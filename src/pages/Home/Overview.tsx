@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { AlertsPanel } from '../../components/AlertsPanel';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
@@ -66,30 +65,6 @@ function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
   }
 
   return `${spreadMetrics.spreadPlatinum} pt (${spreadMetrics.spreadPercent.toFixed(1)}%)`;
-}
-
-function AlertsCard() {
-  const alerts = useAppStore((state) => state.alerts);
-  const setHomeSubTab = useAppStore((state) => state.setHomeSubTab);
-
-  return (
-    <div className="card">
-      <div className="card-header">
-        <span className="card-label">Alerts</span>
-        <span className={`badge ${alerts.length > 0 ? 'badge-green' : 'badge-muted'}`}>
-          {alerts.length}
-        </span>
-        <div className="card-actions">
-          <button className="text-btn" type="button" onClick={() => setHomeSubTab('alerts')}>
-            Open Alerts
-          </button>
-        </div>
-      </div>
-      <div className="card-body">
-        <AlertsPanel compact />
-      </div>
-    </div>
-  );
 }
 
 function WatchlistCard() {
@@ -398,14 +373,13 @@ function AnalysisCard() {
 export function Overview() {
   return (
     <div className="dashboard">
-      <div className="priority-row">
-        <AlertsCard />
-        <WatchlistCard />
-      </div>
       <MetricsRow />
       <div className="content-row">
         <QuickViewCard />
         <AnalysisCard />
+      </div>
+      <div className="watchlist-row-shell">
+        <WatchlistCard />
       </div>
     </div>
   );

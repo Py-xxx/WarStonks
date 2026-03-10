@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import { AlertsPanel } from '../AlertsPanel';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
@@ -60,6 +61,13 @@ const ArrowIcon = () => (
   </svg>
 );
 
+const BellIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+    <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+  </svg>
+);
+
 function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): WfmAutocompleteItem[] {
   const trimmedQuery = query.trim().toLowerCase();
   if (!trimmedQuery) {
@@ -92,6 +100,7 @@ function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): Wfm
 
 export function TopBar() {
   const autoProfile = useAppStore((s) => s.autoProfile);
+  const alerts = useAppStore((s) => s.alerts);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
 
@@ -100,8 +109,10 @@ export function TopBar() {
   const [autocompleteState, setAutocompleteState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [autocompleteError, setAutocompleteError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const searchRef = useRef<HTMLDivElement | null>(null);
+  const notificationsRef = useRef<HTMLDivElement | null>(null);
   const deferredSearchValue = useDeferredValue(searchValue);
   const suggestions = rankAutocompleteItems(autocompleteItems, deferredSearchValue);
 
@@ -151,6 +162,10 @@ export function TopBar() {
     const handlePointerDown = (event: MouseEvent) => {
       if (!searchRef.current?.contains(event.target as Node)) {
         setDropdownOpen(false);
+      }
+
+      if (!notificationsRef.current?.contains(event.target as Node)) {
+        setNotificationsOpen(false);
       }
     };
 
@@ -321,6 +336,32 @@ export function TopBar() {
       <div className="topbar-right">
         <div className="strategy-pill" title="Strategy configuration">
           CUSTOM · H:VERY SHORT · C:{autoProfile ? 'AUTO' : 'BALANCED'}
+        </div>
+        <div ref={notificationsRef} className="notification-wrap">
+          <button
+            className={`notification-btn${notificationsOpen ? ' open' : ''}`}
+            type="button"
+            aria-label="Open notifications"
+            aria-expanded={notificationsOpen}
+            onClick={() => setNotificationsOpen((current) => !current)}
+          >
+            <BellIcon />
+            {alerts.length > 0 ? (
+              <span className="notification-count">{alerts.length}</span>
+            ) : null}
+          </button>
+
+          {notificationsOpen ? (
+            <div className="notification-panel">
+              <div className="notification-panel-header">
+                <span className="card-label">Notifications</span>
+                <span className={`badge ${alerts.length > 0 ? 'badge-green' : 'badge-muted'}`}>
+                  {alerts.length}
+                </span>
+              </div>
+              <AlertsPanel />
+            </div>
+          ) : null}
         </div>
         <button className="btn-connect" aria-label="Connect to Warframe">
           <ArrowIcon />
