@@ -625,7 +625,6 @@ body {
 }
 
 .settings-drawer-header,
-.settings-detail-head,
 .settings-modal-header,
 .settings-switch-row {
   display: flex;
@@ -635,7 +634,6 @@ body {
 }
 
 .settings-drawer-header h2,
-.settings-detail-head h3,
 .settings-modal-header h3 {
   font-size: 18px;
   line-height: 1.2;
@@ -659,17 +657,13 @@ body {
   border-color: #333849;
 }
 
-.settings-drawer-layout,
-.settings-detail-stack,
 .settings-modal-body,
-.settings-preview-grid,
-.settings-detail-meta {
+.settings-preview-grid {
   display: grid;
   gap: 12px;
 }
 
 .settings-nav,
-.settings-detail,
 .settings-form-card {
   display: flex;
   flex-direction: column;
@@ -719,6 +713,13 @@ body {
   gap: 4px;
 }
 
+.settings-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .settings-nav-label,
 .settings-field-label,
 .settings-meta-value {
@@ -727,13 +728,12 @@ body {
 }
 
 .settings-nav-description,
-.settings-detail-body,
-.settings-field-help {
+.settings-field-help,
+.settings-nav-subtext {
   color: var(--text-secondary);
   line-height: 1.5;
 }
 
-.settings-detail-card,
 .settings-form-card,
 .settings-preview-card {
   border: 1px solid var(--border);
@@ -741,17 +741,8 @@ body {
   background: rgba(13, 15, 20, 0.72);
 }
 
-.settings-detail-card,
 .settings-form-card {
   padding: 16px;
-}
-
-.settings-detail-body {
-  margin-top: 4px;
-}
-
-.settings-detail-meta {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .settings-meta-label {
@@ -822,6 +813,7 @@ body {
   top: 84px;
   left: 50%;
   width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 112px);
   transform: translateX(-50%);
   border: 1px solid rgba(74, 158, 255, 0.18);
   border-radius: 18px;
@@ -829,6 +821,7 @@ body {
     linear-gradient(180deg, rgba(26, 30, 42, 0.96), rgba(13, 15, 20, 0.98)),
     var(--bg-surface);
   box-shadow: 0 26px 70px rgba(0, 0, 0, 0.34);
+  overflow: auto;
   z-index: 350;
 }
 
@@ -838,11 +831,13 @@ body {
 
 .settings-modal-body {
   padding: 18px;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.92fr);
+  align-items: start;
 }
 
 .settings-form-card {
   gap: 14px;
+  min-width: 0;
 }
 
 .settings-field {
@@ -871,6 +866,7 @@ body {
 .settings-form-actions {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .settings-preview-grid {
@@ -879,12 +875,71 @@ body {
 
 .settings-preview-card {
   padding: 12px;
+  min-width: 0;
+}
+
+.settings-toggle {
+  min-width: 96px;
+  height: 40px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 160, 48, 0.3);
+  background: rgba(240, 160, 48, 0.14);
+  color: #ffd7a1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.settings-toggle.on {
+  border-color: rgba(61, 214, 140, 0.34);
+  background: rgba(61, 214, 140, 0.16);
+  color: #b8f5d7;
+}
+
+.settings-toggle-track {
+  width: 42px;
+  height: 22px;
+  position: relative;
+  border-radius: 999px;
+  background: rgba(13, 15, 20, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.settings-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.24);
+  transition: transform 0.15s ease;
+}
+
+.settings-toggle.on .settings-toggle-thumb {
+  transform: translateX(20px);
+}
+
+.settings-toggle-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 @media (max-width: 920px) {
   .settings-modal {
     top: 60px;
     width: calc(100vw - 20px);
+    max-height: calc(100vh - 76px);
   }
 
   .settings-modal-body {
@@ -898,11 +953,16 @@ body {
     width: 100vw;
   }
 
-  .settings-detail-meta,
   .settings-preview-grid,
   .settings-form-actions {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .settings-switch-row,
+  .settings-nav-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 
