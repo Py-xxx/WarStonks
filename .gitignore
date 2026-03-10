@@ -5,6 +5,7 @@ dist
 !.env.example
 src-tauri/target
 src-tauri/gen
+src-tauri/tauri.dev.generated.json
 Resources/
 
 # OS / editor files
