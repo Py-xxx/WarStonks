@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 
 const host = process.env.TAURI_DEV_HOST;
+const devHost = host || "127.0.0.1";
 
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -15,7 +16,7 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    host: devHost,
     hmr: host
       ? {
           protocol: "ws",
