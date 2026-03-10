@@ -1,89 +1,138 @@
+import { WatchlistAddControls } from '../../components/WatchlistAddControls';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 
-function scoreBadge(score: number) {
-  if (score >= 75) return 'badge-green';
-  if (score >= 50) return 'badge-amber';
-  return 'badge-muted';
+function formatLastScan(lastUpdatedAt: string | null): string {
+  if (!lastUpdatedAt) {
+    return 'Pending';
+  }
+
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(lastUpdatedAt).getTime()) / 1000),
+  );
+
+  if (elapsedSeconds < 60) {
+    return `${elapsedSeconds}s ago`;
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m ago`;
+  }
+
+  return `${Math.floor(elapsedMinutes / 60)}h ago`;
 }
 
 export function WatchlistTab() {
-  const watchlist = useAppStore((s) => s.watchlist);
-  const removeItem = useAppStore((s) => s.removeWatchlistItem);
-  const targetInput = useAppStore((s) => s.watchlistTargetInput);
-  const setTargetInput = useAppStore((s) => s.setWatchlistTargetInput);
-  const addItem = useAppStore((s) => s.addWatchlistItem);
-
-  const handleAdd = () => {
-    const name = prompt('Item name:');
-    if (!name) return;
-    addItem(name, parseFloat(targetInput) || 0);
-    setTargetInput('');
-  };
+  const watchlist = useAppStore((state) => state.watchlist);
+  const selectedId = useAppStore((state) => state.selectedWatchlistId);
+  const setSelected = useAppStore((state) => state.setSelectedWatchlist);
+  const removeItem = useAppStore((state) => state.removeWatchlistItem);
 
   return (
     <div className="wl-fullscreen">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-          Watchlist
-        </span>
+      <div className="panel-title-row">
+        <span className="panel-title-eyebrow">Watchlist</span>
         <span className="badge badge-blue">{watchlist.length} items</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="input-label">Target pt</span>
-          <input
-            className="price-input"
-            type="number"
-            placeholder="0"
-            style={{ width: 80 }}
-            value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
-          />
-          <button className="btn-sm" onClick={handleAdd}>+ Add Item</button>
-        </div>
+      </div>
+
+      <div className="watchlist-controls-card">
+        <WatchlistAddControls />
       </div>
 
       <div className="card">
-        <table className="wl-fs-table">
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th>Target Price</th>
-              <th>Current Price</th>
-              <th>Entry</th>
-              <th>Exit</th>
-              <th>Volume</th>
-              <th>Δ 24h</th>
-              <th>Score</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {watchlist.map((item) => (
-              <tr key={item.id}>
-                <td style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{item.name}</td>
-                <td>{item.targetPrice} pt</td>
-                <td style={{ color: item.currentPrice <= item.targetPrice ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                  {item.currentPrice} pt
-                </td>
-                <td>{item.entryPrice} pt</td>
-                <td>{item.exitPrice} pt</td>
-                <td className="td-muted">{item.volume.toLocaleString()}</td>
-                <td className={item.delta24h >= 0 ? 'td-green' : 'td-red'}>
-                  {item.delta24h >= 0 ? '+' : ''}{item.delta24h.toFixed(1)}%
-                </td>
-                <td>
-                  <span className={`badge ${scoreBadge(item.score)}`}>{item.score}</span>
-                </td>
-                <td>
-                  <button className="act-btn" style={{ marginRight: 4 }}>Details</button>
-                  <button className="act-btn danger" onClick={() => removeItem(item.id)}>Remove</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="wl-footer">
-          <span>10s · burst 1 · queue 0 · 429 0%</span>
-        </div>
+        {watchlist.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-primary">No watchlist items yet</span>
+            <span className="empty-sub">
+              Search for an item, set your desired price, and add it to start monitoring live
+              sell orders.
+            </span>
+          </div>
+        ) : (
+          <>
+            <table className="wl-fs-table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Desired</th>
+                  <th>Lowest</th>
+                  <th>Seller</th>
+                  <th>Qty</th>
+                  <th>Rank</th>
+                  <th>Last Scan</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {watchlist.map((item) => {
+                  const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                  const hasRank = item.currentRank !== null && item.currentRank !== undefined;
+
+                  return (
+                    <tr
+                      key={item.id}
+                      onClick={() => setSelected(item.id)}
+                      style={{
+                        cursor: 'pointer',
+                        background:
+                          selectedId === item.id ? 'var(--bg-elevated)' : undefined,
+                      }}
+                    >
+                      <td>
+                        <div className="wl-item-cell">
+                          <span className="wl-item-thumb">
+                            {imageUrl ? (
+                              <img src={imageUrl} alt="" loading="lazy" />
+                            ) : (
+                              <span>{item.name.slice(0, 1)}</span>
+                            )}
+                          </span>
+                          <span>{item.name}</span>
+                        </div>
+                      </td>
+                      <td>{item.targetPrice} pt</td>
+                      <td
+                        style={{
+                          color:
+                            item.currentPrice !== null && item.currentPrice <= item.targetPrice
+                              ? 'var(--accent-green)'
+                              : 'var(--text-primary)',
+                        }}
+                      >
+                        {item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}
+                      </td>
+                      <td>{item.currentSeller ?? '—'}</td>
+                      <td>{item.currentQuantity ?? '—'}</td>
+                      <td>{hasRank ? item.currentRank : '—'}</td>
+                      <td className="td-muted">{formatLastScan(item.lastUpdatedAt)}</td>
+                      <td className={item.lastError ? 'td-red' : 'td-green'}>
+                        {item.lastError ? 'Retrying' : 'Watching'}
+                      </td>
+                      <td>
+                        <button
+                          className="act-btn danger"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            removeItem(item.id);
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="wl-footer">
+              <span>Adaptive scans · min 10s per item · retry on rate limits</span>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

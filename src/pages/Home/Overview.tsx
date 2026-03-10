@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react';
+import { AlertsPanel } from '../../components/AlertsPanel';
+import { WatchlistAddControls } from '../../components/WatchlistAddControls';
+import { copyWhisperMessage } from '../../lib/marketMessages';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfmTopSellOrder } from '../../types';
@@ -12,36 +15,6 @@ const colorMap = {
   amber: 'var(--accent-amber)',
   red: 'var(--accent-red)',
 };
-
-const bellSvg = (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-  </svg>
-);
-
-function formatMessage(order: WfmTopSellOrder, itemName: string): string {
-  return `/w ${order.username} Hey there! I would like to buy ${itemName} for ${order.platinum} :platinum: (WarStonks - by py)`;
-}
-
-async function copyMessageToClipboard(order: WfmTopSellOrder, itemName: string): Promise<void> {
-  const message = formatMessage(order, itemName);
-
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(message);
-    return;
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = message;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  document.execCommand('copy');
-  textarea.remove();
-}
 
 function buildSparklinePath(points: number[]): string {
   if (points.length === 0) {
@@ -95,63 +68,49 @@ function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
 }
 
 function AlertsCard() {
+  const alerts = useAppStore((state) => state.alerts);
+  const setHomeSubTab = useAppStore((state) => state.setHomeSubTab);
+
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-label">Alerts</span>
-        <span className="badge badge-muted">0</span>
+        <span className={`badge ${alerts.length > 0 ? 'badge-green' : 'badge-muted'}`}>
+          {alerts.length}
+        </span>
         <div className="card-actions">
-          <button className="text-btn">Mark All Read</button>
+          <button className="text-btn" type="button" onClick={() => setHomeSubTab('alerts')}>
+            Open Alerts
+          </button>
         </div>
       </div>
-      <div className="empty-state">
-        <span className="empty-icon">{bellSvg}</span>
-        <span className="empty-primary">No active alerts</span>
-        <span className="empty-sub">Alerts appear when watchlist items hit target prices</span>
+      <div className="card-body">
+        <AlertsPanel compact />
       </div>
     </div>
   );
 }
 
 function WatchlistCard() {
-  const watchlist = useAppStore((s) => s.watchlist);
-  const selectedId = useAppStore((s) => s.selectedWatchlistId);
-  const setSelected = useAppStore((s) => s.setSelectedWatchlist);
-  const targetInput = useAppStore((s) => s.watchlistTargetInput);
-  const setTargetInput = useAppStore((s) => s.setWatchlistTargetInput);
-  const addWatchlistItem = useAppStore((s) => s.addWatchlistItem);
-
-  const handleAdd = () => {
-    const name = prompt('Item name:');
-    if (!name) return;
-    const price = parseFloat(targetInput) || 0;
-    addWatchlistItem(name, price);
-    setTargetInput('');
-  };
+  const watchlist = useAppStore((state) => state.watchlist);
+  const selectedId = useAppStore((state) => state.selectedWatchlistId);
+  const setSelected = useAppStore((state) => state.setSelectedWatchlist);
 
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-label">Watchlist</span>
         <span className="badge badge-blue">{watchlist.length} items</span>
-        <div className="card-actions">
-          <span className="input-label">pt</span>
-          <input
-            className="price-input"
-            type="number"
-            placeholder="0"
-            title="Target price"
-            value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
-          />
-          <button className="btn-sm" onClick={handleAdd}>+ Add</button>
-        </div>
+      </div>
+
+      <div className="card-body card-body-compact">
+        <WatchlistAddControls compact />
       </div>
 
       {watchlist.length === 0 ? (
         <div className="empty-state">
           <span className="empty-primary">No watchlist items yet</span>
-          <span className="empty-sub">Add tracked items here later. Overview no longer ships with seeded mock watchlist data.</span>
+          <span className="empty-sub">Search for an item, set your desired price, and add it to start monitoring live sell orders.</span>
         </div>
       ) : (
         <>
@@ -161,7 +120,7 @@ function WatchlistCard() {
                 <th>Item</th>
                 <th>Target</th>
                 <th>Current</th>
-                <th>Δ</th>
+                <th>Seller</th>
               </tr>
             </thead>
             <tbody>
@@ -173,16 +132,14 @@ function WatchlistCard() {
                 >
                   <td>{item.name}</td>
                   <td className="td-muted">{item.targetPrice} pt</td>
-                  <td>{item.currentPrice} pt</td>
-                  <td className={item.delta24h >= 0 ? 'td-green' : 'td-red'}>
-                    {item.delta24h >= 0 ? '+' : ''}{item.delta24h.toFixed(1)}%
-                  </td>
+                  <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
+                  <td>{item.currentSeller ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div className="wl-footer">
-            <span>10s · burst 1 · queue 0 · 429 0%</span>
+            <span>Adaptive scans · min 10s per item</span>
             {selectedId ? (
               <span className="selected">
                 Selected:{' '}
@@ -276,7 +233,7 @@ function QuickViewCard() {
     }
 
     try {
-      await copyMessageToClipboard(order, selectedItem.name);
+      await copyWhisperMessage(order, selectedItem.name);
       setCopiedOrderId(order.orderId);
       setCopyFeedback(null);
       window.setTimeout(
@@ -376,6 +333,8 @@ function QuickViewCard() {
                 </svg>
               </div>
             ) : null}
+
+            <WatchlistAddControls />
 
             <div className="qv-order-list">
               {compactOrders.map((order) => (

@@ -2,6 +2,7 @@ import { useAppStore } from '../../stores/useAppStore';
 import type { HomeSubTab } from '../../types';
 import { Overview } from './Overview';
 import { WatchlistTab } from './WatchlistTab';
+import { AlertsTab } from './AlertsTab';
 import { EventsTab } from './EventsTab';
 
 export function HomePage() {
@@ -15,6 +16,7 @@ export function HomePage() {
   const tabs: { id: HomeSubTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'watchlist', label: 'Watchlist' },
+    { id: 'alerts', label: 'Alerts' },
     { id: 'events-tab', label: 'Events' },
   ];
 
@@ -68,6 +70,7 @@ export function HomePage() {
 
       {homeSubTab === 'overview'    && <Overview />}
       {homeSubTab === 'watchlist'   && <WatchlistTab />}
+      {homeSubTab === 'alerts'      && <AlertsTab />}
       {homeSubTab === 'events-tab'  && <EventsTab />}
     </>
   );

@@ -11,6 +11,7 @@ import { PortfolioPage } from './pages/Portfolio';
 import { StrategyPage } from './pages/Strategy';
 import { StartupScreen } from './components/StartupScreen';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
+import { useWatchlistScanner } from './hooks/useWatchlistScanner';
 
 function PageRouter() {
   const activePage = useAppStore((s) => s.activePage);
@@ -29,6 +30,8 @@ function PageRouter() {
 }
 
 function AppShell() {
+  useWatchlistScanner();
+
   return (
     <>
       <TopBar />

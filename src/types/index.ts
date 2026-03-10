@@ -8,21 +8,50 @@ export type PageId =
   | 'portfolio'
   | 'strategy';
 
-export type HomeSubTab = 'overview' | 'watchlist' | 'events-tab';
+export type HomeSubTab = 'overview' | 'watchlist' | 'alerts' | 'events-tab';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | 'all';
 export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
 
 export interface WatchlistItem {
   id: string;
+  itemId: number;
   name: string;
+  slug: string;
+  imagePath: string | null;
+  itemFamily: string | null;
   targetPrice: number;
-  currentPrice: number;
-  entryPrice: number;
-  exitPrice: number;
+  currentPrice: number | null;
+  currentSeller: string | null;
+  currentUserSlug: string | null;
+  currentOrderId: string | null;
+  currentQuantity: number | null;
+  currentRank: number | null;
+  entryPrice: number | null;
+  exitPrice: number | null;
   volume: number;
   delta24h: number; // percent
   score: number;
+  lastUpdatedAt: string | null;
+  nextScanAt: number;
+  retryCount: number;
+  lastError: string | null;
+  ignoredUserKeys: string[];
+}
+
+export interface WatchlistAlert {
+  id: string;
+  watchlistId: string;
+  itemName: string;
+  itemSlug: string;
+  itemImagePath: string | null;
+  username: string;
+  userSlug: string | null;
+  price: number;
+  quantity: number;
+  rank: number | null;
+  orderId: string;
+  createdAt: string;
 }
 
 export interface TradeOrder {
