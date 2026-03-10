@@ -57,6 +57,25 @@ export function selectPreferredWatchlistOrder(
   return null;
 }
 
+export function selectNextWatchlistItemToScan(
+  items: WatchlistItem[],
+  nowMs: number = Date.now(),
+): WatchlistItem | null {
+  let nextItem: WatchlistItem | null = null;
+
+  for (const item of items) {
+    if (item.nextScanAt > nowMs) {
+      continue;
+    }
+
+    if (!nextItem || item.nextScanAt < nextItem.nextScanAt) {
+      nextItem = item;
+    }
+  }
+
+  return nextItem;
+}
+
 export function getWatchlistVisualState(item: WatchlistItem): {
   tone: 'neutral' | 'yellow' | 'red';
   label: string;
