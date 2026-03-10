@@ -829,6 +829,13 @@ body {
   padding: 18px 18px 0;
 }
 
+.settings-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .settings-modal-title,
 .settings-field-copy {
   display: flex;
@@ -888,6 +895,9 @@ body {
 .settings-preview-card {
   padding: 12px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .settings-toggle {
@@ -947,6 +957,23 @@ body {
   text-transform: uppercase;
 }
 
+.settings-refresh-btn {
+  width: auto;
+  min-width: 104px;
+}
+
+.settings-meta-label,
+.settings-meta-value,
+.settings-field-help {
+  display: block;
+}
+
+.settings-meta-value,
+.settings-field-help {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 @media (max-width: 920px) {
   .settings-modal {
     top: 60px;
@@ -972,7 +999,9 @@ body {
   }
 
   .settings-switch-row,
-  .settings-nav-head {
+  .settings-nav-head,
+  .settings-modal-header,
+  .settings-modal-actions {
     flex-direction: column;
     align-items: flex-start;
   }
