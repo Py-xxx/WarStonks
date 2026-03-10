@@ -1,27 +1,5 @@
 import { useAppStore } from '../../stores/useAppStore';
-import { mockFissures } from '../../mocks/events';
-import type { GameEvent } from '../../types';
-
-function EventRow({ evt }: { evt: GameEvent }) {
-  return (
-    <div className="event-row">
-      <div>
-        <div className="event-name">{evt.name}</div>
-        <div className="event-dates">
-          {evt.startDate ? `${evt.startDate} → ` : ''}{evt.endDate}
-        </div>
-      </div>
-      <div className="event-badges">
-        <span className={`badge badge-${evt.status === 'active' ? 'green' : 'muted'}`}>
-          {evt.status === 'active' ? 'Active' : 'Upcoming'}
-        </span>
-        <span className={`badge badge-${evt.tier === 'high' ? 'red' : evt.tier === 'medium' ? 'amber' : 'muted'}`}>
-          {evt.tier.charAt(0).toUpperCase() + evt.tier.slice(1)}
-        </span>
-      </div>
-    </div>
-  );
-}
+import { ActiveEventsPanel } from '../../components/ActiveEventsPanel';
 
 function EmptyState({ message }: { message: string }) {
   return (
@@ -36,6 +14,8 @@ export function EventsPage() {
   const setEventsSubTab = useAppStore((s) => s.setEventsSubTab);
 
   const tabs = [
+    { id: 'active-events' as const, label: 'Active Events' },
+    { id: 'void-trader'  as const, label: 'Void Trader' },
     { id: 'fissures'     as const, label: 'Fissures' },
     { id: 'activities'   as const, label: 'Activities' },
     { id: 'market-news'  as const, label: 'Market & News' },
@@ -61,26 +41,31 @@ export function EventsPage() {
       </div>
 
       <div className="page-content">
+        {eventsSubTab === 'active-events' && <ActiveEventsPanel />}
+        {eventsSubTab === 'void-trader' && (
+          <div className="card">
+            <div className="card-header"><span className="card-label">Void Trader</span></div>
+            <EmptyState message="Void Trader is not wired to a live worldstate feed yet." />
+          </div>
+        )}
         {eventsSubTab === 'fissures' && (
           <div className="card">
             <div className="card-header">
               <span className="card-label">Fissures</span>
-              <span className="badge badge-purple">{mockFissures.filter(e => e.status === 'active').length} active</span>
-              <div className="card-actions"><button className="text-btn">Refresh</button></div>
             </div>
-            {mockFissures.map((evt) => <EventRow key={evt.id} evt={evt} />)}
+            <EmptyState message="Fissures are not wired to a live worldstate feed yet." />
           </div>
         )}
         {eventsSubTab === 'activities' && (
           <div className="card">
             <div className="card-header"><span className="card-label">Activities</span></div>
-            <EmptyState message="No activities found" />
+            <EmptyState message="Activities are not wired to a live worldstate feed yet." />
           </div>
         )}
         {eventsSubTab === 'market-news' && (
           <div className="card">
             <div className="card-header"><span className="card-label">Market &amp; News</span></div>
-            <EmptyState message="No market news available" />
+            <EmptyState message="Market and news feeds are not wired to live data yet." />
           </div>
         )}
       </div>

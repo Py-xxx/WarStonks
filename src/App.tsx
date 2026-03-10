@@ -15,6 +15,7 @@ import { AlecaframeModal } from './components/AlecaframeModal';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
+import { useWorldStateEvents } from './hooks/useWorldStateEvents';
 
 function PageRouter() {
   const activePage = useAppStore((s) => s.activePage);
@@ -35,6 +36,7 @@ function PageRouter() {
 function AppShell() {
   useWatchlistScanner();
   useIntegrationSettings();
+  useWorldStateEvents();
 
   return (
     <>

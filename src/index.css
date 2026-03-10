@@ -997,6 +997,16 @@ body {
     display: grid;
   }
 
+  .world-event-topline,
+  .world-event-step {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .world-event-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
   .settings-preview-grid,
   .settings-form-actions {
     grid-template-columns: 1fr;
@@ -2071,25 +2081,167 @@ body {
 }
 
 /* ── EVENTS ── */
-.event-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--border-subtle);
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.event-row:last-child { border-bottom: none; }
-.event-row:hover { background: var(--bg-elevated); }
-.event-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.event-dates {
+.world-event-updated-at {
+  margin-bottom: 12px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   color: var(--text-muted);
-  margin-top: 2px;
 }
-.event-badges { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.world-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.world-event-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(13, 15, 20, 0.64);
+  overflow: hidden;
+}
+.world-event-toggle {
+  width: 100%;
+  padding: 16px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.world-event-toggle:hover {
+  background: rgba(26, 30, 42, 0.48);
+}
+.world-event-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.world-event-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.world-event-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.world-event-tooltip {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.world-event-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.world-event-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.world-event-meta-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+.world-event-meta-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.world-event-meta-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.world-event-progress {
+  height: 8px;
+  margin-top: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.world-event-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+}
+.world-event-reward-preview {
+  margin-top: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.world-event-expand-copy {
+  margin-top: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-blue);
+}
+.world-event-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+.world-event-expanded-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.world-event-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.world-event-tag {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.world-event-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.world-event-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+.world-event-step-goal {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--accent-amber);
+}
+.world-event-step-reward {
+  font-size: 12px;
+  color: var(--text-primary);
+  text-align: right;
+}
 
 /* ── PAGE TABS ── */
 .page-tabs {
