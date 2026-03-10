@@ -10,7 +10,10 @@ import { TradesPage } from './pages/Trades';
 import { PortfolioPage } from './pages/Portfolio';
 import { StrategyPage } from './pages/Strategy';
 import { StartupScreen } from './components/StartupScreen';
+import { SettingsSidebar } from './components/SettingsSidebar';
+import { AlecaframeModal } from './components/AlecaframeModal';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
+import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
 
 function PageRouter() {
@@ -31,6 +34,7 @@ function PageRouter() {
 
 function AppShell() {
   useWatchlistScanner();
+  useIntegrationSettings();
 
   return (
     <>
@@ -41,6 +45,8 @@ function AppShell() {
           <PageRouter />
         </main>
       </div>
+      <SettingsSidebar />
+      <AlecaframeModal />
     </>
   );
 }

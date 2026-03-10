@@ -1,5 +1,6 @@
 mod commands;
 mod item_catalog;
+mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,6 +11,10 @@ pub fn run() {
             commands::initialize_app_catalog,
             commands::get_wfm_autocomplete_items,
             commands::get_wfm_top_sell_orders,
+            settings::get_app_settings,
+            settings::test_alecaframe_public_link,
+            settings::save_alecaframe_settings,
+            settings::get_currency_balances,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

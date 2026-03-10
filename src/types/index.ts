@@ -12,6 +12,7 @@ export type HomeSubTab = 'overview' | 'watchlist' | 'alerts' | 'events-tab';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | 'all';
 export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
+export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'import-export';
 
 export interface WatchlistItem {
   id: string;
@@ -93,6 +94,46 @@ export interface CurrencyBalance {
   endo: number | null;
   ducats: number | null;
   aya: number | null;
+}
+
+export interface AlecaframeSettings {
+  enabled: boolean;
+  publicLink: string | null;
+  usernameWhenPublic: string | null;
+  lastValidatedAt: string | null;
+}
+
+export interface DiscordWebhookSettings {
+  enabled: boolean;
+  webhookUrl: string | null;
+}
+
+export interface AppSettings {
+  alecaframe: AlecaframeSettings;
+  discordWebhook: DiscordWebhookSettings;
+}
+
+export interface AlecaframeSettingsInput {
+  enabled: boolean;
+  publicLink: string | null;
+}
+
+export interface AlecaframeValidationResult {
+  valid: boolean;
+  normalizedPublicLink: string;
+  publicToken: string;
+  usernameWhenPublic: string | null;
+  lastUpdate: string | null;
+  balances: CurrencyBalance;
+}
+
+export interface WalletSnapshot {
+  enabled: boolean;
+  configured: boolean;
+  balances: CurrencyBalance;
+  usernameWhenPublic: string | null;
+  lastUpdate: string | null;
+  errorMessage: string | null;
 }
 
 export interface WfmAutocompleteItem {

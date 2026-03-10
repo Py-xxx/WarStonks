@@ -1,45 +1,11 @@
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { AlertsPanel } from '../AlertsPanel';
+import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfmAutocompleteItem } from '../../types';
-
-const PlatinumIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-    <circle cx="5.5" cy="5.5" r="4.5" stroke="currentColor" strokeWidth="1.2" fill="none" opacity="0.4"/>
-    <circle cx="5.5" cy="5.5" r="2" fill="currentColor"/>
-  </svg>
-);
-
-const CreditsIcon = () => (
-  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-    <path d="M8 2.5A3.5 3.5 0 1 0 8 7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
-  </svg>
-);
-
-const EndoIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-    <polygon points="5.5,1 9.5,3.25 9.5,7.75 5.5,10 1.5,7.75 1.5,3.25" stroke="currentColor" strokeWidth="1.2" fill="none"/>
-    <circle cx="5.5" cy="5.5" r="1.2" fill="currentColor"/>
-  </svg>
-);
-
-const DucatsIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-    <ellipse cx="5.5" cy="8.5" rx="3.5" ry="1.2" stroke="currentColor" strokeWidth="1" fill="none"/>
-    <ellipse cx="5.5" cy="5.5" rx="3.5" ry="1.2" stroke="currentColor" strokeWidth="1" fill="none"/>
-    <ellipse cx="5.5" cy="2.5" rx="3.5" ry="1.2" fill="currentColor" opacity="0.6"/>
-  </svg>
-);
-
-const AyaIcon = () => (
-  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-    <polygon points="5,1 9,5 5,9 1,5" stroke="currentColor" strokeWidth="1.2" fill="none"/>
-    <polygon points="5,3 7,5 5,7 3,5" fill="currentColor" opacity="0.7"/>
-  </svg>
-);
 
 const SearchIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -67,6 +33,18 @@ const BellIcon = () => (
     <path d="M13.73 21a2 2 0 0 1-3.46 0" />
   </svg>
 );
+
+function formatCurrencyValue(value: number | null, loading: boolean): string {
+  if (loading) {
+    return '…';
+  }
+
+  if (value === null) {
+    return '-';
+  }
+
+  return new Intl.NumberFormat().format(value);
+}
 
 function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): WfmAutocompleteItem[] {
   const trimmedQuery = query.trim().toLowerCase();
@@ -103,6 +81,9 @@ export function TopBar() {
   const alerts = useAppStore((s) => s.alerts);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
+  const walletSnapshot = useAppStore((s) => s.walletSnapshot);
+  const walletLoading = useAppStore((s) => s.walletLoading);
+  const openSettingsSidebar = useAppStore((s) => s.openSettingsSidebar);
 
   const [searchValue, setSearchValue] = useState('');
   const [autocompleteItems, setAutocompleteItems] = useState<WfmAutocompleteItem[]>([]);
@@ -297,38 +278,58 @@ export function TopBar() {
 
       <div className="currency-strip" role="status" aria-label="Currency balances">
         <div className="currency-item ci-platinum">
-          <div className="currency-icon"><PlatinumIcon /></div>
+          <div className="currency-icon">
+            <img src={walletIcons.platinum} alt="" />
+          </div>
           <div className="currency-info">
             <span className="currency-name">Platinum</span>
-            <span className="currency-val no-data">-</span>
+            <span className={`currency-val${walletSnapshot.balances.platinum === null ? ' no-data' : ''}`}>
+              {formatCurrencyValue(walletSnapshot.balances.platinum, walletLoading)}
+            </span>
           </div>
         </div>
         <div className="currency-item ci-credits">
-          <div className="currency-icon"><CreditsIcon /></div>
+          <div className="currency-icon">
+            <img src={walletIcons.credits} alt="" />
+          </div>
           <div className="currency-info">
             <span className="currency-name">Credits</span>
-            <span className="currency-val no-data">-</span>
+            <span className={`currency-val${walletSnapshot.balances.credits === null ? ' no-data' : ''}`}>
+              {formatCurrencyValue(walletSnapshot.balances.credits, walletLoading)}
+            </span>
           </div>
         </div>
         <div className="currency-item ci-endo">
-          <div className="currency-icon"><EndoIcon /></div>
+          <div className="currency-icon">
+            <img src={walletIcons.endo} alt="" />
+          </div>
           <div className="currency-info">
             <span className="currency-name">Endo</span>
-            <span className="currency-val no-data">-</span>
+            <span className={`currency-val${walletSnapshot.balances.endo === null ? ' no-data' : ''}`}>
+              {formatCurrencyValue(walletSnapshot.balances.endo, walletLoading)}
+            </span>
           </div>
         </div>
         <div className="currency-item ci-ducats">
-          <div className="currency-icon"><DucatsIcon /></div>
+          <div className="currency-icon">
+            <img src={walletIcons.ducats} alt="" />
+          </div>
           <div className="currency-info">
             <span className="currency-name">Ducats</span>
-            <span className="currency-val no-data">-</span>
+            <span className={`currency-val${walletSnapshot.balances.ducats === null ? ' no-data' : ''}`}>
+              {formatCurrencyValue(walletSnapshot.balances.ducats, walletLoading)}
+            </span>
           </div>
         </div>
         <div className="currency-item ci-aya">
-          <div className="currency-icon"><AyaIcon /></div>
+          <div className="currency-icon">
+            <img src={walletIcons.aya} alt="" />
+          </div>
           <div className="currency-info">
             <span className="currency-name">Aya</span>
-            <span className="currency-val no-data">-</span>
+            <span className={`currency-val${walletSnapshot.balances.aya === null ? ' no-data' : ''}`}>
+              {formatCurrencyValue(walletSnapshot.balances.aya, walletLoading)}
+            </span>
           </div>
         </div>
       </div>
@@ -367,7 +368,12 @@ export function TopBar() {
           <ArrowIcon />
           Connect
         </button>
-        <button className="settings-btn" title="Settings" aria-label="Open settings">
+        <button
+          className="settings-btn"
+          title="Settings"
+          aria-label="Open settings"
+          onClick={() => openSettingsSidebar('alecaframe')}
+        >
           <GearIcon />
         </button>
       </div>

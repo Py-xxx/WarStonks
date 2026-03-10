@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import { getWfmTopSellOrders } from '../lib/tauriClient';
+import {
+  getAppSettings,
+  getCurrencyBalances,
+  getWfmTopSellOrders,
+  saveAlecaframeSettings,
+} from '../lib/tauriClient';
 import {
   buildWatchlistUserKey,
   getWatchlistPollIntervalMs,
@@ -11,17 +16,49 @@ import type {
   PageId,
   QuickViewSelection,
   SellerMode,
+  SettingsSection,
   TradeOrder,
   TradePeriod,
   TradesSubTab,
   WatchlistAlert,
   WatchlistItem,
+  AlecaframeSettingsInput,
+  AppSettings,
+  WalletSnapshot,
   WfmAutocompleteItem,
   WfmTopSellOrder,
 } from '../types';
 import { mockSellOrders } from '../mocks/trades';
 
 let quickViewRequestSequence = 0;
+
+const defaultAppSettings: AppSettings = {
+  alecaframe: {
+    enabled: false,
+    publicLink: null,
+    usernameWhenPublic: null,
+    lastValidatedAt: null,
+  },
+  discordWebhook: {
+    enabled: false,
+    webhookUrl: null,
+  },
+};
+
+const defaultWalletSnapshot: WalletSnapshot = {
+  enabled: false,
+  configured: false,
+  balances: {
+    platinum: null,
+    credits: null,
+    endo: null,
+    ducats: null,
+    aya: null,
+  },
+  usernameWhenPublic: null,
+  lastUpdate: null,
+  errorMessage: null,
+};
 
 interface WatchlistRefreshResult {
   alertTriggered: boolean;
@@ -132,6 +169,23 @@ interface AppStore {
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
+  settingsSidebarOpen: boolean;
+  settingsSection: SettingsSection;
+  alecaframeModalOpen: boolean;
+  appSettings: AppSettings;
+  walletSnapshot: WalletSnapshot;
+  settingsLoading: boolean;
+  walletLoading: boolean;
+  settingsError: string | null;
+  openSettingsSidebar: (section?: SettingsSection) => void;
+  closeSettingsSidebar: () => void;
+  setSettingsSection: (section: SettingsSection) => void;
+  openAlecaframeModal: () => void;
+  closeAlecaframeModal: () => void;
+  loadAppSettings: () => Promise<void>;
+  refreshWalletSnapshot: () => Promise<void>;
+  saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
+
   sellerMode: SellerMode;
   setSellerMode: (mode: SellerMode) => void;
   autoProfile: boolean;
@@ -187,6 +241,88 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
+  settingsSidebarOpen: false,
+  settingsSection: 'alecaframe',
+  alecaframeModalOpen: false,
+  appSettings: defaultAppSettings,
+  walletSnapshot: defaultWalletSnapshot,
+  settingsLoading: false,
+  walletLoading: false,
+  settingsError: null,
+  openSettingsSidebar: (section = 'alecaframe') =>
+    set({ settingsSidebarOpen: true, settingsSection: section, alecaframeModalOpen: false }),
+  closeSettingsSidebar: () => set({ settingsSidebarOpen: false, alecaframeModalOpen: false }),
+  setSettingsSection: (section) => set({ settingsSection: section }),
+  openAlecaframeModal: () =>
+    set({
+      settingsSidebarOpen: true,
+      settingsSection: 'alecaframe',
+      alecaframeModalOpen: true,
+    }),
+  closeAlecaframeModal: () => set({ alecaframeModalOpen: false }),
+  loadAppSettings: async () => {
+    set({ settingsLoading: true, settingsError: null });
+
+    try {
+      const settings = await getAppSettings();
+      set({
+        appSettings: settings,
+        settingsLoading: false,
+        settingsError: null,
+      });
+    } catch (error) {
+      set({
+        settingsLoading: false,
+        settingsError: toErrorMessage(error),
+      });
+    }
+  },
+  refreshWalletSnapshot: async () => {
+    set({ walletLoading: true });
+
+    try {
+      const snapshot = await getCurrencyBalances();
+      set({
+        walletSnapshot: snapshot,
+        walletLoading: false,
+      });
+    } catch (error) {
+      set({
+        walletSnapshot: {
+          ...defaultWalletSnapshot,
+          errorMessage: toErrorMessage(error),
+        },
+        walletLoading: false,
+      });
+    }
+  },
+  saveAlecaframeConfiguration: async (input) => {
+    set({ settingsLoading: true, settingsError: null });
+
+    try {
+      const settings = await saveAlecaframeSettings(input);
+      set({
+        appSettings: settings,
+        settingsLoading: false,
+        settingsError: null,
+        alecaframeModalOpen: false,
+        walletLoading: true,
+      });
+
+      const snapshot = await getCurrencyBalances();
+      set({
+        walletSnapshot: snapshot,
+        walletLoading: false,
+      });
+    } catch (error) {
+      set({
+        settingsLoading: false,
+        settingsError: toErrorMessage(error),
+      });
+      throw error;
+    }
+  },
 
   sellerMode: 'ingame',
   setSellerMode: (mode) => set({ sellerMode: mode }),

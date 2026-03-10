@@ -3,7 +3,14 @@
  * All functions are stubs when running in a browser (non-Tauri) context.
  */
 
-import type { WfmAutocompleteItem, WfmTopSellOrder } from '../types';
+import type {
+  AlecaframeSettingsInput,
+  AlecaframeValidationResult,
+  AppSettings,
+  WalletSnapshot,
+  WfmAutocompleteItem,
+  WfmTopSellOrder,
+} from '../types';
 
 // Check if running inside Tauri
 export const isTauriRuntime = () =>
@@ -74,6 +81,28 @@ export async function getAppShellInfo(): Promise<AppShellInfo> {
 
 export async function getAppVersion(): Promise<string> {
   return invoke<string>('get_app_version');
+}
+
+export async function getAppSettings(): Promise<AppSettings> {
+  return invoke<AppSettings>('get_app_settings');
+}
+
+export async function testAlecaframePublicLink(
+  publicLink: string,
+): Promise<AlecaframeValidationResult> {
+  return invoke<AlecaframeValidationResult>('test_alecaframe_public_link', {
+    publicLink,
+  });
+}
+
+export async function saveAlecaframeSettings(
+  input: AlecaframeSettingsInput,
+): Promise<AppSettings> {
+  return invoke<AppSettings>('save_alecaframe_settings', { input });
+}
+
+export async function getCurrencyBalances(): Promise<WalletSnapshot> {
+  return invoke<WalletSnapshot>('get_currency_balances');
 }
 
 export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> {
