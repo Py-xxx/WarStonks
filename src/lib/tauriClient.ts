@@ -4,11 +4,11 @@
  */
 
 // Check if running inside Tauri
-const isTauri = () =>
+export const isTauriRuntime = () =>
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (isTauri()) {
+  if (isTauriRuntime()) {
     const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
     return tauriInvoke<T>(cmd, args);
   }
@@ -25,12 +25,62 @@ export interface AppShellInfo {
   platform: string;
 }
 
+export interface StartupProgress {
+  stageKey: string;
+  stageLabel: string;
+  statusText: string;
+  progressValue: number;
+}
+
+export interface ImportStats {
+  totalWfmItems: number;
+  totalWfstatItems: number;
+  matchedByDirectRef: number;
+  matchedByComponentRef: number;
+  matchedByMarketSlug: number;
+  matchedByMarketId: number;
+  matchedByNormalizedName: number;
+  matchedByBlueprintDecomposition: number;
+  matchedByManualAlias: number;
+  unmatchedWfmItems: number;
+  wfmOnlyCanonicalItems: number;
+  wfstatOnlyCanonicalItems: number;
+}
+
+export interface StartupSummary {
+  ready: boolean;
+  refreshed: boolean;
+  databasePath: string;
+  dataDir: string;
+  wfmSourceFile: string;
+  wfstatSourceFile: string | null;
+  stats: ImportStats;
+  currentWfmApiVersion: string | null;
+}
+
 export async function getAppShellInfo(): Promise<AppShellInfo> {
   return invoke<AppShellInfo>('get_app_shell_info');
 }
 
 export async function getAppVersion(): Promise<string> {
   return invoke<string>('get_app_version');
+}
+
+export async function initializeAppCatalog(): Promise<StartupSummary> {
+  return invoke<StartupSummary>('initialize_app_catalog');
+}
+
+export async function listenToStartupProgress(
+  onProgress: (progress: StartupProgress) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<StartupProgress>('startup-progress', (event) => {
+    onProgress(event.payload);
+  });
 }
 
 // Future commands — add typed stubs here as the backend grows:

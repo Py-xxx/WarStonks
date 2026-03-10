@@ -34,6 +34,205 @@ body {
   overflow: hidden;
 }
 
+.startup-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(74, 158, 255, 0.14), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(61, 214, 140, 0.12), transparent 32%),
+    linear-gradient(180deg, rgba(19, 22, 30, 0.96), rgba(13, 15, 20, 1));
+}
+
+.startup-panel {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid rgba(74, 158, 255, 0.16);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(26, 30, 42, 0.94), rgba(16, 19, 26, 0.98)),
+    var(--bg-surface);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+}
+
+.startup-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.startup-header h1 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: 0.08em;
+}
+
+.startup-eyebrow {
+  margin-bottom: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.startup-progress-chip {
+  min-width: 78px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(61, 214, 140, 0.22);
+  background: rgba(61, 214, 140, 0.08);
+  color: var(--accent-green);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.startup-stage-card,
+.startup-info-card,
+.startup-error-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(13, 15, 20, 0.72);
+}
+
+.startup-stage-card {
+  padding: 18px;
+}
+
+.startup-stage-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.startup-stage-label {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.startup-stage-key {
+  color: var(--accent-blue);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.startup-status-text {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+
+.startup-progress-track {
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.startup-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+  box-shadow: 0 0 18px rgba(74, 158, 255, 0.4);
+  transition: width 180ms ease-out;
+}
+
+.startup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.startup-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.startup-info-label {
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.startup-info-value {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.startup-error-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border-color: rgba(240, 79, 88, 0.28);
+}
+
+.startup-error-title {
+  color: var(--accent-red);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.startup-error-body {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.startup-retry-button {
+  align-self: flex-start;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(74, 158, 255, 0.5);
+  border-radius: 8px;
+  background: rgba(74, 158, 255, 0.08);
+  color: var(--accent-blue);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.startup-retry-button:hover {
+  background: rgba(74, 158, 255, 0.14);
+}
+
+@media (max-width: 720px) {
+  .startup-shell {
+    padding: 18px;
+  }
+
+  .startup-panel {
+    padding: 20px;
+  }
+
+  .startup-header {
+    flex-direction: column;
+  }
+
+  .startup-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── SCROLLBAR ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
