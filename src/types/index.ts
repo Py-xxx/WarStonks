@@ -166,6 +166,11 @@ export interface WfstatFissure {
   expired?: boolean;
 }
 
+export interface RelicTierIcon {
+  tier: string;
+  imagePath: string;
+}
+
 export interface CurrencyBalance {
   platinum: number | null;
   credits: number | null;

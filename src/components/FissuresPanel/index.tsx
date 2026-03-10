@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
+import { getRelicTierIcons } from '../../lib/tauriClient';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import type { WfstatFissure } from '../../types';
+import type { RelicTierIcon, WfstatFissure } from '../../types';
 
 type FissureMode = 'normal' | 'steel-path';
 
@@ -10,22 +12,8 @@ const FISSURE_MODE_LABELS: Record<FissureMode, string> = {
   'steel-path': 'Steel Path fissures',
 };
 
-const FISSURE_TIER_MONOGRAMS: Record<string, string> = {
-  lith: 'L',
-  meso: 'M',
-  neo: 'N',
-  axi: 'A',
-  requiem: 'R',
-  omnia: 'O',
-};
-
 function getFissureTierLabel(fissure: WfstatFissure): string {
   return fissure.tier?.trim() || 'Unknown';
-}
-
-function getFissureTierMonogram(tier: string): string {
-  const fallback = tier.trim().slice(0, 1).toUpperCase();
-  return (FISSURE_TIER_MONOGRAMS[tier.trim().toLowerCase()] ?? fallback) || '?';
 }
 
 function compareFissures(left: WfstatFissure, right: WfstatFissure): number {
@@ -90,24 +78,12 @@ function SteelPathModeIcon() {
   );
 }
 
-function FissureTierIcon({ tier }: { tier: string }) {
+function FissureTierIcon({ tier, imagePath }: { tier: string; imagePath: string | null }) {
+  const imageUrl = resolveWfmAssetUrl(imagePath);
+
   return (
     <span className="fissure-tier-icon" aria-hidden="true">
-      <svg viewBox="0 0 32 32">
-        <path
-          d="M16 3.5 25.8 8.9v7.8c0 6.2-3.6 10.3-9.8 12.9C9.8 27 6.2 22.9 6.2 16.7V8.9L16 3.5Z"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M16 9.1 17.8 13l4.2.5-3.1 2.8.8 4.2L16 18.5l-3.7 2 .8-4.2-3.1-2.8 4.2-.5L16 9.1Z"
-          fill="currentColor"
-          opacity="0.9"
-        />
-      </svg>
-      <span className="fissure-tier-icon-badge">{getFissureTierMonogram(tier)}</span>
+      {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : tier.slice(0, 1)}
     </span>
   );
 }
@@ -121,6 +97,7 @@ export function FissuresPanel() {
 
   const [mode, setMode] = useState<FissureMode>('normal');
   const [nowMs, setNowMs] = useState(Date.now());
+  const [tierIcons, setTierIcons] = useState<RelicTierIcon[]>([]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -128,6 +105,24 @@ export function FissuresPanel() {
     }, 1000);
 
     return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void getRelicTierIcons()
+      .then((icons) => {
+        if (isMounted) {
+          setTierIcons(icons);
+        }
+      })
+      .catch((loadError) => {
+        console.error('[fissures] failed to load relic tier icons', loadError);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const filteredFissures = useMemo(
@@ -142,6 +137,14 @@ export function FissuresPanel() {
     () => groupFissuresByTier(filteredFissures),
     [filteredFissures],
   );
+  const tierIconMap = useMemo(
+    () =>
+      new Map(
+        tierIcons.map((icon) => [icon.tier.trim().toLowerCase(), icon.imagePath]),
+      ),
+    [tierIcons],
+  );
+  const fallbackTierIcon = tierIcons[0]?.imagePath ?? null;
 
   return (
     <div className="card">
@@ -218,7 +221,10 @@ export function FissuresPanel() {
               <section key={group.tier} className="fissure-group-card">
                 <div className="fissure-group-header">
                   <span className="fissure-group-title-wrap">
-                    <FissureTierIcon tier={group.tier} />
+                    <FissureTierIcon
+                      tier={group.tier}
+                      imagePath={tierIconMap.get(group.tier.trim().toLowerCase()) ?? fallbackTierIcon}
+                    />
                     <span className="fissure-group-title">{group.tier}</span>
                   </span>
                   <span className="badge badge-muted">{group.fissures.length}</span>
