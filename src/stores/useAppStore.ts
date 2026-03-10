@@ -6,6 +6,10 @@ import {
   saveAlecaframeSettings,
 } from '../lib/tauriClient';
 import {
+  fetchWorldStateEventsSnapshot,
+  WORLDSTATE_RETRY_DELAY_MS,
+} from '../lib/worldState';
+import {
   buildWatchlistUserKey,
   getWatchlistPollIntervalMs,
   getWatchlistRetryDelayMs,
@@ -22,6 +26,7 @@ import type {
   TradesSubTab,
   WatchlistAlert,
   WatchlistItem,
+  WfstatWorldStateEvent,
   AlecaframeSettingsInput,
   AppSettings,
   WalletSnapshot,
@@ -31,6 +36,7 @@ import type {
 import { mockSellOrders } from '../mocks/trades';
 
 let quickViewRequestSequence = 0;
+let worldStateEventsRefreshPromise: Promise<void> | null = null;
 
 const defaultAppSettings: AppSettings = {
   alecaframe: {
@@ -177,6 +183,11 @@ interface AppStore {
   settingsLoading: boolean;
   walletLoading: boolean;
   settingsError: string | null;
+  worldStateEvents: WfstatWorldStateEvent[];
+  worldStateEventsLoading: boolean;
+  worldStateEventsError: string | null;
+  worldStateEventsNextRefreshAt: string | null;
+  worldStateEventsLastUpdatedAt: string | null;
   openSettingsSidebar: (section?: SettingsSection) => void;
   closeSettingsSidebar: () => void;
   setSettingsSection: (section: SettingsSection) => void;
@@ -185,6 +196,7 @@ interface AppStore {
   loadAppSettings: () => Promise<void>;
   refreshWalletSnapshot: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
+  refreshWorldStateEvents: () => Promise<void>;
 
   sellerMode: SellerMode;
   setSellerMode: (mode: SellerMode) => void;
@@ -228,8 +240,8 @@ interface AppStore {
   marketSubTab: 'analysis' | 'analytics';
   setMarketSubTab: (tab: 'analysis' | 'analytics') => void;
 
-  eventsSubTab: 'fissures' | 'activities' | 'market-news';
-  setEventsSubTab: (tab: 'fissures' | 'activities' | 'market-news') => void;
+  eventsSubTab: 'active-events' | 'void-trader' | 'fissures' | 'activities' | 'market-news';
+  setEventsSubTab: (tab: 'active-events' | 'void-trader' | 'fissures' | 'activities' | 'market-news') => void;
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -250,6 +262,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   settingsLoading: false,
   walletLoading: false,
   settingsError: null,
+  worldStateEvents: [],
+  worldStateEventsLoading: false,
+  worldStateEventsError: null,
+  worldStateEventsNextRefreshAt: null,
+  worldStateEventsLastUpdatedAt: null,
   openSettingsSidebar: (section = 'alecaframe') =>
     set({ settingsSidebarOpen: true, settingsSection: section, alecaframeModalOpen: false }),
   closeSettingsSidebar: () => set({ settingsSidebarOpen: false, alecaframeModalOpen: false }),
@@ -322,6 +339,38 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
       throw error;
     }
+  },
+  refreshWorldStateEvents: async () => {
+    if (worldStateEventsRefreshPromise) {
+      return worldStateEventsRefreshPromise;
+    }
+
+    set({ worldStateEventsLoading: true });
+
+    worldStateEventsRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateEventsSnapshot();
+        set({
+          worldStateEvents: snapshot.events,
+          worldStateEventsLoading: false,
+          worldStateEventsError: null,
+          worldStateEventsNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateEventsLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateEventsLoading: false,
+          worldStateEventsError: toErrorMessage(error),
+          worldStateEventsNextRefreshAt:
+            state.worldStateEventsNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateEventsRefreshPromise = null;
+      }
+    })();
+
+    return worldStateEventsRefreshPromise;
   },
 
   sellerMode: 'ingame',
@@ -588,6 +637,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   marketSubTab: 'analysis',
   setMarketSubTab: (tab) => set({ marketSubTab: tab }),
 
-  eventsSubTab: 'fissures',
+  eventsSubTab: 'active-events',
   setEventsSubTab: (tab) => set({ eventsSubTab: tab }),
 }));

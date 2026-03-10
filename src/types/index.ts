@@ -8,7 +8,7 @@ export type PageId =
   | 'portfolio'
   | 'strategy';
 
-export type HomeSubTab = 'overview' | 'watchlist' | 'alerts' | 'events-tab';
+export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | 'all';
 export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
@@ -79,13 +79,53 @@ export interface PortfolioTrade {
   holdHours: number;
 }
 
-export interface GameEvent {
+export interface WfstatEventRewardCountedItem {
+  count: number;
+  type: string;
+  key: string | null;
+}
+
+export interface WfstatEventReward {
+  items: string[];
+  countedItems: WfstatEventRewardCountedItem[];
+  credits: number | null;
+  thumbnail: string | null;
+  color: number | null;
+}
+
+export interface WfstatEventInterimStep {
+  goal: number | null;
+  reward: WfstatEventReward | null;
+  message: Record<string, unknown>;
+}
+
+export interface WfstatWorldStateEvent {
   id: string;
-  name: string;
-  startDate: string;
-  endDate: string;
-  status: 'active' | 'upcoming' | 'ended';
-  tier: 'low' | 'medium' | 'high';
+  activation: string | null;
+  expiry: string | null;
+  description: string;
+  tooltip: string | null;
+  node: string | null;
+  rewards: WfstatEventReward[];
+  interimSteps: WfstatEventInterimStep[];
+  jobs: Record<string, unknown>[];
+  previousJobs: Record<string, unknown>[];
+  concurrentNodes: string[];
+  progressSteps: number[];
+  regionDrops: string[];
+  archwingDrops: string[];
+  maximumScore: number | null;
+  currentScore: number | null;
+  health: number | null;
+  scoreLocTag: string | null;
+  scoreVar: string | null;
+  tag: string | null;
+  altExpiry: string | null;
+  altActivation: string | null;
+  isPersonal: boolean;
+  isCommunity: boolean;
+  showTotalAtEndOfMission: boolean;
+  expired?: boolean;
 }
 
 export interface CurrencyBalance {
