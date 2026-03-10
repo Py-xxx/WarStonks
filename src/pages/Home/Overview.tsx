@@ -170,7 +170,7 @@ function WatchlistCard() {
           </div>
           <div className="watchlist-alert-summary">
             <div className="watchlist-alert-summary-header">
-              <span className="card-label">Alert Summary</span>
+              <span className="card-label">Events</span>
               <span className={`badge ${alerts.length > 0 ? 'badge-red' : 'badge-muted'}`}>
                 {alerts.length} active
               </span>
@@ -188,7 +188,7 @@ function WatchlistCard() {
                     <span className="watchlist-alert-summary-item-copy">
                       <span className="watchlist-alert-summary-item-name">{alert.itemName}</span>
                       <span className="watchlist-alert-summary-item-meta">
-                        <span className="badge badge-red">Target Hit</span>
+                        <span className="badge badge-red">Alert Event</span>
                         <span>{formatAlertSummaryTime(alert.createdAt)}</span>
                       </span>
                     </span>
@@ -202,7 +202,7 @@ function WatchlistCard() {
                 type="button"
                 onClick={() => setHomeSubTab('alerts')}
               >
-                No active alerts yet. Alerts appear here when a watched item reaches your target.
+                No active events yet. Click here to open Alerts when events start coming in.
               </button>
             )}
           </div>
