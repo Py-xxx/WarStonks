@@ -33,6 +33,9 @@ export function AlecaframeModal() {
   const appSettings = useAppStore((state) => state.appSettings);
   const settingsLoading = useAppStore((state) => state.settingsLoading);
   const settingsError = useAppStore((state) => state.settingsError);
+  const walletSnapshot = useAppStore((state) => state.walletSnapshot);
+  const walletLoading = useAppStore((state) => state.walletLoading);
+  const refreshWalletSnapshot = useAppStore((state) => state.refreshWalletSnapshot);
   const saveAlecaframeConfiguration = useAppStore(
     (state) => state.saveAlecaframeConfiguration,
   );
@@ -58,12 +61,35 @@ export function AlecaframeModal() {
     setTestedInput('');
   }, [appSettings.alecaframe.enabled, appSettings.alecaframe.publicLink, modalOpen]);
 
+  useEffect(() => {
+    if (!modalOpen || !appSettings.alecaframe.enabled || !appSettings.alecaframe.publicLink) {
+      return;
+    }
+
+    void refreshWalletSnapshot();
+  }, [
+    appSettings.alecaframe.enabled,
+    appSettings.alecaframe.publicLink,
+    modalOpen,
+    refreshWalletSnapshot,
+  ]);
+
   const trimmedPublicLink = publicLink.trim();
 
   const previewBalances = useMemo(
-    () => validationResult?.balances ?? null,
-    [validationResult],
+    () => validationResult?.balances ?? walletSnapshot.balances,
+    [validationResult, walletSnapshot.balances],
   );
+
+  const previewUsername =
+    validationResult?.usernameWhenPublic ??
+    walletSnapshot.usernameWhenPublic ??
+    appSettings.alecaframe.usernameWhenPublic;
+
+  const previewLastUpdate =
+    validationResult?.lastUpdate ??
+    walletSnapshot.lastUpdate ??
+    appSettings.alecaframe.lastValidatedAt;
 
   if (!modalOpen) {
     return null;
@@ -136,14 +162,30 @@ export function AlecaframeModal() {
             <span className="card-label">Alecaframe API</span>
             <h3>Alecaframe API Integration</h3>
           </div>
-          <button
-            className="settings-close-btn"
-            type="button"
-            aria-label="Close Alecaframe settings"
-            onClick={closeModal}
-          >
-            <CloseIcon />
-          </button>
+          <div className="settings-modal-actions">
+            <button
+              className="settings-secondary-btn settings-refresh-btn"
+              type="button"
+              onClick={() => {
+                void refreshWalletSnapshot();
+              }}
+              disabled={
+                walletLoading ||
+                !appSettings.alecaframe.enabled ||
+                !appSettings.alecaframe.publicLink
+              }
+            >
+              {walletLoading ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <button
+              className="settings-close-btn"
+              type="button"
+              aria-label="Close Alecaframe settings"
+              onClick={closeModal}
+            >
+              <CloseIcon />
+            </button>
+          </div>
         </div>
 
         <div className="settings-modal-body">
@@ -228,17 +270,13 @@ export function AlecaframeModal() {
               <div className="settings-preview-card">
                 <span className="settings-meta-label">Public user</span>
                 <span className="settings-meta-value">
-                  {validationResult?.usernameWhenPublic ??
-                    appSettings.alecaframe.usernameWhenPublic ??
-                    'Not validated'}
+                  {previewUsername ?? 'Not validated'}
                 </span>
               </div>
               <div className="settings-preview-card">
                 <span className="settings-meta-label">Last update</span>
                 <span className="settings-meta-value">
-                  {formatShortLocalDateTime(
-                    validationResult?.lastUpdate ?? appSettings.alecaframe.lastValidatedAt,
-                  )}
+                  {formatShortLocalDateTime(previewLastUpdate)}
                 </span>
               </div>
               <div className="settings-preview-card">
