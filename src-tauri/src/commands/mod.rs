@@ -1,7 +1,90 @@
+use anyhow::{Context, Result};
+use reqwest::blocking::Client;
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Duration;
+use tauri::Manager;
 
 use crate::item_catalog;
+
+const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
+const WFM_API_BASE_URL: &str = "https://api.warframe.market/v2";
+const WFM_LANGUAGE_HEADER: &str = "en";
+const WFM_PLATFORM_HEADER: &str = "pc";
+const WFM_CROSSPLAY_HEADER: &str = "true";
+const WFM_USER_AGENT: &str = "warstonks/3.0.0";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WfmAutocompleteItem {
+    pub item_id: i64,
+    pub name: String,
+    pub slug: String,
+    pub max_rank: Option<i64>,
+    pub item_family: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WfmTopSellOrder {
+    pub order_id: String,
+    pub platinum: i64,
+    pub quantity: i64,
+    pub per_trade: i64,
+    pub rank: Option<i64>,
+    pub username: String,
+    pub user_slug: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WfmTopSellOrdersResponse {
+    pub api_version: Option<String>,
+    pub slug: String,
+    pub sell_orders: Vec<WfmTopSellOrder>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmTopOrdersApiResponse {
+    api_version: Option<String>,
+    data: WfmTopOrdersData,
+}
+
+#[derive(Debug, Deserialize)]
+struct WfmTopOrdersData {
+    #[serde(default)]
+    sell: Vec<WfmOrderWithUser>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmOrderWithUser {
+    id: String,
+    platinum: i64,
+    #[serde(default)]
+    quantity: Option<i64>,
+    #[serde(default)]
+    per_trade: Option<i64>,
+    #[serde(default)]
+    rank: Option<i64>,
+    user: WfmOrderUser,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmOrderUser {
+    #[serde(default)]
+    ingame_name: Option<String>,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AppShellInfo {
@@ -25,6 +108,122 @@ pub fn get_app_shell_info() -> AppShellInfo {
 #[tauri::command]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+fn resolve_catalog_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve the app data directory")?;
+    Ok(app_data_dir.join(ITEM_CATALOG_DATABASE_FILE))
+}
+
+fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
+    let db_path = resolve_catalog_db_path(app)?;
+    Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .context("failed to open the local item catalog")
+}
+
+fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAutocompleteItem>> {
+    let connection = open_catalog_database(&app)?;
+    let mut statement = connection.prepare(
+        "SELECT
+            item_id,
+            name_en,
+            slug,
+            max_rank,
+            item_family
+         FROM wfm_items
+         WHERE name_en IS NOT NULL
+         ORDER BY name_en COLLATE NOCASE, slug COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(WfmAutocompleteItem {
+            item_id: row.get(0)?,
+            name: row.get(1)?,
+            slug: row.get(2)?,
+            max_rank: row.get(3)?,
+            item_family: row.get(4)?,
+        })
+    })?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row?);
+    }
+
+    Ok(items)
+}
+
+fn compare_sell_orders(left: &WfmTopSellOrder, right: &WfmTopSellOrder) -> Ordering {
+    left.platinum.cmp(&right.platinum).then_with(|| {
+        left.username
+            .to_lowercase()
+            .cmp(&right.username.to_lowercase())
+    })
+}
+
+fn normalize_top_sell_orders(
+    slug: &str,
+    api_version: Option<String>,
+    sell_orders: Vec<WfmOrderWithUser>,
+) -> WfmTopSellOrdersResponse {
+    let mut normalized = sell_orders
+        .into_iter()
+        .filter_map(|order| {
+            let username = order.user.ingame_name?;
+            Some(WfmTopSellOrder {
+                order_id: order.id,
+                platinum: order.platinum,
+                quantity: order.quantity.unwrap_or(1),
+                per_trade: order.per_trade.unwrap_or(1),
+                rank: order.rank,
+                username,
+                user_slug: order.user.slug,
+                status: order.user.status,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    normalized.sort_by(compare_sell_orders);
+    normalized.truncate(5);
+
+    WfmTopSellOrdersResponse {
+        api_version,
+        slug: slug.to_string(),
+        sell_orders: normalized,
+    }
+}
+
+fn fetch_wfm_top_sell_orders_inner(slug: String) -> Result<WfmTopSellOrdersResponse> {
+    let trimmed_slug = slug.trim();
+    if trimmed_slug.is_empty() {
+        return Err(anyhow::anyhow!("item slug cannot be empty"));
+    }
+
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let response = client
+        .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}/top"))
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Language", WFM_LANGUAGE_HEADER)
+        .header("Platform", WFM_PLATFORM_HEADER)
+        .header("Crossplay", WFM_CROSSPLAY_HEADER)
+        .send()
+        .context("failed to request top WFM orders")?
+        .error_for_status()
+        .context("WFM top orders request failed")?;
+    let payload = response
+        .json::<WfmTopOrdersApiResponse>()
+        .context("failed to parse WFM top orders response JSON")?;
+
+    Ok(normalize_top_sell_orders(
+        trimmed_slug,
+        payload.api_version,
+        payload.data.sell,
+    ))
 }
 
 #[derive(Debug, Default)]
@@ -94,9 +293,30 @@ pub async fn initialize_app_catalog(
         .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub async fn get_wfm_autocomplete_items(
+    app: tauri::AppHandle,
+) -> Result<Vec<WfmAutocompleteItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || load_wfm_autocomplete_items_inner(app))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_wfm_top_sell_orders(slug: String) -> Result<WfmTopSellOrdersResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_wfm_top_sell_orders_inner(slug))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cached_startup_summary, StartupCommandState};
+    use super::{
+        cached_startup_summary, normalize_top_sell_orders, StartupCommandState, WfmOrderUser,
+        WfmOrderWithUser,
+    };
     use crate::item_catalog::{ImportStats, StartupSummary};
 
     fn sample_summary() -> StartupSummary {
@@ -131,5 +351,104 @@ mod tests {
         };
 
         assert!(cached_startup_summary(&state).is_none());
+    }
+
+    #[test]
+    fn normalizes_and_truncates_top_sell_orders() {
+        let response = normalize_top_sell_orders(
+            "arcane_energize",
+            Some("0.22.7".to_string()),
+            vec![
+                WfmOrderWithUser {
+                    id: "3".to_string(),
+                    platinum: 9,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(0),
+                    user: WfmOrderUser {
+                        ingame_name: Some("charlie".to_string()),
+                        slug: Some("charlie".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "1".to_string(),
+                    platinum: 5,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(0),
+                    user: WfmOrderUser {
+                        ingame_name: Some("alpha".to_string()),
+                        slug: Some("alpha".to_string()),
+                        status: Some("ingame".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "skip".to_string(),
+                    platinum: 4,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(0),
+                    user: WfmOrderUser {
+                        ingame_name: None,
+                        slug: Some("missing".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "2".to_string(),
+                    platinum: 7,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(0),
+                    user: WfmOrderUser {
+                        ingame_name: Some("bravo".to_string()),
+                        slug: Some("bravo".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "4".to_string(),
+                    platinum: 10,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(0),
+                    user: WfmOrderUser {
+                        ingame_name: Some("delta".to_string()),
+                        slug: Some("delta".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "5".to_string(),
+                    platinum: 11,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(0),
+                    user: WfmOrderUser {
+                        ingame_name: Some("echo".to_string()),
+                        slug: Some("echo".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "6".to_string(),
+                    platinum: 12,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(0),
+                    user: WfmOrderUser {
+                        ingame_name: Some("foxtrot".to_string()),
+                        slug: Some("foxtrot".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+            ],
+        );
+
+        assert_eq!(response.slug, "arcane_energize");
+        assert_eq!(response.sell_orders.len(), 5);
+        assert_eq!(response.sell_orders[0].username, "alpha");
+        assert_eq!(response.sell_orders[4].username, "echo");
     }
 }
