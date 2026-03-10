@@ -86,16 +86,13 @@ function formatAlertSummaryTime(isoTimestamp: string): string {
 
 function WatchlistCard() {
   const watchlist = useAppStore((state) => state.watchlist);
-  const alerts = useAppStore((state) => state.alerts);
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
   const setSelected = useAppStore((state) => state.setSelectedWatchlist);
   const removeItem = useAppStore((state) => state.removeWatchlistItem);
-  const setHomeSubTab = useAppStore((state) => state.setHomeSubTab);
   const watchlistRows = watchlist.map((item) => ({
     item,
     visualState: getWatchlistVisualState(item),
   }));
-  const latestAlerts = alerts.slice(0, 3);
 
   return (
     <div className="card">
@@ -168,46 +165,58 @@ function WatchlistCard() {
               </span>
             ) : null}
           </div>
-          <div className="watchlist-alert-summary">
-            <div className="watchlist-alert-summary-header">
-              <span className="card-label">Events</span>
-              <span className={`badge ${alerts.length > 0 ? 'badge-red' : 'badge-muted'}`}>
-                {alerts.length} active
-              </span>
-            </div>
-
-            {latestAlerts.length > 0 ? (
-              <div className="watchlist-alert-summary-list">
-                {latestAlerts.map((alert) => (
-                  <button
-                    key={alert.id}
-                    className="watchlist-alert-summary-item"
-                    type="button"
-                    onClick={() => setHomeSubTab('alerts')}
-                  >
-                    <span className="watchlist-alert-summary-item-copy">
-                      <span className="watchlist-alert-summary-item-name">{alert.itemName}</span>
-                      <span className="watchlist-alert-summary-item-meta">
-                        <span className="badge badge-red">Alert Event</span>
-                        <span>{formatAlertSummaryTime(alert.createdAt)}</span>
-                      </span>
-                    </span>
-                    <span className="watchlist-alert-summary-item-price">{alert.price} pt</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <button
-                className="watchlist-alert-summary-empty"
-                type="button"
-                onClick={() => setHomeSubTab('alerts')}
-              >
-                No active events yet. Click here to open Alerts when events start coming in.
-              </button>
-            )}
-          </div>
         </>
       )}
+    </div>
+  );
+}
+
+function EventsCard() {
+  const alerts = useAppStore((state) => state.alerts);
+  const setHomeSubTab = useAppStore((state) => state.setHomeSubTab);
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <span className="card-label">Events</span>
+        <span className={`badge ${alerts.length > 0 ? 'badge-red' : 'badge-muted'}`}>
+          {alerts.length} active
+        </span>
+      </div>
+
+      <div className="card-body">
+        <div className="watchlist-alert-summary">
+          {alerts.length > 0 ? (
+            <div className="watchlist-alert-summary-list">
+              {alerts.map((alert) => (
+                <button
+                  key={alert.id}
+                  className="watchlist-alert-summary-item"
+                  type="button"
+                  onClick={() => setHomeSubTab('alerts')}
+                >
+                  <span className="watchlist-alert-summary-item-copy">
+                    <span className="watchlist-alert-summary-item-name">{alert.itemName}</span>
+                    <span className="watchlist-alert-summary-item-meta">
+                      <span className="badge badge-red">Alert Event</span>
+                      <span>{formatAlertSummaryTime(alert.createdAt)}</span>
+                    </span>
+                  </span>
+                  <span className="watchlist-alert-summary-item-price">{alert.price} pt</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <button
+              className="watchlist-alert-summary-empty"
+              type="button"
+              onClick={() => setHomeSubTab('alerts')}
+            >
+              No active events yet. Click here to open Alerts when events start coming in.
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -452,6 +461,7 @@ export function Overview() {
       </div>
       <div className="watchlist-row-shell">
         <WatchlistCard />
+        <EventsCard />
       </div>
     </div>
   );
