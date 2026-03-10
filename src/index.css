@@ -829,6 +829,18 @@ body {
   padding: 18px 18px 0;
 }
 
+.settings-modal-title,
+.settings-field-copy {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-modal-title .card-label,
+.settings-field-copy .settings-field-label,
+.settings-section-title {
+  margin-bottom: 6px;
+}
+
 .settings-modal-body {
   padding: 18px;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.92fr);
