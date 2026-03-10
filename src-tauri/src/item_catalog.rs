@@ -298,9 +298,10 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         0.22,
     );
     let wfstat_bytes = fetch_to_file(WFSTAT_ITEMS_URL, &paths.wfstat_file_path)?;
-    let wfstat_json: Value =
-        serde_json::from_slice(&wfstat_bytes).context("failed to parse WFStat item response JSON")?;
-    let wfstat_meta = build_wfstat_meta(&wfstat_json, &paths.wfstat_file_path, &now, &wfstat_bytes)?;
+    let wfstat_json: Value = serde_json::from_slice(&wfstat_bytes)
+        .context("failed to parse WFStat item response JSON")?;
+    let wfstat_meta =
+        build_wfstat_meta(&wfstat_json, &paths.wfstat_file_path, &now, &wfstat_bytes)?;
 
     emit_progress(
         &app,
@@ -361,8 +362,11 @@ fn build_import_context(wfm_json: &Value, wfstat_json: &Value) -> Result<ImportC
 
         if let Some(components) = get_array(wfstat_value, "components") {
             for (component_index, component_value) in components.iter().enumerate() {
-                let component =
-                    parse_wfstat_component_record(&record.unique_name, component_index, component_value);
+                let component = parse_wfstat_component_record(
+                    &record.unique_name,
+                    component_index,
+                    component_value,
+                );
                 let component_key = build_component_canonical_key(&record, &component);
                 register_component_record(&mut context, &record, &component, &component_key);
             }
@@ -385,7 +389,9 @@ fn build_import_context(wfm_json: &Value, wfstat_json: &Value) -> Result<ImportC
         let match_outcome = match_wfm_record(&record, &context.indexes, &manual_alias_seed)?;
 
         update_stats_for_match(&mut context.stats, match_outcome.method);
-        context.wfm_matches.insert(record.id.clone(), match_outcome.clone());
+        context
+            .wfm_matches
+            .insert(record.id.clone(), match_outcome.clone());
         update_canonical_from_wfm(&mut context.canonical_items, &record, &match_outcome)?;
         context.wfm_records.push(record);
     }
@@ -468,7 +474,11 @@ fn import_into_database(
     })
 }
 
-fn register_top_level_record(context: &mut ImportContext, record: &WfstatRecord, canonical_key: &str) {
+fn register_top_level_record(
+    context: &mut ImportContext,
+    record: &WfstatRecord,
+    canonical_key: &str,
+) {
     let canonical_entry = context
         .canonical_items
         .entry(canonical_key.to_string())
@@ -499,14 +509,20 @@ fn register_top_level_record(context: &mut ImportContext, record: &WfstatRecord,
             wfm_game_ref: None,
             primary_wfstat_unique_name: Some(record.unique_name.clone()),
             wfstat_name: Some(record.name.clone()),
-            relic_tier: record
-                .variant
-                .as_ref()
-                .and_then(|variant| variant.group_name.split_whitespace().next().map(str::to_string)),
-            relic_code: record
-                .variant
-                .as_ref()
-                .and_then(|variant| variant.group_name.split_whitespace().nth(1).map(str::to_string)),
+            relic_tier: record.variant.as_ref().and_then(|variant| {
+                variant
+                    .group_name
+                    .split_whitespace()
+                    .next()
+                    .map(str::to_string)
+            }),
+            relic_code: record.variant.as_ref().and_then(|variant| {
+                variant
+                    .group_name
+                    .split_whitespace()
+                    .nth(1)
+                    .map(str::to_string)
+            }),
             notes: None,
             has_wfm: false,
             has_wfstat: true,
@@ -576,7 +592,10 @@ fn register_component_record(
             canonical_name,
             canonical_name_normalized,
             base_name: component.name.clone(),
-            item_family: component.item_family.clone().or_else(|| parent.item_family.clone()),
+            item_family: component
+                .item_family
+                .clone()
+                .or_else(|| parent.item_family.clone()),
             parent_key: Some(build_top_level_canonical_key(parent)),
             preferred_name: component.name.clone(),
             preferred_slug: None,
@@ -609,7 +628,11 @@ fn register_component_record(
         context.indexes.component_by_parent_and_name.insert(
             (
                 parent.normalized_name.clone(),
-                normalize_name(&format!("{} {}", parent.name, component.name.clone().unwrap_or_default())),
+                normalize_name(&format!(
+                    "{} {}",
+                    parent.name,
+                    component.name.clone().unwrap_or_default()
+                )),
             ),
             canonical_key.to_string(),
         );
@@ -667,7 +690,9 @@ fn update_canonical_from_wfm(
     } else {
         "wfm_only".to_string()
     };
-    if canonical.primary_match_method.is_none() || canonical.primary_match_method.as_deref() == Some("wfstat_top_level") {
+    if canonical.primary_match_method.is_none()
+        || canonical.primary_match_method.as_deref() == Some("wfstat_top_level")
+    {
         canonical.primary_match_method = Some(outcome.method.to_string());
     }
     if canonical.wfm_id.is_none() {
@@ -691,10 +716,18 @@ fn update_canonical_from_wfm(
     }
     if let Some(variant) = &record.variant {
         if canonical.relic_tier.is_none() {
-            canonical.relic_tier = variant.group_name.split_whitespace().next().map(str::to_string);
+            canonical.relic_tier = variant
+                .group_name
+                .split_whitespace()
+                .next()
+                .map(str::to_string);
         }
         if canonical.relic_code.is_none() {
-            canonical.relic_code = variant.group_name.split_whitespace().nth(1).map(str::to_string);
+            canonical.relic_code = variant
+                .group_name
+                .split_whitespace()
+                .nth(1)
+                .map(str::to_string);
         }
     }
 
@@ -770,13 +803,17 @@ fn match_wfm_record(
     }
 
     if let Some(variant) = &record.variant {
-        if let Some(canonical_key) = resolve_unique_name_match(indexes, &variant.group_name_normalized) {
+        if let Some(canonical_key) =
+            resolve_unique_name_match(indexes, &variant.group_name_normalized)
+        {
             return Ok(MatchOutcome {
                 canonical_key,
                 method: "normalized_name_to_wfstat_name",
                 matched_field: Some("i18n.en.name".to_string()),
                 matched_value: Some(variant.group_name.clone()),
-                notes: Some("Resolved a relic refinement to the base relic canonical item.".to_string()),
+                notes: Some(
+                    "Resolved a relic refinement to the base relic canonical item.".to_string(),
+                ),
             });
         }
     }
@@ -855,15 +892,23 @@ fn manual_alias_matches_record(alias: &ManualAliasSeedRow, record: &WfmRecord) -
         "wfm_slug" => alias.lookup_value == record.slug,
         "wfm_game_ref" => record.game_ref.as_deref() == Some(alias.lookup_value.as_str()),
         "wfm_name" => record.name_en.as_deref() == Some(alias.lookup_value.as_str()),
-        "wfm_normalized_name" => record.normalized_name_en.as_deref() == Some(alias.lookup_value.as_str()),
+        "wfm_normalized_name" => {
+            record.normalized_name_en.as_deref() == Some(alias.lookup_value.as_str())
+        }
         _ => false,
     }
 }
 
-fn resolve_manual_alias_target(alias: &ManualAliasSeedRow, indexes: &MatchIndexes) -> Option<String> {
+fn resolve_manual_alias_target(
+    alias: &ManualAliasSeedRow,
+    indexes: &MatchIndexes,
+) -> Option<String> {
     match alias.target_type.as_str() {
         "wfstat_unique_name" => indexes.top_by_unique_name.get(&alias.target_value).cloned(),
-        "wfstat_component_unique_name" => indexes.component_by_unique_name.get(&alias.target_value).cloned(),
+        "wfstat_component_unique_name" => indexes
+            .component_by_unique_name
+            .get(&alias.target_value)
+            .cloned(),
         "wfstat_name" => resolve_unique_name_match(indexes, &normalize_name(&alias.target_value)),
         "canonical_key" => Some(alias.target_value.clone()),
         _ => None,
@@ -948,7 +993,10 @@ fn build_top_level_canonical_key(record: &WfstatRecord) -> String {
     format!("wfstat:{}", record.unique_name)
 }
 
-fn build_component_canonical_key(parent: &WfstatRecord, component: &WfstatComponentRecord) -> String {
+fn build_component_canonical_key(
+    parent: &WfstatRecord,
+    component: &WfstatComponentRecord,
+) -> String {
     if let Some(unique_name) = &component.unique_name {
         return format!("wfstat_component:{}", unique_name);
     }
@@ -1063,7 +1111,12 @@ fn insert_wfm_record(
     let item_id = item_ids
         .get(&outcome.canonical_key)
         .copied()
-        .ok_or_else(|| anyhow!("missing item_id for canonical key {}", outcome.canonical_key))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "missing item_id for canonical key {}",
+                outcome.canonical_key
+            )
+        })?;
 
     let i18n_en = record.raw.get("i18n").and_then(|value| value.get("en"));
     tx.execute(
@@ -1139,7 +1192,11 @@ fn insert_wfm_record(
         outcome.method,
         outcome.matched_field.as_deref(),
         outcome.matched_value.as_deref(),
-        if outcome.method == "manual_alias" { Some(1) } else { Some(0) },
+        if outcome.method == "manual_alias" {
+            Some(1)
+        } else {
+            Some(0)
+        },
         outcome.notes.as_deref(),
     )?;
 
@@ -1548,7 +1605,13 @@ fn insert_wfstat_record(
         &record.unique_name,
         &record.raw,
     )?;
-    insert_damage_table(tx, "wfstat_item_damage", "wfstat_unique_name", &record.unique_name, record.raw.get("damage"))?;
+    insert_damage_table(
+        tx,
+        "wfstat_item_damage",
+        "wfstat_unique_name",
+        &record.unique_name,
+        record.raw.get("damage"),
+    )?;
     insert_damage_per_shot_table(
         tx,
         "wfstat_item_damage_per_shot",
@@ -1703,7 +1766,10 @@ fn insert_wfstat_component_record(
         component.name.as_deref(),
         "wfstat_component",
         Some("component_unique_name"),
-        component.unique_name.as_deref().or(component.name.as_deref()),
+        component
+            .unique_name
+            .as_deref()
+            .or(component.name.as_deref()),
         Some(0),
         None,
     )?;
@@ -1832,7 +1898,8 @@ fn insert_parent_rows(
     if let Some(parents) = get_array(&record.raw, "parents") {
         for (index, parent_value) in parents.iter().enumerate() {
             let parent_text = parent_value.as_str().unwrap_or_default().to_string();
-            let parent_item_id = resolve_nested_item_id(Some(&parent_text), None, import_context, item_ids);
+            let parent_item_id =
+                resolve_nested_item_id(Some(&parent_text), None, import_context, item_ids);
             tx.execute(
                 "INSERT INTO wfstat_item_parents (wfstat_unique_name, parent_index, parent_item_id, parent_value)
                  VALUES (?1, ?2, ?3, ?4)",
@@ -1963,7 +2030,8 @@ fn insert_reward_rows(
     if let Some(rewards) = get_array(&record.raw, "rewards") {
         for (index, reward_value) in rewards.iter().enumerate() {
             let reward_unique_name = get_string(reward_value, "uniqueName");
-            let reward_name = get_string(reward_value, "name").or_else(|| get_string(reward_value, "item"));
+            let reward_name =
+                get_string(reward_value, "name").or_else(|| get_string(reward_value, "item"));
             tx.execute(
                 "INSERT INTO wfstat_item_rewards (
                     wfstat_unique_name,
@@ -2132,8 +2200,20 @@ fn insert_attack_rows(
             ],
         )?;
         let attack_id = tx.last_insert_rowid();
-        insert_attack_damage_row(tx, damage_table, damage_table.contains("component"), attack_id, attack_value.get("damage"))?;
-        insert_attack_falloff_row(tx, falloff_table, falloff_table.contains("component"), attack_id, attack_value.get("falloff"))?;
+        insert_attack_damage_row(
+            tx,
+            damage_table,
+            damage_table.contains("component"),
+            attack_id,
+            attack_value.get("damage"),
+        )?;
+        insert_attack_falloff_row(
+            tx,
+            falloff_table,
+            falloff_table.contains("component"),
+            attack_id,
+            attack_value.get("falloff"),
+        )?;
     }
 
     Ok(())
@@ -2263,8 +2343,9 @@ fn insert_damage_per_shot_table(
     let Some(values) = values.and_then(Value::as_array) else {
         return Ok(());
     };
-    let sql =
-        format!("INSERT INTO {table_name} ({owner_column}, shot_index, damage_value) VALUES (?1, ?2, ?3)");
+    let sql = format!(
+        "INSERT INTO {table_name} ({owner_column}, shot_index, damage_value) VALUES (?1, ?2, ?3)"
+    );
     for (index, value) in values.iter().enumerate() {
         tx.execute(&sql, params![owner_key, index as i64, value.as_f64()])?;
     }
@@ -2354,13 +2435,19 @@ fn resolve_nested_item_id(
         if let Some(canonical_key) = import_context.indexes.top_by_unique_name.get(unique_name) {
             return item_ids.get(canonical_key).copied();
         }
-        if let Some(canonical_key) = import_context.indexes.component_by_unique_name.get(unique_name) {
+        if let Some(canonical_key) = import_context
+            .indexes
+            .component_by_unique_name
+            .get(unique_name)
+        {
             return item_ids.get(canonical_key).copied();
         }
     }
 
     let normalized_name = item_name.map(normalize_name)?;
-    if let Some(canonical_key) = resolve_unique_name_match(&import_context.indexes, &normalized_name) {
+    if let Some(canonical_key) =
+        resolve_unique_name_match(&import_context.indexes, &normalized_name)
+    {
         return item_ids.get(&canonical_key).copied();
     }
 
@@ -2607,8 +2694,10 @@ fn should_refresh_catalog(
     schema_checksum: &str,
     alias_seed_checksum: &str,
 ) -> Result<bool> {
-    let has_items = connection.query_row("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)", [], |row| row.get::<_, i64>(0))?
-        == 1;
+    let has_items =
+        connection.query_row("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)", [], |row| {
+            row.get::<_, i64>(0)
+        })? == 1;
     let previous_wfm = load_version_row(connection, WFM_SOURCE_NAME)?;
     let previous_schema = load_version_row(connection, SCHEMA_SOURCE_NAME)?;
     let previous_alias_seed = load_version_row(connection, MANUAL_ALIAS_SOURCE_NAME)?;
@@ -2670,15 +2759,23 @@ fn upsert_source_version(tx: &Transaction<'_>, meta: &SourceMeta) -> Result<()> 
 }
 
 fn load_existing_stats(connection: &Connection) -> Result<ImportStats> {
-    let total_wfm_items = connection.query_row("SELECT COUNT(*) FROM wfm_items", [], |row| row.get::<_, i64>(0))? as usize;
+    let total_wfm_items = connection.query_row("SELECT COUNT(*) FROM wfm_items", [], |row| {
+        row.get::<_, i64>(0)
+    })? as usize;
     let total_wfstat_items =
-        connection.query_row("SELECT COUNT(*) FROM wfstat_items", [], |row| row.get::<_, i64>(0))? as usize;
+        connection.query_row("SELECT COUNT(*) FROM wfstat_items", [], |row| {
+            row.get::<_, i64>(0)
+        })? as usize;
     let matched_by_direct_ref = count_match_method(connection, "gameRef_to_wfstat_uniqueName")?;
-    let matched_by_component_ref = count_match_method(connection, "gameRef_to_wfstat_component_uniqueName")?;
-    let matched_by_market_slug = count_match_method(connection, "wfm_slug_to_wfstat_market_url_name")?;
+    let matched_by_component_ref =
+        count_match_method(connection, "gameRef_to_wfstat_component_uniqueName")?;
+    let matched_by_market_slug =
+        count_match_method(connection, "wfm_slug_to_wfstat_market_url_name")?;
     let matched_by_market_id = count_match_method(connection, "wfm_id_to_wfstat_market_id")?;
-    let matched_by_normalized_name = count_match_method(connection, "normalized_name_to_wfstat_name")?;
-    let matched_by_blueprint_decomposition = count_match_method(connection, "blueprint_parent_component_name")?;
+    let matched_by_normalized_name =
+        count_match_method(connection, "normalized_name_to_wfstat_name")?;
+    let matched_by_blueprint_decomposition =
+        count_match_method(connection, "blueprint_parent_component_name")?;
     let matched_by_manual_alias = count_match_method(connection, "manual_alias")?;
     let unmatched_wfm_items = count_match_method(connection, "unmatched")?;
     let wfm_only_canonical_items = connection.query_row(
@@ -2732,7 +2829,12 @@ fn fetch_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()?;
-    let bytes = client.get(url).send()?.error_for_status()?.bytes()?.to_vec();
+    let bytes = client
+        .get(url)
+        .send()?
+        .error_for_status()?
+        .bytes()?
+        .to_vec();
     fs::write(output_path, &bytes)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
     Ok(bytes)
@@ -2755,7 +2857,12 @@ fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths> {
     })
 }
 
-fn build_wfm_meta(wfm_json: &Value, path: &Path, fetched_at: &str, bytes: &[u8]) -> Result<SourceMeta> {
+fn build_wfm_meta(
+    wfm_json: &Value,
+    path: &Path,
+    fetched_at: &str,
+    bytes: &[u8],
+) -> Result<SourceMeta> {
     let api_version = get_string(wfm_json, "apiVersion");
     let item_count = wfm_json
         .get("data")
@@ -2773,7 +2880,12 @@ fn build_wfm_meta(wfm_json: &Value, path: &Path, fetched_at: &str, bytes: &[u8])
     })
 }
 
-fn build_wfstat_meta(wfstat_json: &Value, path: &Path, fetched_at: &str, bytes: &[u8]) -> Result<SourceMeta> {
+fn build_wfstat_meta(
+    wfstat_json: &Value,
+    path: &Path,
+    fetched_at: &str,
+    bytes: &[u8],
+) -> Result<SourceMeta> {
     let item_count = wfstat_json
         .as_array()
         .map(|rows| rows.len() as i64)
@@ -2786,21 +2898,24 @@ fn build_wfstat_meta(wfstat_json: &Value, path: &Path, fetched_at: &str, bytes: 
         fetched_at: fetched_at.to_string(),
         source_file: path.display().to_string(),
         notes: Some(
-            "Saved from GET https://api.warframestat.us/items/ without tradable filtering.".to_string(),
+            "Saved from GET https://api.warframestat.us/items/ without tradable filtering."
+                .to_string(),
         ),
     })
 }
 
 fn parse_manual_alias_seed() -> Result<Vec<ManualAliasSeedRow>> {
-    let rows: Vec<ManualAliasSeedRow> =
-        serde_json::from_str(MANUAL_ALIAS_SEED_JSON).context("failed to parse manual alias seed JSON")?;
+    let rows: Vec<ManualAliasSeedRow> = serde_json::from_str(MANUAL_ALIAS_SEED_JSON)
+        .context("failed to parse manual alias seed JSON")?;
     for row in &rows {
         if row.lookup_type.trim().is_empty()
             || row.lookup_value.trim().is_empty()
             || row.target_type.trim().is_empty()
             || row.target_value.trim().is_empty()
         {
-            return Err(anyhow!("manual alias entries must have non-empty lookup and target fields"));
+            return Err(anyhow!(
+                "manual alias entries must have non-empty lookup and target fields"
+            ));
         }
     }
     Ok(rows)
@@ -2838,7 +2953,13 @@ fn update_stats_for_match(stats: &mut ImportStats, method: &str) {
     }
 }
 
-fn emit_progress(app: &AppHandle, stage_key: &str, stage_label: &str, status_text: &str, progress_value: f64) {
+fn emit_progress(
+    app: &AppHandle,
+    stage_key: &str,
+    stage_label: &str,
+    status_text: &str,
+    progress_value: f64,
+) {
     let _ = app.emit(
         STARTUP_PROGRESS_EVENT,
         StartupProgress {
@@ -2942,7 +3063,15 @@ fn blueprint_regex() -> &'static Regex {
 fn derive_wfm_item_family(value: &Value) -> Option<String> {
     let tags = get_array(value, "tags")?;
     let tag_values = tags.iter().filter_map(Value::as_str).collect::<Vec<_>>();
-    for candidate in ["relic", "component", "set", "mod", "weapon", "warframe", "blueprint"] {
+    for candidate in [
+        "relic",
+        "component",
+        "set",
+        "mod",
+        "weapon",
+        "warframe",
+        "blueprint",
+    ] {
         if tag_values.iter().any(|tag| *tag == candidate) {
             return Some(candidate.to_string());
         }
@@ -2987,8 +3116,13 @@ fn get_i64(value: &Value, key: &str) -> Option<i64> {
 
 fn get_i64_any(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(|value| match value {
-        Value::Number(number) => number.as_i64().or_else(|| number.as_f64().map(|value| value as i64)),
-        Value::String(text) => text.parse::<i64>().ok().or_else(|| text.parse::<f64>().ok().map(|value| value as i64)),
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|value| value as i64)),
+        Value::String(text) => text
+            .parse::<i64>()
+            .ok()
+            .or_else(|| text.parse::<f64>().ok().map(|value| value as i64)),
         Value::Bool(boolean) => Some(if *boolean { 1 } else { 0 }),
         _ => None,
     })
