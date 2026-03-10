@@ -41,6 +41,7 @@ export function useStartupInitialization(): StartupState {
   const [attempt, setAttempt] = useState(0);
   const activeAttemptRef = useRef(0);
   const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
+  const refreshWorldStateFissures = useAppStore((state) => state.refreshWorldStateFissures);
   const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
 
   useEffect(() => {
@@ -135,14 +136,31 @@ export function useStartupInitialization(): StartupState {
           return;
         }
 
+        setProgress((current) => ({
+          ...current,
+          stageKey: 'worldstate-fissures',
+          stageLabel: 'Fetching event data',
+          statusText:
+            'Void Trader data is loaded. Fetching fissure worldstate data before entering the app.',
+          progressValue: Math.max(current.progressValue, 0.97),
+        }));
+
+        await refreshWorldStateFissures();
+        if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+          return;
+        }
+
         const {
           worldStateEvents,
           worldStateEventsError,
+          worldStateFissures,
+          worldStateFissuresError,
           worldStateVoidTrader,
           worldStateVoidTraderError,
         } = useAppStore.getState();
         const worldStateFailed =
           (worldStateEventsError && worldStateEvents.length === 0) ||
+          (worldStateFissuresError && worldStateFissures.length === 0) ||
           (worldStateVoidTraderError && worldStateVoidTrader === null);
 
         setProgress((current) => ({
@@ -174,7 +192,7 @@ export function useStartupInitialization(): StartupState {
       isMounted = false;
       unlisten();
     };
-  }, [attempt, refreshWorldStateEvents, refreshWorldStateVoidTrader]);
+  }, [attempt, refreshWorldStateEvents, refreshWorldStateFissures, refreshWorldStateVoidTrader]);
 
   return {
     phase,

@@ -7,6 +7,7 @@ import {
 } from '../lib/tauriClient';
 import {
   fetchWorldStateEventsSnapshot,
+  fetchWorldStateFissuresSnapshot,
   fetchWorldStateVoidTraderSnapshot,
   WORLDSTATE_RETRY_DELAY_MS,
 } from '../lib/worldState';
@@ -27,6 +28,7 @@ import type {
   TradesSubTab,
   WatchlistAlert,
   WatchlistItem,
+  WfstatFissure,
   WfstatVoidTrader,
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
@@ -39,6 +41,7 @@ import { mockSellOrders } from '../mocks/trades';
 
 let quickViewRequestSequence = 0;
 let worldStateEventsRefreshPromise: Promise<void> | null = null;
+let worldStateFissuresRefreshPromise: Promise<void> | null = null;
 let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
 
 const defaultAppSettings: AppSettings = {
@@ -191,6 +194,11 @@ interface AppStore {
   worldStateEventsError: string | null;
   worldStateEventsNextRefreshAt: string | null;
   worldStateEventsLastUpdatedAt: string | null;
+  worldStateFissures: WfstatFissure[];
+  worldStateFissuresLoading: boolean;
+  worldStateFissuresError: string | null;
+  worldStateFissuresNextRefreshAt: string | null;
+  worldStateFissuresLastUpdatedAt: string | null;
   worldStateVoidTrader: WfstatVoidTrader | null;
   worldStateVoidTraderLoading: boolean;
   worldStateVoidTraderError: string | null;
@@ -205,6 +213,7 @@ interface AppStore {
   refreshWalletSnapshot: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
+  refreshWorldStateFissures: () => Promise<void>;
   refreshWorldStateVoidTrader: () => Promise<void>;
 
   sellerMode: SellerMode;
@@ -276,6 +285,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateEventsError: null,
   worldStateEventsNextRefreshAt: null,
   worldStateEventsLastUpdatedAt: null,
+  worldStateFissures: [],
+  worldStateFissuresLoading: false,
+  worldStateFissuresError: null,
+  worldStateFissuresNextRefreshAt: null,
+  worldStateFissuresLastUpdatedAt: null,
   worldStateVoidTrader: null,
   worldStateVoidTraderLoading: false,
   worldStateVoidTraderError: null,
@@ -385,6 +399,38 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })();
 
     return worldStateEventsRefreshPromise;
+  },
+  refreshWorldStateFissures: async () => {
+    if (worldStateFissuresRefreshPromise) {
+      return worldStateFissuresRefreshPromise;
+    }
+
+    set({ worldStateFissuresLoading: true });
+
+    worldStateFissuresRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateFissuresSnapshot();
+        set({
+          worldStateFissures: snapshot.fissures,
+          worldStateFissuresLoading: false,
+          worldStateFissuresError: null,
+          worldStateFissuresNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateFissuresLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateFissuresLoading: false,
+          worldStateFissuresError: toErrorMessage(error),
+          worldStateFissuresNextRefreshAt:
+            state.worldStateFissuresNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateFissuresRefreshPromise = null;
+      }
+    })();
+
+    return worldStateFissuresRefreshPromise;
   },
   refreshWorldStateVoidTrader: async () => {
     if (worldStateVoidTraderRefreshPromise) {

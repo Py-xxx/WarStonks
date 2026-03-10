@@ -110,6 +110,10 @@ export async function getWorldStateEvents(): Promise<Record<string, unknown>[]> 
   return invoke<Record<string, unknown>[]>('get_worldstate_events');
 }
 
+export async function getWorldStateFissures(): Promise<Record<string, unknown>[]> {
+  return invoke<Record<string, unknown>[]>('get_worldstate_fissures');
+}
+
 export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
   return invoke<WfstatVoidTrader>('get_worldstate_void_trader');
 }
