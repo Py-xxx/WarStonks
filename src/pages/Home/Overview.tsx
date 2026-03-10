@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
+import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -67,21 +68,18 @@ function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
   return `${spreadMetrics.spreadPlatinum} pt (${spreadMetrics.spreadPercent.toFixed(1)}%)`;
 }
 
-function formatAlertSummaryTime(isoTimestamp: string): string {
-  const createdAt = new Date(isoTimestamp).getTime();
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+function buildDashboardEventDetail(node: string | null, expiry: string | null): string {
+  const detailParts = [];
 
-  if (elapsedSeconds < 60) {
-    return `${elapsedSeconds}s active`;
+  if (node) {
+    detailParts.push(node);
   }
 
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m active`;
+  if (expiry) {
+    detailParts.push(`Ends ${formatWorldStateDateTime(expiry)}`);
   }
 
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  return `${elapsedHours}h active`;
+  return detailParts.join(' • ');
 }
 
 function WatchlistCard() {
@@ -172,49 +170,101 @@ function WatchlistCard() {
 }
 
 function EventsCard() {
-  const alerts = useAppStore((state) => state.alerts);
-  const setHomeSubTab = useAppStore((state) => state.setHomeSubTab);
+  const worldStateEvents = useAppStore((state) => state.worldStateEvents);
+  const worldStateEventsLoading = useAppStore((state) => state.worldStateEventsLoading);
+  const worldStateEventsError = useAppStore((state) => state.worldStateEventsError);
+  const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
+  const setActivePage = useAppStore((state) => state.setActivePage);
+  const setEventsSubTab = useAppStore((state) => state.setEventsSubTab);
+  const [nowMs, setNowMs] = useState(Date.now());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const openActiveEventsPage = () => {
+    setActivePage('events');
+    setEventsSubTab('active-events');
+  };
 
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-label">Events</span>
-        <span className={`badge ${alerts.length > 0 ? 'badge-red' : 'badge-muted'}`}>
-          {alerts.length} active
+        <span
+          className={`badge ${worldStateEvents.length > 0 ? 'badge-blue' : 'badge-muted'}`}
+        >
+          {worldStateEvents.length} active
         </span>
+        <div className="card-actions">
+          <button className="text-btn" type="button" onClick={openActiveEventsPage}>
+            Open
+          </button>
+        </div>
       </div>
 
       <div className="card-body">
         <div className="watchlist-alert-summary">
-          {alerts.length > 0 ? (
-            <div className="watchlist-alert-summary-list">
-              {alerts.map((alert) => (
-                <button
-                  key={alert.id}
-                  className="watchlist-alert-summary-item"
-                  type="button"
-                  onClick={() => setHomeSubTab('alerts')}
-                >
-                  <span className="watchlist-alert-summary-item-copy">
-                    <span className="watchlist-alert-summary-item-name">{alert.itemName}</span>
-                    <span className="watchlist-alert-summary-item-meta">
-                      <span className="badge badge-red">Alert Event</span>
-                      <span>{formatAlertSummaryTime(alert.createdAt)}</span>
-                    </span>
-                  </span>
-                  <span className="watchlist-alert-summary-item-price">{alert.price} pt</span>
-                </button>
-              ))}
-            </div>
-          ) : (
+          {worldStateEventsError && worldStateEvents.length === 0 ? (
             <button
               className="watchlist-alert-summary-empty"
               type="button"
-              onClick={() => setHomeSubTab('alerts')}
+              onClick={() => {
+                void refreshWorldStateEvents();
+              }}
             >
-              No active events yet. Click here to open Alerts when events start coming in.
+              Events are currently offline. Click here to retry the worldstate fetch.
             </button>
-          )}
+          ) : null}
+
+          {worldStateEvents.length > 0 ? (
+            <div className="watchlist-alert-summary-list">
+              {worldStateEvents.map((event) => (
+                <button
+                  key={event.id}
+                  className="watchlist-alert-summary-item"
+                  type="button"
+                  onClick={openActiveEventsPage}
+                >
+                  <span className="watchlist-alert-summary-item-copy">
+                    <span className="watchlist-alert-summary-item-name">{event.description}</span>
+                    <span className="watchlist-alert-summary-item-meta">
+                      {event.isCommunity ? (
+                        <span className="badge badge-blue">Community</span>
+                      ) : null}
+                      {event.isPersonal ? (
+                        <span className="badge badge-purple">Personal</span>
+                      ) : null}
+                      <span>{buildDashboardEventDetail(event.node, event.expiry) || 'No node data'}</span>
+                    </span>
+                  </span>
+                  <span className="watchlist-alert-summary-item-price">
+                    {formatWorldStateCountdown(event.expiry, nowMs)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {!worldStateEventsError && worldStateEventsLoading && worldStateEvents.length === 0 ? (
+            <button className="watchlist-alert-summary-empty" type="button" onClick={openActiveEventsPage}>
+              Loading active worldstate events for the dashboard.
+            </button>
+          ) : null}
+
+          {!worldStateEventsError && !worldStateEventsLoading && worldStateEvents.length === 0 ? (
+            <button
+              className="watchlist-alert-summary-empty"
+              type="button"
+              onClick={openActiveEventsPage}
+            >
+              No active worldstate events right now. Click here to open the Events page.
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
