@@ -132,7 +132,7 @@ export function AlecaframeModal() {
       />
       <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Alecaframe API settings">
         <div className="settings-modal-header">
-          <div>
+          <div className="settings-modal-title">
             <span className="card-label">Alecaframe API</span>
             <h3>Alecaframe API Integration</h3>
           </div>
@@ -149,7 +149,7 @@ export function AlecaframeModal() {
         <div className="settings-modal-body">
           <div className="settings-form-card">
             <label className="settings-switch-row">
-              <span>
+              <span className="settings-field-copy">
                 <span className="settings-field-label">Enable Alecaframe API</span>
                 <span className="settings-field-help">
                   Stored in app data outside the project so it works on both macOS and Windows.
@@ -222,7 +222,7 @@ export function AlecaframeModal() {
           </div>
 
           <div className="settings-form-card">
-            <span className="settings-field-label">Validation preview</span>
+            <span className="settings-field-label settings-section-title">Validation preview</span>
             <span className="settings-field-help">Times shown in {timeZone}.</span>
             <div className="settings-preview-grid">
               <div className="settings-preview-card">
