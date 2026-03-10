@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { formatShortLocalDateTime, getUserTimeZone } from '../../lib/dateTime';
 import { testAlecaframePublicLink } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
 import type { AlecaframeValidationResult } from '../../types';
@@ -42,6 +43,7 @@ export function AlecaframeModal() {
   const [testState, setTestState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [validationResult, setValidationResult] = useState<AlecaframeValidationResult | null>(null);
   const [testedInput, setTestedInput] = useState('');
+  const timeZone = useMemo(() => getUserTimeZone(), []);
 
   useEffect(() => {
     if (!modalOpen) {
@@ -132,7 +134,7 @@ export function AlecaframeModal() {
         <div className="settings-modal-header">
           <div>
             <span className="card-label">Alecaframe API</span>
-            <h3>Configure wallet sync</h3>
+            <h3>Alecaframe API Integration</h3>
           </div>
           <button
             className="settings-close-btn"
@@ -154,12 +156,17 @@ export function AlecaframeModal() {
                 </span>
               </span>
               <button
-                className={`toggle${enabled ? ' on' : ''}`}
+                className={`settings-toggle${enabled ? ' on' : ''}`}
                 type="button"
                 role="switch"
                 aria-checked={enabled}
                 onClick={() => setEnabled((current) => !current)}
-              />
+              >
+                <span className="settings-toggle-track">
+                  <span className="settings-toggle-thumb" />
+                </span>
+                <span className="settings-toggle-label">{enabled ? 'On' : 'Off'}</span>
+              </button>
             </label>
 
             <label className="settings-field">
@@ -216,6 +223,7 @@ export function AlecaframeModal() {
 
           <div className="settings-form-card">
             <span className="settings-field-label">Validation preview</span>
+            <span className="settings-field-help">Times shown in {timeZone}.</span>
             <div className="settings-preview-grid">
               <div className="settings-preview-card">
                 <span className="settings-meta-label">Public user</span>
@@ -228,9 +236,9 @@ export function AlecaframeModal() {
               <div className="settings-preview-card">
                 <span className="settings-meta-label">Last update</span>
                 <span className="settings-meta-value">
-                  {validationResult?.lastUpdate ??
-                    appSettings.alecaframe.lastValidatedAt ??
-                    'Not validated'}
+                  {formatShortLocalDateTime(
+                    validationResult?.lastUpdate ?? appSettings.alecaframe.lastValidatedAt,
+                  )}
                 </span>
               </div>
               <div className="settings-preview-card">
