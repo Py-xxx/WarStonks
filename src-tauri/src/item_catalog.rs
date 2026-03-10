@@ -1101,6 +1101,13 @@ fn build_component_canonical_key(
     )
 }
 
+fn wfstat_component_source_record_key(component: &WfstatComponentRecord) -> String {
+    format!(
+        "{}#{}",
+        component.parent_unique_name, component.component_index
+    )
+}
+
 fn insert_canonical_items(
     tx: &Transaction<'_>,
     canonical_items: &BTreeMap<String, CanonicalItem>,
@@ -1678,6 +1685,7 @@ fn insert_wfstat_component_record(
         .get(&build_top_level_canonical_key(parent_record))
         .copied()
         .ok_or_else(|| anyhow!("missing parent item_id for {}", parent_record.unique_name))?;
+    let component_source_record_key = wfstat_component_source_record_key(component);
 
     tx.execute(
         "INSERT INTO wfstat_item_components (
@@ -1765,10 +1773,7 @@ fn insert_wfstat_component_record(
         Some(component_item_id),
         WFSTAT_SOURCE_NAME,
         "wfstat_item_components",
-        component
-            .unique_name
-            .as_deref()
-            .unwrap_or(component.name.as_deref().unwrap_or("unnamed_component")),
+        &component_source_record_key,
         component.name.as_deref(),
         "wfstat_component",
         Some("component_unique_name"),
@@ -1789,17 +1794,12 @@ fn insert_wfstat_component_record(
             Some(&normalize_name(unique_name)),
             WFSTAT_SOURCE_NAME,
             "wfstat_item_components",
-            unique_name,
+            &component_source_record_key,
             true,
             None,
         )?;
     }
     if let Some(name) = &component.name {
-        let source_key = component
-            .unique_name
-            .as_deref()
-            .unwrap_or(name.as_str())
-            .to_string();
         insert_alias(
             tx,
             component_item_id,
@@ -1808,7 +1808,7 @@ fn insert_wfstat_component_record(
             Some(&normalize_name(name)),
             WFSTAT_SOURCE_NAME,
             "wfstat_item_components",
-            &source_key,
+            &component_source_record_key,
             true,
             None,
         )?;
@@ -1820,7 +1820,7 @@ fn insert_wfstat_component_record(
             Some(&normalize_name(name)),
             WFSTAT_SOURCE_NAME,
             "wfstat_item_components",
-            &source_key,
+            &component_source_record_key,
             false,
             Some("Derived normalized WFStat component name."),
         )?;
@@ -1832,10 +1832,7 @@ fn insert_wfstat_component_record(
             component_item_id,
             WFSTAT_SOURCE_NAME,
             "wfstat_item_components",
-            component
-                .unique_name
-                .as_deref()
-                .unwrap_or(component.name.as_deref().unwrap_or("unnamed_component")),
+            &component_source_record_key,
             variant,
             true,
             Some("Variant derived from the WFStat component name."),
@@ -3166,9 +3163,11 @@ fn get_bool_as_i64(value: &Value, key: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_name, parse_variant_info, split_blueprint_name, WFSTAT_ITEMS_COLUMN_COUNT,
+        normalize_name, parse_variant_info, split_blueprint_name,
+        wfstat_component_source_record_key, WfstatComponentRecord, WFSTAT_ITEMS_COLUMN_COUNT,
         WFSTAT_ITEMS_INSERT_SQL,
     };
+    use serde_json::json;
 
     #[test]
     fn normalizes_whitespace_and_case() {
@@ -3195,6 +3194,35 @@ mod tests {
         assert_eq!(
             WFSTAT_ITEMS_INSERT_SQL.matches('?').count(),
             WFSTAT_ITEMS_COLUMN_COUNT
+        );
+    }
+
+    #[test]
+    fn wfstat_component_source_record_key_is_parent_scoped() {
+        let left = WfstatComponentRecord {
+            parent_unique_name: "/Lotus/Weapons/Foo".to_string(),
+            component_index: 0,
+            unique_name: Some("/Lotus/Types/Items/MiscItems/OrokinCell".to_string()),
+            name: Some("Orokin Cell".to_string()),
+            normalized_name: Some("orokin cell".to_string()),
+            variant: None,
+            item_family: None,
+            raw: json!({}),
+        };
+        let right = WfstatComponentRecord {
+            parent_unique_name: "/Lotus/Weapons/Bar".to_string(),
+            component_index: 0,
+            unique_name: Some("/Lotus/Types/Items/MiscItems/OrokinCell".to_string()),
+            name: Some("Orokin Cell".to_string()),
+            normalized_name: Some("orokin cell".to_string()),
+            variant: None,
+            item_family: None,
+            raw: json!({}),
+        };
+
+        assert_ne!(
+            wfstat_component_source_record_key(&left),
+            wfstat_component_source_record_key(&right)
         );
     }
 }
