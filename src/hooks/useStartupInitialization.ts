@@ -63,13 +63,41 @@ export function useStartupInitialization(): StartupState {
         return;
       }
 
-      unlisten = await listenToStartupProgress((nextProgress) => {
-        if (isMounted && activeAttemptRef.current === currentAttempt) {
-          setProgress(nextProgress);
-        }
-      });
-
       try {
+        setProgress({
+          stageKey: 'startup-command',
+          stageLabel: 'Starting catalog sync',
+          statusText: 'Connecting startup progress and invoking the desktop initializer.',
+          progressValue: 0.03,
+        });
+
+        void listenToStartupProgress((nextProgress) => {
+          if (isMounted && activeAttemptRef.current === currentAttempt) {
+            setProgress(nextProgress);
+          }
+        })
+          .then((nextUnlisten) => {
+            if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+              nextUnlisten();
+              return;
+            }
+
+            unlisten = nextUnlisten;
+          })
+          .catch((error) => {
+            console.error('[startup] failed to subscribe to startup-progress', error);
+
+            if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+              return;
+            }
+
+            setProgress((current) => ({
+              ...current,
+              statusText:
+                'Running startup initialization. Live progress is unavailable in this session.',
+            }));
+          });
+
         const nextSummary = await initializeAppCatalogOnce();
         if (!isMounted || activeAttemptRef.current !== currentAttempt) {
           return;
