@@ -1,5 +1,6 @@
 import type {
   VoidTraderInventoryItem,
+  WorldStateEndpointKey,
   WfstatAlert,
   WfstatAlertMission,
   WfstatArchonHunt,
@@ -45,6 +46,28 @@ const WFSTAT_VOID_TRADER_URL = 'https://api.warframestat.us/pc/voidTrader?langua
 const INVALID_WORLDSTATE_EXPIRY = '1970-01-01T00:00:00.000Z';
 const NO_EXPIRY_WORLDSTATE_REFRESH_MS = 5 * 60_000;
 export const WORLDSTATE_RETRY_DELAY_MS = 60_000;
+export const WORLDSTATE_ENDPOINT_KEYS = {
+  events: 'events',
+  alerts: 'alerts',
+  sortie: 'sortie',
+  arbitration: 'arbitration',
+  archonHunt: 'archon-hunt',
+  fissures: 'fissures',
+  invasions: 'invasions',
+  syndicateMissions: 'syndicate-missions',
+  voidTrader: 'void-trader',
+} as const satisfies Record<string, WorldStateEndpointKey>;
+export const WORLDSTATE_ENDPOINT_LABELS: Record<WorldStateEndpointKey, string> = {
+  events: 'Active Events',
+  alerts: 'Alerts',
+  sortie: 'Sorties',
+  arbitration: 'Arbitrations',
+  'archon-hunt': 'Archon Hunts',
+  fissures: 'Fissures',
+  invasions: 'Invasions',
+  'syndicate-missions': 'Syndicate Missions',
+  'void-trader': 'Void Trader',
+};
 
 function parseOptionalNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -52,6 +75,19 @@ function parseOptionalNumber(value: unknown): number | null {
 
 function parseOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function hasExpired(expiry: string | null, explicitExpired: boolean | undefined): boolean {
+  if (explicitExpired) {
+    return true;
+  }
+
+  if (!expiry || expiry === INVALID_WORLDSTATE_EXPIRY) {
+    return false;
+  }
+
+  const expiryMs = Date.parse(expiry);
+  return Number.isFinite(expiryMs) && expiryMs <= Date.now();
 }
 
 function parseStringArray(value: unknown): string[] {
@@ -230,11 +266,12 @@ function parseSyndicateJob(value: unknown): WfstatSyndicateJob | null {
 
 function normalizeWorldStateEvent(entry: unknown): WfstatWorldStateEvent {
   const record = entry as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? crypto.randomUUID(),
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     description: parseOptionalString(record.description) ?? 'Unnamed event',
     tooltip: parseOptionalString(record.tooltip),
     node: parseOptionalString(record.node),
@@ -267,31 +304,33 @@ function normalizeWorldStateEvent(entry: unknown): WfstatWorldStateEvent {
     isPersonal: Boolean(record.isPersonal),
     isCommunity: Boolean(record.isCommunity),
     showTotalAtEndOfMission: Boolean(record.showTotalAtEndOfMission),
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
 function normalizeAlert(entry: unknown): WfstatAlert {
   const record = entry as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? crypto.randomUUID(),
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     mission: parseAlertMission(record.mission),
     rewardTypes: parseStringArray(record.rewardTypes),
     tag: parseOptionalString(record.tag),
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
 function normalizeSortie(entry: unknown): WfstatSortie {
   const record = entry as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? 'sortie',
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     rewardPool: parseOptionalString(record.rewardPool),
     variants: Array.isArray(record.variants)
       ? record.variants
@@ -301,35 +340,37 @@ function normalizeSortie(entry: unknown): WfstatSortie {
     boss: parseOptionalString(record.boss),
     faction: parseOptionalString(record.faction),
     factionKey: parseOptionalString(record.factionKey),
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
 function normalizeArbitration(entry: unknown): WfstatArbitration {
   const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? 'arbitration',
     node: parseOptionalString(record.node),
     nodeKey: parseOptionalString(record.nodeKey),
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     enemy: parseOptionalString(record.enemy),
     type: parseOptionalString(record.type),
     typeKey: parseOptionalString(record.typeKey),
     archwing: Boolean(record.archwing),
     sharkwing: Boolean(record.sharkwing),
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
 function normalizeArchonHunt(entry: unknown): WfstatArchonHunt {
   const record = entry as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? 'archon-hunt',
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     rewardPool: parseOptionalString(record.rewardPool),
     missions: Array.isArray(record.missions)
       ? record.missions
@@ -339,7 +380,7 @@ function normalizeArchonHunt(entry: unknown): WfstatArchonHunt {
     boss: parseOptionalString(record.boss),
     faction: parseOptionalString(record.faction),
     factionKey: parseOptionalString(record.factionKey),
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
@@ -365,11 +406,12 @@ function normalizeVoidTraderInventoryItem(entry: unknown): VoidTraderInventoryIt
 
 function normalizeVoidTrader(entry: unknown): WfstatVoidTrader {
   const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? 'void-trader',
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     character: parseOptionalString(record.character) ?? "Baro Ki'Teer",
     location: parseOptionalString(record.location),
     inventory: Array.isArray(record.inventory)
@@ -384,17 +426,18 @@ function normalizeVoidTrader(entry: unknown): WfstatVoidTrader {
           (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object',
         )
       : [],
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
 function normalizeFissure(entry: unknown): WfstatFissure {
   const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? crypto.randomUUID(),
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     node: parseOptionalString(record.node),
     missionType: parseOptionalString(record.missionType),
     missionTypeKey: parseOptionalString(record.missionTypeKey),
@@ -405,7 +448,7 @@ function normalizeFissure(entry: unknown): WfstatFissure {
     tierNum: parseOptionalNumber(record.tierNum),
     isStorm: Boolean(record.isStorm),
     isHard: Boolean(record.isHard),
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
@@ -431,11 +474,12 @@ function normalizeInvasion(entry: unknown): WfstatInvasion {
 
 function normalizeSyndicateMission(entry: unknown): WfstatSyndicateMission {
   const record = entry as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
 
   return {
     id: parseOptionalString(record.id) ?? crypto.randomUUID(),
     activation: parseOptionalString(record.activation),
-    expiry: parseOptionalString(record.expiry),
+    expiry,
     syndicate: parseOptionalString(record.syndicate),
     syndicateKey: parseOptionalString(record.syndicateKey),
     nodes: parseStringArray(record.nodes),
@@ -444,7 +488,7 @@ function normalizeSyndicateMission(entry: unknown): WfstatSyndicateMission {
           .map((job) => parseSyndicateJob(job))
           .filter((job): job is WfstatSyndicateJob => job !== null)
       : [],
-    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
   };
 }
 
@@ -595,6 +639,44 @@ export function selectVoidTraderRefreshAt(
 export function selectWorldStateInvasionsRefreshAt(nowMs: number = Date.now()): string {
   // WFStat invasion payloads do not expose an expiry, so the app falls back to a fixed poll window.
   return new Date(nowMs + NO_EXPIRY_WORLDSTATE_REFRESH_MS).toISOString();
+}
+
+export function restoreCachedWorldStateEvents(payload: unknown): WfstatWorldStateEvent[] {
+  return Array.isArray(payload) ? payload.map((entry) => normalizeWorldStateEvent(entry)) : [];
+}
+
+export function restoreCachedWorldStateAlerts(payload: unknown): WfstatAlert[] {
+  return Array.isArray(payload) ? payload.map((entry) => normalizeAlert(entry)) : [];
+}
+
+export function restoreCachedWorldStateSortie(payload: unknown): WfstatSortie | null {
+  return payload && typeof payload === 'object' ? normalizeSortie(payload) : null;
+}
+
+export function restoreCachedWorldStateArbitration(payload: unknown): WfstatArbitration | null {
+  return payload && typeof payload === 'object' ? normalizeArbitration(payload) : null;
+}
+
+export function restoreCachedWorldStateArchonHunt(payload: unknown): WfstatArchonHunt | null {
+  return payload && typeof payload === 'object' ? normalizeArchonHunt(payload) : null;
+}
+
+export function restoreCachedWorldStateFissures(payload: unknown): WfstatFissure[] {
+  return Array.isArray(payload) ? payload.map((entry) => normalizeFissure(entry)) : [];
+}
+
+export function restoreCachedWorldStateInvasions(payload: unknown): WfstatInvasion[] {
+  return Array.isArray(payload) ? payload.map((entry) => normalizeInvasion(entry)) : [];
+}
+
+export function restoreCachedWorldStateSyndicateMissions(
+  payload: unknown,
+): WfstatSyndicateMission[] {
+  return Array.isArray(payload) ? payload.map((entry) => normalizeSyndicateMission(entry)) : [];
+}
+
+export function restoreCachedWorldStateVoidTrader(payload: unknown): WfstatVoidTrader | null {
+  return payload && typeof payload === 'object' ? normalizeVoidTrader(payload) : null;
 }
 
 async function fetchJsonArray(url: string, label: string): Promise<unknown> {

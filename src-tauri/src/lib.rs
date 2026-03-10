@@ -1,6 +1,7 @@
 mod commands;
 mod item_catalog;
 mod settings;
+mod worldstate_cache;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,6 +22,8 @@ pub fn run() {
             commands::get_worldstate_invasions,
             commands::get_worldstate_syndicate_missions,
             commands::get_worldstate_void_trader,
+            worldstate_cache::get_worldstate_cache,
+            worldstate_cache::save_worldstate_cache_entry,
             settings::get_app_settings,
             settings::test_alecaframe_public_link,
             settings::save_alecaframe_settings,

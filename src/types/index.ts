@@ -13,6 +13,16 @@ export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | 'all';
 export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
 export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'import-export';
+export type WorldStateEndpointKey =
+  | 'events'
+  | 'alerts'
+  | 'sortie'
+  | 'arbitration'
+  | 'archon-hunt'
+  | 'fissures'
+  | 'invasions'
+  | 'syndicate-missions'
+  | 'void-trader';
 
 export interface WatchlistItem {
   id: string;
@@ -52,6 +62,14 @@ export interface WatchlistAlert {
   quantity: number;
   rank: number | null;
   orderId: string;
+  createdAt: string;
+}
+
+export interface SystemAlert {
+  id: string;
+  sourceKey: WorldStateEndpointKey;
+  title: string;
+  message: string;
   createdAt: string;
 }
 
@@ -399,4 +417,10 @@ export interface AnalysisBar {
   label: string;
   value: number;
   color: 'green' | 'amber' | 'red';
+}
+
+export interface PersistedWorldStateCacheEntry {
+  payload: unknown;
+  fetchedAt: string;
+  nextRefreshAt: string | null;
 }

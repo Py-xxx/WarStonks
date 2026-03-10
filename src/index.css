@@ -1652,6 +1652,23 @@ body {
   justify-content: space-between;
   gap: 12px;
 }
+.alert-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.alerts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.alerts-section-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 .alerts-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -1694,11 +1711,21 @@ body {
   height: 100%;
   object-fit: cover;
 }
+.alert-item-thumb-system {
+  background: rgba(255, 193, 92, 0.12);
+  border-color: rgba(255, 193, 92, 0.25);
+  color: var(--accent-amber);
+  font-weight: 700;
+}
 .alert-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+.alert-item-system .alert-meta {
+  display: grid;
+  gap: 4px;
 }
 .alert-topline {
   display: flex;

@@ -7,6 +7,7 @@ import type {
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
   AppSettings,
+  PersistedWorldStateCacheEntry,
   WfstatArchonHunt,
   WfstatArbitration,
   WfstatAlert,
@@ -147,6 +148,19 @@ export async function getWorldStateSyndicateMissions(): Promise<WfstatSyndicateM
 
 export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
   return invoke<WfstatVoidTrader>('get_worldstate_void_trader');
+}
+
+export async function getWorldStateCache(): Promise<
+  Record<string, PersistedWorldStateCacheEntry>
+> {
+  return invoke<Record<string, PersistedWorldStateCacheEntry>>('get_worldstate_cache');
+}
+
+export async function saveWorldStateCacheEntry(
+  endpoint: string,
+  entry: PersistedWorldStateCacheEntry,
+): Promise<void> {
+  return invoke<void>('save_worldstate_cache_entry', { endpoint, entry });
 }
 
 export async function getRelicTierIcons(): Promise<RelicTierIcon[]> {
