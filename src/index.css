@@ -992,7 +992,6 @@ body {
     width: 100vw;
   }
 
-  .watchlist-alert-summary-metrics,
   .watchlist-alert-summary-item {
     grid-template-columns: 1fr;
     display: grid;
@@ -1534,34 +1533,6 @@ body {
   justify-content: space-between;
   gap: 10px;
 }
-.watchlist-alert-summary-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.watchlist-alert-summary-chip {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-base);
-}
-.watchlist-alert-summary-value {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: 1;
-}
-.watchlist-alert-summary-label {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
 .watchlist-alert-summary-list {
   display: flex;
   flex-direction: column;
@@ -1576,6 +1547,19 @@ body {
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-base);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.watchlist-alert-summary-item:hover {
+  background: var(--bg-elevated);
+  border-color: rgba(74, 158, 255, 0.24);
+}
+.watchlist-alert-summary-item-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 .watchlist-alert-summary-item-name {
   font-size: 12px;
@@ -1583,16 +1567,35 @@ body {
   color: var(--text-primary);
 }
 .watchlist-alert-summary-item-meta,
-.watchlist-alert-summary-empty {
+.watchlist-alert-summary-empty,
+.watchlist-alert-summary-item-price {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   color: var(--text-secondary);
 }
+.watchlist-alert-summary-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.watchlist-alert-summary-item-price {
+  color: var(--text-primary);
+  font-weight: 700;
+  white-space: nowrap;
+}
 .watchlist-alert-summary-empty {
+  width: 100%;
   padding: 10px;
   border-radius: 8px;
   border: 1px dashed var(--border);
   background: rgba(13, 15, 20, 0.28);
+  text-align: left;
+  cursor: pointer;
+}
+.watchlist-alert-summary-empty:hover {
+  border-color: rgba(74, 158, 255, 0.24);
+  background: rgba(26, 30, 42, 0.5);
 }
 .wl-item-cell {
   display: flex;

@@ -67,18 +67,34 @@ function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
   return `${spreadMetrics.spreadPlatinum} pt (${spreadMetrics.spreadPercent.toFixed(1)}%)`;
 }
 
+function formatAlertSummaryTime(isoTimestamp: string): string {
+  const createdAt = new Date(isoTimestamp).getTime();
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+
+  if (elapsedSeconds < 60) {
+    return `${elapsedSeconds}s active`;
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m active`;
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  return `${elapsedHours}h active`;
+}
+
 function WatchlistCard() {
   const watchlist = useAppStore((state) => state.watchlist);
   const alerts = useAppStore((state) => state.alerts);
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
   const setSelected = useAppStore((state) => state.setSelectedWatchlist);
   const removeItem = useAppStore((state) => state.removeWatchlistItem);
+  const setHomeSubTab = useAppStore((state) => state.setHomeSubTab);
   const watchlistRows = watchlist.map((item) => ({
     item,
     visualState: getWatchlistVisualState(item),
   }));
-  const foundCount = watchlistRows.filter((entry) => entry.visualState.tone === 'red').length;
-  const nearTargetCount = watchlistRows.filter((entry) => entry.visualState.tone === 'yellow').length;
   const latestAlerts = alerts.slice(0, 3);
 
   return (
@@ -160,36 +176,34 @@ function WatchlistCard() {
               </span>
             </div>
 
-            <div className="watchlist-alert-summary-metrics">
-              <div className="watchlist-alert-summary-chip">
-                <span className="watchlist-alert-summary-value">{foundCount}</span>
-                <span className="watchlist-alert-summary-label">Found now</span>
-              </div>
-              <div className="watchlist-alert-summary-chip">
-                <span className="watchlist-alert-summary-value">{nearTargetCount}</span>
-                <span className="watchlist-alert-summary-label">Within 10%</span>
-              </div>
-              <div className="watchlist-alert-summary-chip">
-                <span className="watchlist-alert-summary-value">{latestAlerts.length}</span>
-                <span className="watchlist-alert-summary-label">Latest shown</span>
-              </div>
-            </div>
-
             {latestAlerts.length > 0 ? (
               <div className="watchlist-alert-summary-list">
                 {latestAlerts.map((alert) => (
-                  <div key={alert.id} className="watchlist-alert-summary-item">
-                    <span className="watchlist-alert-summary-item-name">{alert.itemName}</span>
-                    <span className="watchlist-alert-summary-item-meta">
-                      {alert.username} · {alert.price} pt
+                  <button
+                    key={alert.id}
+                    className="watchlist-alert-summary-item"
+                    type="button"
+                    onClick={() => setHomeSubTab('alerts')}
+                  >
+                    <span className="watchlist-alert-summary-item-copy">
+                      <span className="watchlist-alert-summary-item-name">{alert.itemName}</span>
+                      <span className="watchlist-alert-summary-item-meta">
+                        <span className="badge badge-red">Target Hit</span>
+                        <span>{formatAlertSummaryTime(alert.createdAt)}</span>
+                      </span>
                     </span>
-                  </div>
+                    <span className="watchlist-alert-summary-item-price">{alert.price} pt</span>
+                  </button>
                 ))}
               </div>
             ) : (
-              <div className="watchlist-alert-summary-empty">
+              <button
+                className="watchlist-alert-summary-empty"
+                type="button"
+                onClick={() => setHomeSubTab('alerts')}
+              >
                 No active alerts yet. Alerts appear here when a watched item reaches your target.
-              </div>
+              </button>
             )}
           </div>
         </>
