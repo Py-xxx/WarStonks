@@ -1,0 +1,233 @@
+[
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "ancient_fusion_core",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:ancient_fusion_core",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "legendary_fusion_core",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:legendary_fusion_core",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "cephalon_suda_augment_mod",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:cephalon_suda_augment_mod",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "steel_meridian_augment_mod",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:steel_meridian_augment_mod",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "scan_lifeforms",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:scan_lifeforms",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "corpus_void_key",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:corpus_void_key",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "vay_hek_frequency_triangulator",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:vay_hek_frequency_triangulator",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "the_perrin_sequence_augment_mod",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:the_perrin_sequence_augment_mod",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "new_loka_augment_mod",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:new_loka_augment_mod",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "arbiters_of_hexis_augment_mod",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:arbiters_of_hexis_augment_mod",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "red_veil_augment_mod",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:red_veil_augment_mod",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "damaged_necramech_weapon_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:damaged_necramech_weapon_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "damaged_necramech_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:damaged_necramech_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "grendel_systems_locator",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:grendel_systems_locator",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "grendel_chassis_locator",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:grendel_chassis_locator",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "companion_weapon_riven_mod_(veiled)",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:companion_weapon_riven_mod_(veiled)",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "grendel_neuroptics_locator",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:grendel_neuroptics_locator",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "equilibrium_(steam_pinnacle_pack)",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:equilibrium_(steam_pinnacle_pack)",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "baro_void_signal_(key)",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:baro_void_signal_(key)",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "meridian_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:meridian_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "perrin_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:perrin_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "suda_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:suda_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "solaris_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:solaris_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "lokan_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:lokan_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "ostron_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:ostron_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "hexis_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:hexis_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "red_veil_armor_set",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:red_veil_armor_set",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "abyssal_beacon",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:abyssal_beacon",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "zid-an-sek-eel",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:zid-an-sek-eel",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "zid-an-asheir",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:zid-an-asheir",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "zid-an-uskos",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:zid-an-uskos",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "zid-an-haras",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:zid-an-haras",
+    "notes": "Manual WFM-only fallback canonical item."
+  },
+  {
+    "lookup_type": "wfm_slug",
+    "lookup_value": "zid-an-osbok",
+    "target_type": "canonical_key",
+    "target_value": "manual:wfm:zid-an-osbok",
+    "notes": "Manual WFM-only fallback canonical item."
+  }
+]

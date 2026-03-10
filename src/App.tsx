@@ -9,6 +9,8 @@ import { OpportunitiesPage } from './pages/Opportunities';
 import { TradesPage } from './pages/Trades';
 import { PortfolioPage } from './pages/Portfolio';
 import { StrategyPage } from './pages/Strategy';
+import { StartupScreen } from './components/StartupScreen';
+import { useStartupInitialization } from './hooks/useStartupInitialization';
 
 function PageRouter() {
   const activePage = useAppStore((s) => s.activePage);
@@ -26,7 +28,7 @@ function PageRouter() {
   }
 }
 
-export function App() {
+function AppShell() {
   return (
     <>
       <TopBar />
@@ -38,4 +40,21 @@ export function App() {
       </div>
     </>
   );
+}
+
+export function App() {
+  const { phase, progress, summary, errorMessage, retry } = useStartupInitialization();
+
+  if (phase !== 'ready') {
+    return (
+      <StartupScreen
+        progress={progress}
+        summary={summary}
+        errorMessage={errorMessage}
+        onRetry={retry}
+      />
+    );
+  }
+
+  return <AppShell />;
 }
