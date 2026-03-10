@@ -4,6 +4,8 @@ import path from "path";
 
 const host = process.env.TAURI_DEV_HOST;
 const devHost = host || "127.0.0.1";
+const devPort = Number(process.env.TAURI_DEV_PORT || "1420");
+const hmrPort = Number(process.env.TAURI_DEV_HMR_PORT || String(devPort + 1));
 
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -14,14 +16,14 @@ export default defineConfig(async () => ({
   },
   clearScreen: false,
   server: {
-    port: 1420,
+    port: devPort,
     strictPort: true,
     host: devHost,
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: hmrPort,
         }
       : undefined,
   },
