@@ -27,6 +27,95 @@ const CURRENT_SCHEMA_VERSION: &str = "2026-03-10.item-catalog.v1";
 const WFM_DATA_FILE: &str = "WFM-items.json";
 const WFSTAT_DATA_FILE: &str = "WFStat-items.json";
 const DATABASE_FILE: &str = "item_catalog.sqlite";
+#[cfg(test)]
+const WFSTAT_ITEMS_COLUMN_COUNT: usize = 85;
+const WFSTAT_ITEMS_INSERT_SQL: &str = "INSERT INTO wfstat_items (
+            wfstat_unique_name,
+            item_id,
+            name,
+            normalized_name,
+            item_family,
+            variant_group_name,
+            variant_group_name_normalized,
+            variant_kind,
+            variant_value,
+            variant_value_normalized,
+            variant_rank,
+            description,
+            category,
+            type,
+            image_name,
+            compat_name,
+            rarity,
+            polarity,
+            stance_polarity,
+            product_category,
+            mod_set,
+            tradable,
+            masterable,
+            transmutable,
+            is_augment,
+            is_prime,
+            is_exilus,
+            is_utility,
+            vaulted,
+            wiki_available,
+            exclude_from_codex,
+            show_in_inventory,
+            consume_on_build,
+            base_drain,
+            fusion_limit,
+            item_count,
+            mastery_req,
+            market_cost,
+            bp_cost,
+            build_price,
+            build_quantity,
+            build_time,
+            skip_build_time_price,
+            accuracy,
+            critical_chance,
+            critical_multiplier,
+            fire_rate,
+            omega_attenuation,
+            proc_chance,
+            reload_time,
+            magazine_size,
+            multishot,
+            slot,
+            total_damage,
+            disposition,
+            range,
+            follow_through,
+            blocking_angle,
+            combo_duration,
+            heavy_attack_damage,
+            heavy_slam_attack,
+            heavy_slam_radial_damage,
+            heavy_slam_radius,
+            slam_attack,
+            slam_radial_damage,
+            slam_radius,
+            slide_attack,
+            wind_up,
+            power,
+            stamina,
+            health,
+            shield,
+            armor,
+            sprint_speed,
+            region_bits,
+            release_date,
+            vault_date,
+            estimated_vault_date,
+            wikia_thumbnail,
+            wikia_url,
+            noise,
+            trigger,
+            market_info_id,
+            market_info_url_name,
+            raw_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85)";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1324,100 +1413,17 @@ fn insert_wfstat_record(
         .ok_or_else(|| anyhow!("missing item_id for {}", canonical_key))?;
 
     tx.execute(
-        "INSERT INTO wfstat_items (
-            wfstat_unique_name,
-            item_id,
-            name,
-            normalized_name,
-            item_family,
-            variant_group_name,
-            variant_group_name_normalized,
-            variant_kind,
-            variant_value,
-            variant_value_normalized,
-            variant_rank,
-            description,
-            category,
-            type,
-            image_name,
-            compat_name,
-            rarity,
-            polarity,
-            stance_polarity,
-            product_category,
-            mod_set,
-            tradable,
-            masterable,
-            transmutable,
-            is_augment,
-            is_prime,
-            is_exilus,
-            is_utility,
-            vaulted,
-            wiki_available,
-            exclude_from_codex,
-            show_in_inventory,
-            consume_on_build,
-            base_drain,
-            fusion_limit,
-            item_count,
-            mastery_req,
-            market_cost,
-            bp_cost,
-            build_price,
-            build_quantity,
-            build_time,
-            skip_build_time_price,
-            accuracy,
-            critical_chance,
-            critical_multiplier,
-            fire_rate,
-            omega_attenuation,
-            proc_chance,
-            reload_time,
-            magazine_size,
-            multishot,
-            slot,
-            total_damage,
-            disposition,
-            range,
-            follow_through,
-            blocking_angle,
-            combo_duration,
-            heavy_attack_damage,
-            heavy_slam_attack,
-            heavy_slam_radial_damage,
-            heavy_slam_radius,
-            slam_attack,
-            slam_radial_damage,
-            slam_radius,
-            slide_attack,
-            wind_up,
-            power,
-            stamina,
-            health,
-            shield,
-            armor,
-            sprint_speed,
-            region_bits,
-            release_date,
-            vault_date,
-            estimated_vault_date,
-            wikia_thumbnail,
-            wikia_url,
-            noise,
-            trigger,
-            market_info_id,
-            market_info_url_name,
-            raw_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84)",
+        WFSTAT_ITEMS_INSERT_SQL,
         params![
             record.unique_name,
             item_id,
             record.name,
             record.normalized_name,
             record.item_family,
-            record.variant.as_ref().map(|value| value.group_name.clone()),
+            record
+                .variant
+                .as_ref()
+                .map(|value| value.group_name.clone()),
             record
                 .variant
                 .as_ref()
@@ -3159,7 +3165,10 @@ fn get_bool_as_i64(value: &Value, key: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_name, parse_variant_info, split_blueprint_name};
+    use super::{
+        normalize_name, parse_variant_info, split_blueprint_name, WFSTAT_ITEMS_COLUMN_COUNT,
+        WFSTAT_ITEMS_INSERT_SQL,
+    };
 
     #[test]
     fn normalizes_whitespace_and_case() {
@@ -3179,5 +3188,13 @@ mod tests {
         let parts = split_blueprint_name("Wisp Prime Blueprint").expect("blueprint");
         assert_eq!(parts.parent_name, "Wisp Prime");
         assert_eq!(parts.component_name, "Blueprint");
+    }
+
+    #[test]
+    fn wfstat_items_insert_placeholder_count_matches_columns() {
+        assert_eq!(
+            WFSTAT_ITEMS_INSERT_SQL.matches('?').count(),
+            WFSTAT_ITEMS_COLUMN_COUNT
+        );
     }
 }
