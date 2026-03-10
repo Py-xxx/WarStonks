@@ -1,4 +1,4 @@
-import type { WfmTopSellOrder } from '../types';
+import type { WatchlistItem, WfmTopSellOrder } from '../types';
 
 export const WATCHLIST_MIN_ITEM_SCAN_INTERVAL_MS = 10_500;
 export const WATCHLIST_SAFE_REQUESTS_PER_SECOND = 2;
@@ -55,4 +55,38 @@ export function selectPreferredWatchlistOrder(
   }
 
   return null;
+}
+
+export function getWatchlistVisualState(item: WatchlistItem): {
+  tone: 'neutral' | 'yellow' | 'red';
+  label: string;
+} {
+  if (item.currentPrice !== null && item.currentPrice <= item.targetPrice) {
+    return {
+      tone: 'red',
+      label: 'Found',
+    };
+  }
+
+  if (
+    item.currentPrice !== null &&
+    item.currentPrice <= item.targetPrice * 1.1
+  ) {
+    return {
+      tone: 'yellow',
+      label: 'Within 10%',
+    };
+  }
+
+  if (item.lastError) {
+    return {
+      tone: 'neutral',
+      label: 'Retrying',
+    };
+  }
+
+  return {
+    tone: 'neutral',
+    label: 'Watching',
+  };
 }

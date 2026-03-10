@@ -1,5 +1,6 @@
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { getWatchlistVisualState } from '../../lib/watchlist';
 import { useAppStore } from '../../stores/useAppStore';
 
 function formatLastScan(lastUpdatedAt: string | null): string {
@@ -70,16 +71,16 @@ export function WatchlistTab() {
                 {watchlist.map((item) => {
                   const imageUrl = resolveWfmAssetUrl(item.imagePath);
                   const hasRank = item.currentRank !== null && item.currentRank !== undefined;
+                  const visualState = getWatchlistVisualState(item);
 
                   return (
                     <tr
                       key={item.id}
                       onClick={() => setSelected(item.id)}
-                      style={{
-                        cursor: 'pointer',
-                        background:
-                          selectedId === item.id ? 'var(--bg-elevated)' : undefined,
-                      }}
+                      className={`watchlist-row watchlist-row-${visualState.tone}${
+                        selectedId === item.id ? ' selected' : ''
+                      }`}
+                      style={{ cursor: 'pointer' }}
                     >
                       <td>
                         <div className="wl-item-cell">
@@ -108,8 +109,8 @@ export function WatchlistTab() {
                       <td>{item.currentQuantity ?? '—'}</td>
                       <td>{hasRank ? item.currentRank : '—'}</td>
                       <td className="td-muted">{formatLastScan(item.lastUpdatedAt)}</td>
-                      <td className={item.lastError ? 'td-red' : 'td-green'}>
-                        {item.lastError ? 'Retrying' : 'Watching'}
+                      <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
+                        {visualState.label}
                       </td>
                       <td>
                         <button
