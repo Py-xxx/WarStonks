@@ -18,6 +18,12 @@ interface StartupState {
   retry: () => void;
 }
 
+interface StartupWorldStateTask {
+  stageKey: string;
+  stageLabel: string;
+  run: () => Promise<void>;
+}
+
 const INITIAL_PROGRESS: StartupProgress = {
   stageKey: 'startup',
   stageLabel: 'Starting WarStonks',
@@ -31,6 +37,27 @@ function toErrorMessage(error: unknown): string {
   }
 
   return String(error);
+}
+
+function buildWorldStateProgress(
+  completedCount: number,
+  totalCount: number,
+  stageKey: string,
+  stageLabel: string,
+): StartupProgress {
+  const progressBase = 0.86;
+  const progressRange = 0.13;
+  const completionRatio = totalCount === 0 ? 1 : completedCount / totalCount;
+
+  return {
+    stageKey,
+    stageLabel: 'Fetching event data',
+    statusText:
+      completedCount === 0
+        ? `Catalog initialization is complete. Loading ${totalCount} worldstate feeds before entering the app.`
+        : `${stageLabel} loaded. ${completedCount} of ${totalCount} worldstate feeds are ready.`,
+    progressValue: progressBase + completionRatio * progressRange,
+  };
 }
 
 export function useStartupInitialization(): StartupState {
@@ -119,70 +146,93 @@ export function useStartupInitialization(): StartupState {
         const startupWorldStateTasks = [
           {
             stageKey: 'worldstate-events',
-            statusText:
-              'Catalog initialization is complete. Loading active events before entering the app.',
+            stageLabel: 'Active Events',
             run: refreshWorldStateEvents,
           },
           {
             stageKey: 'worldstate-void-trader',
-            statusText: 'Active Events are loaded. Fetching Void Trader data.',
+            stageLabel: 'Void Trader',
             run: refreshWorldStateVoidTrader,
           },
           {
             stageKey: 'worldstate-fissures',
-            statusText: 'Void Trader data is loaded. Fetching fissure data.',
+            stageLabel: 'Fissures',
             run: refreshWorldStateFissures,
           },
           {
             stageKey: 'worldstate-alerts',
-            statusText: 'Fissure data is loaded. Fetching alert activities.',
+            stageLabel: 'Alerts',
             run: refreshWorldStateAlerts,
           },
           {
             stageKey: 'worldstate-sortie',
-            statusText: 'Alerts are loaded. Fetching sortie data.',
+            stageLabel: 'Sortie',
             run: refreshWorldStateSortie,
           },
           {
             stageKey: 'worldstate-arbitration',
-            statusText: 'Sortie data is loaded. Fetching arbitration data.',
+            stageLabel: 'Arbitration',
             run: refreshWorldStateArbitration,
           },
           {
             stageKey: 'worldstate-archon-hunt',
-            statusText: 'Arbitration data is loaded. Fetching archon hunt data.',
+            stageLabel: 'Archon Hunt',
             run: refreshWorldStateArchonHunt,
           },
           {
             stageKey: 'worldstate-invasions',
-            statusText: 'Archon Hunt data is loaded. Fetching invasions.',
+            stageLabel: 'Invasions',
             run: refreshWorldStateInvasions,
           },
           {
             stageKey: 'worldstate-syndicate-missions',
-            statusText: 'Invasions are loaded. Fetching syndicate missions.',
+            stageLabel: 'Syndicate Missions',
             run: refreshWorldStateSyndicateMissions,
           },
-        ] as const;
+        ] satisfies StartupWorldStateTask[];
 
-        for (const [index, task] of startupWorldStateTasks.entries()) {
-          const progressBase = 0.86;
-          const progressRange = 0.13;
-          const progressValue =
-            progressBase + (index / startupWorldStateTasks.length) * progressRange;
+        const initialWorldStateProgress = buildWorldStateProgress(
+          0,
+          startupWorldStateTasks.length,
+          'worldstate-start',
+          'Startup',
+        );
 
-          setProgress((current) => ({
-            ...current,
-            stageKey: task.stageKey,
-            stageLabel: 'Fetching event data',
-            statusText: task.statusText,
-            progressValue: Math.max(current.progressValue, progressValue),
-          }));
+        setProgress((current) => ({
+          ...current,
+          ...initialWorldStateProgress,
+          progressValue: Math.max(current.progressValue, initialWorldStateProgress.progressValue),
+        }));
 
-          await task.run();
-          if (!isMounted || activeAttemptRef.current !== currentAttempt) {
-            return;
-          }
+        let completedWorldStateTasks = 0;
+        await Promise.allSettled(
+          startupWorldStateTasks.map(async (task) => {
+            try {
+              await task.run();
+            } finally {
+              if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+                return;
+              }
+
+              completedWorldStateTasks += 1;
+              const nextProgress = buildWorldStateProgress(
+                completedWorldStateTasks,
+                startupWorldStateTasks.length,
+                task.stageKey,
+                task.stageLabel,
+              );
+
+              setProgress((current) => ({
+                ...current,
+                ...nextProgress,
+                progressValue: Math.max(current.progressValue, nextProgress.progressValue),
+              }));
+            }
+          }),
+        );
+
+        if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+          return;
         }
 
         const {

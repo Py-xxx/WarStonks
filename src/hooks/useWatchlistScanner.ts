@@ -1,6 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { playAlertSound, primeAlertAudio } from '../lib/alertAudio';
-import { WATCHLIST_SCANNER_TICK_MS } from '../lib/watchlist';
+import {
+  selectNextWatchlistItemToScan,
+  WATCHLIST_SCANNER_TICK_MS,
+} from '../lib/watchlist';
 import { useAppStore } from '../stores/useAppStore';
 
 export function useWatchlistScanner() {
@@ -17,9 +20,7 @@ export function useWatchlistScanner() {
       }
 
       const state = useAppStore.getState();
-      const nextItem = state.watchlist
-        .filter((item) => item.nextScanAt <= Date.now())
-        .sort((left, right) => left.nextScanAt - right.nextScanAt)[0];
+      const nextItem = selectNextWatchlistItemToScan(state.watchlist);
 
       if (!nextItem) {
         return;
