@@ -10,8 +10,22 @@ const FISSURE_MODE_LABELS: Record<FissureMode, string> = {
   'steel-path': 'Steel Path fissures',
 };
 
+const FISSURE_TIER_MONOGRAMS: Record<string, string> = {
+  lith: 'L',
+  meso: 'M',
+  neo: 'N',
+  axi: 'A',
+  requiem: 'R',
+  omnia: 'O',
+};
+
 function getFissureTierLabel(fissure: WfstatFissure): string {
   return fissure.tier?.trim() || 'Unknown';
+}
+
+function getFissureTierMonogram(tier: string): string {
+  const fallback = tier.trim().slice(0, 1).toUpperCase();
+  return (FISSURE_TIER_MONOGRAMS[tier.trim().toLowerCase()] ?? fallback) || '?';
 }
 
 function compareFissures(left: WfstatFissure, right: WfstatFissure): number {
@@ -73,6 +87,28 @@ function SteelPathModeIcon() {
       />
       <path d="M10 6.1 11 8.5l2.5.2-1.9 1.6.6 2.4L10 11.3 7.8 12.7l.6-2.4-1.9-1.6 2.5-.2L10 6.1Z" fill="currentColor" />
     </svg>
+  );
+}
+
+function FissureTierIcon({ tier }: { tier: string }) {
+  return (
+    <span className="fissure-tier-icon" aria-hidden="true">
+      <svg viewBox="0 0 32 32">
+        <path
+          d="M16 3.5 25.8 8.9v7.8c0 6.2-3.6 10.3-9.8 12.9C9.8 27 6.2 22.9 6.2 16.7V8.9L16 3.5Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M16 9.1 17.8 13l4.2.5-3.1 2.8.8 4.2L16 18.5l-3.7 2 .8-4.2-3.1-2.8 4.2-.5L16 9.1Z"
+          fill="currentColor"
+          opacity="0.9"
+        />
+      </svg>
+      <span className="fissure-tier-icon-badge">{getFissureTierMonogram(tier)}</span>
+    </span>
   );
 }
 
@@ -181,7 +217,10 @@ export function FissuresPanel() {
             {groupedFissures.map((group) => (
               <section key={group.tier} className="fissure-group-card">
                 <div className="fissure-group-header">
-                  <span className="fissure-group-title">{group.tier}</span>
+                  <span className="fissure-group-title-wrap">
+                    <FissureTierIcon tier={group.tier} />
+                    <span className="fissure-group-title">{group.tier}</span>
+                  </span>
                   <span className="badge badge-muted">{group.fissures.length}</span>
                 </div>
 
