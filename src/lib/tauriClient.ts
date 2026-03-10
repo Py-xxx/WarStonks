@@ -58,6 +58,8 @@ export interface StartupSummary {
   currentWfmApiVersion: string | null;
 }
 
+let startupInitializationPromise: Promise<StartupSummary> | null = null;
+
 export async function getAppShellInfo(): Promise<AppShellInfo> {
   return invoke<AppShellInfo>('get_app_shell_info');
 }
@@ -68,6 +70,17 @@ export async function getAppVersion(): Promise<string> {
 
 export async function initializeAppCatalog(): Promise<StartupSummary> {
   return invoke<StartupSummary>('initialize_app_catalog');
+}
+
+export function initializeAppCatalogOnce(): Promise<StartupSummary> {
+  if (!startupInitializationPromise) {
+    startupInitializationPromise = initializeAppCatalog().catch((error) => {
+      startupInitializationPromise = null;
+      throw error;
+    });
+  }
+
+  return startupInitializationPromise;
 }
 
 export async function listenToStartupProgress(

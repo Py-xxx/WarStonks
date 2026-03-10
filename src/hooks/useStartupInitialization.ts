@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  initializeAppCatalog,
+  initializeAppCatalogOnce,
   isTauriRuntime,
   listenToStartupProgress,
   type StartupProgress,
@@ -70,7 +70,7 @@ export function useStartupInitialization(): StartupState {
       });
 
       try {
-        const nextSummary = await initializeAppCatalog();
+        const nextSummary = await initializeAppCatalogOnce();
         if (!isMounted || activeAttemptRef.current !== currentAttempt) {
           return;
         }
