@@ -291,10 +291,6 @@ function QuickViewCard() {
 
             <div className="qv-grid">
               <div>
-                <div className="qv-stat-label">Orders Loaded</div>
-                <div className="qv-stat-value">{quickView.sellOrders.length}</div>
-              </div>
-              <div>
                 <div className="qv-stat-label">Entry Price</div>
                 <div className="qv-stat-value" style={{ color: 'var(--accent-green)' }}>{mainOrder.platinum} pt</div>
               </div>
@@ -307,16 +303,8 @@ function QuickViewCard() {
                 <div className="qv-stat-value">{mainOrder.quantity}</div>
               </div>
               <div>
-                <div className="qv-stat-label">Per Trade</div>
-                <div className="qv-stat-value">{mainOrder.perTrade}</div>
-              </div>
-              <div>
                 <div className="qv-stat-label">Rank</div>
                 <div className="qv-stat-value">{mainOrder.rank ?? '—'}</div>
-              </div>
-              <div>
-                <div className="qv-stat-label">Per Trade</div>
-                <div className="qv-stat-value">{mainOrder.perTrade}</div>
               </div>
             </div>
 
