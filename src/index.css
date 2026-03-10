@@ -992,6 +992,12 @@ body {
     width: 100vw;
   }
 
+  .watchlist-alert-summary-metrics,
+  .watchlist-alert-summary-item {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
   .settings-preview-grid,
   .settings-form-actions {
     grid-template-columns: 1fr;
@@ -1514,6 +1520,80 @@ body {
   background: var(--bg-base);
 }
 .wl-footer .selected { color: var(--text-secondary); }
+.watchlist-alert-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 10px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(13, 15, 20, 0.46);
+}
+.watchlist-alert-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.watchlist-alert-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.watchlist-alert-summary-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+.watchlist-alert-summary-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+.watchlist-alert-summary-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.watchlist-alert-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.watchlist-alert-summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+.watchlist-alert-summary-item-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.watchlist-alert-summary-item-meta,
+.watchlist-alert-summary-empty {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.watchlist-alert-summary-empty {
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: rgba(13, 15, 20, 0.28);
+}
 .wl-item-cell {
   display: flex;
   align-items: center;

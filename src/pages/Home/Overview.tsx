@@ -69,9 +69,17 @@ function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
 
 function WatchlistCard() {
   const watchlist = useAppStore((state) => state.watchlist);
+  const alerts = useAppStore((state) => state.alerts);
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
   const setSelected = useAppStore((state) => state.setSelectedWatchlist);
   const removeItem = useAppStore((state) => state.removeWatchlistItem);
+  const watchlistRows = watchlist.map((item) => ({
+    item,
+    visualState: getWatchlistVisualState(item),
+  }));
+  const foundCount = watchlistRows.filter((entry) => entry.visualState.tone === 'red').length;
+  const nearTargetCount = watchlistRows.filter((entry) => entry.visualState.tone === 'yellow').length;
+  const latestAlerts = alerts.slice(0, 3);
 
   return (
     <div className="card">
@@ -102,10 +110,7 @@ function WatchlistCard() {
               </tr>
             </thead>
             <tbody>
-              {watchlist.map((item) => {
-                const visualState = getWatchlistVisualState(item);
-
-                return (
+              {watchlistRows.map(({ item, visualState }) => (
                   <tr
                     key={item.id}
                     onClick={() => setSelected(item.id)}
@@ -133,8 +138,7 @@ function WatchlistCard() {
                       </button>
                     </td>
                   </tr>
-                );
-              })}
+              ))}
             </tbody>
           </table>
           <div className="wl-footer">
@@ -147,6 +151,46 @@ function WatchlistCard() {
                 </span>
               </span>
             ) : null}
+          </div>
+          <div className="watchlist-alert-summary">
+            <div className="watchlist-alert-summary-header">
+              <span className="card-label">Alert Summary</span>
+              <span className={`badge ${alerts.length > 0 ? 'badge-red' : 'badge-muted'}`}>
+                {alerts.length} active
+              </span>
+            </div>
+
+            <div className="watchlist-alert-summary-metrics">
+              <div className="watchlist-alert-summary-chip">
+                <span className="watchlist-alert-summary-value">{foundCount}</span>
+                <span className="watchlist-alert-summary-label">Found now</span>
+              </div>
+              <div className="watchlist-alert-summary-chip">
+                <span className="watchlist-alert-summary-value">{nearTargetCount}</span>
+                <span className="watchlist-alert-summary-label">Within 10%</span>
+              </div>
+              <div className="watchlist-alert-summary-chip">
+                <span className="watchlist-alert-summary-value">{latestAlerts.length}</span>
+                <span className="watchlist-alert-summary-label">Latest shown</span>
+              </div>
+            </div>
+
+            {latestAlerts.length > 0 ? (
+              <div className="watchlist-alert-summary-list">
+                {latestAlerts.map((alert) => (
+                  <div key={alert.id} className="watchlist-alert-summary-item">
+                    <span className="watchlist-alert-summary-item-name">{alert.itemName}</span>
+                    <span className="watchlist-alert-summary-item-meta">
+                      {alert.username} · {alert.price} pt
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="watchlist-alert-summary-empty">
+                No active alerts yet. Alerts appear here when a watched item reaches your target.
+              </div>
+            )}
           </div>
         </>
       )}
