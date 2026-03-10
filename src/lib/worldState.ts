@@ -1,12 +1,15 @@
 import type {
+  VoidTraderInventoryItem,
   WfstatEventInterimStep,
   WfstatEventReward,
   WfstatEventRewardCountedItem,
+  WfstatVoidTrader,
   WfstatWorldStateEvent,
 } from '../types';
-import { getWorldStateEvents, isTauriRuntime } from './tauriClient';
+import { getWorldStateEvents, getWorldStateVoidTrader, isTauriRuntime } from './tauriClient';
 
 const WFSTAT_EVENTS_URL = 'https://api.warframestat.us/pc/events?language=en';
+const WFSTAT_VOID_TRADER_URL = 'https://api.warframestat.us/pc/voidTrader?language=en';
 const INVALID_WORLDSTATE_EXPIRY = '1970-01-01T00:00:00.000Z';
 export const WORLDSTATE_RETRY_DELAY_MS = 60_000;
 
@@ -115,6 +118,51 @@ function normalizeWorldStateEvent(entry: unknown): WfstatWorldStateEvent {
   };
 }
 
+function normalizeVoidTraderInventoryItem(entry: unknown): VoidTraderInventoryItem | null {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const record = entry as Record<string, unknown>;
+  const item = parseOptionalString(record.item);
+  if (!item) {
+    return null;
+  }
+
+  return {
+    item,
+    ducats: parseOptionalNumber(record.ducats),
+    credits: parseOptionalNumber(record.credits),
+    category: parseOptionalString(record.category) ?? 'Other',
+    imagePath: parseOptionalString(record.imagePath),
+  };
+}
+
+function normalizeVoidTrader(entry: unknown): WfstatVoidTrader {
+  const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+
+  return {
+    id: parseOptionalString(record.id) ?? 'void-trader',
+    activation: parseOptionalString(record.activation),
+    expiry: parseOptionalString(record.expiry),
+    character: parseOptionalString(record.character) ?? "Baro Ki'Teer",
+    location: parseOptionalString(record.location),
+    inventory: Array.isArray(record.inventory)
+      ? record.inventory
+          .map((inventoryItem) => normalizeVoidTraderInventoryItem(inventoryItem))
+          .filter((inventoryItem): inventoryItem is VoidTraderInventoryItem => inventoryItem !== null)
+      : [],
+    psId: parseOptionalString(record.psId),
+    initialStart: parseOptionalString(record.initialStart),
+    schedule: Array.isArray(record.schedule)
+      ? record.schedule.filter(
+          (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object',
+        )
+      : [],
+    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+  };
+}
+
 function isValidFutureExpiry(expiry: string | null, nowMs: number): boolean {
   if (!expiry || expiry === INVALID_WORLDSTATE_EXPIRY) {
     return false;
@@ -135,6 +183,48 @@ export function selectWorldStateEventsRefreshAt(
     .sort((left, right) => Date.parse(left) - Date.parse(right));
 
   return validExpiries[0] ?? null;
+}
+
+export function isWorldStateWindowActive(
+  activation: string | null,
+  expiry: string | null,
+  nowMs: number = Date.now(),
+): boolean {
+  const activationMs = activation ? Date.parse(activation) : Number.NaN;
+  const expiryMs = expiry ? Date.parse(expiry) : Number.NaN;
+
+  if (!Number.isFinite(expiryMs) || expiryMs <= nowMs) {
+    return false;
+  }
+
+  if (!Number.isFinite(activationMs)) {
+    return true;
+  }
+
+  return activationMs <= nowMs;
+}
+
+export function selectVoidTraderRefreshAt(
+  voidTrader: WfstatVoidTrader,
+  nowMs: number = Date.now(),
+): string | null {
+  if (voidTrader.expired) {
+    return new Date(nowMs + WORLDSTATE_RETRY_DELAY_MS).toISOString();
+  }
+
+  const activationMs = voidTrader.activation ? Date.parse(voidTrader.activation) : Number.NaN;
+  const expiryMs = voidTrader.expiry ? Date.parse(voidTrader.expiry) : Number.NaN;
+
+  // The view becomes stale at activation when Baro arrives, then again at expiry when he leaves.
+  if (Number.isFinite(activationMs) && activationMs > nowMs) {
+    return voidTrader.activation;
+  }
+
+  if (Number.isFinite(expiryMs) && expiryMs > nowMs && voidTrader.expiry !== INVALID_WORLDSTATE_EXPIRY) {
+    return voidTrader.expiry;
+  }
+
+  return null;
 }
 
 export async function fetchWorldStateEventsSnapshot(): Promise<{
@@ -169,6 +259,42 @@ export async function fetchWorldStateEventsSnapshot(): Promise<{
   return {
     events,
     nextRefreshAt: selectWorldStateEventsRefreshAt(events),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchWorldStateVoidTraderSnapshot(): Promise<{
+  voidTrader: WfstatVoidTrader;
+  nextRefreshAt: string | null;
+  fetchedAt: string;
+}> {
+  let payload: unknown;
+
+  if (isTauriRuntime()) {
+    payload = await getWorldStateVoidTrader();
+  } else {
+    const response = await fetch(WFSTAT_VOID_TRADER_URL, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`WFStat void trader request failed with ${response.status}`);
+    }
+
+    payload = (await response.json()) as unknown;
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('WFStat void trader response was not an object.');
+  }
+
+  const voidTrader = normalizeVoidTrader(payload);
+
+  return {
+    voidTrader,
+    nextRefreshAt: selectVoidTraderRefreshAt(voidTrader),
     fetchedAt: new Date().toISOString(),
   };
 }

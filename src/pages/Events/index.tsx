@@ -1,5 +1,6 @@
 import { useAppStore } from '../../stores/useAppStore';
 import { ActiveEventsPanel } from '../../components/ActiveEventsPanel';
+import { VoidTraderPanel } from '../../components/VoidTraderPanel';
 
 function EmptyState({ message }: { message: string }) {
   return (
@@ -13,7 +14,9 @@ export function EventsPage() {
   const eventsSubTab = useAppStore((s) => s.eventsSubTab);
   const setEventsSubTab = useAppStore((s) => s.setEventsSubTab);
   const worldStateEventsError = useAppStore((s) => s.worldStateEventsError);
+  const worldStateVoidTraderError = useAppStore((s) => s.worldStateVoidTraderError);
   const refreshWorldStateEvents = useAppStore((s) => s.refreshWorldStateEvents);
+  const refreshWorldStateVoidTrader = useAppStore((s) => s.refreshWorldStateVoidTrader);
 
   const tabs = [
     { id: 'active-events' as const, label: 'Active Events' },
@@ -22,6 +25,29 @@ export function EventsPage() {
     { id: 'activities'   as const, label: 'Activities' },
     { id: 'market-news'  as const, label: 'Market & News' },
   ];
+
+  const currentFeedError =
+    eventsSubTab === 'active-events'
+      ? worldStateEventsError
+      : eventsSubTab === 'void-trader'
+        ? worldStateVoidTraderError
+        : null;
+  const retryCurrentFeed =
+    eventsSubTab === 'active-events'
+      ? () => {
+          void refreshWorldStateEvents();
+        }
+      : eventsSubTab === 'void-trader'
+        ? () => {
+            void refreshWorldStateVoidTrader();
+          }
+        : null;
+  const currentFeedLabel =
+    eventsSubTab === 'active-events'
+      ? 'Active Events'
+      : eventsSubTab === 'void-trader'
+        ? 'Void Trader'
+        : 'Events';
 
   return (
     <>
@@ -42,14 +68,9 @@ export function EventsPage() {
         </div>
       </div>
 
-      <div className="page-content events-page-content">
+        <div className="page-content events-page-content">
         {eventsSubTab === 'active-events' && <ActiveEventsPanel />}
-        {eventsSubTab === 'void-trader' && (
-          <div className="card">
-            <div className="card-header"><span className="card-label">Void Trader</span></div>
-            <EmptyState message="Void Trader is not wired to a live worldstate feed yet." />
-          </div>
-        )}
+        {eventsSubTab === 'void-trader' && <VoidTraderPanel />}
         {eventsSubTab === 'fissures' && (
           <div className="card">
             <div className="card-header">
@@ -71,26 +92,26 @@ export function EventsPage() {
           </div>
         )}
 
-        {worldStateEventsError ? (
+        {currentFeedError ? (
           <div className="events-offline-overlay" role="status" aria-live="polite">
             <div className="events-offline-panel">
               <span className="card-label">Events Offline</span>
               <div className="events-offline-title">
-                Events are unable to be updated because the API is offline.
+                {currentFeedLabel} is unable to be updated because the API is offline.
               </div>
               <div className="events-offline-body">
                 Last request failed. The page will retry automatically when the worldstate refresh
                 timer runs again.
               </div>
-              <button
-                className="settings-secondary-btn events-offline-btn"
-                type="button"
-                onClick={() => {
-                  void refreshWorldStateEvents();
-                }}
-              >
-                Retry now
-              </button>
+              {retryCurrentFeed ? (
+                <button
+                  className="settings-secondary-btn events-offline-btn"
+                  type="button"
+                  onClick={retryCurrentFeed}
+                >
+                  Retry now
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}

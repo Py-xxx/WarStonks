@@ -8,6 +8,7 @@ import type {
   AlecaframeValidationResult,
   AppSettings,
   WalletSnapshot,
+  WfstatVoidTrader,
   WfmAutocompleteItem,
   WfmTopSellOrder,
 } from '../types';
@@ -107,6 +108,10 @@ export async function getCurrencyBalances(): Promise<WalletSnapshot> {
 
 export async function getWorldStateEvents(): Promise<Record<string, unknown>[]> {
   return invoke<Record<string, unknown>[]>('get_worldstate_events');
+}
+
+export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
+  return invoke<WfstatVoidTrader>('get_worldstate_void_trader');
 }
 
 export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> {

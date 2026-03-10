@@ -7,6 +7,7 @@ import {
 } from '../lib/tauriClient';
 import {
   fetchWorldStateEventsSnapshot,
+  fetchWorldStateVoidTraderSnapshot,
   WORLDSTATE_RETRY_DELAY_MS,
 } from '../lib/worldState';
 import {
@@ -26,6 +27,7 @@ import type {
   TradesSubTab,
   WatchlistAlert,
   WatchlistItem,
+  WfstatVoidTrader,
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
   AppSettings,
@@ -37,6 +39,7 @@ import { mockSellOrders } from '../mocks/trades';
 
 let quickViewRequestSequence = 0;
 let worldStateEventsRefreshPromise: Promise<void> | null = null;
+let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
 
 const defaultAppSettings: AppSettings = {
   alecaframe: {
@@ -188,6 +191,11 @@ interface AppStore {
   worldStateEventsError: string | null;
   worldStateEventsNextRefreshAt: string | null;
   worldStateEventsLastUpdatedAt: string | null;
+  worldStateVoidTrader: WfstatVoidTrader | null;
+  worldStateVoidTraderLoading: boolean;
+  worldStateVoidTraderError: string | null;
+  worldStateVoidTraderNextRefreshAt: string | null;
+  worldStateVoidTraderLastUpdatedAt: string | null;
   openSettingsSidebar: (section?: SettingsSection) => void;
   closeSettingsSidebar: () => void;
   setSettingsSection: (section: SettingsSection) => void;
@@ -197,6 +205,7 @@ interface AppStore {
   refreshWalletSnapshot: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
+  refreshWorldStateVoidTrader: () => Promise<void>;
 
   sellerMode: SellerMode;
   setSellerMode: (mode: SellerMode) => void;
@@ -267,6 +276,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateEventsError: null,
   worldStateEventsNextRefreshAt: null,
   worldStateEventsLastUpdatedAt: null,
+  worldStateVoidTrader: null,
+  worldStateVoidTraderLoading: false,
+  worldStateVoidTraderError: null,
+  worldStateVoidTraderNextRefreshAt: null,
+  worldStateVoidTraderLastUpdatedAt: null,
   openSettingsSidebar: (section = 'alecaframe') =>
     set({ settingsSidebarOpen: true, settingsSection: section, alecaframeModalOpen: false }),
   closeSettingsSidebar: () => set({ settingsSidebarOpen: false, alecaframeModalOpen: false }),
@@ -371,6 +385,38 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })();
 
     return worldStateEventsRefreshPromise;
+  },
+  refreshWorldStateVoidTrader: async () => {
+    if (worldStateVoidTraderRefreshPromise) {
+      return worldStateVoidTraderRefreshPromise;
+    }
+
+    set({ worldStateVoidTraderLoading: true });
+
+    worldStateVoidTraderRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateVoidTraderSnapshot();
+        set({
+          worldStateVoidTrader: snapshot.voidTrader,
+          worldStateVoidTraderLoading: false,
+          worldStateVoidTraderError: null,
+          worldStateVoidTraderNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateVoidTraderLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateVoidTraderLoading: false,
+          worldStateVoidTraderError: toErrorMessage(error),
+          worldStateVoidTraderNextRefreshAt:
+            state.worldStateVoidTraderNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateVoidTraderRefreshPromise = null;
+      }
+    })();
+
+    return worldStateVoidTraderRefreshPromise;
   },
 
   sellerMode: 'ingame',
