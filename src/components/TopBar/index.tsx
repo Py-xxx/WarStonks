@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfmAutocompleteItem } from '../../types';
 
@@ -253,9 +254,24 @@ export function TopBar() {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => selectItem(item)}
                   >
-                    <span className="search-suggestion-name">{item.name}</span>
-                    <span className="search-suggestion-meta">
-                      {item.itemFamily ?? 'item'}
+                    <span className="search-suggestion-main">
+                      <span className="search-suggestion-thumb">
+                        {resolveWfmAssetUrl(item.imagePath) ? (
+                          <img
+                            src={resolveWfmAssetUrl(item.imagePath) ?? undefined}
+                            alt=""
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span>{item.name.slice(0, 1)}</span>
+                        )}
+                      </span>
+                      <span className="search-suggestion-copy">
+                        <span className="search-suggestion-name">{item.name}</span>
+                        <span className="search-suggestion-meta">
+                          {item.itemFamily ?? 'item'}
+                        </span>
+                      </span>
                     </span>
                   </button>
                 ))
