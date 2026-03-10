@@ -105,6 +105,10 @@ export async function getCurrencyBalances(): Promise<WalletSnapshot> {
   return invoke<WalletSnapshot>('get_currency_balances');
 }
 
+export async function getWorldStateEvents(): Promise<Record<string, unknown>[]> {
+  return invoke<Record<string, unknown>[]>('get_worldstate_events');
+}
+
 export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> {
   if (!isTauriRuntime()) {
     return [];

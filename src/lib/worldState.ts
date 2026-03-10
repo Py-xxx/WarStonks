@@ -4,6 +4,7 @@ import type {
   WfstatEventRewardCountedItem,
   WfstatWorldStateEvent,
 } from '../types';
+import { getWorldStateEvents, isTauriRuntime } from './tauriClient';
 
 const WFSTAT_EVENTS_URL = 'https://api.warframestat.us/pc/events?language=en';
 const INVALID_WORLDSTATE_EXPIRY = '1970-01-01T00:00:00.000Z';
@@ -141,17 +142,24 @@ export async function fetchWorldStateEventsSnapshot(): Promise<{
   nextRefreshAt: string | null;
   fetchedAt: string;
 }> {
-  const response = await fetch(WFSTAT_EVENTS_URL, {
-    headers: {
-      Accept: 'application/json',
-    },
-  });
+  let payload: unknown;
 
-  if (!response.ok) {
-    throw new Error(`WFStat events request failed with ${response.status}`);
+  if (isTauriRuntime()) {
+    payload = await getWorldStateEvents();
+  } else {
+    const response = await fetch(WFSTAT_EVENTS_URL, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`WFStat events request failed with ${response.status}`);
+    }
+
+    payload = (await response.json()) as unknown;
   }
 
-  const payload = (await response.json()) as unknown;
   if (!Array.isArray(payload)) {
     throw new Error('WFStat events response was not an array.');
   }
