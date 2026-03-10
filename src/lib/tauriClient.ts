@@ -3,6 +3,8 @@
  * All functions are stubs when running in a browser (non-Tauri) context.
  */
 
+import type { WfmAutocompleteItem, WfmTopSellOrder } from '../types';
+
 // Check if running inside Tauri
 export const isTauriRuntime = () =>
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -58,6 +60,12 @@ export interface StartupSummary {
   currentWfmApiVersion: string | null;
 }
 
+export interface WfmTopSellOrdersResponse {
+  apiVersion: string | null;
+  slug: string;
+  sellOrders: WfmTopSellOrder[];
+}
+
 let startupInitializationPromise: Promise<StartupSummary> | null = null;
 
 export async function getAppShellInfo(): Promise<AppShellInfo> {
@@ -66,6 +74,18 @@ export async function getAppShellInfo(): Promise<AppShellInfo> {
 
 export async function getAppVersion(): Promise<string> {
   return invoke<string>('get_app_version');
+}
+
+export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+
+  return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items');
+}
+
+export async function getWfmTopSellOrders(slug: string): Promise<WfmTopSellOrdersResponse> {
+  return invoke<WfmTopSellOrdersResponse>('get_wfm_top_sell_orders', { slug });
 }
 
 export async function initializeAppCatalog(): Promise<StartupSummary> {

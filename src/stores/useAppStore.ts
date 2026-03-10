@@ -1,15 +1,27 @@
 import { create } from 'zustand';
+import { getWfmTopSellOrders } from '../lib/tauriClient';
 import type {
   PageId,
   HomeSubTab,
   SellerMode,
   TradePeriod,
   TradesSubTab,
+  QuickViewSelection,
   WatchlistItem,
   TradeOrder,
+  WfmAutocompleteItem,
 } from '../types';
-import { mockWatchlist } from '../mocks/watchlist';
 import { mockSellOrders } from '../mocks/trades';
+
+let quickViewRequestSequence = 0;
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
 
 interface AppStore {
   // Navigation
@@ -38,6 +50,10 @@ interface AppStore {
   removeWatchlistItem: (id: string) => void;
   watchlistTargetInput: string;
   setWatchlistTargetInput: (val: string) => void;
+
+  // Quick View
+  quickView: QuickViewSelection;
+  loadQuickViewItem: (item: WfmAutocompleteItem) => Promise<void>;
 
   // Trades
   tradesSubTab: TradesSubTab;
@@ -86,8 +102,8 @@ export const useAppStore = create<AppStore>((set) => ({
   toggleAutoProfile: () => set((s) => ({ autoProfile: !s.autoProfile })),
 
   // Watchlist
-  watchlist: mockWatchlist,
-  selectedWatchlistId: mockWatchlist[0]?.id ?? null,
+  watchlist: [],
+  selectedWatchlistId: null,
   setSelectedWatchlist: (id) => set({ selectedWatchlistId: id }),
   addWatchlistItem: (name, targetPrice) =>
     set((s) => ({
@@ -105,6 +121,8 @@ export const useAppStore = create<AppStore>((set) => ({
           score: 0,
         },
       ],
+      selectedWatchlistId:
+        s.selectedWatchlistId ?? name.toLowerCase().replace(/\s+/g, '-'),
     })),
   removeWatchlistItem: (id) =>
     set((s) => ({
@@ -116,6 +134,61 @@ export const useAppStore = create<AppStore>((set) => ({
     })),
   watchlistTargetInput: '',
   setWatchlistTargetInput: (val) => set({ watchlistTargetInput: val }),
+
+  // Quick View
+  quickView: {
+    selectedItem: null,
+    sellOrders: [],
+    apiVersion: null,
+    loading: false,
+    errorMessage: null,
+  },
+  loadQuickViewItem: async (item) => {
+    const requestId = ++quickViewRequestSequence;
+
+    set({
+      activePage: 'home',
+      homeSubTab: 'overview',
+      quickView: {
+        selectedItem: item,
+        sellOrders: [],
+        apiVersion: null,
+        loading: true,
+        errorMessage: null,
+      },
+    });
+
+    try {
+      const response = await getWfmTopSellOrders(item.slug);
+      if (requestId !== quickViewRequestSequence) {
+        return;
+      }
+
+      set({
+        quickView: {
+          selectedItem: item,
+          sellOrders: response.sellOrders,
+          apiVersion: response.apiVersion,
+          loading: false,
+          errorMessage: null,
+        },
+      });
+    } catch (error) {
+      if (requestId !== quickViewRequestSequence) {
+        return;
+      }
+
+      set({
+        quickView: {
+          selectedItem: item,
+          sellOrders: [],
+          apiVersion: null,
+          loading: false,
+          errorMessage: toErrorMessage(error),
+        },
+      });
+    }
+  },
 
   // Trades
   tradesSubTab: 'sell-orders',

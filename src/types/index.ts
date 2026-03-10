@@ -66,6 +66,33 @@ export interface CurrencyBalance {
   aya: number | null;
 }
 
+export interface WfmAutocompleteItem {
+  itemId: number;
+  name: string;
+  slug: string;
+  maxRank: number | null;
+  itemFamily: string | null;
+}
+
+export interface WfmTopSellOrder {
+  orderId: string;
+  platinum: number;
+  quantity: number;
+  perTrade: number;
+  rank: number | null;
+  username: string;
+  userSlug: string | null;
+  status: string | null;
+}
+
+export interface QuickViewSelection {
+  selectedItem: WfmAutocompleteItem | null;
+  sellOrders: WfmTopSellOrder[];
+  apiVersion: string | null;
+  loading: boolean;
+  errorMessage: string | null;
+}
+
 export interface QuickViewData {
   item: string;
   entry: number;

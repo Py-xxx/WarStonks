@@ -1,4 +1,8 @@
+import { useDeferredValue, useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
+import { getWfmAutocompleteItems } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
+import type { WfmAutocompleteItem } from '../../types';
 
 const PlatinumIcon = () => (
   <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
@@ -55,20 +59,211 @@ const ArrowIcon = () => (
   </svg>
 );
 
+function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): WfmAutocompleteItem[] {
+  const trimmedQuery = query.trim().toLowerCase();
+  if (!trimmedQuery) {
+    return [];
+  }
+
+  const slugQuery = trimmedQuery.replace(/\s+/g, '_');
+  const prefixMatches: WfmAutocompleteItem[] = [];
+  const substringMatches: WfmAutocompleteItem[] = [];
+
+  for (const item of items) {
+    const normalizedName = item.name.toLowerCase();
+    const isPrefixMatch =
+      normalizedName.startsWith(trimmedQuery) || item.slug.startsWith(slugQuery);
+    const isSubstringMatch =
+      normalizedName.includes(trimmedQuery) || item.slug.includes(slugQuery);
+
+    if (isPrefixMatch) {
+      prefixMatches.push(item);
+      continue;
+    }
+
+    if (isSubstringMatch) {
+      substringMatches.push(item);
+    }
+  }
+
+  return [...prefixMatches, ...substringMatches].slice(0, 8);
+}
+
 export function TopBar() {
   const autoProfile = useAppStore((s) => s.autoProfile);
+  const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
+  const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
+
+  const [searchValue, setSearchValue] = useState('');
+  const [autocompleteItems, setAutocompleteItems] = useState<WfmAutocompleteItem[]>([]);
+  const [autocompleteState, setAutocompleteState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [autocompleteError, setAutocompleteError] = useState<string | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const searchRef = useRef<HTMLDivElement | null>(null);
+  const deferredSearchValue = useDeferredValue(searchValue);
+  const suggestions = rankAutocompleteItems(autocompleteItems, deferredSearchValue);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadItems = async () => {
+      setAutocompleteState('loading');
+      setAutocompleteError(null);
+
+      try {
+        const items = await getWfmAutocompleteItems();
+        if (!isMounted) {
+          return;
+        }
+
+        setAutocompleteItems(items);
+        setAutocompleteState('ready');
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setAutocompleteState('error');
+        setAutocompleteError(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    void loadItems();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedQuickViewItem) {
+      setSearchValue(selectedQuickViewItem.name);
+    }
+  }, [selectedQuickViewItem]);
+
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [deferredSearchValue]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!searchRef.current?.contains(event.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, []);
+
+  const selectItem = (item: WfmAutocompleteItem) => {
+    setSearchValue(item.name);
+    setDropdownOpen(false);
+    void loadQuickViewItem(item);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (!dropdownOpen && suggestions.length > 0) {
+        setDropdownOpen(true);
+        return;
+      }
+
+      setHighlightedIndex((current) =>
+        suggestions.length === 0 ? 0 : Math.min(current + 1, suggestions.length - 1),
+      );
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlightedIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      if (!dropdownOpen || suggestions.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      selectItem(suggestions[highlightedIndex] ?? suggestions[0]);
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      setDropdownOpen(false);
+    }
+  };
 
   return (
     <header className="topbar">
       <div className="logo">WarStonks<span>v3</span></div>
 
-      <div className="search-bar" role="search" aria-label="Search items">
+      <div
+        ref={searchRef}
+        className={`search-bar${dropdownOpen ? ' open' : ''}`}
+        role="search"
+        aria-label="Search items"
+      >
         <SearchIcon />
-        <span>Search items, sets, relics…</span>
+        <input
+          className="search-input"
+          type="text"
+          value={searchValue}
+          placeholder="Search WFM items, sets, relics…"
+          onFocus={() => setDropdownOpen(suggestions.length > 0)}
+          onChange={(event) => {
+            setSearchValue(event.target.value);
+            setDropdownOpen(event.target.value.trim().length > 0);
+          }}
+          onKeyDown={handleKeyDown}
+          aria-autocomplete="list"
+          aria-expanded={dropdownOpen}
+          aria-controls="global-search-results"
+        />
         <span className="kbd">⌘K</span>
+
+        {dropdownOpen ? (
+          <div className="search-dropdown" id="global-search-results" role="listbox">
+            {autocompleteState === 'loading' ? (
+              <div className="search-state">Loading local item catalog…</div>
+            ) : null}
+
+            {autocompleteState === 'error' ? (
+              <div className="search-state error">
+                {autocompleteError ?? 'Failed to load the local item catalog.'}
+              </div>
+            ) : null}
+
+            {autocompleteState === 'ready' && suggestions.length === 0 ? (
+              <div className="search-state">No WFM items match that search.</div>
+            ) : null}
+
+            {autocompleteState === 'ready'
+              ? suggestions.map((item, index) => (
+                  <button
+                    key={item.slug}
+                    className={`search-suggestion${index === highlightedIndex ? ' active' : ''}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === highlightedIndex}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectItem(item)}
+                  >
+                    <span className="search-suggestion-name">{item.name}</span>
+                    <span className="search-suggestion-meta">
+                      {item.itemFamily ?? 'item'}
+                    </span>
+                  </button>
+                ))
+              : null}
+          </div>
+        ) : null}
       </div>
 
-      {/* Currency Strip */}
       <div className="currency-strip" role="status" aria-label="Currency balances">
         <div className="currency-item ci-platinum">
           <div className="currency-icon"><PlatinumIcon /></div>
