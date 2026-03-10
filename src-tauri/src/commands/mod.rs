@@ -53,6 +53,13 @@ pub struct WfmTopSellOrdersResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RelicTierIcon {
+    pub tier: String,
+    pub image_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VoidTraderInventoryItem {
     pub item: String,
     pub ducats: Option<i64>,
@@ -465,6 +472,44 @@ fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAut
     Ok(items)
 }
 
+fn load_relic_tier_icons_inner(app: tauri::AppHandle) -> Result<Vec<RelicTierIcon>> {
+    let connection = open_catalog_database(&app)?;
+    let mut statement = connection.prepare(
+        "WITH ranked AS (
+            SELECT
+              relic_tier,
+              preferred_image,
+              ROW_NUMBER() OVER (
+                PARTITION BY relic_tier
+                ORDER BY
+                  CASE WHEN preferred_image = 'items/unknown.thumb.png' THEN 1 ELSE 0 END,
+                  preferred_name ASC
+              ) AS row_rank
+            FROM items
+            WHERE item_family = 'relics'
+              AND relic_tier IS NOT NULL
+              AND preferred_image IS NOT NULL
+          )
+          SELECT relic_tier, preferred_image
+          FROM ranked
+          WHERE row_rank = 1
+          ORDER BY relic_tier COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(RelicTierIcon {
+            tier: row.get(0)?,
+            image_path: row.get(1)?,
+        })
+    })?;
+
+    let mut icons = Vec::new();
+    for row in rows {
+        icons.push(row?);
+    }
+
+    Ok(icons)
+}
+
 fn compare_sell_orders(left: &WfmTopSellOrder, right: &WfmTopSellOrder) -> Ordering {
     left.platinum.cmp(&right.platinum).then_with(|| {
         left.username
@@ -605,6 +650,14 @@ pub async fn get_wfm_autocomplete_items(
     app: tauri::AppHandle,
 ) -> Result<Vec<WfmAutocompleteItem>, String> {
     tauri::async_runtime::spawn_blocking(move || load_wfm_autocomplete_items_inner(app))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_relic_tier_icons(app: tauri::AppHandle) -> Result<Vec<RelicTierIcon>, String> {
+    tauri::async_runtime::spawn_blocking(move || load_relic_tier_icons_inner(app))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())

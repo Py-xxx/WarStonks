@@ -10,6 +10,7 @@ pub fn run() {
             commands::get_app_version,
             commands::initialize_app_catalog,
             commands::get_wfm_autocomplete_items,
+            commands::get_relic_tier_icons,
             commands::get_wfm_top_sell_orders,
             commands::get_worldstate_events,
             commands::get_worldstate_fissures,

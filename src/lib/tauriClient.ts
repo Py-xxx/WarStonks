@@ -7,6 +7,7 @@ import type {
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
   AppSettings,
+  RelicTierIcon,
   WalletSnapshot,
   WfstatVoidTrader,
   WfmAutocompleteItem,
@@ -116,6 +117,14 @@ export async function getWorldStateFissures(): Promise<Record<string, unknown>[]
 
 export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
   return invoke<WfstatVoidTrader>('get_worldstate_void_trader');
+}
+
+export async function getRelicTierIcons(): Promise<RelicTierIcon[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+
+  return invoke<RelicTierIcon[]>('get_relic_tier_icons');
 }
 
 export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> {
