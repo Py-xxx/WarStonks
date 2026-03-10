@@ -39,6 +39,19 @@ function groupFissuresByTier(fissures: WfstatFissure[]) {
   .sort((left, right) => left.tierNum - right.tierNum || left.tier.localeCompare(right.tier));
 }
 
+function isActiveFissure(fissure: WfstatFissure, nowMs: number): boolean {
+  if (fissure.expired) {
+    return false;
+  }
+
+  if (!fissure.expiry) {
+    return true;
+  }
+
+  const expiryMs = Date.parse(fissure.expiry);
+  return !Number.isFinite(expiryMs) || expiryMs > nowMs;
+}
+
 function NormalModeIcon() {
   return (
     <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -82,8 +95,12 @@ export function FissuresPanel() {
   }, []);
 
   const filteredFissures = useMemo(
-    () => fissures.filter((fissure) => fissure.isHard === (mode === 'steel-path')),
-    [fissures, mode],
+    () =>
+      fissures.filter(
+        (fissure) =>
+          fissure.isHard === (mode === 'steel-path') && isActiveFissure(fissure, nowMs),
+      ),
+    [fissures, mode, nowMs],
   );
   const groupedFissures = useMemo(
     () => groupFissuresByTier(filteredFissures),
