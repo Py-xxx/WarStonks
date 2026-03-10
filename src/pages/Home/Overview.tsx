@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertsPanel } from '../../components/AlertsPanel';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { copyWhisperMessage } from '../../lib/marketMessages';
+import { getWatchlistVisualState } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfmTopSellOrder } from '../../types';
@@ -120,22 +121,31 @@ function WatchlistCard() {
                 <th>Item</th>
                 <th>Target</th>
                 <th>Current</th>
-                <th>Seller</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {watchlist.map((item) => (
-                <tr
-                  key={item.id}
-                  onClick={() => setSelected(item.id)}
-                  style={{ cursor: 'pointer', background: selectedId === item.id ? 'var(--bg-elevated)' : undefined }}
-                >
-                  <td>{item.name}</td>
-                  <td className="td-muted">{item.targetPrice} pt</td>
-                  <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
-                  <td>{item.currentSeller ?? '—'}</td>
-                </tr>
-              ))}
+              {watchlist.map((item) => {
+                const visualState = getWatchlistVisualState(item);
+
+                return (
+                  <tr
+                    key={item.id}
+                    onClick={() => setSelected(item.id)}
+                    className={`watchlist-row watchlist-row-${visualState.tone}${
+                      selectedId === item.id ? ' selected' : ''
+                    }`}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td>{item.name}</td>
+                    <td className="td-muted">{item.targetPrice} pt</td>
+                    <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
+                    <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
+                      {visualState.label}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           <div className="wl-footer">
@@ -333,8 +343,6 @@ function QuickViewCard() {
                 </svg>
               </div>
             ) : null}
-
-            <WatchlistAddControls />
 
             <div className="qv-order-list">
               {compactOrders.map((order) => (
