@@ -6,6 +6,7 @@ import {
   type StartupProgress,
   type StartupSummary,
 } from '../lib/tauriClient';
+import { useAppStore } from '../stores/useAppStore';
 
 type StartupPhase = 'loading' | 'ready' | 'error';
 
@@ -39,6 +40,7 @@ export function useStartupInitialization(): StartupState {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const activeAttemptRef = useRef(0);
+  const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
 
   useEffect(() => {
     activeAttemptRef.current += 1;
@@ -106,11 +108,30 @@ export function useStartupInitialization(): StartupState {
         setSummary(nextSummary);
         setProgress((current) => ({
           ...current,
+          stageKey: 'worldstate-events',
+          stageLabel: 'Fetching event data',
+          statusText:
+            'Catalog initialization is complete. Loading worldstate event data before entering the app.',
+          progressValue: Math.max(current.progressValue, 0.86),
+        }));
+
+        await refreshWorldStateEvents();
+        if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+          return;
+        }
+
+        const { worldStateEvents, worldStateEventsError } = useAppStore.getState();
+
+        setProgress((current) => ({
+          ...current,
           stageKey: 'startup-complete',
           stageLabel: 'Catalog ready',
-          statusText: nextSummary.refreshed
-            ? 'Item sources refreshed and SQLite initialization completed.'
-            : 'Cached item catalog is current.',
+          statusText:
+            worldStateEventsError && worldStateEvents.length === 0
+              ? 'Catalog is ready. Worldstate event data could not be refreshed and will retry in the background.'
+              : nextSummary.refreshed
+                ? 'Item sources refreshed and startup event data loaded.'
+                : 'Cached item catalog and startup event data are current.',
           progressValue: 1,
         }));
         setPhase('ready');
@@ -130,7 +151,7 @@ export function useStartupInitialization(): StartupState {
       isMounted = false;
       unlisten();
     };
-  }, [attempt]);
+  }, [attempt, refreshWorldStateEvents]);
 
   return {
     phase,

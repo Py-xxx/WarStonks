@@ -3,13 +3,19 @@ import { WORLDSTATE_RETRY_DELAY_MS } from '../lib/worldState';
 import { useAppStore } from '../stores/useAppStore';
 
 export function useWorldStateEvents() {
+  const lastUpdatedAt = useAppStore((state) => state.worldStateEventsLastUpdatedAt);
   const nextRefreshAt = useAppStore((state) => state.worldStateEventsNextRefreshAt);
   const error = useAppStore((state) => state.worldStateEventsError);
+  const loading = useAppStore((state) => state.worldStateEventsLoading);
   const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
 
   useEffect(() => {
+    if (lastUpdatedAt || nextRefreshAt || error || loading) {
+      return;
+    }
+
     void refreshWorldStateEvents();
-  }, [refreshWorldStateEvents]);
+  }, [error, lastUpdatedAt, loading, nextRefreshAt, refreshWorldStateEvents]);
 
   useEffect(() => {
     const targetMs = nextRefreshAt
