@@ -12,10 +12,12 @@ use crate::item_catalog;
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const WFM_API_BASE_URL: &str = "https://api.warframe.market/v2";
+const WFSTAT_API_BASE_URL: &str = "https://api.warframestat.us";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_CROSSPLAY_HEADER: &str = "true";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
+const WFSTAT_LANGUAGE_QUERY: &str = "en";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,6 +111,30 @@ pub fn get_app_shell_info() -> AppShellInfo {
 #[tauri::command]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+pub fn get_worldstate_events() -> Result<Vec<serde_json::Value>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(format!("{WFSTAT_API_BASE_URL}/pc/events"))
+        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Accept", "application/json")
+        .send()
+        .context("failed to request WFStat events")
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .context("WFStat events request failed")
+        .map_err(|error| error.to_string())?;
+
+    response
+        .json::<Vec<serde_json::Value>>()
+        .context("failed to parse WFStat events response JSON")
+        .map_err(|error| error.to_string())
 }
 
 fn resolve_catalog_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {

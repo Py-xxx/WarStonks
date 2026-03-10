@@ -11,6 +11,7 @@ pub fn run() {
             commands::initialize_app_catalog,
             commands::get_wfm_autocomplete_items,
             commands::get_wfm_top_sell_orders,
+            commands::get_worldstate_events,
             settings::get_app_settings,
             settings::test_alecaframe_public_link,
             settings::save_alecaframe_settings,
