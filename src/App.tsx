@@ -16,6 +16,7 @@ import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
 import { useWorldStateEvents } from './hooks/useWorldStateEvents';
+import { useWorldStateVoidTrader } from './hooks/useWorldStateVoidTrader';
 
 function PageRouter() {
   const activePage = useAppStore((s) => s.activePage);
@@ -37,6 +38,7 @@ function AppShell() {
   useWatchlistScanner();
   useIntegrationSettings();
   useWorldStateEvents();
+  useWorldStateVoidTrader();
 
   return (
     <>

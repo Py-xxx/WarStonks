@@ -1007,6 +1007,11 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .void-trader-meta-grid,
+  .void-trader-grid {
+    grid-template-columns: 1fr;
+  }
+
   .settings-preview-grid,
   .settings-form-actions {
     grid-template-columns: 1fr;
@@ -2243,6 +2248,172 @@ body {
   text-align: right;
 }
 
+.void-trader-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.void-trader-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at top right, rgba(240, 160, 48, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(26, 30, 42, 0.86), rgba(13, 15, 20, 0.88));
+}
+.void-trader-hero-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.void-trader-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.void-trader-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.void-trader-location {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.void-trader-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-width: min(380px, 100%);
+}
+.void-trader-meta-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(13, 15, 20, 0.52);
+}
+.void-trader-meta-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+.void-trader-idle-state {
+  min-height: 140px;
+}
+.void-trader-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.void-trader-tab {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(19, 22, 30, 0.84);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+.void-trader-tab:hover {
+  border-color: rgba(74, 158, 255, 0.28);
+  color: var(--text-primary);
+}
+.void-trader-tab.active {
+  border-color: rgba(240, 160, 48, 0.42);
+  background: rgba(240, 160, 48, 0.12);
+  color: #ffd39a;
+}
+.void-trader-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.void-trader-item-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(13, 15, 20, 0.72);
+}
+.void-trader-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.void-trader-item-thumb {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, black);
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.void-trader-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.void-trader-item-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.void-trader-item-name {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+.void-trader-item-category {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.void-trader-cost-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.void-trader-cost-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(26, 30, 42, 0.68);
+}
+.void-trader-cost-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
 /* ── PAGE TABS ── */
 .page-tabs {
   display: flex;
@@ -2314,6 +2485,17 @@ body {
 .events-offline-btn {
   width: auto;
   align-self: flex-start;
+}
+
+@media (max-width: 960px) {
+  .void-trader-hero {
+    flex-direction: column;
+  }
+
+  .void-trader-meta-grid {
+    min-width: 0;
+    width: 100%;
+  }
 }
 
 /* ── WATCHLIST FULL SCREEN ── */

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::PathBuf;
@@ -51,6 +51,31 @@ pub struct WfmTopSellOrdersResponse {
     pub sell_orders: Vec<WfmTopSellOrder>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoidTraderInventoryItem {
+    pub item: String,
+    pub ducats: Option<i64>,
+    pub credits: Option<i64>,
+    pub category: String,
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoidTraderResponse {
+    pub id: String,
+    pub activation: Option<String>,
+    pub expiry: Option<String>,
+    pub character: String,
+    pub location: Option<String>,
+    pub inventory: Vec<VoidTraderInventoryItem>,
+    pub ps_id: Option<String>,
+    pub initial_start: Option<String>,
+    pub schedule: Vec<serde_json::Value>,
+    pub expired: Option<bool>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WfmTopOrdersApiResponse {
@@ -87,6 +112,47 @@ struct WfmOrderUser {
     slug: Option<String>,
     #[serde(default)]
     status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VoidTraderApiResponse {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    activation: Option<String>,
+    #[serde(default)]
+    expiry: Option<String>,
+    #[serde(default)]
+    character: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    inventory: Vec<VoidTraderInventoryApiItem>,
+    #[serde(default)]
+    ps_id: Option<String>,
+    #[serde(default)]
+    initial_start: Option<String>,
+    #[serde(default)]
+    schedule: Vec<serde_json::Value>,
+    #[serde(default)]
+    expired: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VoidTraderInventoryApiItem {
+    item: String,
+    #[serde(default)]
+    ducats: Option<i64>,
+    #[serde(default)]
+    credits: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct CatalogItemMetadata {
+    category: String,
+    image_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -134,6 +200,194 @@ pub fn get_worldstate_events() -> Result<Vec<serde_json::Value>, String> {
     response
         .json::<Vec<serde_json::Value>>()
         .context("failed to parse WFStat events response JSON")
+        .map_err(|error| error.to_string())
+}
+
+fn normalize_catalog_lookup_value(value: &str) -> Option<String> {
+    let normalized = value
+        .split_whitespace()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_lowercase();
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn resolve_catalog_item_id_by_name(
+    connection: &Connection,
+    item_name: &str,
+) -> Result<Option<i64>> {
+    let Some(normalized_name) = normalize_catalog_lookup_value(item_name) else {
+        return Ok(None);
+    };
+
+    let alias_item_id = connection
+        .query_row(
+            "SELECT item_id
+             FROM item_aliases
+             WHERE normalized_alias_value = ?1
+             ORDER BY
+               CASE alias_scope
+                 WHEN 'wfm_name_en' THEN 0
+                 WHEN 'wfstat_name' THEN 1
+                 WHEN 'wfstat_component_name' THEN 2
+                 WHEN 'normalized_name' THEN 3
+                 ELSE 4
+               END,
+               is_primary DESC,
+               alias_id ASC
+             LIMIT 1",
+            [normalized_name.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+
+    if alias_item_id.is_some() {
+        return Ok(alias_item_id);
+    }
+
+    let indexed_item_id = connection
+        .query_row(
+            "SELECT item_id
+             FROM items
+             WHERE canonical_name_normalized = ?1
+             UNION
+             SELECT item_id
+             FROM wfm_items
+             WHERE normalized_name_en = ?1
+             UNION
+             SELECT item_id
+             FROM wfstat_items
+             WHERE normalized_name = ?1
+             LIMIT 1",
+            [normalized_name.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+
+    Ok(indexed_item_id)
+}
+
+fn load_catalog_item_metadata(
+    connection: &Connection,
+    item_id: i64,
+) -> Result<Option<CatalogItemMetadata>> {
+    connection
+        .query_row(
+            "SELECT
+               COALESCE(
+                 NULLIF(wfstat_items.category, ''),
+                 NULLIF(wfstat_items.type, ''),
+                 NULLIF(wfm_items.item_family, ''),
+                 NULLIF(items.item_family, ''),
+                 'Other'
+               ) AS category,
+               COALESCE(
+                 NULLIF(items.preferred_image, ''),
+                 NULLIF(wfm_items.thumb, ''),
+                 NULLIF(wfm_items.icon, ''),
+                 NULLIF(wfstat_items.wikia_thumbnail, '')
+               ) AS image_path
+             FROM items
+             LEFT JOIN wfm_items
+               ON wfm_items.item_id = items.item_id
+             LEFT JOIN wfstat_items
+               ON wfstat_items.item_id = items.item_id
+             WHERE items.item_id = ?1
+             LIMIT 1",
+            [item_id],
+            |row| {
+                Ok(CatalogItemMetadata {
+                    category: row.get::<_, String>(0)?,
+                    image_path: row.get::<_, Option<String>>(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn enrich_void_trader_inventory_item(
+    connection: Option<&Connection>,
+    item: VoidTraderInventoryApiItem,
+) -> Result<VoidTraderInventoryItem> {
+    let metadata = match connection {
+        Some(catalog) => resolve_catalog_item_id_by_name(catalog, &item.item)?
+            .map(|item_id| load_catalog_item_metadata(catalog, item_id))
+            .transpose()?
+            .flatten(),
+        None => None,
+    };
+
+    Ok(VoidTraderInventoryItem {
+        item: item.item,
+        ducats: item.ducats,
+        credits: item.credits,
+        category: metadata
+            .as_ref()
+            .map(|entry| entry.category.clone())
+            .unwrap_or_else(|| "Other".to_string()),
+        image_path: metadata.and_then(|entry| entry.image_path),
+    })
+}
+
+fn fetch_worldstate_void_trader_inner(app: tauri::AppHandle) -> Result<VoidTraderResponse> {
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let response = client
+        .get(format!("{WFSTAT_API_BASE_URL}/pc/voidTrader"))
+        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Accept", "application/json")
+        .send()
+        .context("failed to request WFStat void trader")?
+        .error_for_status()
+        .context("WFStat void trader request failed")?;
+    let payload = response
+        .json::<VoidTraderApiResponse>()
+        .context("failed to parse WFStat void trader response JSON")?;
+
+    let catalog_connection = open_catalog_database(&app).ok();
+    let mut inventory = payload
+        .inventory
+        .into_iter()
+        .map(|entry| enrich_void_trader_inventory_item(catalog_connection.as_ref(), entry))
+        .collect::<Result<Vec<_>>>()?;
+    inventory.sort_by(|left, right| {
+        left.category
+            .to_lowercase()
+            .cmp(&right.category.to_lowercase())
+            .then_with(|| left.item.to_lowercase().cmp(&right.item.to_lowercase()))
+    });
+
+    Ok(VoidTraderResponse {
+        id: payload.id.unwrap_or_else(|| "void-trader".to_string()),
+        activation: payload.activation,
+        expiry: payload.expiry,
+        character: payload
+            .character
+            .unwrap_or_else(|| "Baro Ki'Teer".to_string()),
+        location: payload.location,
+        inventory,
+        ps_id: payload.ps_id,
+        initial_start: payload.initial_start,
+        schedule: payload.schedule,
+        expired: payload.expired,
+    })
+}
+
+#[tauri::command]
+pub async fn get_worldstate_void_trader(
+    app: tauri::AppHandle,
+) -> Result<VoidTraderResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_worldstate_void_trader_inner(app))
+        .await
+        .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
 }
 
@@ -343,8 +597,8 @@ pub async fn get_wfm_top_sell_orders(slug: String) -> Result<WfmTopSellOrdersRes
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_startup_summary, normalize_top_sell_orders, StartupCommandState, WfmOrderUser,
-        WfmOrderWithUser,
+        cached_startup_summary, normalize_catalog_lookup_value, normalize_top_sell_orders,
+        StartupCommandState, WfmOrderUser, WfmOrderWithUser,
     };
     use crate::item_catalog::{ImportStats, StartupSummary};
 
@@ -479,5 +733,14 @@ mod tests {
         assert_eq!(response.sell_orders.len(), 5);
         assert_eq!(response.sell_orders[0].username, "alpha");
         assert_eq!(response.sell_orders[4].username, "echo");
+    }
+
+    #[test]
+    fn normalizes_catalog_lookup_values() {
+        assert_eq!(
+            normalize_catalog_lookup_value("  Primed   Continuity  "),
+            Some("primed continuity".to_string())
+        );
+        assert_eq!(normalize_catalog_lookup_value("   "), None);
     }
 }

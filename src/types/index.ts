@@ -128,6 +128,27 @@ export interface WfstatWorldStateEvent {
   expired?: boolean;
 }
 
+export interface VoidTraderInventoryItem {
+  item: string;
+  ducats: number | null;
+  credits: number | null;
+  category: string;
+  imagePath: string | null;
+}
+
+export interface WfstatVoidTrader {
+  id: string;
+  activation: string | null;
+  expiry: string | null;
+  character: string;
+  location: string | null;
+  inventory: VoidTraderInventoryItem[];
+  psId: string | null;
+  initialStart: string | null;
+  schedule: Record<string, unknown>[];
+  expired?: boolean;
+}
+
 export interface CurrencyBalance {
   platinum: number | null;
   credits: number | null;

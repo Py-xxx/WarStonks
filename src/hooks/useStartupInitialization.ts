@@ -41,6 +41,7 @@ export function useStartupInitialization(): StartupState {
   const [attempt, setAttempt] = useState(0);
   const activeAttemptRef = useRef(0);
   const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
+  const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
 
   useEffect(() => {
     activeAttemptRef.current += 1;
@@ -120,15 +121,37 @@ export function useStartupInitialization(): StartupState {
           return;
         }
 
-        const { worldStateEvents, worldStateEventsError } = useAppStore.getState();
+        setProgress((current) => ({
+          ...current,
+          stageKey: 'worldstate-void-trader',
+          stageLabel: 'Fetching event data',
+          statusText:
+            'Active Events are loaded. Fetching Void Trader worldstate data before entering the app.',
+          progressValue: Math.max(current.progressValue, 0.93),
+        }));
+
+        await refreshWorldStateVoidTrader();
+        if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+          return;
+        }
+
+        const {
+          worldStateEvents,
+          worldStateEventsError,
+          worldStateVoidTrader,
+          worldStateVoidTraderError,
+        } = useAppStore.getState();
+        const worldStateFailed =
+          (worldStateEventsError && worldStateEvents.length === 0) ||
+          (worldStateVoidTraderError && worldStateVoidTrader === null);
 
         setProgress((current) => ({
           ...current,
           stageKey: 'startup-complete',
           stageLabel: 'Catalog ready',
           statusText:
-            worldStateEventsError && worldStateEvents.length === 0
-              ? 'Catalog is ready. Worldstate event data could not be refreshed and will retry in the background.'
+            worldStateFailed
+              ? 'Catalog is ready. One or more worldstate feeds could not be refreshed and will retry in the background.'
               : nextSummary.refreshed
                 ? 'Item sources refreshed and startup event data loaded.'
                 : 'Cached item catalog and startup event data are current.',
@@ -151,7 +174,7 @@ export function useStartupInitialization(): StartupState {
       isMounted = false;
       unlisten();
     };
-  }, [attempt, refreshWorldStateEvents]);
+  }, [attempt, refreshWorldStateEvents, refreshWorldStateVoidTrader]);
 
   return {
     phase,
