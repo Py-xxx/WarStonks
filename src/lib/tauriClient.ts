@@ -7,6 +7,12 @@ import type {
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
   AppSettings,
+  WfstatArchonHunt,
+  WfstatArbitration,
+  WfstatAlert,
+  WfstatInvasion,
+  WfstatSortie,
+  WfstatSyndicateMission,
   RelicTierIcon,
   WalletSnapshot,
   WfstatVoidTrader,
@@ -111,8 +117,32 @@ export async function getWorldStateEvents(): Promise<Record<string, unknown>[]> 
   return invoke<Record<string, unknown>[]>('get_worldstate_events');
 }
 
+export async function getWorldStateAlerts(): Promise<WfstatAlert[]> {
+  return invoke<WfstatAlert[]>('get_worldstate_alerts');
+}
+
+export async function getWorldStateSortie(): Promise<WfstatSortie> {
+  return invoke<WfstatSortie>('get_worldstate_sortie');
+}
+
+export async function getWorldStateArbitration(): Promise<WfstatArbitration> {
+  return invoke<WfstatArbitration>('get_worldstate_arbitration');
+}
+
+export async function getWorldStateArchonHunt(): Promise<WfstatArchonHunt> {
+  return invoke<WfstatArchonHunt>('get_worldstate_archon_hunt');
+}
+
 export async function getWorldStateFissures(): Promise<Record<string, unknown>[]> {
   return invoke<Record<string, unknown>[]>('get_worldstate_fissures');
+}
+
+export async function getWorldStateInvasions(): Promise<WfstatInvasion[]> {
+  return invoke<WfstatInvasion[]>('get_worldstate_invasions');
+}
+
+export async function getWorldStateSyndicateMissions(): Promise<WfstatSyndicateMission[]> {
+  return invoke<WfstatSyndicateMission[]>('get_worldstate_syndicate_missions');
 }
 
 export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {

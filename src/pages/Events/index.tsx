@@ -1,5 +1,6 @@
 import { useAppStore } from '../../stores/useAppStore';
 import { ActiveEventsPanel } from '../../components/ActiveEventsPanel';
+import { ActivitiesPanel } from '../../components/ActivitiesPanel';
 import { FissuresPanel } from '../../components/FissuresPanel';
 import { VoidTraderPanel } from '../../components/VoidTraderPanel';
 
@@ -83,12 +84,7 @@ export function EventsPage() {
         {eventsSubTab === 'active-events' && <ActiveEventsPanel />}
         {eventsSubTab === 'void-trader' && <VoidTraderPanel />}
         {eventsSubTab === 'fissures' && <FissuresPanel />}
-        {eventsSubTab === 'activities' && (
-          <div className="card">
-            <div className="card-header"><span className="card-label">Activities</span></div>
-            <EmptyState message="Activities are not wired to a live worldstate feed yet." />
-          </div>
-        )}
+        {eventsSubTab === 'activities' && <ActivitiesPanel />}
         {eventsSubTab === 'market-news' && (
           <div className="card">
             <div className="card-header"><span className="card-label">Market &amp; News</span></div>

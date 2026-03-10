@@ -128,6 +128,142 @@ export interface WfstatWorldStateEvent {
   expired?: boolean;
 }
 
+export interface WfstatAlertMission {
+  description: string | null;
+  node: string | null;
+  nodeKey: string | null;
+  type: string | null;
+  typeKey: string | null;
+  faction: string | null;
+  factionKey: string | null;
+  reward: WfstatEventReward | null;
+  minEnemyLevel: number | null;
+  maxEnemyLevel: number | null;
+  maxWaveNum: number | null;
+  nightmare: boolean;
+  archwingRequired: boolean;
+  isSharkwing: boolean;
+}
+
+export interface WfstatAlert {
+  id: string;
+  activation: string | null;
+  expiry: string | null;
+  mission: WfstatAlertMission | null;
+  rewardTypes: string[];
+  tag: string | null;
+  expired?: boolean;
+}
+
+export interface WfstatSortieVariant {
+  missionType: string | null;
+  missionTypeKey: string | null;
+  modifier: string | null;
+  modifierDescription: string | null;
+  node: string | null;
+  nodeKey: string | null;
+}
+
+export interface WfstatSortie {
+  id: string;
+  activation: string | null;
+  expiry: string | null;
+  rewardPool: string | null;
+  variants: WfstatSortieVariant[];
+  boss: string | null;
+  faction: string | null;
+  factionKey: string | null;
+  expired?: boolean;
+}
+
+export interface WfstatArbitration {
+  id: string;
+  node: string | null;
+  nodeKey: string | null;
+  activation: string | null;
+  expiry: string | null;
+  enemy: string | null;
+  type: string | null;
+  typeKey: string | null;
+  archwing: boolean;
+  sharkwing: boolean;
+  expired?: boolean;
+}
+
+export interface WfstatArchonMission {
+  node: string | null;
+  nodeKey: string | null;
+  type: string | null;
+  typeKey: string | null;
+  nightmare: boolean;
+  archwingRequired: boolean;
+  isSharkwing: boolean;
+}
+
+export interface WfstatArchonHunt {
+  id: string;
+  activation: string | null;
+  expiry: string | null;
+  rewardPool: string | null;
+  missions: WfstatArchonMission[];
+  boss: string | null;
+  faction: string | null;
+  factionKey: string | null;
+  expired?: boolean;
+}
+
+export interface WfstatInvasionSide {
+  reward: WfstatEventReward | null;
+  faction: string | null;
+  factionKey: string | null;
+}
+
+export interface WfstatInvasion {
+  id: string;
+  activation: string | null;
+  node: string | null;
+  nodeKey: string | null;
+  desc: string | null;
+  attacker: WfstatInvasionSide;
+  defender: WfstatInvasionSide;
+  vsInfestation: boolean;
+  count: number | null;
+  requiredRuns: number | null;
+  completion: number | null;
+  completed: boolean;
+  rewardTypes: string[];
+}
+
+export interface WfstatSyndicateJobDrop {
+  item: string;
+  rarity: string | null;
+  chance: number | null;
+  count: number | null;
+}
+
+export interface WfstatSyndicateJob {
+  id: string;
+  expiry: string | null;
+  uniqueName: string | null;
+  rewardPool: string[];
+  rewardPoolDrops: WfstatSyndicateJobDrop[];
+  type: string | null;
+  enemyLevels: number[];
+  standingStages: number[];
+  minMR: number | null;
+}
+
+export interface WfstatSyndicateMission {
+  id: string;
+  activation: string | null;
+  expiry: string | null;
+  syndicate: string | null;
+  syndicateKey: string | null;
+  nodes: string[];
+  jobs: WfstatSyndicateJob[];
+  expired?: boolean;
+}
+
 export interface VoidTraderInventoryItem {
   item: string;
   ducats: number | null;

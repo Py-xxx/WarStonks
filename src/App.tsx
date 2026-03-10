@@ -18,6 +18,7 @@ import { useWatchlistScanner } from './hooks/useWatchlistScanner';
 import { useWorldStateEvents } from './hooks/useWorldStateEvents';
 import { useWorldStateFissures } from './hooks/useWorldStateFissures';
 import { useWorldStateVoidTrader } from './hooks/useWorldStateVoidTrader';
+import { useWorldStateActivities } from './hooks/useWorldStateActivities';
 
 function PageRouter() {
   const activePage = useAppStore((s) => s.activePage);
@@ -41,6 +42,7 @@ function AppShell() {
   useWorldStateEvents();
   useWorldStateFissures();
   useWorldStateVoidTrader();
+  useWorldStateActivities();
 
   return (
     <>

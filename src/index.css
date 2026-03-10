@@ -2249,6 +2249,208 @@ body {
   color: var(--text-primary);
   text-align: right;
 }
+.activities-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+}
+.activity-panel {
+  grid-column: span 4;
+}
+.activity-panel-wide {
+  grid-column: span 6;
+}
+.activity-panel-tall {
+  grid-column: span 8;
+}
+.activity-panel-full {
+  grid-column: 1 / -1;
+}
+.activity-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.activity-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(20, 24, 33, 0.74);
+}
+.activity-hero-row {
+  align-items: center;
+}
+.activity-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.25;
+}
+.activity-subtitle {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.activity-meta-grid {
+  min-width: 220px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.activity-meta-grid-single {
+  min-width: 0;
+}
+.activity-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(9, 11, 16, 0.48);
+}
+.activity-meta-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.activity-meta-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.activity-inline-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.activity-empty-state {
+  min-height: 180px;
+}
+.activity-step-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.activity-step-card,
+.activity-list-card,
+.activity-job-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background:
+    linear-gradient(180deg, rgba(24, 29, 39, 0.92), rgba(13, 16, 23, 0.96)),
+    var(--bg-surface);
+}
+.activity-step-index {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-blue);
+}
+.activity-step-title,
+.activity-list-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.35;
+}
+.activity-step-detail,
+.activity-list-subtitle {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.activity-step-copy,
+.activity-list-copy {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.activity-list {
+  display: grid;
+  gap: 12px;
+}
+.activity-list-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.activity-chip-row,
+.activity-flag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.activity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.activity-progress {
+  height: 7px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+.activity-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+}
+.activities-syndicate-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.activities-syndicate-tab {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.14s ease;
+}
+.activities-syndicate-tab:hover {
+  color: var(--text-primary);
+  border-color: rgba(98, 169, 255, 0.28);
+}
+.activities-syndicate-tab.active {
+  color: var(--text-primary);
+  background: rgba(98, 169, 255, 0.12);
+  border-color: rgba(98, 169, 255, 0.28);
+}
+.activities-syndicate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.invasion-card {
+  gap: 10px;
+}
 
 .fissure-mode-toggle {
   gap: 8px;
@@ -2613,6 +2815,30 @@ body {
   .void-trader-meta-grid {
     min-width: 0;
     width: 100%;
+  }
+
+  .activities-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-panel,
+  .activity-panel-wide,
+  .activity-panel-tall,
+  .activity-panel-full {
+    grid-column: auto;
+  }
+
+  .activity-hero,
+  .activity-list-top {
+    flex-direction: column;
+  }
+
+  .activity-meta-grid,
+  .activity-step-list,
+  .activities-syndicate-grid {
+    min-width: 0;
+    width: 100%;
+    grid-template-columns: 1fr;
   }
 }
 
