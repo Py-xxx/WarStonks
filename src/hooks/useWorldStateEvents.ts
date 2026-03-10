@@ -1,6 +1,5 @@
-import { useEffect } from 'react';
-import { WORLDSTATE_RETRY_DELAY_MS } from '../lib/worldState';
 import { useAppStore } from '../stores/useAppStore';
+import { useWorldStateRefresh } from './useWorldStateRefresh';
 
 export function useWorldStateEvents() {
   const lastUpdatedAt = useAppStore((state) => state.worldStateEventsLastUpdatedAt);
@@ -9,29 +8,11 @@ export function useWorldStateEvents() {
   const loading = useAppStore((state) => state.worldStateEventsLoading);
   const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
 
-  useEffect(() => {
-    if (lastUpdatedAt || nextRefreshAt || error || loading) {
-      return;
-    }
-
-    void refreshWorldStateEvents();
-  }, [error, lastUpdatedAt, loading, nextRefreshAt, refreshWorldStateEvents]);
-
-  useEffect(() => {
-    const targetMs = nextRefreshAt
-      ? Date.parse(nextRefreshAt)
-      : error
-        ? Date.now() + WORLDSTATE_RETRY_DELAY_MS
-        : null;
-
-    if (targetMs === null || !Number.isFinite(targetMs)) {
-      return undefined;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      void refreshWorldStateEvents();
-    }, Math.max(0, targetMs - Date.now()));
-
-    return () => window.clearTimeout(timeoutId);
-  }, [error, nextRefreshAt, refreshWorldStateEvents]);
+  useWorldStateRefresh({
+    lastUpdatedAt,
+    nextRefreshAt,
+    error,
+    loading,
+    refresh: refreshWorldStateEvents,
+  });
 }

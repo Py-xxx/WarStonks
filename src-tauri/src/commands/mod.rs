@@ -186,52 +186,91 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-#[tauri::command]
-pub fn get_worldstate_events() -> Result<Vec<serde_json::Value>, String> {
-    let client = Client::builder()
+fn build_wfstat_client() -> Result<Client, String> {
+    Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+fn fetch_wfstat_array(endpoint: &str, label: &str) -> Result<Vec<serde_json::Value>, String> {
+    let client = build_wfstat_client()?;
     let response = client
-        .get(format!("{WFSTAT_API_BASE_URL}/pc/events"))
+        .get(format!("{WFSTAT_API_BASE_URL}{endpoint}"))
         .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
         .header("User-Agent", WFM_USER_AGENT)
         .header("Accept", "application/json")
         .send()
-        .context("failed to request WFStat events")
+        .with_context(|| format!("failed to request WFStat {label}"))
         .map_err(|error| error.to_string())?
         .error_for_status()
-        .context("WFStat events request failed")
+        .with_context(|| format!("WFStat {label} request failed"))
         .map_err(|error| error.to_string())?;
 
     response
         .json::<Vec<serde_json::Value>>()
-        .context("failed to parse WFStat events response JSON")
+        .with_context(|| format!("failed to parse WFStat {label} response JSON"))
+        .map_err(|error| error.to_string())
+}
+
+fn fetch_wfstat_object(endpoint: &str, label: &str) -> Result<serde_json::Value, String> {
+    let client = build_wfstat_client()?;
+    let response = client
+        .get(format!("{WFSTAT_API_BASE_URL}{endpoint}"))
+        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Accept", "application/json")
+        .send()
+        .with_context(|| format!("failed to request WFStat {label}"))
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .with_context(|| format!("WFStat {label} request failed"))
+        .map_err(|error| error.to_string())?;
+
+    response
+        .json::<serde_json::Value>()
+        .with_context(|| format!("failed to parse WFStat {label} response JSON"))
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn get_worldstate_fissures() -> Result<Vec<serde_json::Value>, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let response = client
-        .get(format!("{WFSTAT_API_BASE_URL}/pc/fissures"))
-        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
-        .header("User-Agent", WFM_USER_AGENT)
-        .header("Accept", "application/json")
-        .send()
-        .context("failed to request WFStat fissures")
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .context("WFStat fissures request failed")
-        .map_err(|error| error.to_string())?;
+pub fn get_worldstate_events() -> Result<Vec<serde_json::Value>, String> {
+    fetch_wfstat_array("/pc/events", "events")
+}
 
-    response
-        .json::<Vec<serde_json::Value>>()
-        .context("failed to parse WFStat fissures response JSON")
-        .map_err(|error| error.to_string())
+#[tauri::command]
+pub fn get_worldstate_alerts() -> Result<Vec<serde_json::Value>, String> {
+    fetch_wfstat_array("/pc/alerts", "alerts")
+}
+
+#[tauri::command]
+pub fn get_worldstate_invasions() -> Result<Vec<serde_json::Value>, String> {
+    fetch_wfstat_array("/pc/invasions", "invasions")
+}
+
+#[tauri::command]
+pub fn get_worldstate_syndicate_missions() -> Result<Vec<serde_json::Value>, String> {
+    fetch_wfstat_array("/pc/syndicateMissions", "syndicate missions")
+}
+
+#[tauri::command]
+pub fn get_worldstate_sortie() -> Result<serde_json::Value, String> {
+    fetch_wfstat_object("/pc/sortie", "sortie")
+}
+
+#[tauri::command]
+pub fn get_worldstate_arbitration() -> Result<serde_json::Value, String> {
+    fetch_wfstat_object("/pc/arbitration", "arbitration")
+}
+
+#[tauri::command]
+pub fn get_worldstate_archon_hunt() -> Result<serde_json::Value, String> {
+    fetch_wfstat_object("/pc/archonHunt", "archon hunt")
+}
+
+#[tauri::command]
+pub fn get_worldstate_fissures() -> Result<Vec<serde_json::Value>, String> {
+    fetch_wfstat_array("/pc/fissures", "fissures")
 }
 
 fn normalize_catalog_lookup_value(value: &str) -> Option<String> {

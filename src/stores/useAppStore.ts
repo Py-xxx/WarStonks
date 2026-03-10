@@ -6,8 +6,14 @@ import {
   saveAlecaframeSettings,
 } from '../lib/tauriClient';
 import {
+  fetchWorldStateAlertsSnapshot,
+  fetchWorldStateArbitrationSnapshot,
+  fetchWorldStateArchonHuntSnapshot,
   fetchWorldStateEventsSnapshot,
   fetchWorldStateFissuresSnapshot,
+  fetchWorldStateInvasionsSnapshot,
+  fetchWorldStateSortieSnapshot,
+  fetchWorldStateSyndicateMissionsSnapshot,
   fetchWorldStateVoidTraderSnapshot,
   WORLDSTATE_RETRY_DELAY_MS,
 } from '../lib/worldState';
@@ -28,7 +34,13 @@ import type {
   TradesSubTab,
   WatchlistAlert,
   WatchlistItem,
+  WfstatAlert,
+  WfstatArchonHunt,
+  WfstatArbitration,
   WfstatFissure,
+  WfstatInvasion,
+  WfstatSortie,
+  WfstatSyndicateMission,
   WfstatVoidTrader,
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
@@ -41,7 +53,13 @@ import { mockSellOrders } from '../mocks/trades';
 
 let quickViewRequestSequence = 0;
 let worldStateEventsRefreshPromise: Promise<void> | null = null;
+let worldStateAlertsRefreshPromise: Promise<void> | null = null;
+let worldStateSortieRefreshPromise: Promise<void> | null = null;
+let worldStateArbitrationRefreshPromise: Promise<void> | null = null;
+let worldStateArchonHuntRefreshPromise: Promise<void> | null = null;
 let worldStateFissuresRefreshPromise: Promise<void> | null = null;
+let worldStateInvasionsRefreshPromise: Promise<void> | null = null;
+let worldStateSyndicateMissionsRefreshPromise: Promise<void> | null = null;
 let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
 
 const defaultAppSettings: AppSettings = {
@@ -194,11 +212,41 @@ interface AppStore {
   worldStateEventsError: string | null;
   worldStateEventsNextRefreshAt: string | null;
   worldStateEventsLastUpdatedAt: string | null;
+  worldStateAlerts: WfstatAlert[];
+  worldStateAlertsLoading: boolean;
+  worldStateAlertsError: string | null;
+  worldStateAlertsNextRefreshAt: string | null;
+  worldStateAlertsLastUpdatedAt: string | null;
+  worldStateSortie: WfstatSortie | null;
+  worldStateSortieLoading: boolean;
+  worldStateSortieError: string | null;
+  worldStateSortieNextRefreshAt: string | null;
+  worldStateSortieLastUpdatedAt: string | null;
+  worldStateArbitration: WfstatArbitration | null;
+  worldStateArbitrationLoading: boolean;
+  worldStateArbitrationError: string | null;
+  worldStateArbitrationNextRefreshAt: string | null;
+  worldStateArbitrationLastUpdatedAt: string | null;
+  worldStateArchonHunt: WfstatArchonHunt | null;
+  worldStateArchonHuntLoading: boolean;
+  worldStateArchonHuntError: string | null;
+  worldStateArchonHuntNextRefreshAt: string | null;
+  worldStateArchonHuntLastUpdatedAt: string | null;
   worldStateFissures: WfstatFissure[];
   worldStateFissuresLoading: boolean;
   worldStateFissuresError: string | null;
   worldStateFissuresNextRefreshAt: string | null;
   worldStateFissuresLastUpdatedAt: string | null;
+  worldStateInvasions: WfstatInvasion[];
+  worldStateInvasionsLoading: boolean;
+  worldStateInvasionsError: string | null;
+  worldStateInvasionsNextRefreshAt: string | null;
+  worldStateInvasionsLastUpdatedAt: string | null;
+  worldStateSyndicateMissions: WfstatSyndicateMission[];
+  worldStateSyndicateMissionsLoading: boolean;
+  worldStateSyndicateMissionsError: string | null;
+  worldStateSyndicateMissionsNextRefreshAt: string | null;
+  worldStateSyndicateMissionsLastUpdatedAt: string | null;
   worldStateVoidTrader: WfstatVoidTrader | null;
   worldStateVoidTraderLoading: boolean;
   worldStateVoidTraderError: string | null;
@@ -213,7 +261,13 @@ interface AppStore {
   refreshWalletSnapshot: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
+  refreshWorldStateAlerts: () => Promise<void>;
+  refreshWorldStateSortie: () => Promise<void>;
+  refreshWorldStateArbitration: () => Promise<void>;
+  refreshWorldStateArchonHunt: () => Promise<void>;
   refreshWorldStateFissures: () => Promise<void>;
+  refreshWorldStateInvasions: () => Promise<void>;
+  refreshWorldStateSyndicateMissions: () => Promise<void>;
   refreshWorldStateVoidTrader: () => Promise<void>;
 
   sellerMode: SellerMode;
@@ -285,11 +339,41 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateEventsError: null,
   worldStateEventsNextRefreshAt: null,
   worldStateEventsLastUpdatedAt: null,
+  worldStateAlerts: [],
+  worldStateAlertsLoading: false,
+  worldStateAlertsError: null,
+  worldStateAlertsNextRefreshAt: null,
+  worldStateAlertsLastUpdatedAt: null,
+  worldStateSortie: null,
+  worldStateSortieLoading: false,
+  worldStateSortieError: null,
+  worldStateSortieNextRefreshAt: null,
+  worldStateSortieLastUpdatedAt: null,
+  worldStateArbitration: null,
+  worldStateArbitrationLoading: false,
+  worldStateArbitrationError: null,
+  worldStateArbitrationNextRefreshAt: null,
+  worldStateArbitrationLastUpdatedAt: null,
+  worldStateArchonHunt: null,
+  worldStateArchonHuntLoading: false,
+  worldStateArchonHuntError: null,
+  worldStateArchonHuntNextRefreshAt: null,
+  worldStateArchonHuntLastUpdatedAt: null,
   worldStateFissures: [],
   worldStateFissuresLoading: false,
   worldStateFissuresError: null,
   worldStateFissuresNextRefreshAt: null,
   worldStateFissuresLastUpdatedAt: null,
+  worldStateInvasions: [],
+  worldStateInvasionsLoading: false,
+  worldStateInvasionsError: null,
+  worldStateInvasionsNextRefreshAt: null,
+  worldStateInvasionsLastUpdatedAt: null,
+  worldStateSyndicateMissions: [],
+  worldStateSyndicateMissionsLoading: false,
+  worldStateSyndicateMissionsError: null,
+  worldStateSyndicateMissionsNextRefreshAt: null,
+  worldStateSyndicateMissionsLastUpdatedAt: null,
   worldStateVoidTrader: null,
   worldStateVoidTraderLoading: false,
   worldStateVoidTraderError: null,
@@ -400,6 +484,134 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     return worldStateEventsRefreshPromise;
   },
+  refreshWorldStateAlerts: async () => {
+    if (worldStateAlertsRefreshPromise) {
+      return worldStateAlertsRefreshPromise;
+    }
+
+    set({ worldStateAlertsLoading: true });
+
+    worldStateAlertsRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateAlertsSnapshot();
+        set({
+          worldStateAlerts: snapshot.alerts,
+          worldStateAlertsLoading: false,
+          worldStateAlertsError: null,
+          worldStateAlertsNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateAlertsLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateAlertsLoading: false,
+          worldStateAlertsError: toErrorMessage(error),
+          worldStateAlertsNextRefreshAt:
+            state.worldStateAlertsNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateAlertsRefreshPromise = null;
+      }
+    })();
+
+    return worldStateAlertsRefreshPromise;
+  },
+  refreshWorldStateSortie: async () => {
+    if (worldStateSortieRefreshPromise) {
+      return worldStateSortieRefreshPromise;
+    }
+
+    set({ worldStateSortieLoading: true });
+
+    worldStateSortieRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateSortieSnapshot();
+        set({
+          worldStateSortie: snapshot.sortie,
+          worldStateSortieLoading: false,
+          worldStateSortieError: null,
+          worldStateSortieNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateSortieLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateSortieLoading: false,
+          worldStateSortieError: toErrorMessage(error),
+          worldStateSortieNextRefreshAt:
+            state.worldStateSortieNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateSortieRefreshPromise = null;
+      }
+    })();
+
+    return worldStateSortieRefreshPromise;
+  },
+  refreshWorldStateArbitration: async () => {
+    if (worldStateArbitrationRefreshPromise) {
+      return worldStateArbitrationRefreshPromise;
+    }
+
+    set({ worldStateArbitrationLoading: true });
+
+    worldStateArbitrationRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateArbitrationSnapshot();
+        set({
+          worldStateArbitration: snapshot.arbitration,
+          worldStateArbitrationLoading: false,
+          worldStateArbitrationError: null,
+          worldStateArbitrationNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateArbitrationLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateArbitrationLoading: false,
+          worldStateArbitrationError: toErrorMessage(error),
+          worldStateArbitrationNextRefreshAt:
+            state.worldStateArbitrationNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateArbitrationRefreshPromise = null;
+      }
+    })();
+
+    return worldStateArbitrationRefreshPromise;
+  },
+  refreshWorldStateArchonHunt: async () => {
+    if (worldStateArchonHuntRefreshPromise) {
+      return worldStateArchonHuntRefreshPromise;
+    }
+
+    set({ worldStateArchonHuntLoading: true });
+
+    worldStateArchonHuntRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateArchonHuntSnapshot();
+        set({
+          worldStateArchonHunt: snapshot.archonHunt,
+          worldStateArchonHuntLoading: false,
+          worldStateArchonHuntError: null,
+          worldStateArchonHuntNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateArchonHuntLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateArchonHuntLoading: false,
+          worldStateArchonHuntError: toErrorMessage(error),
+          worldStateArchonHuntNextRefreshAt:
+            state.worldStateArchonHuntNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateArchonHuntRefreshPromise = null;
+      }
+    })();
+
+    return worldStateArchonHuntRefreshPromise;
+  },
   refreshWorldStateFissures: async () => {
     if (worldStateFissuresRefreshPromise) {
       return worldStateFissuresRefreshPromise;
@@ -431,6 +643,70 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })();
 
     return worldStateFissuresRefreshPromise;
+  },
+  refreshWorldStateInvasions: async () => {
+    if (worldStateInvasionsRefreshPromise) {
+      return worldStateInvasionsRefreshPromise;
+    }
+
+    set({ worldStateInvasionsLoading: true });
+
+    worldStateInvasionsRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateInvasionsSnapshot();
+        set({
+          worldStateInvasions: snapshot.invasions,
+          worldStateInvasionsLoading: false,
+          worldStateInvasionsError: null,
+          worldStateInvasionsNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateInvasionsLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateInvasionsLoading: false,
+          worldStateInvasionsError: toErrorMessage(error),
+          worldStateInvasionsNextRefreshAt:
+            state.worldStateInvasionsNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateInvasionsRefreshPromise = null;
+      }
+    })();
+
+    return worldStateInvasionsRefreshPromise;
+  },
+  refreshWorldStateSyndicateMissions: async () => {
+    if (worldStateSyndicateMissionsRefreshPromise) {
+      return worldStateSyndicateMissionsRefreshPromise;
+    }
+
+    set({ worldStateSyndicateMissionsLoading: true });
+
+    worldStateSyndicateMissionsRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateSyndicateMissionsSnapshot();
+        set({
+          worldStateSyndicateMissions: snapshot.syndicateMissions,
+          worldStateSyndicateMissionsLoading: false,
+          worldStateSyndicateMissionsError: null,
+          worldStateSyndicateMissionsNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateSyndicateMissionsLastUpdatedAt: snapshot.fetchedAt,
+        });
+      } catch (error) {
+        set((state) => ({
+          worldStateSyndicateMissionsLoading: false,
+          worldStateSyndicateMissionsError: toErrorMessage(error),
+          worldStateSyndicateMissionsNextRefreshAt:
+            state.worldStateSyndicateMissionsNextRefreshAt ??
+            new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+        }));
+      } finally {
+        worldStateSyndicateMissionsRefreshPromise = null;
+      }
+    })();
+
+    return worldStateSyndicateMissionsRefreshPromise;
   },
   refreshWorldStateVoidTrader: async () => {
     if (worldStateVoidTraderRefreshPromise) {
