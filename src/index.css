@@ -399,6 +399,67 @@ body {
   gap: 8px;
   margin-left: auto;
 }
+.notification-wrap {
+  position: relative;
+}
+.notification-btn {
+  width: 32px;
+  height: 32px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.notification-btn:hover,
+.notification-btn.open {
+  border-color: #333849;
+  color: var(--text-primary);
+  background: #1f2334;
+}
+.notification-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-red);
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.notification-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(460px, calc(100vw - 40px));
+  max-height: min(70vh, 640px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.26);
+  z-index: 260;
+}
+.notification-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
 
 .strategy-pill {
   font-family: 'JetBrains Mono', monospace;
@@ -1196,6 +1257,9 @@ body {
   grid-template-columns: 3fr 2fr;
   gap: 12px;
 }
+.watchlist-row-shell {
+  margin-top: 12px;
+}
 
 /* ── QUICK VIEW ── */
 .qv-grid {
@@ -1766,6 +1830,11 @@ body {
   .alerts-list,
   .alerts-panel.compact .alerts-list {
     grid-template-columns: 1fr;
+  }
+
+  .notification-panel {
+    right: -42px;
+    width: min(420px, calc(100vw - 24px));
   }
 
   .qv-focus-row {
