@@ -188,33 +188,60 @@ export function useStartupInitialization(): StartupState {
         const {
           worldStateEvents,
           worldStateEventsError,
+          worldStateEventsLastUpdatedAt,
           worldStateAlerts,
           worldStateAlertsError,
+          worldStateAlertsLastUpdatedAt,
           worldStateSortie,
           worldStateSortieError,
+          worldStateSortieLastUpdatedAt,
           worldStateArbitration,
           worldStateArbitrationError,
+          worldStateArbitrationLastUpdatedAt,
           worldStateArchonHunt,
           worldStateArchonHuntError,
+          worldStateArchonHuntLastUpdatedAt,
           worldStateFissures,
           worldStateFissuresError,
+          worldStateFissuresLastUpdatedAt,
           worldStateInvasions,
           worldStateInvasionsError,
+          worldStateInvasionsLastUpdatedAt,
           worldStateSyndicateMissions,
           worldStateSyndicateMissionsError,
+          worldStateSyndicateMissionsLastUpdatedAt,
           worldStateVoidTrader,
           worldStateVoidTraderError,
+          worldStateVoidTraderLastUpdatedAt,
         } = useAppStore.getState();
         const worldStateFailed =
-          (worldStateEventsError && worldStateEvents.length === 0) ||
-          (worldStateAlertsError && worldStateAlerts.length === 0) ||
-          (worldStateSortieError && worldStateSortie === null) ||
-          (worldStateArbitrationError && worldStateArbitration === null) ||
-          (worldStateArchonHuntError && worldStateArchonHunt === null) ||
-          (worldStateFissuresError && worldStateFissures.length === 0) ||
-          (worldStateInvasionsError && worldStateInvasions.length === 0) ||
-          (worldStateSyndicateMissionsError && worldStateSyndicateMissions.length === 0) ||
-          (worldStateVoidTraderError && worldStateVoidTrader === null);
+          (worldStateEventsError &&
+            worldStateEvents.length === 0 &&
+            worldStateEventsLastUpdatedAt === null) ||
+          (worldStateAlertsError &&
+            worldStateAlerts.length === 0 &&
+            worldStateAlertsLastUpdatedAt === null) ||
+          (worldStateSortieError &&
+            worldStateSortie === null &&
+            worldStateSortieLastUpdatedAt === null) ||
+          (worldStateArbitrationError &&
+            worldStateArbitration === null &&
+            worldStateArbitrationLastUpdatedAt === null) ||
+          (worldStateArchonHuntError &&
+            worldStateArchonHunt === null &&
+            worldStateArchonHuntLastUpdatedAt === null) ||
+          (worldStateFissuresError &&
+            worldStateFissures.length === 0 &&
+            worldStateFissuresLastUpdatedAt === null) ||
+          (worldStateInvasionsError &&
+            worldStateInvasions.length === 0 &&
+            worldStateInvasionsLastUpdatedAt === null) ||
+          (worldStateSyndicateMissionsError &&
+            worldStateSyndicateMissions.length === 0 &&
+            worldStateSyndicateMissionsLastUpdatedAt === null) ||
+          (worldStateVoidTraderError &&
+            worldStateVoidTrader === null &&
+            worldStateVoidTraderLastUpdatedAt === null);
 
         setProgress((current) => ({
           ...current,

@@ -79,6 +79,7 @@ function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): Wfm
 export function TopBar() {
   const autoProfile = useAppStore((s) => s.autoProfile);
   const alerts = useAppStore((s) => s.alerts);
+  const systemAlerts = useAppStore((s) => s.systemAlerts);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
   const walletSnapshot = useAppStore((s) => s.walletSnapshot);
@@ -94,8 +95,10 @@ export function TopBar() {
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const searchRef = useRef<HTMLDivElement | null>(null);
   const notificationsRef = useRef<HTMLDivElement | null>(null);
+  const previousAlertCountRef = useRef(0);
   const deferredSearchValue = useDeferredValue(searchValue);
   const suggestions = rankAutocompleteItems(autocompleteItems, deferredSearchValue);
+  const notificationCount = alerts.length + systemAlerts.length;
 
   useEffect(() => {
     let isMounted = true;
@@ -153,6 +156,14 @@ export function TopBar() {
     window.addEventListener('mousedown', handlePointerDown);
     return () => window.removeEventListener('mousedown', handlePointerDown);
   }, []);
+
+  useEffect(() => {
+    if (notificationCount > previousAlertCountRef.current) {
+      setNotificationsOpen(true);
+    }
+
+    previousAlertCountRef.current = notificationCount;
+  }, [notificationCount]);
 
   const selectItem = (item: WfmAutocompleteItem) => {
     setSearchValue(item.name);
@@ -347,8 +358,8 @@ export function TopBar() {
             onClick={() => setNotificationsOpen((current) => !current)}
           >
             <BellIcon />
-            {alerts.length > 0 ? (
-              <span className="notification-count">{alerts.length}</span>
+            {notificationCount > 0 ? (
+              <span className="notification-count">{notificationCount}</span>
             ) : null}
           </button>
 
@@ -356,8 +367,10 @@ export function TopBar() {
             <div className="notification-panel">
               <div className="notification-panel-header">
                 <span className="card-label">Notifications</span>
-                <span className={`badge ${alerts.length > 0 ? 'badge-green' : 'badge-muted'}`}>
-                  {alerts.length}
+                <span
+                  className={`badge ${notificationCount > 0 ? 'badge-green' : 'badge-muted'}`}
+                >
+                  {notificationCount}
                 </span>
               </div>
               <AlertsPanel />
