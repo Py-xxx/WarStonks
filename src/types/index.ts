@@ -149,6 +149,23 @@ export interface WfstatVoidTrader {
   expired?: boolean;
 }
 
+export interface WfstatFissure {
+  id: string;
+  activation: string | null;
+  expiry: string | null;
+  node: string | null;
+  missionType: string | null;
+  missionTypeKey: string | null;
+  enemy: string | null;
+  enemyKey: string | null;
+  nodeKey: string | null;
+  tier: string | null;
+  tierNum: number | null;
+  isStorm: boolean;
+  isHard: boolean;
+  expired?: boolean;
+}
+
 export interface CurrencyBalance {
   platinum: number | null;
   credits: number | null;

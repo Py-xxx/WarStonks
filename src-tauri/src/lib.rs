@@ -12,6 +12,7 @@ pub fn run() {
             commands::get_wfm_autocomplete_items,
             commands::get_wfm_top_sell_orders,
             commands::get_worldstate_events,
+            commands::get_worldstate_fissures,
             commands::get_worldstate_void_trader,
             settings::get_app_settings,
             settings::test_alecaframe_public_link,

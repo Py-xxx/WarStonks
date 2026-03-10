@@ -203,6 +203,30 @@ pub fn get_worldstate_events() -> Result<Vec<serde_json::Value>, String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub fn get_worldstate_fissures() -> Result<Vec<serde_json::Value>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(format!("{WFSTAT_API_BASE_URL}/pc/fissures"))
+        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Accept", "application/json")
+        .send()
+        .context("failed to request WFStat fissures")
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .context("WFStat fissures request failed")
+        .map_err(|error| error.to_string())?;
+
+    response
+        .json::<Vec<serde_json::Value>>()
+        .context("failed to parse WFStat fissures response JSON")
+        .map_err(|error| error.to_string())
+}
+
 fn normalize_catalog_lookup_value(value: &str) -> Option<String> {
     let normalized = value
         .split_whitespace()

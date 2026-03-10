@@ -3,12 +3,19 @@ import type {
   WfstatEventInterimStep,
   WfstatEventReward,
   WfstatEventRewardCountedItem,
+  WfstatFissure,
   WfstatVoidTrader,
   WfstatWorldStateEvent,
 } from '../types';
-import { getWorldStateEvents, getWorldStateVoidTrader, isTauriRuntime } from './tauriClient';
+import {
+  getWorldStateEvents,
+  getWorldStateFissures,
+  getWorldStateVoidTrader,
+  isTauriRuntime,
+} from './tauriClient';
 
 const WFSTAT_EVENTS_URL = 'https://api.warframestat.us/pc/events?language=en';
+const WFSTAT_FISSURES_URL = 'https://api.warframestat.us/pc/fissures?language=en';
 const WFSTAT_VOID_TRADER_URL = 'https://api.warframestat.us/pc/voidTrader?language=en';
 const INVALID_WORLDSTATE_EXPIRY = '1970-01-01T00:00:00.000Z';
 export const WORLDSTATE_RETRY_DELAY_MS = 60_000;
@@ -163,6 +170,27 @@ function normalizeVoidTrader(entry: unknown): WfstatVoidTrader {
   };
 }
 
+function normalizeFissure(entry: unknown): WfstatFissure {
+  const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+
+  return {
+    id: parseOptionalString(record.id) ?? crypto.randomUUID(),
+    activation: parseOptionalString(record.activation),
+    expiry: parseOptionalString(record.expiry),
+    node: parseOptionalString(record.node),
+    missionType: parseOptionalString(record.missionType),
+    missionTypeKey: parseOptionalString(record.missionTypeKey),
+    enemy: parseOptionalString(record.enemy),
+    enemyKey: parseOptionalString(record.enemyKey),
+    nodeKey: parseOptionalString(record.nodeKey),
+    tier: parseOptionalString(record.tier),
+    tierNum: parseOptionalNumber(record.tierNum),
+    isStorm: Boolean(record.isStorm),
+    isHard: Boolean(record.isHard),
+    expired: typeof record.expired === 'boolean' ? record.expired : undefined,
+  };
+}
+
 function isValidFutureExpiry(expiry: string | null, nowMs: number): boolean {
   if (!expiry || expiry === INVALID_WORLDSTATE_EXPIRY) {
     return false;
@@ -179,6 +207,19 @@ export function selectWorldStateEventsRefreshAt(
   const validExpiries = events
     .filter((event) => !event.expired)
     .map((event) => event.expiry)
+    .filter((expiry): expiry is string => isValidFutureExpiry(expiry, nowMs))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+
+  return validExpiries[0] ?? null;
+}
+
+export function selectWorldStateFissuresRefreshAt(
+  fissures: WfstatFissure[],
+  nowMs: number = Date.now(),
+): string | null {
+  const validExpiries = fissures
+    .filter((fissure) => !fissure.expired)
+    .map((fissure) => fissure.expiry)
     .filter((expiry): expiry is string => isValidFutureExpiry(expiry, nowMs))
     .sort((left, right) => Date.parse(left) - Date.parse(right));
 
@@ -259,6 +300,42 @@ export async function fetchWorldStateEventsSnapshot(): Promise<{
   return {
     events,
     nextRefreshAt: selectWorldStateEventsRefreshAt(events),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchWorldStateFissuresSnapshot(): Promise<{
+  fissures: WfstatFissure[];
+  nextRefreshAt: string | null;
+  fetchedAt: string;
+}> {
+  let payload: unknown;
+
+  if (isTauriRuntime()) {
+    payload = await getWorldStateFissures();
+  } else {
+    const response = await fetch(WFSTAT_FISSURES_URL, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`WFStat fissures request failed with ${response.status}`);
+    }
+
+    payload = (await response.json()) as unknown;
+  }
+
+  if (!Array.isArray(payload)) {
+    throw new Error('WFStat fissures response was not an array.');
+  }
+
+  const fissures = payload.map((entry) => normalizeFissure(entry));
+
+  return {
+    fissures,
+    nextRefreshAt: selectWorldStateFissuresRefreshAt(fissures),
     fetchedAt: new Date().toISOString(),
   };
 }

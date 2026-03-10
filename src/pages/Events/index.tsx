@@ -1,5 +1,6 @@
 import { useAppStore } from '../../stores/useAppStore';
 import { ActiveEventsPanel } from '../../components/ActiveEventsPanel';
+import { FissuresPanel } from '../../components/FissuresPanel';
 import { VoidTraderPanel } from '../../components/VoidTraderPanel';
 
 function EmptyState({ message }: { message: string }) {
@@ -14,8 +15,10 @@ export function EventsPage() {
   const eventsSubTab = useAppStore((s) => s.eventsSubTab);
   const setEventsSubTab = useAppStore((s) => s.setEventsSubTab);
   const worldStateEventsError = useAppStore((s) => s.worldStateEventsError);
+  const worldStateFissuresError = useAppStore((s) => s.worldStateFissuresError);
   const worldStateVoidTraderError = useAppStore((s) => s.worldStateVoidTraderError);
   const refreshWorldStateEvents = useAppStore((s) => s.refreshWorldStateEvents);
+  const refreshWorldStateFissures = useAppStore((s) => s.refreshWorldStateFissures);
   const refreshWorldStateVoidTrader = useAppStore((s) => s.refreshWorldStateVoidTrader);
 
   const tabs = [
@@ -29,6 +32,8 @@ export function EventsPage() {
   const currentFeedError =
     eventsSubTab === 'active-events'
       ? worldStateEventsError
+      : eventsSubTab === 'fissures'
+        ? worldStateFissuresError
       : eventsSubTab === 'void-trader'
         ? worldStateVoidTraderError
         : null;
@@ -37,6 +42,10 @@ export function EventsPage() {
       ? () => {
           void refreshWorldStateEvents();
         }
+      : eventsSubTab === 'fissures'
+        ? () => {
+            void refreshWorldStateFissures();
+          }
       : eventsSubTab === 'void-trader'
         ? () => {
             void refreshWorldStateVoidTrader();
@@ -45,6 +54,8 @@ export function EventsPage() {
   const currentFeedLabel =
     eventsSubTab === 'active-events'
       ? 'Active Events'
+      : eventsSubTab === 'fissures'
+        ? 'Fissures'
       : eventsSubTab === 'void-trader'
         ? 'Void Trader'
         : 'Events';
@@ -71,14 +82,7 @@ export function EventsPage() {
         <div className="page-content events-page-content">
         {eventsSubTab === 'active-events' && <ActiveEventsPanel />}
         {eventsSubTab === 'void-trader' && <VoidTraderPanel />}
-        {eventsSubTab === 'fissures' && (
-          <div className="card">
-            <div className="card-header">
-              <span className="card-label">Fissures</span>
-            </div>
-            <EmptyState message="Fissures are not wired to a live worldstate feed yet." />
-          </div>
-        )}
+        {eventsSubTab === 'fissures' && <FissuresPanel />}
         {eventsSubTab === 'activities' && (
           <div className="card">
             <div className="card-header"><span className="card-label">Activities</span></div>

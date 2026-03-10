@@ -998,7 +998,8 @@ body {
   }
 
   .world-event-topline,
-  .world-event-step {
+  .world-event-step,
+  .fissure-item-topline {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -1007,6 +1008,7 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .fissure-group-grid,
   .void-trader-meta-grid,
   .void-trader-grid {
     grid-template-columns: 1fr;
@@ -2246,6 +2248,95 @@ body {
   font-size: 12px;
   color: var(--text-primary);
   text-align: right;
+}
+
+.fissure-mode-toggle {
+  gap: 8px;
+}
+.fissure-mode-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(19, 22, 30, 0.84);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+.fissure-mode-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.fissure-mode-btn:hover {
+  border-color: rgba(74, 158, 255, 0.28);
+  color: var(--text-primary);
+}
+.fissure-mode-btn.active {
+  border-color: rgba(74, 158, 255, 0.4);
+  background: rgba(74, 158, 255, 0.12);
+  color: var(--accent-blue);
+}
+.fissure-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.fissure-group-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(13, 15, 20, 0.68);
+}
+.fissure-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fissure-group-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.fissure-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fissure-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+.fissure-item-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fissure-item-node {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.fissure-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
 }
 
 .void-trader-stack {
