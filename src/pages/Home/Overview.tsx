@@ -4,6 +4,13 @@ import type { WfmTopSellOrder } from '../../types';
 
 const COPY_RESET_DELAY_MS = 1800;
 const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
+const PENDING_METRIC_VALUE = '--';
+
+const colorMap = {
+  green: 'var(--accent-green)',
+  amber: 'var(--accent-amber)',
+  red: 'var(--accent-red)',
+};
 
 const bellSvg = (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -35,19 +42,26 @@ async function copyMessageToClipboard(order: WfmTopSellOrder, itemName: string):
   textarea.remove();
 }
 
-function buildOrderBars(orders: WfmTopSellOrder[]) {
-  if (orders.length === 0) {
-    return [];
+function buildSparklinePath(points: number[]): string {
+  if (points.length === 0) {
+    return '';
   }
 
-  const maxPrice = Math.max(...orders.map((order) => order.platinum));
-  const minHeight = 24;
-  const heightRange = 84;
+  const safePoints = points.length === 1 ? [points[0], points[0]] : points;
+  const max = Math.max(...safePoints);
+  const min = Math.min(...safePoints);
+  const range = max - min || 1;
+  const width = 300;
+  const height = 24;
+  const step = width / (safePoints.length - 1);
 
-  return orders.map((order) => ({
-    order,
-    height: Math.round((order.platinum / Math.max(maxPrice, 1)) * heightRange) + minHeight,
-  }));
+  return safePoints
+    .map((value, index) => {
+      const x = Math.round(index * step);
+      const y = Math.round(height - ((value - min) / range) * (height - 2) - 1);
+      return `${x},${y}`;
+    })
+    .join(' ');
 }
 
 function AlertsCard() {
@@ -155,30 +169,31 @@ function WatchlistCard() {
 }
 
 function MetricsRow() {
-  const quickView = useAppStore((s) => s.quickView);
-  const selectedItem = quickView.selectedItem;
-  const cheapestOrder = quickView.sellOrders[0];
-  const spread =
-    quickView.sellOrders.length >= 5
-      ? quickView.sellOrders[4].platinum - quickView.sellOrders[0].platinum
-      : null;
-
   return (
     <div className="metrics-row">
       <div className="card metric-card">
-        <div className="card-label">Selected Item</div>
-        <div className="metric-value metric-value-sm">{selectedItem?.name ?? 'Awaiting search'}</div>
-        <div className="metric-sub">{selectedItem ? selectedItem.slug : 'Use the global search bar to load quick view.'}</div>
+        <div className="card-label">Best Score</div>
+        <div className="metric-value">{PENDING_METRIC_VALUE}</div>
+        <div className="metric-sub">Analysis pending</div>
+        <div className="metric-bar">
+          <div className="metric-bar-fill" style={{ width: '0%', background: colorMap.green }} />
+        </div>
       </div>
       <div className="card metric-card">
-        <div className="card-label">Cheapest Seller</div>
-        <div className="metric-value">{cheapestOrder?.username ?? '--'}</div>
-        <div className="metric-sub">{cheapestOrder ? `${cheapestOrder.platinum} pt` : 'No live order selected yet.'}</div>
+        <div className="card-label">Avg Efficiency</div>
+        <div className="metric-value">{PENDING_METRIC_VALUE}</div>
+        <div className="metric-sub">Analysis pending</div>
+        <div className="metric-bar">
+          <div className="metric-bar-fill" style={{ width: '0%', background: colorMap.amber }} />
+        </div>
       </div>
       <div className="card metric-card">
-        <div className="card-label">Orders Loaded</div>
-        <div className="metric-value">{quickView.sellOrders.length}</div>
-        <div className="metric-sub">{spread === null ? 'Spread pending 5 sell orders.' : `Spread ${spread} pt`}</div>
+        <div className="card-label">Market Volatility</div>
+        <div className="metric-value">{PENDING_METRIC_VALUE}</div>
+        <div className="metric-sub">24h abs move</div>
+        <div className="metric-bar">
+          <div className="metric-bar-fill" style={{ width: '0%', background: colorMap.red, opacity: 0.7 }} />
+        </div>
       </div>
     </div>
   );
@@ -196,7 +211,7 @@ function QuickViewCard() {
     quickView.sellOrders.length >= 5
       ? quickView.sellOrders[4].platinum - quickView.sellOrders[0].platinum
       : null;
-  const orderBars = buildOrderBars(quickView.sellOrders);
+  const sparklinePath = buildSparklinePath(quickView.sellOrders.map((order) => order.platinum));
 
   useEffect(() => {
     setCopiedOrderId(null);
@@ -263,15 +278,11 @@ function QuickViewCard() {
 
         {selectedItem && mainOrder && !quickView.loading && !quickView.errorMessage ? (
           <div className="qv-stack">
-            <div className="qv-hero">
+            <div className="qv-focus-row">
               <div>
                 <div className="qv-stat-label">Cheapest Seller</div>
-                <div className="qv-hero-user">{mainOrder.username}</div>
-                <div className="qv-hero-status">{mainOrder.status ?? 'online'}</div>
-              </div>
-              <div className="qv-hero-price-block">
-                <div className="qv-stat-label">Entry Price</div>
-                <div className="qv-hero-price">{mainOrder.platinum} pt</div>
+                <div className="qv-focus-user">{mainOrder.username}</div>
+                <div className="qv-focus-status">{mainOrder.status ?? 'online'}</div>
               </div>
               <button className="btn-sm" onClick={() => void handleCopy(mainOrder)}>
                 {copiedOrderId === mainOrder.orderId ? 'Copied' : 'Copy Message'}
@@ -279,6 +290,10 @@ function QuickViewCard() {
             </div>
 
             <div className="qv-grid">
+              <div>
+                <div className="qv-stat-label">Orders Loaded</div>
+                <div className="qv-stat-value">{quickView.sellOrders.length}</div>
+              </div>
               <div>
                 <div className="qv-stat-label">Entry Price</div>
                 <div className="qv-stat-value" style={{ color: 'var(--accent-green)' }}>{mainOrder.platinum} pt</div>
@@ -300,20 +315,19 @@ function QuickViewCard() {
                 <div className="qv-stat-value">{mainOrder.rank ?? '—'}</div>
               </div>
               <div>
-                <div className="qv-stat-label">Analysis</div>
-                <div className="qv-stat-value qv-stat-pending">Later</div>
+                <div className="qv-stat-label">Per Trade</div>
+                <div className="qv-stat-value">{mainOrder.perTrade}</div>
               </div>
             </div>
 
-            <div className="qv-chart">
-              {orderBars.map(({ order, height }, index) => (
-                <div key={order.orderId} className="qv-chart-bar-group">
-                  <span className="qv-chart-value">{order.platinum}</span>
-                  <div className={`qv-chart-bar${index === 0 ? ' primary' : ''}`} style={{ height }} />
-                  <span className="qv-chart-label">#{index + 1}</span>
-                </div>
-              ))}
-            </div>
+            {sparklinePath ? (
+              <div className="sparkline-wrap">
+                <svg width="100%" height="24" viewBox="0 0 300 24" preserveAspectRatio="none">
+                  <polyline points={sparklinePath} fill="none" stroke="#3DD68C" strokeWidth="1.5" opacity="0.8" />
+                  <polyline points={`${sparklinePath} 300,24 0,24`} fill="rgba(61,214,140,0.06)" stroke="none" />
+                </svg>
+              </div>
+            ) : null}
 
             <div className="qv-order-list">
               {compactOrders.map((order) => (
