@@ -71,6 +71,7 @@ function WatchlistCard() {
   const watchlist = useAppStore((state) => state.watchlist);
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
   const setSelected = useAppStore((state) => state.setSelectedWatchlist);
+  const removeItem = useAppStore((state) => state.removeWatchlistItem);
 
   return (
     <div className="card">
@@ -97,6 +98,7 @@ function WatchlistCard() {
                 <th>Target</th>
                 <th>Current</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -117,6 +119,18 @@ function WatchlistCard() {
                     <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
                     <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
                       {visualState.label}
+                    </td>
+                    <td>
+                      <button
+                        className="act-btn danger"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeItem(item.id);
+                        }}
+                      >
+                        Remove
+                      </button>
                     </td>
                   </tr>
                 );
