@@ -12,6 +12,8 @@ function EmptyState({ message }: { message: string }) {
 export function EventsPage() {
   const eventsSubTab = useAppStore((s) => s.eventsSubTab);
   const setEventsSubTab = useAppStore((s) => s.setEventsSubTab);
+  const worldStateEventsError = useAppStore((s) => s.worldStateEventsError);
+  const refreshWorldStateEvents = useAppStore((s) => s.refreshWorldStateEvents);
 
   const tabs = [
     { id: 'active-events' as const, label: 'Active Events' },
@@ -40,7 +42,7 @@ export function EventsPage() {
         </div>
       </div>
 
-      <div className="page-content">
+      <div className="page-content events-page-content">
         {eventsSubTab === 'active-events' && <ActiveEventsPanel />}
         {eventsSubTab === 'void-trader' && (
           <div className="card">
@@ -68,6 +70,30 @@ export function EventsPage() {
             <EmptyState message="Market and news feeds are not wired to live data yet." />
           </div>
         )}
+
+        {worldStateEventsError ? (
+          <div className="events-offline-overlay" role="status" aria-live="polite">
+            <div className="events-offline-panel">
+              <span className="card-label">Events Offline</span>
+              <div className="events-offline-title">
+                Events are unable to be updated because the API is offline.
+              </div>
+              <div className="events-offline-body">
+                Last request failed. The page will retry automatically when the worldstate refresh
+                timer runs again.
+              </div>
+              <button
+                className="settings-secondary-btn events-offline-btn"
+                type="button"
+                onClick={() => {
+                  void refreshWorldStateEvents();
+                }}
+              >
+                Retry now
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </>
   );
