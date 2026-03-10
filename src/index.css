@@ -968,6 +968,32 @@ body {
   font-size: 11px;
   color: var(--accent-green);
 }
+.qv-focus-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0 2px;
+}
+.qv-focus-user {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.qv-focus-status {
+  margin-top: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.sparkline-wrap {
+  padding: 10px 0 2px;
+}
+.sparkline-wrap svg {
+  display: block;
+}
 .qv-hero {
   display: grid;
   grid-template-columns: 1.5fr 1fr auto;
@@ -1411,6 +1437,11 @@ body {
 
   .qv-hero {
     grid-template-columns: 1fr;
+  }
+
+  .qv-focus-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .qv-hero-price-block {
