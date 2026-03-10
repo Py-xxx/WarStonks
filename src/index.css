@@ -344,10 +344,46 @@ body {
 .search-suggestion.active {
   background: var(--bg-elevated);
 }
+.search-suggestion-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.search-suggestion-thumb {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, black);
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.search-suggestion-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.search-suggestion-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .search-suggestion-name {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .search-suggestion-meta {
   font-family: 'JetBrains Mono', monospace;
@@ -975,6 +1011,38 @@ body {
   gap: 12px;
   padding: 12px 0 2px;
 }
+.qv-focus-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.qv-item-thumb {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, black);
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  text-transform: uppercase;
+}
+.qv-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.qv-focus-item-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
 .qv-focus-user {
   font-size: 18px;
   font-weight: 700;
@@ -1071,7 +1139,7 @@ body {
 .qv-order-button {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
@@ -1090,6 +1158,26 @@ body {
 .qv-order-button.copied {
   border-color: rgba(61,214,140,0.4);
   color: var(--accent-green);
+}
+.qv-order-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+.qv-order-primary {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.qv-order-secondary {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.qv-order-price {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  font-weight: 700;
 }
 .qv-copy-feedback {
   font-family: 'JetBrains Mono', monospace;
@@ -1442,6 +1530,10 @@ body {
   .qv-focus-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .qv-focus-main {
+    width: 100%;
   }
 
   .qv-hero-price-block {

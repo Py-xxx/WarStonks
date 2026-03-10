@@ -72,6 +72,7 @@ export interface WfmAutocompleteItem {
   slug: string;
   maxRank: number | null;
   itemFamily: string | null;
+  imagePath: string | null;
 }
 
 export interface WfmTopSellOrder {

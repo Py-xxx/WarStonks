@@ -25,6 +25,7 @@ pub struct WfmAutocompleteItem {
     pub slug: String,
     pub max_rank: Option<i64>,
     pub item_family: Option<String>,
+    pub image_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,7 +136,8 @@ fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAut
             name_en,
             slug,
             max_rank,
-            item_family
+            item_family,
+            COALESCE(NULLIF(thumb, ''), NULLIF(icon, ''))
          FROM wfm_items
          WHERE name_en IS NOT NULL
          ORDER BY name_en COLLATE NOCASE, slug COLLATE NOCASE",
@@ -147,6 +149,7 @@ fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAut
             slug: row.get(2)?,
             max_rank: row.get(3)?,
             item_family: row.get(4)?,
+            image_path: row.get(5)?,
         })
     })?;
 

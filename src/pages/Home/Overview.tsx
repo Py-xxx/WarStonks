@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfmTopSellOrder } from '../../types';
 
@@ -62,6 +63,35 @@ function buildSparklinePath(points: number[]): string {
       return `${x},${y}`;
     })
     .join(' ');
+}
+
+function calculateSpreadMetrics(orders: WfmTopSellOrder[]) {
+  if (orders.length < 5) {
+    return null;
+  }
+
+  const cheapestPrice = orders[0].platinum;
+  const fifthPrice = orders[4].platinum;
+  const spreadPlatinum = fifthPrice - cheapestPrice;
+  const spreadPercent = cheapestPrice > 0 ? (spreadPlatinum / cheapestPrice) * 100 : null;
+
+  return {
+    spreadPlatinum,
+    spreadPercent,
+  };
+}
+
+function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
+  const spreadMetrics = calculateSpreadMetrics(orders);
+  if (!spreadMetrics) {
+    return 'Waiting for 5 sell orders';
+  }
+
+  if (spreadMetrics.spreadPercent === null) {
+    return `${spreadMetrics.spreadPlatinum} pt`;
+  }
+
+  return `${spreadMetrics.spreadPlatinum} pt (${spreadMetrics.spreadPercent.toFixed(1)}%)`;
 }
 
 function AlertsCard() {
@@ -207,11 +237,33 @@ function QuickViewCard() {
   const selectedItem = quickView.selectedItem;
   const mainOrder = quickView.sellOrders[0] ?? null;
   const compactOrders = quickView.sellOrders.slice(1, 5);
-  const spread =
-    quickView.sellOrders.length >= 5
-      ? quickView.sellOrders[4].platinum - quickView.sellOrders[0].platinum
-      : null;
+  const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath);
   const sparklinePath = buildSparklinePath(quickView.sellOrders.map((order) => order.platinum));
+  const spreadLabel = formatSpreadLabel(quickView.sellOrders);
+  const mainStats = [
+    {
+      label: 'Entry Price',
+      value: `${mainOrder?.platinum ?? 0} pt`,
+      accent: 'var(--accent-green)',
+    },
+    {
+      label: 'Exit Price',
+      value: 'Pending',
+      pending: true,
+    },
+    {
+      label: 'Quantity',
+      value: `${mainOrder?.quantity ?? 0}`,
+    },
+    ...(mainOrder?.rank !== null && mainOrder?.rank !== undefined
+      ? [
+          {
+            label: 'Rank',
+            value: `${mainOrder.rank}`,
+          },
+        ]
+      : []),
+  ];
 
   useEffect(() => {
     setCopiedOrderId(null);
@@ -241,7 +293,7 @@ function QuickViewCard() {
     <div className="card">
       <div className="card-header">
         <span className="card-label">Quick View</span>
-        <span className="qv-title">{selectedItem?.name ?? 'No item selected'}</span>
+        <span className="qv-title">{selectedItem?.itemFamily ?? 'WFM item'}</span>
         <div className="card-actions">
           {quickView.apiVersion ? <span className="badge badge-muted">WFM {quickView.apiVersion}</span> : null}
         </div>
@@ -279,6 +331,19 @@ function QuickViewCard() {
         {selectedItem && mainOrder && !quickView.loading && !quickView.errorMessage ? (
           <div className="qv-stack">
             <div className="qv-focus-row">
+              <div className="qv-focus-main">
+                <span className="qv-item-thumb">
+                  {selectedItemImageUrl ? (
+                    <img src={selectedItemImageUrl} alt="" loading="lazy" />
+                  ) : (
+                    <span>{selectedItem.name.slice(0, 1)}</span>
+                  )}
+                </span>
+                <div>
+                  <div className="qv-stat-label">Selected Item</div>
+                  <div className="qv-focus-item-name">{selectedItem.name}</div>
+                </div>
+              </div>
               <div>
                 <div className="qv-stat-label">Cheapest Seller</div>
                 <div className="qv-focus-user">{mainOrder.username}</div>
@@ -290,22 +355,17 @@ function QuickViewCard() {
             </div>
 
             <div className="qv-grid">
-              <div>
-                <div className="qv-stat-label">Entry Price</div>
-                <div className="qv-stat-value" style={{ color: 'var(--accent-green)' }}>{mainOrder.platinum} pt</div>
-              </div>
-              <div>
-                <div className="qv-stat-label">Exit Price</div>
-                <div className="qv-stat-value qv-stat-pending">Pending</div>
-              </div>
-              <div>
-                <div className="qv-stat-label">Quantity</div>
-                <div className="qv-stat-value">{mainOrder.quantity}</div>
-              </div>
-              <div>
-                <div className="qv-stat-label">Rank</div>
-                <div className="qv-stat-value">{mainOrder.rank ?? '—'}</div>
-              </div>
+              {mainStats.map((stat) => (
+                <div key={stat.label}>
+                  <div className="qv-stat-label">{stat.label}</div>
+                  <div
+                    className={`qv-stat-value${stat.pending ? ' qv-stat-pending' : ''}`}
+                    style={stat.accent ? { color: stat.accent } : undefined}
+                  >
+                    {stat.value}
+                  </div>
+                </div>
+              ))}
             </div>
 
             {sparklinePath ? (
@@ -325,8 +385,14 @@ function QuickViewCard() {
                   type="button"
                   onClick={() => void handleCopy(order)}
                 >
-                  <span>{order.username}</span>
-                  <span>{order.platinum} pt</span>
+                  <span className="qv-order-copy">
+                    <span className="qv-order-primary">{order.username}</span>
+                    <span className="qv-order-secondary">
+                      Qty {order.quantity}
+                      {order.rank !== null && order.rank !== undefined ? ` • Rank ${order.rank}` : ''}
+                    </span>
+                  </span>
+                  <span className="qv-order-price">{order.platinum} pt</span>
                 </button>
               ))}
             </div>
@@ -335,9 +401,7 @@ function QuickViewCard() {
 
             <div className="qv-spread-row">
               <span className="qv-spread-label">Spread</span>
-              <span className="qv-spread-value">
-                {spread === null ? 'Waiting for 5 sell orders' : `${spread} pt`}
-              </span>
+              <span className="qv-spread-value">{spreadLabel}</span>
             </div>
           </div>
         ) : null}
