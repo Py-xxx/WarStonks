@@ -12,6 +12,13 @@ const FISSURE_MODE_LABELS: Record<FissureMode, string> = {
   'steel-path': 'Steel Path fissures',
 };
 
+const EXCLUDED_FISSURE_MISSION_TYPES = new Set(['skirmish', 'volatile']);
+
+function normalizeMissionTypeKey(value: string | null): string | null {
+  const normalized = value?.trim().toLowerCase() ?? null;
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
 function getFissureTierLabel(fissure: WfstatFissure): string {
   return fissure.tier?.trim() || 'Unknown';
 }
@@ -52,6 +59,16 @@ function isActiveFissure(fissure: WfstatFissure, nowMs: number): boolean {
 
   const expiryMs = Date.parse(fissure.expiry);
   return !Number.isFinite(expiryMs) || expiryMs > nowMs;
+}
+
+function isSupportedFissureMissionType(fissure: WfstatFissure): boolean {
+  const missionTypeKey = normalizeMissionTypeKey(fissure.missionTypeKey);
+  const missionType = normalizeMissionTypeKey(fissure.missionType);
+
+  return !(
+    (missionTypeKey && EXCLUDED_FISSURE_MISSION_TYPES.has(missionTypeKey)) ||
+    (missionType && EXCLUDED_FISSURE_MISSION_TYPES.has(missionType))
+  );
 }
 
 function NormalModeIcon() {
@@ -129,7 +146,9 @@ export function FissuresPanel() {
     () =>
       fissures.filter(
         (fissure) =>
-          fissure.isHard === (mode === 'steel-path') && isActiveFissure(fissure, nowMs),
+          fissure.isHard === (mode === 'steel-path') &&
+          isActiveFissure(fissure, nowMs) &&
+          isSupportedFissureMissionType(fissure),
       ),
     [fissures, mode, nowMs],
   );
