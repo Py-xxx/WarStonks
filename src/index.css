@@ -3577,7 +3577,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  min-height: 500px;
+  min-height: 0;
 }
 
 .market-chart-stack {
@@ -3602,12 +3602,7 @@ body {
 }
 
 .market-chart-card {
-  min-height: 336px;
-  flex: 0 0 auto;
-}
-
-.market-volume-card {
-  min-height: 168px;
+  min-height: 500px;
   flex: 0 0 auto;
 }
 
@@ -3616,7 +3611,7 @@ body {
   grid-template-columns: 66px 1fr;
   gap: 10px;
   align-items: stretch;
-  min-height: 260px;
+  min-height: 404px;
   padding: 12px;
   border-radius: 10px;
   border: 1px solid rgba(121, 184, 255, 0.12);
@@ -3638,13 +3633,9 @@ body {
 .market-chart-svg,
 .market-volume-svg {
   width: 100%;
-  height: 260px;
+  height: 404px;
   display: block;
   flex: 0 0 auto;
-}
-
-.market-volume-svg {
-  height: 110px;
 }
 
 .market-chart-gridline {
@@ -3699,6 +3690,11 @@ body {
   stroke-dasharray: 4 6;
 }
 
+.market-chart-divider {
+  stroke: rgba(121, 184, 255, 0.18);
+  stroke-dasharray: 6 6;
+}
+
 .market-chart-toolbar {
   display: flex;
   align-items: flex-start;
@@ -3707,10 +3703,37 @@ body {
   flex-wrap: wrap;
 }
 
+.market-chart-toolbar-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .market-chart-note {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.market-chart-ohlc-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.market-chart-delta {
+  font-weight: 700;
+}
+
+.market-chart-delta.is-up {
+  color: #72e0b4;
+}
+
+.market-chart-delta.is-down {
+  color: #ff8f9f;
 }
 
 .market-chart-footer {
@@ -3788,21 +3811,16 @@ body {
 .legend-swatch.buy { background: #8c7cff; }
 .legend-swatch.band { background: rgba(88, 205, 177, 0.4); }
 
-.market-volume-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.market-volume-subtitle {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
 .market-volume-bar {
-  fill: rgba(121, 184, 255, 0.55);
+  fill: rgba(121, 184, 255, 0.32);
+}
+
+.market-volume-bar.is-up {
+  fill: rgba(98, 217, 170, 0.55);
+}
+
+.market-volume-bar.is-down {
+  fill: rgba(255, 118, 135, 0.52);
 }
 
 .market-analytics-grid {
