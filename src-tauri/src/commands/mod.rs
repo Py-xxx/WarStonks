@@ -193,6 +193,27 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+fn validate_external_url(url: &str) -> Result<&str, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("URL is empty".to_string());
+    }
+
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("Only http and https URLs are supported".to_string());
+    }
+
+    Ok(trimmed)
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    let validated_url = validate_external_url(&url)?;
+    webbrowser::open(validated_url)
+        .map(|_| ())
+        .map_err(|error| format!("Failed to open external URL: {error}"))
+}
+
 fn build_wfstat_client() -> Result<Client, String> {
     Client::builder()
         .timeout(Duration::from_secs(30))
@@ -768,7 +789,7 @@ pub async fn get_wfm_top_sell_orders(
 mod tests {
     use super::{
         cached_startup_summary, normalize_catalog_lookup_value, normalize_top_sell_orders,
-        StartupCommandState, WfmOrderUser, WfmOrderWithUser,
+        validate_external_url, StartupCommandState, WfmOrderUser, WfmOrderWithUser,
     };
     use crate::item_catalog::{ImportStats, StartupSummary};
 
@@ -913,5 +934,25 @@ mod tests {
             Some("primed continuity".to_string())
         );
         assert_eq!(normalize_catalog_lookup_value("   "), None);
+    }
+
+    #[test]
+    fn validates_http_and_https_urls() {
+        assert_eq!(
+            validate_external_url("https://warframe.fandom.com/wiki/Wisp_Prime_Set").unwrap(),
+            "https://warframe.fandom.com/wiki/Wisp_Prime_Set"
+        );
+        assert_eq!(
+            validate_external_url(" http://example.com ").unwrap(),
+            "http://example.com"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_or_unsupported_urls() {
+        assert!(validate_external_url("").is_err());
+        assert!(validate_external_url("   ").is_err());
+        assert!(validate_external_url("javascript:alert(1)").is_err());
+        assert!(validate_external_url("file:///tmp/test").is_err());
     }
 }

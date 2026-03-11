@@ -121,6 +121,10 @@ export async function getAppVersion(): Promise<string> {
   return invoke<string>('get_app_version');
 }
 
+export async function openExternalUrl(url: string): Promise<void> {
+  return invoke<void>('open_external_url', { url });
+}
+
 export async function getAppSettings(): Promise<AppSettings> {
   return invoke<AppSettings>('get_app_settings');
 }
