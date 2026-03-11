@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ensureMarketTracking, getItemAnalytics, stopMarketTracking } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -390,6 +390,7 @@ function AnalyticsPanel({
 }
 
 function AnalyticsTab() {
+  const pageContentRef = useRef<HTMLDivElement | null>(null);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
@@ -418,6 +419,10 @@ function AnalyticsTab() {
       setBucketSizeKey(supportedBuckets[0]);
     }
   }, [bucketSizeKey, supportedBuckets]);
+
+  useEffect(() => {
+    pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [selectedItem?.itemId, selectedMarketVariantKey]);
 
   useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey) {
@@ -532,7 +537,7 @@ function AnalyticsTab() {
   }
 
   return (
-    <div className="page-content market-page-content">
+    <div ref={pageContentRef} className="page-content market-page-content">
       <div className="card">
         <div className="card-body market-item-header">
           <div className="market-item-media">
