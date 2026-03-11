@@ -19,7 +19,6 @@ const WFM_CROSSPLAY_HEADER: &str = "true";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
-const STATISTICS_STALE_MINUTES: i64 = 45;
 const ANALYTICS_CACHE_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -846,34 +845,6 @@ fn fetch_and_cache_statistics(
     }
 
     Ok(())
-}
-
-fn statistics_cache_is_stale(
-    connection: &Connection,
-    item_id: i64,
-    variant_key: &str,
-) -> Result<bool> {
-    let cached_fetched_at = connection
-        .query_row(
-            "SELECT MAX(fetched_at)
-             FROM statistics_cache
-             WHERE item_id = ?1
-               AND variant_key = ?2",
-            params![item_id, variant_key],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
-
-    let Some(cached_fetched_at) = cached_fetched_at else {
-        return Ok(true);
-    };
-
-    let Some(parsed_fetched_at) = parse_timestamp(&cached_fetched_at) else {
-        return Ok(true);
-    };
-
-    Ok(now_utc() - parsed_fetched_at >= TimeDuration::minutes(STATISTICS_STALE_MINUTES))
 }
 
 fn statistics_cache_is_usable(
@@ -2231,15 +2202,15 @@ fn build_item_analytics_inner(
     let variant_label = derive_variant_label(&variant_key);
     let connection = open_market_observatory_database(&app)?;
 
-    if statistics_cache_is_stale(&connection, item_id, &variant_key)?
-        || !statistics_cache_is_usable(
+    if let Err(error) = fetch_and_cache_statistics(&connection, item_id, &slug, &variant_key) {
+        if !statistics_cache_is_usable(
             &connection,
             item_id,
             &variant_key,
             AnalyticsDomainKey::FortyEightHours,
-        )?
-    {
-        fetch_and_cache_statistics(&connection, item_id, &slug, &variant_key)?;
+        )? {
+            return Err(error);
+        }
     }
 
     let snapshot = maybe_capture_fresh_snapshot(&connection, item_id, &slug, &variant_key)?;

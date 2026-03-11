@@ -412,6 +412,19 @@ async function syncSearchTrackingSelection(
   };
 }
 
+async function persistSearchedItemSelection(
+  previousSelection: { itemId: number; slug: string; variantKey: string } | null,
+  item: WfmAutocompleteItem,
+): Promise<{ itemId: number; slug: string; variantKey: string } | null> {
+  const syncedSelection = await syncSearchTrackingSelection(
+    previousSelection,
+    item,
+    'base',
+  );
+
+  return syncedSelection.nextTrackedSelection;
+}
+
 interface AppStore {
   activePage: PageId;
   setActivePage: (page: PageId) => void;
@@ -1660,23 +1673,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return;
       }
 
-      let nextTrackedSelection = previousTrackedSelection;
+      let nextTrackedSelection = await persistSearchedItemSelection(
+        previousTrackedSelection,
+        item,
+      );
       let nextSelectedVariantKey: string | null = null;
       let nextSelectedVariantLabel: string | null = null;
 
       if (variants.length === 1) {
         nextSelectedVariantKey = variants[0].key;
         nextSelectedVariantLabel = variants[0].label;
-        const syncedSelection = await syncSearchTrackingSelection(
-          previousTrackedSelection,
-          item,
-          nextSelectedVariantKey,
-        );
-        nextTrackedSelection = syncedSelection.nextTrackedSelection;
-        nextSelectedVariantLabel = syncedSelection.selectedVariantLabel;
-      } else {
-        await stopTrackedSelection(previousTrackedSelection);
-        nextTrackedSelection = null;
+        if (nextTrackedSelection?.variantKey !== nextSelectedVariantKey) {
+          const syncedSelection = await syncSearchTrackingSelection(
+            nextTrackedSelection,
+            item,
+            nextSelectedVariantKey,
+          );
+          nextTrackedSelection = syncedSelection.nextTrackedSelection;
+          nextSelectedVariantLabel = syncedSelection.selectedVariantLabel;
+        }
       }
 
       if (requestId !== quickViewRequestSequence) {
