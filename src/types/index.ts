@@ -555,6 +555,8 @@ export interface AnalyticsChartPoint {
   highestBuy: number | null;
   fairValueLow: number | null;
   fairValueHigh: number | null;
+  entryZone: number | null;
+  exitZone: number | null;
   volume: number;
 }
 
