@@ -1633,6 +1633,20 @@ function AnalysisTab() {
                   <p>{analysis.itemDetails.description}</p>
                 </div>
               ) : null}
+              {analysis.itemDetails.statHighlights.length > 0 ? (
+                <div className="market-copy-block">
+                  <span className="market-copy-title">
+                    {analysis.itemDetails.rankScaleLabel ?? 'Rank Scaling'}
+                  </span>
+                  <div className="market-detail-highlight-list">
+                    {analysis.itemDetails.statHighlights.map((line) => (
+                      <span key={line} className="market-detail-highlight">
+                        {line}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="market-detail-grid">
                 <div><span className="market-copy-title">Family</span><span>{analysis.itemDetails.itemFamily ?? '—'}</span></div>
                 <div><span className="market-copy-title">Category</span><span>{analysis.itemDetails.category ?? '—'}</span></div>

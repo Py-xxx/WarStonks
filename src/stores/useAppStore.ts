@@ -1721,33 +1721,32 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
 
     try {
-      const [variants, response] = await Promise.all([
-        getItemVariantsForMarket(item.itemId, item.slug),
-        loadQuickViewOrdersForSelection(item, item.maxRank && item.maxRank > 0 ? null : 'base'),
-      ]);
+      const variants = await getItemVariantsForMarket(item.itemId, item.slug);
+      const defaultVariantKey =
+        variants.find((variant) => variant.isDefault)?.key
+        ?? variants[0]?.key
+        ?? 'base';
+      const response = await loadQuickViewOrdersForSelection(item, defaultVariantKey);
       if (requestId !== quickViewRequestSequence) {
         return;
       }
 
-      let nextTrackedSelection = await persistSearchedItemSelection(
-        previousTrackedSelection,
-        item,
-      );
-      let nextSelectedVariantKey: string | null = null;
-      let nextSelectedVariantLabel: string | null = null;
+      let nextTrackedSelection = await persistSearchedItemSelection(previousTrackedSelection, item);
+      let nextSelectedVariantKey: string | null = defaultVariantKey;
+      let nextSelectedVariantLabel: string | null =
+        variants.find((variant) => variant.key === defaultVariantKey)?.label
+        ?? (defaultVariantKey.startsWith('rank:')
+          ? `Rank ${defaultVariantKey.slice(5)}`
+          : 'Base Market');
 
-      if (variants.length === 1) {
-        nextSelectedVariantKey = variants[0].key;
-        nextSelectedVariantLabel = variants[0].label;
-        if (nextTrackedSelection?.variantKey !== nextSelectedVariantKey) {
-          const syncedSelection = await syncSearchTrackingSelection(
-            nextTrackedSelection,
-            item,
-            nextSelectedVariantKey,
-          );
-          nextTrackedSelection = syncedSelection.nextTrackedSelection;
-          nextSelectedVariantLabel = syncedSelection.selectedVariantLabel;
-        }
+      if (nextTrackedSelection?.variantKey !== nextSelectedVariantKey) {
+        const syncedSelection = await syncSearchTrackingSelection(
+          nextTrackedSelection,
+          item,
+          nextSelectedVariantKey,
+        );
+        nextTrackedSelection = syncedSelection.nextTrackedSelection;
+        nextSelectedVariantLabel = syncedSelection.selectedVariantLabel;
       }
 
       if (requestId !== quickViewRequestSequence) {

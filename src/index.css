@@ -3985,6 +3985,21 @@ body {
   gap: 4px;
 }
 
+.market-detail-highlight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.market-detail-highlight {
+  border: 1px solid rgba(121, 184, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(9, 14, 24, 0.96);
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 @media (max-width: 1200px) {
   .market-analysis-shell,
   .market-analysis-summary-grid,

@@ -664,6 +664,8 @@ export interface ItemDetailSummary {
   estimatedVaultDate: string | null;
   vaultDate: string | null;
   tags: string[];
+  rankScaleLabel: string | null;
+  statHighlights: string[];
 }
 
 export interface SetComponentAnalysisEntry {
