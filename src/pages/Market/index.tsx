@@ -10,7 +10,7 @@ import type {
 } from '../../types';
 
 const DOMAIN_OPTIONS: { key: AnalyticsDomainKey; label: string }[] = [
-  { key: '1d', label: '1 day' },
+  { key: '48h', label: '48 hours' },
   { key: '7d', label: '7 days' },
   { key: '30d', label: '30 days' },
   { key: '90d', label: '90 days' },
@@ -27,7 +27,7 @@ const BUCKET_OPTIONS: { key: AnalyticsBucketSizeKey; label: string }[] = [
 ];
 
 const SUPPORTED_BUCKETS: Record<AnalyticsDomainKey, AnalyticsBucketSizeKey[]> = {
-  '1d': ['1h', '3h', '12h', '18h', '24h'],
+  '48h': ['1h', '3h', '12h', '18h', '24h'],
   '7d': ['24h', '7d'],
   '30d': ['24h', '7d', '14d'],
   '90d': ['24h', '7d', '14d'],
@@ -196,8 +196,17 @@ function HistoryPanel({
     toggles[key as HistorySeriesKey] ? values : [],
   );
   const definedValues = enabledValues.filter((value): value is number => value !== null);
-  const minValue = definedValues.length > 0 ? Math.min(...definedValues) : 0;
-  const maxValue = definedValues.length > 0 ? Math.max(...definedValues) : 1;
+  const baseMinValue = definedValues.length > 0 ? Math.min(...definedValues) : 0;
+  const baseMaxValue = definedValues.length > 0 ? Math.max(...definedValues) : 1;
+  const baseRange = baseMaxValue - baseMinValue;
+  const chartPadding =
+    definedValues.length === 0
+      ? 1
+      : baseRange === 0
+        ? Math.max(1, Math.abs(baseMinValue) * 0.04)
+        : baseRange * 0.08;
+  const minValue = baseMinValue - chartPadding;
+  const maxValue = baseMaxValue + chartPadding;
   const yTicks = Array.from({ length: 5 }, (_, index) => maxValue - ((maxValue - minValue || 1) * index) / 4);
   const tickIndexes = points.length > 1
     ? Array.from(new Set([0, Math.floor((points.length - 1) * 0.25), Math.floor((points.length - 1) * 0.5), Math.floor((points.length - 1) * 0.75), points.length - 1]))
@@ -323,7 +332,7 @@ function HistoryPanel({
               <div className="market-history-x-axis">
                 {tickIndexes.map((tickIndex, renderIndex) => (
                   <span key={`${tickIndex}-${renderIndex}`}>
-                    {points[tickIndex] ? formatTimelineLabel(points[tickIndex].bucketAt, domainKey !== '1d') : '—'}
+                    {points[tickIndex] ? formatTimelineLabel(points[tickIndex].bucketAt, domainKey !== '48h') : '—'}
                   </span>
                 ))}
               </div>
@@ -384,8 +393,8 @@ function AnalyticsTab() {
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
-  const [domainKey, setDomainKey] = useState<AnalyticsDomainKey>('7d');
-  const [bucketSizeKey, setBucketSizeKey] = useState<AnalyticsBucketSizeKey>('24h');
+  const [domainKey, setDomainKey] = useState<AnalyticsDomainKey>('48h');
+  const [bucketSizeKey, setBucketSizeKey] = useState<AnalyticsBucketSizeKey>('1h');
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

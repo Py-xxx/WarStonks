@@ -20,6 +20,7 @@ const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const STATISTICS_STALE_MINUTES: i64 = 45;
+const ANALYTICS_CACHE_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,7 +55,7 @@ impl MarketTrackingSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AnalyticsDomainKey {
-    OneDay,
+    FortyEightHours,
     SevenDays,
     ThirtyDays,
     NinetyDays,
@@ -63,23 +64,16 @@ pub enum AnalyticsDomainKey {
 impl AnalyticsDomainKey {
     fn as_str(self) -> &'static str {
         match self {
-            Self::OneDay => "1d",
+            Self::FortyEightHours => "48h",
             Self::SevenDays => "7d",
             Self::ThirtyDays => "30d",
             Self::NinetyDays => "90d",
         }
     }
 
-    fn source_domain(self) -> &'static str {
-        match self {
-            Self::OneDay => "48hours",
-            Self::SevenDays | Self::ThirtyDays | Self::NinetyDays => "90days",
-        }
-    }
-
     fn lookback(self) -> TimeDuration {
         match self {
-            Self::OneDay => TimeDuration::hours(24),
+            Self::FortyEightHours => TimeDuration::hours(48),
             Self::SevenDays => TimeDuration::days(7),
             Self::ThirtyDays => TimeDuration::days(30),
             Self::NinetyDays => TimeDuration::days(90),
@@ -92,7 +86,7 @@ impl TryFrom<&str> for AnalyticsDomainKey {
 
     fn try_from(value: &str) -> Result<Self> {
         match value {
-            "1d" => Ok(Self::OneDay),
+            "48h" | "1d" => Ok(Self::FortyEightHours),
             "7d" => Ok(Self::SevenDays),
             "30d" => Ok(Self::ThirtyDays),
             "90d" => Ok(Self::NinetyDays),
@@ -595,6 +589,7 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           variant_key TEXT NOT NULL,
           domain_key TEXT NOT NULL,
           bucket_size_key TEXT NOT NULL,
+          cache_version INTEGER NOT NULL DEFAULT 1,
           computed_at TEXT NOT NULL,
           payload_json TEXT NOT NULL,
           source_snapshot_at TEXT,
@@ -603,6 +598,25 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         );
         ",
     )?;
+
+    let has_cache_version = connection
+        .query_row(
+            "SELECT 1
+             FROM pragma_table_info('analytics_cache')
+             WHERE name = 'cache_version'
+             LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    if !has_cache_version {
+        connection.execute(
+            "ALTER TABLE analytics_cache
+             ADD COLUMN cache_version INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
 
     Ok(())
 }
@@ -639,7 +653,7 @@ fn derive_variant_label(variant_key: &str) -> String {
 
 fn supported_bucket_sizes(domain: AnalyticsDomainKey) -> &'static [AnalyticsBucketSizeKey] {
     match domain {
-        AnalyticsDomainKey::OneDay => &[
+        AnalyticsDomainKey::FortyEightHours => &[
             AnalyticsBucketSizeKey::OneHour,
             AnalyticsBucketSizeKey::ThreeHours,
             AnalyticsBucketSizeKey::TwelveHours,
@@ -925,51 +939,59 @@ fn statistics_cache_is_usable(
     variant_key: &str,
     domain_key: AnalyticsDomainKey,
 ) -> Result<bool> {
-    let expected_min_rows = match domain_key {
-        AnalyticsDomainKey::OneDay => 8_i64,
-        AnalyticsDomainKey::SevenDays => 5_i64,
-        AnalyticsDomainKey::ThirtyDays | AnalyticsDomainKey::NinetyDays => 10_i64,
+    let required_domains = match domain_key {
+        AnalyticsDomainKey::FortyEightHours => vec![("48hours", 12_i64)],
+        AnalyticsDomainKey::SevenDays => vec![("48hours", 12_i64), ("90days", 5_i64)],
+        AnalyticsDomainKey::ThirtyDays | AnalyticsDomainKey::NinetyDays => {
+            vec![("48hours", 12_i64), ("90days", 10_i64)]
+        }
     };
 
-    let (closed_row_count, rich_anchor_count): (i64, i64) = connection.query_row(
-        "SELECT
-           COUNT(*),
-           SUM(
-             CASE
-               WHEN min_price IS NOT NULL
-                 OR max_price IS NOT NULL
-                 OR open_price IS NOT NULL
-                 OR closed_price IS NOT NULL
-                 OR avg_price IS NOT NULL
-                 OR wa_price IS NOT NULL
-                 OR moving_avg IS NOT NULL
-                 OR donch_top IS NOT NULL
-                 OR donch_bot IS NOT NULL
-               THEN 1
-               ELSE 0
-             END
-           )
-         FROM statistics_cache
-         WHERE item_id = ?1
-           AND variant_key = ?2
-           AND domain_key = ?3
-           AND source_kind = 'closed'",
-        params![item_id, variant_key, domain_key.source_domain()],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
-    )?;
+    for (source_domain, expected_min_rows) in required_domains {
+        let (closed_row_count, rich_anchor_count): (i64, i64) = connection.query_row(
+            "SELECT
+               COUNT(*),
+               SUM(
+                 CASE
+                   WHEN min_price IS NOT NULL
+                     OR max_price IS NOT NULL
+                     OR open_price IS NOT NULL
+                     OR closed_price IS NOT NULL
+                     OR avg_price IS NOT NULL
+                     OR wa_price IS NOT NULL
+                     OR moving_avg IS NOT NULL
+                     OR donch_top IS NOT NULL
+                     OR donch_bot IS NOT NULL
+                   THEN 1
+                   ELSE 0
+                 END
+               )
+             FROM statistics_cache
+             WHERE item_id = ?1
+               AND variant_key = ?2
+               AND domain_key = ?3
+               AND source_kind = 'closed'",
+            params![item_id, variant_key, source_domain],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?;
 
-    if closed_row_count < expected_min_rows {
-        return Ok(false);
+        if closed_row_count < expected_min_rows {
+            return Ok(false);
+        }
+
+        if !(rich_anchor_count > 0 && rich_anchor_count * 2 >= closed_row_count) {
+            return Ok(false);
+        }
     }
 
-    Ok(rich_anchor_count > 0 && rich_anchor_count * 2 >= closed_row_count)
+    Ok(true)
 }
 
-fn load_statistics_rows(
+fn load_statistics_rows_for_domain(
     connection: &Connection,
     item_id: i64,
     variant_key: &str,
-    domain_key: AnalyticsDomainKey,
+    source_domain: &str,
 ) -> Result<(Vec<InternalStatsRow>, Vec<InternalStatsRow>, Option<String>)> {
     let mut statement = connection.prepare(
         "SELECT
@@ -993,7 +1015,7 @@ fn load_statistics_rows(
            AND domain_key = ?3
          ORDER BY bucket_at ASC",
     )?;
-    let rows = statement.query_map(params![item_id, variant_key, domain_key.source_domain()], |row| {
+    let rows = statement.query_map(params![item_id, variant_key, source_domain], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -1062,6 +1084,40 @@ fn load_statistics_rows(
     }
 
     Ok((closed_rows, live_buy_rows, latest_fetched_at))
+}
+
+fn merge_extended_chart_rows(
+    domain_key: AnalyticsDomainKey,
+    hourly_rows: &[InternalStatsRow],
+    extended_rows: &[InternalStatsRow],
+) -> Vec<InternalStatsRow> {
+    if domain_key == AnalyticsDomainKey::FortyEightHours {
+        return hourly_rows.to_vec();
+    }
+
+    let hourly_cutoff = now_utc() - AnalyticsDomainKey::FortyEightHours.lookback();
+    let mut merged_rows = extended_rows
+        .iter()
+        .filter(|row| row.bucket_at < hourly_cutoff)
+        .cloned()
+        .collect::<Vec<_>>();
+    merged_rows.extend(
+        hourly_rows
+            .iter()
+            .filter(|row| row.bucket_at >= hourly_cutoff)
+            .cloned(),
+    );
+    merged_rows.sort_by_key(|row| row.bucket_at);
+    merged_rows
+}
+
+fn latest_fetched_at(values: &[Option<String>]) -> Option<String> {
+    values
+        .iter()
+        .flatten()
+        .filter_map(|value| parse_timestamp(value).map(|parsed| (parsed, value.clone())))
+        .max_by_key(|(parsed, _)| *parsed)
+        .map(|(_, value)| value)
 }
 
 fn filter_supported_order(order: &WfmOrderRecord, variant_key: &str) -> bool {
@@ -2192,7 +2248,7 @@ fn load_cached_analytics(
 ) -> Result<Option<ItemAnalyticsResponse>> {
     let cached_row = connection
         .query_row(
-            "SELECT payload_json, source_snapshot_at, source_stats_fetched_at
+            "SELECT payload_json, source_snapshot_at, source_stats_fetched_at, cache_version
              FROM analytics_cache
              WHERE item_id = ?1
                AND variant_key = ?2
@@ -2209,17 +2265,19 @@ fn load_cached_analytics(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
                 ))
             },
         )
         .optional()?;
 
-    let Some((payload_json, cached_snapshot_at, cached_stats_at)) = cached_row else {
+    let Some((payload_json, cached_snapshot_at, cached_stats_at, cache_version)) = cached_row else {
         return Ok(None);
     };
 
     if cached_snapshot_at.as_deref() != source_snapshot_at
         || cached_stats_at.as_deref() != source_stats_fetched_at
+        || cache_version != ANALYTICS_CACHE_VERSION
     {
         return Ok(None);
     }
@@ -2258,13 +2316,15 @@ fn persist_analytics_cache(
            variant_key,
            domain_key,
            bucket_size_key,
+           cache_version,
            computed_at,
            payload_json,
            source_snapshot_at,
            source_stats_fetched_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(item_id, variant_key, domain_key, bucket_size_key) DO UPDATE SET
            slug = excluded.slug,
+           cache_version = excluded.cache_version,
            computed_at = excluded.computed_at,
            payload_json = excluded.payload_json,
            source_snapshot_at = excluded.source_snapshot_at,
@@ -2275,6 +2335,7 @@ fn persist_analytics_cache(
             response.variant_key,
             domain_key.as_str(),
             bucket_size_key.as_str(),
+            ANALYTICS_CACHE_VERSION,
             response.computed_at,
             serde_json::to_string(response).context("failed to serialize analytics payload")?,
             response.source_snapshot_at,
@@ -2308,10 +2369,44 @@ fn build_item_analytics_inner(
     }
 
     let snapshot = maybe_capture_fresh_snapshot(&connection, item_id, &slug, &variant_key)?;
-    let (closed_rows, live_buy_rows, latest_stats_fetched_at) =
-        load_statistics_rows(&connection, item_id, &variant_key, domain_key)?;
+    let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
+        load_statistics_rows_for_domain(&connection, item_id, &variant_key, "48hours")?;
+    let (chart_closed_rows, chart_live_buy_rows, latest_stats_fetched_at) =
+        if domain_key == AnalyticsDomainKey::FortyEightHours {
+            (
+                hourly_closed_rows.clone(),
+                hourly_live_buy_rows.clone(),
+                hourly_stats_fetched_at.clone(),
+            )
+        } else {
+            let (extended_closed_rows, extended_live_buy_rows, extended_stats_fetched_at) =
+                load_statistics_rows_for_domain(&connection, item_id, &variant_key, "90days")?;
+            (
+                merge_extended_chart_rows(
+                    domain_key,
+                    &hourly_closed_rows,
+                    &extended_closed_rows,
+                ),
+                merge_extended_chart_rows(
+                    domain_key,
+                    &hourly_live_buy_rows,
+                    &extended_live_buy_rows,
+                ),
+                latest_fetched_at(&[
+                    hourly_stats_fetched_at.clone(),
+                    extended_stats_fetched_at.clone(),
+                ]),
+            )
+        };
 
-    let chart_points = resample_rows(&closed_rows, &live_buy_rows, domain_key, bucket_size_key);
+    let chart_points =
+        resample_rows(&chart_closed_rows, &chart_live_buy_rows, domain_key, bucket_size_key);
+    let trend_points = resample_rows(
+        &hourly_closed_rows,
+        &hourly_live_buy_rows,
+        AnalyticsDomainKey::FortyEightHours,
+        AnalyticsBucketSizeKey::OneHour,
+    );
     let source_snapshot_at = Some(snapshot.captured_at.clone());
     if let Some(cached) = load_cached_analytics(
         &connection,
@@ -2328,7 +2423,7 @@ fn build_item_analytics_inner(
     let latest_point = chart_points.last();
     let zone_overview = build_entry_exit_zone_overview(Some(&snapshot), latest_point);
     let orderbook_pressure = build_orderbook_pressure(Some(&snapshot));
-    let trend_quality_breakdown = build_trend_quality_breakdown(&chart_points);
+    let trend_quality_breakdown = build_trend_quality_breakdown(&trend_points);
     let action_card = build_action_card(
         &zone_overview,
         &orderbook_pressure,
@@ -2579,7 +2674,7 @@ mod tests {
     #[test]
     fn validates_bucket_support() {
         assert!(validate_domain_and_bucket(
-            AnalyticsDomainKey::OneDay,
+            AnalyticsDomainKey::FortyEightHours,
             AnalyticsBucketSizeKey::OneHour
         )
         .is_ok());
@@ -2662,7 +2757,7 @@ mod tests {
         let points = resample_rows(
             &rows,
             &[],
-            AnalyticsDomainKey::OneDay,
+            AnalyticsDomainKey::FortyEightHours,
             AnalyticsBucketSizeKey::ThreeHours,
         );
 
@@ -2722,6 +2817,113 @@ mod tests {
         assert_eq!(points[0].median_sell, Some(67.6));
         assert_eq!(points[0].weighted_avg, Some(68.2));
         assert_eq!(points[0].fair_value_high, Some(69.0));
+    }
+
+    #[test]
+    fn merges_recent_hourly_rows_over_extended_daily_rows() {
+        let cutoff = super::now_utc() - AnalyticsDomainKey::FortyEightHours.lookback();
+        let hourly_rows = vec![
+            InternalStatsRow {
+                bucket_at: cutoff + time::Duration::hours(1),
+                source_kind: "closed".to_string(),
+                volume: 5.0,
+                min_price: Some(64.0),
+                max_price: Some(66.0),
+                open_price: Some(64.0),
+                closed_price: Some(65.0),
+                avg_price: Some(65.0),
+                wa_price: Some(65.2),
+                median: Some(65.0),
+                moving_avg: Some(64.8),
+                donch_top: Some(66.0),
+                donch_bot: Some(63.5),
+            },
+            InternalStatsRow {
+                bucket_at: cutoff + time::Duration::hours(2),
+                source_kind: "closed".to_string(),
+                volume: 7.0,
+                min_price: Some(66.0),
+                max_price: Some(68.0),
+                open_price: Some(66.0),
+                closed_price: Some(67.0),
+                avg_price: Some(67.0),
+                wa_price: Some(67.1),
+                median: Some(67.0),
+                moving_avg: Some(66.7),
+                donch_top: Some(68.0),
+                donch_bot: Some(65.8),
+            },
+        ];
+        let extended_rows = vec![
+            InternalStatsRow {
+                bucket_at: cutoff - time::Duration::days(2),
+                source_kind: "closed".to_string(),
+                volume: 10.0,
+                min_price: Some(60.0),
+                max_price: Some(62.0),
+                open_price: Some(60.0),
+                closed_price: Some(61.0),
+                avg_price: Some(61.0),
+                wa_price: Some(61.0),
+                median: Some(61.0),
+                moving_avg: Some(60.5),
+                donch_top: Some(62.0),
+                donch_bot: Some(59.5),
+            },
+            InternalStatsRow {
+                bucket_at: cutoff + time::Duration::hours(3),
+                source_kind: "closed".to_string(),
+                volume: 20.0,
+                min_price: Some(90.0),
+                max_price: Some(92.0),
+                open_price: Some(90.0),
+                closed_price: Some(91.0),
+                avg_price: Some(91.0),
+                wa_price: Some(91.0),
+                median: Some(91.0),
+                moving_avg: Some(90.5),
+                donch_top: Some(92.0),
+                donch_bot: Some(89.5),
+            },
+        ];
+
+        let merged = super::merge_extended_chart_rows(
+            AnalyticsDomainKey::SevenDays,
+            &hourly_rows,
+            &extended_rows,
+        );
+
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].median, Some(61.0));
+        assert_eq!(merged[1].median, Some(65.0));
+        assert_eq!(merged[2].median, Some(67.0));
+    }
+
+    #[test]
+    fn computes_short_term_slopes_from_hourly_points() {
+        let base_time = super::now_utc() - time::Duration::hours(6);
+        let points = (0..7)
+            .map(|index| AnalyticsChartPoint {
+                bucket_at: super::format_timestamp(base_time + time::Duration::hours(index as i64))
+                    .expect("timestamp"),
+                lowest_sell: Some(60.0 + index as f64),
+                median_sell: Some(61.0 + index as f64),
+                moving_avg: Some(60.5 + index as f64),
+                weighted_avg: Some(60.8 + index as f64),
+                average_price: Some(60.6 + index as f64),
+                highest_buy: Some(58.0 + index as f64),
+                fair_value_low: Some(59.0),
+                fair_value_high: Some(66.0),
+                volume: 10.0,
+            })
+            .collect::<Vec<_>>();
+
+        let breakdown = build_trend_quality_breakdown(&points);
+        let lowest_sell = breakdown.tabs.get("lowestSell").expect("lowest sell tab");
+
+        assert!(lowest_sell.slope_1h.unwrap_or_default() > 0.0);
+        assert!(lowest_sell.slope_3h.unwrap_or_default() > 0.0);
+        assert!(lowest_sell.slope_6h.unwrap_or_default() > 0.0);
     }
 
     #[test]

@@ -3540,6 +3540,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 456px;
   padding: 16px;
   border: 1px solid rgba(108, 164, 255, 0.14);
   border-radius: 10px;
@@ -3569,6 +3570,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 .market-history-svg {
