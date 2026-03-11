@@ -2,15 +2,8 @@ import { useAppStore } from '../../stores/useAppStore';
 import { ActiveEventsPanel } from '../../components/ActiveEventsPanel';
 import { ActivitiesPanel } from '../../components/ActivitiesPanel';
 import { FissuresPanel } from '../../components/FissuresPanel';
+import { MarketNewsPanel } from '../../components/MarketNewsPanel';
 import { VoidTraderPanel } from '../../components/VoidTraderPanel';
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="empty-state" style={{ minHeight: 120 }}>
-      <span className="empty-primary">{message}</span>
-    </div>
-  );
-}
 
 export function EventsPage() {
   const eventsSubTab = useAppStore((s) => s.eventsSubTab);
@@ -48,12 +41,7 @@ export function EventsPage() {
         {eventsSubTab === 'void-trader' && <VoidTraderPanel />}
         {eventsSubTab === 'fissures' && <FissuresPanel />}
         {eventsSubTab === 'activities' && <ActivitiesPanel />}
-        {eventsSubTab === 'market-news' && (
-          <div className="card">
-            <div className="card-header"><span className="card-label">Market &amp; News</span></div>
-            <EmptyState message="Market and news feeds are not wired to live data yet." />
-          </div>
-        )}
+        {eventsSubTab === 'market-news' && <MarketNewsPanel />}
 
       </div>
     </>

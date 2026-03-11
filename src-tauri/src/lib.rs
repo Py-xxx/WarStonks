@@ -19,6 +19,7 @@ pub fn run() {
             commands::get_worldstate_arbitration,
             commands::get_worldstate_archon_hunt,
             commands::get_worldstate_fissures,
+            commands::get_worldstate_market_news,
             commands::get_worldstate_invasions,
             commands::get_worldstate_syndicate_missions,
             commands::get_worldstate_void_trader,

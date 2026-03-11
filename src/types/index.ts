@@ -22,7 +22,8 @@ export type WorldStateEndpointKey =
   | 'fissures'
   | 'invasions'
   | 'syndicate-missions'
-  | 'void-trader';
+  | 'void-trader'
+  | 'market-news';
 
 export interface WatchlistItem {
   id: string;
@@ -317,6 +318,34 @@ export interface WfstatFissure {
   tierNum: number | null;
   isStorm: boolean;
   isHard: boolean;
+  expired?: boolean;
+}
+
+export interface WfstatNewsItem {
+  id: string;
+  message: string;
+  link: string | null;
+  imageLink: string | null;
+  priority: boolean;
+  date: string | null;
+  activation: string | null;
+  expiry: string | null;
+  update: boolean;
+  primeAccess: boolean;
+  stream: boolean;
+  mobileOnly: boolean;
+  expired?: boolean;
+}
+
+export interface WfstatFlashSale {
+  id: string;
+  item: string;
+  activation: string | null;
+  expiry: string | null;
+  discount: number | null;
+  premiumOverride: number | null;
+  regularOverride: number | null;
+  isShownInMarket: boolean;
   expired?: boolean;
 }
 

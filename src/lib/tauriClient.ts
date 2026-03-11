@@ -8,6 +8,8 @@ import type {
   AlecaframeValidationResult,
   AppSettings,
   PersistedWorldStateCacheEntry,
+  WfstatFlashSale,
+  WfstatNewsItem,
   WfstatArchonHunt,
   WfstatArbitration,
   WfstatAlert,
@@ -82,6 +84,11 @@ export interface WfmTopSellOrdersResponse {
   sellOrders: WfmTopSellOrder[];
 }
 
+export interface WorldStateMarketNewsResponse {
+  news: WfstatNewsItem[];
+  flashSales: WfstatFlashSale[];
+}
+
 let startupInitializationPromise: Promise<StartupSummary> | null = null;
 
 export async function getAppShellInfo(): Promise<AppShellInfo> {
@@ -148,6 +155,10 @@ export async function getWorldStateSyndicateMissions(): Promise<WfstatSyndicateM
 
 export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
   return invoke<WfstatVoidTrader>('get_worldstate_void_trader');
+}
+
+export async function getWorldStateMarketNews(): Promise<WorldStateMarketNewsResponse> {
+  return invoke<WorldStateMarketNewsResponse>('get_worldstate_market_news');
 }
 
 export async function getWorldStateCache(): Promise<

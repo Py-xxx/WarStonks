@@ -12,6 +12,7 @@ import {
   fetchWorldStateEventsSnapshot,
   fetchWorldStateFissuresSnapshot,
   fetchWorldStateInvasionsSnapshot,
+  fetchWorldStateMarketNewsSnapshot,
   fetchWorldStateSortieSnapshot,
   fetchWorldStateSyndicateMissionsSnapshot,
   fetchWorldStateVoidTraderSnapshot,
@@ -21,6 +22,7 @@ import {
   restoreCachedWorldStateEvents,
   restoreCachedWorldStateFissures,
   restoreCachedWorldStateInvasions,
+  restoreCachedWorldStateMarketNews,
   restoreCachedWorldStateSortie,
   restoreCachedWorldStateSyndicateMissions,
   restoreCachedWorldStateVoidTrader,
@@ -54,8 +56,10 @@ import type {
   WfstatAlert,
   WfstatArchonHunt,
   WfstatArbitration,
+  WfstatFlashSale,
   WfstatFissure,
   WfstatInvasion,
+  WfstatNewsItem,
   WfstatSortie,
   WfstatSyndicateMission,
   WfstatVoidTrader,
@@ -75,6 +79,7 @@ let worldStateSortieRefreshPromise: Promise<void> | null = null;
 let worldStateArbitrationRefreshPromise: Promise<void> | null = null;
 let worldStateArchonHuntRefreshPromise: Promise<void> | null = null;
 let worldStateFissuresRefreshPromise: Promise<void> | null = null;
+let worldStateMarketNewsRefreshPromise: Promise<void> | null = null;
 let worldStateInvasionsRefreshPromise: Promise<void> | null = null;
 let worldStateSyndicateMissionsRefreshPromise: Promise<void> | null = null;
 let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
@@ -314,6 +319,12 @@ interface AppStore {
   worldStateFissuresError: string | null;
   worldStateFissuresNextRefreshAt: string | null;
   worldStateFissuresLastUpdatedAt: string | null;
+  worldStateNews: WfstatNewsItem[];
+  worldStateFlashSales: WfstatFlashSale[];
+  worldStateMarketNewsLoading: boolean;
+  worldStateMarketNewsError: string | null;
+  worldStateMarketNewsNextRefreshAt: string | null;
+  worldStateMarketNewsLastUpdatedAt: string | null;
   worldStateInvasions: WfstatInvasion[];
   worldStateInvasionsLoading: boolean;
   worldStateInvasionsError: string | null;
@@ -343,6 +354,7 @@ interface AppStore {
   refreshWorldStateArbitration: () => Promise<void>;
   refreshWorldStateArchonHunt: () => Promise<void>;
   refreshWorldStateFissures: () => Promise<void>;
+  refreshWorldStateMarketNews: () => Promise<void>;
   refreshWorldStateInvasions: () => Promise<void>;
   refreshWorldStateSyndicateMissions: () => Promise<void>;
   refreshWorldStateVoidTrader: () => Promise<void>;
@@ -444,6 +456,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateFissuresError: null,
   worldStateFissuresNextRefreshAt: null,
   worldStateFissuresLastUpdatedAt: null,
+  worldStateNews: [],
+  worldStateFlashSales: [],
+  worldStateMarketNewsLoading: false,
+  worldStateMarketNewsError: null,
+  worldStateMarketNewsNextRefreshAt: null,
+  worldStateMarketNewsLastUpdatedAt: null,
   worldStateInvasions: [],
   worldStateInvasionsLoading: false,
   worldStateInvasionsError: null,
@@ -897,6 +915,75 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })();
 
     return worldStateFissuresRefreshPromise;
+  },
+  refreshWorldStateMarketNews: async () => {
+    if (worldStateMarketNewsRefreshPromise) {
+      return worldStateMarketNewsRefreshPromise;
+    }
+
+    set({ worldStateMarketNewsLoading: true });
+
+    worldStateMarketNewsRefreshPromise = (async () => {
+      try {
+        const snapshot = await fetchWorldStateMarketNewsSnapshot();
+        await persistWorldStateSnapshot(WORLDSTATE_ENDPOINT_KEYS.marketNews, {
+          payload: {
+            news: snapshot.news,
+            flashSales: snapshot.flashSales,
+          },
+          fetchedAt: snapshot.fetchedAt,
+          nextRefreshAt: snapshot.nextRefreshAt,
+        });
+        set({
+          worldStateNews: snapshot.news,
+          worldStateFlashSales: snapshot.flashSales,
+          worldStateMarketNewsLoading: false,
+          worldStateMarketNewsError: null,
+          worldStateMarketNewsNextRefreshAt: snapshot.nextRefreshAt,
+          worldStateMarketNewsLastUpdatedAt: snapshot.fetchedAt,
+        });
+        set((state) => ({
+          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.marketNews),
+        }));
+      } catch (error) {
+        const errorMessage = toErrorMessage(error);
+        const cachedSnapshot = await loadCachedWorldStateSnapshot(
+          WORLDSTATE_ENDPOINT_KEYS.marketNews,
+          restoreCachedWorldStateMarketNews,
+        );
+
+        set((state) => ({
+          worldStateNews:
+            state.worldStateNews.length > 0 ? state.worldStateNews : (cachedSnapshot?.payload.news ?? []),
+          worldStateFlashSales:
+            state.worldStateFlashSales.length > 0
+              ? state.worldStateFlashSales
+              : (cachedSnapshot?.payload.flashSales ?? []),
+          worldStateMarketNewsLoading: false,
+          worldStateMarketNewsError: cachedSnapshot
+            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
+            : errorMessage,
+          worldStateMarketNewsNextRefreshAt: new Date(
+            Date.now() + WORLDSTATE_RETRY_DELAY_MS,
+          ).toISOString(),
+          worldStateMarketNewsLastUpdatedAt:
+            state.worldStateMarketNewsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          systemAlerts: upsertSystemAlert(
+            state.systemAlerts,
+            buildSystemAlert(
+              WORLDSTATE_ENDPOINT_KEYS.marketNews,
+              cachedSnapshot
+                ? `WFStat is offline. Showing cached Market & News from ${cachedSnapshot.fetchedAt}.`
+                : 'WFStat is offline and no cached Market & News are available yet.',
+            ),
+          ),
+        }));
+      } finally {
+        worldStateMarketNewsRefreshPromise = null;
+      }
+    })();
+
+    return worldStateMarketNewsRefreshPromise;
   },
   refreshWorldStateInvasions: async () => {
     if (worldStateInvasionsRefreshPromise) {

@@ -73,6 +73,7 @@ export function useStartupInitialization(): StartupState {
   const refreshWorldStateArbitration = useAppStore((state) => state.refreshWorldStateArbitration);
   const refreshWorldStateArchonHunt = useAppStore((state) => state.refreshWorldStateArchonHunt);
   const refreshWorldStateFissures = useAppStore((state) => state.refreshWorldStateFissures);
+  const refreshWorldStateMarketNews = useAppStore((state) => state.refreshWorldStateMarketNews);
   const refreshWorldStateInvasions = useAppStore((state) => state.refreshWorldStateInvasions);
   const refreshWorldStateSyndicateMissions = useAppStore(
     (state) => state.refreshWorldStateSyndicateMissions,
@@ -165,6 +166,11 @@ export function useStartupInitialization(): StartupState {
             run: refreshWorldStateAlerts,
           },
           {
+            stageKey: 'worldstate-market-news',
+            stageLabel: 'Market & News',
+            run: refreshWorldStateMarketNews,
+          },
+          {
             stageKey: 'worldstate-sortie',
             stageLabel: 'Sortie',
             run: refreshWorldStateSortie,
@@ -254,6 +260,10 @@ export function useStartupInitialization(): StartupState {
           worldStateFissures,
           worldStateFissuresError,
           worldStateFissuresLastUpdatedAt,
+          worldStateNews,
+          worldStateFlashSales,
+          worldStateMarketNewsError,
+          worldStateMarketNewsLastUpdatedAt,
           worldStateInvasions,
           worldStateInvasionsError,
           worldStateInvasionsLastUpdatedAt,
@@ -283,6 +293,10 @@ export function useStartupInitialization(): StartupState {
           (worldStateFissuresError &&
             worldStateFissures.length === 0 &&
             worldStateFissuresLastUpdatedAt === null) ||
+          (worldStateMarketNewsError &&
+            worldStateNews.length === 0 &&
+            worldStateFlashSales.length === 0 &&
+            worldStateMarketNewsLastUpdatedAt === null) ||
           (worldStateInvasionsError &&
             worldStateInvasions.length === 0 &&
             worldStateInvasionsLastUpdatedAt === null) ||
@@ -329,6 +343,7 @@ export function useStartupInitialization(): StartupState {
     refreshWorldStateArchonHunt,
     refreshWorldStateEvents,
     refreshWorldStateFissures,
+    refreshWorldStateMarketNews,
     refreshWorldStateInvasions,
     refreshWorldStateSortie,
     refreshWorldStateSyndicateMissions,
