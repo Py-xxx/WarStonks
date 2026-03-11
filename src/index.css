@@ -3580,6 +3580,14 @@ body {
   min-height: 500px;
 }
 
+.market-chart-stack {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  overflow: visible;
+  isolation: isolate;
+}
+
 .market-chart-card,
 .market-volume-card {
   border: 1px solid var(--border);
@@ -3595,10 +3603,12 @@ body {
 
 .market-chart-card {
   min-height: 336px;
+  flex: 0 0 auto;
 }
 
 .market-volume-card {
   min-height: 168px;
+  flex: 0 0 auto;
 }
 
 .market-chart-surface {
@@ -3796,9 +3806,11 @@ body {
 }
 
 .market-analytics-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+  position: relative;
+  z-index: 1;
 }
 
 .market-panel .card-body {
@@ -3959,10 +3971,6 @@ body {
 }
 
 @media (max-width: 1180px) {
-  .market-analytics-grid {
-    grid-template-columns: 1fr;
-  }
-
   .market-pressure-row {
     grid-template-columns: 1fr;
   }
