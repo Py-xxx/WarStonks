@@ -25,6 +25,8 @@ export type WorldStateEndpointKey =
   | 'void-trader'
   | 'market-news';
 
+export type SystemAlertKind = 'worldstate-offline';
+
 export interface WatchlistItem {
   id: string;
   itemId: number;
@@ -68,7 +70,8 @@ export interface WatchlistAlert {
 
 export interface SystemAlert {
   id: string;
-  sourceKey: WorldStateEndpointKey;
+  kind: SystemAlertKind;
+  sourceKeys: WorldStateEndpointKey[];
   title: string;
   message: string;
   createdAt: string;

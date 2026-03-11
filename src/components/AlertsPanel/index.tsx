@@ -2,7 +2,6 @@ import { copyWhisperMessage } from '../../lib/marketMessages';
 import { WORLDSTATE_ENDPOINT_LABELS } from '../../lib/worldState';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import type { WorldStateEndpointKey } from '../../types';
 
 interface AlertsPanelProps {
   compact?: boolean;
@@ -34,55 +33,9 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const dismissSystemAlert = useAppStore((state) => state.dismissSystemAlert);
   const markAlertBought = useAppStore((state) => state.markAlertBought);
   const markAlertNoResponse = useAppStore((state) => state.markAlertNoResponse);
-  const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
-  const refreshWorldStateAlerts = useAppStore((state) => state.refreshWorldStateAlerts);
-  const refreshWorldStateSortie = useAppStore((state) => state.refreshWorldStateSortie);
-  const refreshWorldStateArbitration = useAppStore((state) => state.refreshWorldStateArbitration);
-  const refreshWorldStateArchonHunt = useAppStore((state) => state.refreshWorldStateArchonHunt);
-  const refreshWorldStateFissures = useAppStore((state) => state.refreshWorldStateFissures);
-  const refreshWorldStateMarketNews = useAppStore((state) => state.refreshWorldStateMarketNews);
-  const refreshWorldStateInvasions = useAppStore((state) => state.refreshWorldStateInvasions);
-  const refreshWorldStateSyndicateMissions = useAppStore(
-    (state) => state.refreshWorldStateSyndicateMissions,
-  );
-  const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
+  const retryWorldStateSystemAlert = useAppStore((state) => state.retryWorldStateSystemAlert);
 
   const totalAlerts = alerts.length + systemAlerts.length;
-
-  function retrySystemAlert(sourceKey: WorldStateEndpointKey) {
-    switch (sourceKey) {
-      case 'events':
-        void refreshWorldStateEvents();
-        break;
-      case 'alerts':
-        void refreshWorldStateAlerts();
-        break;
-      case 'sortie':
-        void refreshWorldStateSortie();
-        break;
-      case 'arbitration':
-        void refreshWorldStateArbitration();
-        break;
-      case 'archon-hunt':
-        void refreshWorldStateArchonHunt();
-        break;
-      case 'fissures':
-        void refreshWorldStateFissures();
-        break;
-      case 'market-news':
-        void refreshWorldStateMarketNews();
-        break;
-      case 'invasions':
-        void refreshWorldStateInvasions();
-        break;
-      case 'syndicate-missions':
-        void refreshWorldStateSyndicateMissions();
-        break;
-      case 'void-trader':
-        void refreshWorldStateVoidTrader();
-        break;
-    }
-  }
 
   if (totalAlerts === 0) {
     return (
@@ -130,11 +83,16 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                     <div className="alert-topline">
                       <span className="alert-item-name">{alert.title}</span>
                       <span className="badge badge-amber">
-                        {WORLDSTATE_ENDPOINT_LABELS[alert.sourceKey]}
+                        {alert.sourceKeys.length} feeds
                       </span>
                     </div>
                     <div className="alert-meta">
                       <span>{alert.message}</span>
+                      <span>
+                        {alert.sourceKeys
+                          .map((sourceKey) => WORLDSTATE_ENDPOINT_LABELS[sourceKey])
+                          .join(', ')}
+                      </span>
                       <span>{formatAlertTimestamp(alert.createdAt)}</span>
                     </div>
                   </div>
@@ -144,7 +102,9 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                   <button
                     className="act-btn"
                     type="button"
-                    onClick={() => retrySystemAlert(alert.sourceKey)}
+                    onClick={() => {
+                      void retryWorldStateSystemAlert(alert.sourceKeys);
+                    }}
                   >
                     Retry
                   </button>

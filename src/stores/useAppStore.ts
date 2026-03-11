@@ -122,6 +122,8 @@ interface CachedWorldStateSnapshot<T> {
   nextRefreshAt: string | null;
 }
 
+const WORLDSTATE_SYSTEM_ALERT_ID = 'system:worldstate-offline';
+
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -158,22 +160,63 @@ function buildWatchlistAlert(
   };
 }
 
-function buildSystemAlert(sourceKey: WorldStateEndpointKey, message: string): SystemAlert {
+function buildWorldStateSystemAlert(sourceKeys: WorldStateEndpointKey[]): SystemAlert {
+  const uniqueSourceKeys = [...new Set(sourceKeys)];
+  const affectedLabels = uniqueSourceKeys
+    .map((sourceKey) => WORLDSTATE_ENDPOINT_LABELS[sourceKey])
+    .sort((left, right) => left.localeCompare(right));
+  const affectedSummary =
+    affectedLabels.length > 3
+      ? `${affectedLabels.slice(0, 3).join(', ')}, +${affectedLabels.length - 3} more`
+      : affectedLabels.join(', ');
+
   return {
-    id: `system:${sourceKey}`,
-    sourceKey,
-    title: `${WORLDSTATE_ENDPOINT_LABELS[sourceKey]} refresh failed`,
-    message,
+    id: WORLDSTATE_SYSTEM_ALERT_ID,
+    kind: 'worldstate-offline',
+    sourceKeys: uniqueSourceKeys,
+    title: 'WFStat API unavailable',
+    message:
+      uniqueSourceKeys.length === 1
+        ? `${affectedSummary} could not be refreshed. Cached data will stay visible until the API recovers.`
+        : `${affectedSummary} could not be refreshed. Cached data will stay visible until the API recovers.`,
     createdAt: new Date().toISOString(),
   };
 }
 
-function upsertSystemAlert(alerts: SystemAlert[], nextAlert: SystemAlert): SystemAlert[] {
-  return [nextAlert, ...alerts.filter((alert) => alert.sourceKey !== nextAlert.sourceKey)];
+function upsertWorldStateSystemAlert(
+  alerts: SystemAlert[],
+  sourceKey: WorldStateEndpointKey,
+  allowCreate: boolean,
+): SystemAlert[] {
+  const existingAlert = alerts.find((alert) => alert.id === WORLDSTATE_SYSTEM_ALERT_ID);
+  if (!existingAlert && !allowCreate) {
+    return alerts;
+  }
+
+  const nextAlert = buildWorldStateSystemAlert([
+    ...(existingAlert?.sourceKeys ?? []),
+    sourceKey,
+  ]);
+
+  return [nextAlert, ...alerts.filter((alert) => alert.id !== WORLDSTATE_SYSTEM_ALERT_ID)];
 }
 
-function clearSystemAlert(alerts: SystemAlert[], sourceKey: WorldStateEndpointKey): SystemAlert[] {
-  return alerts.filter((alert) => alert.sourceKey !== sourceKey);
+function clearWorldStateSystemAlertSource(
+  alerts: SystemAlert[],
+  sourceKey: WorldStateEndpointKey,
+): SystemAlert[] {
+  const existingAlert = alerts.find((alert) => alert.id === WORLDSTATE_SYSTEM_ALERT_ID);
+  if (!existingAlert) {
+    return alerts;
+  }
+
+  const remainingSourceKeys = existingAlert.sourceKeys.filter((key) => key !== sourceKey);
+  if (remainingSourceKeys.length === 0) {
+    return alerts.filter((alert) => alert.id !== WORLDSTATE_SYSTEM_ALERT_ID);
+  }
+
+  const nextAlert = buildWorldStateSystemAlert(remainingSourceKeys);
+  return [nextAlert, ...alerts.filter((alert) => alert.id !== WORLDSTATE_SYSTEM_ALERT_ID)];
 }
 
 async function persistWorldStateSnapshot<T>(
@@ -367,6 +410,7 @@ interface AppStore {
   watchlist: WatchlistItem[];
   alerts: WatchlistAlert[];
   systemAlerts: SystemAlert[];
+  worldStateSystemAlertDismissed: boolean;
   selectedWatchlistId: string | null;
   watchlistTargetInput: string;
   watchlistFormError: string | null;
@@ -380,6 +424,7 @@ interface AppStore {
   markAlertNoResponse: (id: string) => void;
   dismissSystemAlert: (id: string) => void;
   clearAllSystemAlerts: () => void;
+  retryWorldStateSystemAlert: (sourceKeys: WorldStateEndpointKey[]) => Promise<void>;
   refreshWatchlistItem: (id: string) => Promise<WatchlistRefreshResult>;
 
   quickView: QuickViewSelection;
@@ -571,9 +616,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateEventsError: null,
           worldStateEventsNextRefreshAt: snapshot.nextRefreshAt,
           worldStateEventsLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.events),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.events,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -595,14 +644,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateEventsLastUpdatedAt:
             state.worldStateEventsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.events,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Active Events from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Active Events are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.events,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -633,9 +678,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateAlertsError: null,
           worldStateAlertsNextRefreshAt: snapshot.nextRefreshAt,
           worldStateAlertsLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.alerts),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.alerts,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -657,14 +706,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateAlertsLastUpdatedAt:
             state.worldStateAlertsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.alerts,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Alerts from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Alerts are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.alerts,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -695,9 +740,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateSortieError: null,
           worldStateSortieNextRefreshAt: snapshot.nextRefreshAt,
           worldStateSortieLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.sortie),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.sortie,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -717,14 +766,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateSortieLastUpdatedAt:
             state.worldStateSortieLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.sortie,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Sorties from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Sorties are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.sortie,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -755,9 +800,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateArbitrationError: null,
           worldStateArbitrationNextRefreshAt: snapshot.nextRefreshAt,
           worldStateArbitrationLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.arbitration),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.arbitration,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -777,14 +826,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateArbitrationLastUpdatedAt:
             state.worldStateArbitrationLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.arbitration,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Arbitrations from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Arbitrations are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.arbitration,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -815,9 +860,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateArchonHuntError: null,
           worldStateArchonHuntNextRefreshAt: snapshot.nextRefreshAt,
           worldStateArchonHuntLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.archonHunt),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.archonHunt,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -837,14 +886,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateArchonHuntLastUpdatedAt:
             state.worldStateArchonHuntLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.archonHunt,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Archon Hunts from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Archon Hunts are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.archonHunt,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -875,9 +920,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateFissuresError: null,
           worldStateFissuresNextRefreshAt: snapshot.nextRefreshAt,
           worldStateFissuresLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.fissures),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.fissures,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -899,14 +948,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateFissuresLastUpdatedAt:
             state.worldStateFissuresLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.fissures,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Fissures from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Fissures are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.fissures,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -941,9 +986,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateMarketNewsError: null,
           worldStateMarketNewsNextRefreshAt: snapshot.nextRefreshAt,
           worldStateMarketNewsLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.marketNews),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.marketNews,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -968,14 +1017,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateMarketNewsLastUpdatedAt:
             state.worldStateMarketNewsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.marketNews,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Market & News from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Market & News are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.marketNews,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -1006,9 +1051,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateInvasionsError: null,
           worldStateInvasionsNextRefreshAt: snapshot.nextRefreshAt,
           worldStateInvasionsLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.invasions),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.invasions,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -1030,14 +1079,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateInvasionsLastUpdatedAt:
             state.worldStateInvasionsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.invasions,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Invasions from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Invasions are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.invasions,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -1068,9 +1113,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateSyndicateMissionsError: null,
           worldStateSyndicateMissionsNextRefreshAt: snapshot.nextRefreshAt,
           worldStateSyndicateMissionsLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(
+          systemAlerts: clearWorldStateSystemAlertSource(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.syndicateMissions,
           ),
@@ -1095,14 +1141,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateSyndicateMissionsLastUpdatedAt:
             state.worldStateSyndicateMissionsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.syndicateMissions,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Syndicate Missions from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Syndicate Missions are available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.syndicateMissions,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -1133,9 +1175,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
           worldStateVoidTraderError: null,
           worldStateVoidTraderNextRefreshAt: snapshot.nextRefreshAt,
           worldStateVoidTraderLastUpdatedAt: snapshot.fetchedAt,
+          worldStateSystemAlertDismissed: false,
         });
         set((state) => ({
-          systemAlerts: clearSystemAlert(state.systemAlerts, WORLDSTATE_ENDPOINT_KEYS.voidTrader),
+          systemAlerts: clearWorldStateSystemAlertSource(
+            state.systemAlerts,
+            WORLDSTATE_ENDPOINT_KEYS.voidTrader,
+          ),
         }));
       } catch (error) {
         const errorMessage = toErrorMessage(error);
@@ -1155,14 +1201,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ).toISOString(),
           worldStateVoidTraderLastUpdatedAt:
             state.worldStateVoidTraderLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
-          systemAlerts: upsertSystemAlert(
+          systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
-            buildSystemAlert(
-              WORLDSTATE_ENDPOINT_KEYS.voidTrader,
-              cachedSnapshot
-                ? `WFStat is offline. Showing cached Void Trader data from ${cachedSnapshot.fetchedAt}.`
-                : 'WFStat is offline and no cached Void Trader data is available yet.',
-            ),
+            WORLDSTATE_ENDPOINT_KEYS.voidTrader,
+            !state.worldStateSystemAlertDismissed,
           ),
         }));
       } finally {
@@ -1181,6 +1223,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   watchlist: [],
   alerts: [],
   systemAlerts: [],
+  worldStateSystemAlertDismissed: false,
   selectedWatchlistId: null,
   watchlistTargetInput: '',
   watchlistFormError: null,
@@ -1291,8 +1334,61 @@ export const useAppStore = create<AppStore>((set, get) => ({
   dismissSystemAlert: (id) =>
     set((state) => ({
       systemAlerts: state.systemAlerts.filter((alert) => alert.id !== id),
+      worldStateSystemAlertDismissed:
+        id === WORLDSTATE_SYSTEM_ALERT_ID ? true : state.worldStateSystemAlertDismissed,
     })),
-  clearAllSystemAlerts: () => set({ systemAlerts: [] }),
+  clearAllSystemAlerts: () =>
+    set((state) => ({
+      systemAlerts: [],
+      worldStateSystemAlertDismissed:
+        state.systemAlerts.some((alert) => alert.id === WORLDSTATE_SYSTEM_ALERT_ID)
+          ? true
+          : state.worldStateSystemAlertDismissed,
+    })),
+  retryWorldStateSystemAlert: async (sourceKeys) => {
+    const uniqueSourceKeys = [...new Set(sourceKeys)];
+
+    set({ worldStateSystemAlertDismissed: false });
+
+    await Promise.allSettled(
+      uniqueSourceKeys.map(async (sourceKey) => {
+        const latestState = get();
+
+        switch (sourceKey) {
+          case 'events':
+            await latestState.refreshWorldStateEvents();
+            break;
+          case 'alerts':
+            await latestState.refreshWorldStateAlerts();
+            break;
+          case 'sortie':
+            await latestState.refreshWorldStateSortie();
+            break;
+          case 'arbitration':
+            await latestState.refreshWorldStateArbitration();
+            break;
+          case 'archon-hunt':
+            await latestState.refreshWorldStateArchonHunt();
+            break;
+          case 'fissures':
+            await latestState.refreshWorldStateFissures();
+            break;
+          case 'market-news':
+            await latestState.refreshWorldStateMarketNews();
+            break;
+          case 'invasions':
+            await latestState.refreshWorldStateInvasions();
+            break;
+          case 'syndicate-missions':
+            await latestState.refreshWorldStateSyndicateMissions();
+            break;
+          case 'void-trader':
+            await latestState.refreshWorldStateVoidTrader();
+            break;
+        }
+      }),
+    );
+  },
   refreshWatchlistItem: async (id) => {
     const currentState = get();
     const item = currentState.watchlist.find((entry) => entry.id === id);
