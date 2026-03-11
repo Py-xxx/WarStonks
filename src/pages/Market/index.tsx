@@ -4,6 +4,7 @@ import {
   ensureMarketTracking,
   getItemAnalysis,
   getItemAnalytics,
+  openExternalUrl,
   stopMarketTracking,
 } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -139,6 +140,18 @@ function renderStatHighlightLine(line: string): ReactNode {
       {suffix ? <span className="market-detail-highlight-copy">{suffix}</span> : null}
     </>
   );
+}
+
+async function handleOpenExternalLink(url: string | null | undefined) {
+  if (!url) {
+    return;
+  }
+
+  try {
+    await openExternalUrl(url);
+  } catch (error) {
+    console.error('Failed to open external link', error);
+  }
 }
 
 function buildSeriesPath(
@@ -1644,14 +1657,15 @@ function AnalysisTab() {
                   <span className="market-item-detail-name">{analysis.itemDetails.name}</span>
                   <span className="market-item-detail-slug">{analysis.itemDetails.slug}</span>
                   {analysis.itemDetails.wikiLink ? (
-                    <a
+                    <button
+                      type="button"
                       className="market-item-detail-link"
-                      href={analysis.itemDetails.wikiLink}
-                      target="_blank"
-                      rel="noreferrer"
+                      onClick={() => {
+                        void handleOpenExternalLink(analysis.itemDetails.wikiLink);
+                      }}
                     >
                       Open Wiki
-                    </a>
+                    </button>
                   ) : null}
                 </div>
               </div>

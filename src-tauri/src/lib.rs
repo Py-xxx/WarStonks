@@ -10,6 +10,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_shell_info,
             commands::get_app_version,
+            commands::open_external_url,
             commands::initialize_app_catalog,
             commands::get_wfm_autocomplete_items,
             commands::get_relic_tier_icons,

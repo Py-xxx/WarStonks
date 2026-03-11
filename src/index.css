@@ -3968,9 +3968,15 @@ body {
 }
 
 .market-item-detail-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #79b8ff;
   font-size: 13px;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .market-detail-grid {
