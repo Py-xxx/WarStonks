@@ -113,6 +113,31 @@ function formatChartTimestamp(timestamp: number, domain: ChartDomainKey): string
   return new Intl.DateTimeFormat(undefined, formatOptions).format(new Date(timestamp));
 }
 
+function normalizeStatHighlightText(value: string): string[] {
+  return value
+    .replace(/\\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function renderStatHighlightLine(line: string): ReactNode {
+  const firstDigitIndex = line.search(/\d/);
+  if (firstDigitIndex === -1) {
+    return <span className="market-detail-highlight-copy">{line}</span>;
+  }
+
+  const label = line.slice(0, firstDigitIndex);
+  const changedText = line.slice(firstDigitIndex);
+
+  return (
+    <>
+      {label ? <span className="market-detail-highlight-copy">{label}</span> : null}
+      <span className="market-detail-highlight-change">{changedText}</span>
+    </>
+  );
+}
+
 function buildSeriesPath(
   points: MockBucketPoint[],
   valueKey: keyof Pick<MockBucketPoint, 'lowest' | 'median' | 'movingAverage' | 'average' | 'entryZone' | 'exitZone'>,
@@ -1640,9 +1665,13 @@ function AnalysisTab() {
                   </span>
                   <div className="market-detail-highlight-list">
                     {analysis.itemDetails.statHighlights.map((line) => (
-                      <span key={line} className="market-detail-highlight">
-                        {line}
-                      </span>
+                      <div key={line} className="market-detail-highlight">
+                        {normalizeStatHighlightText(line).map((segment, segmentIndex) => (
+                          <div key={`${line}-${segmentIndex}`} className="market-detail-highlight-line">
+                            {renderStatHighlightLine(segment)}
+                          </div>
+                        ))}
+                      </div>
                     ))}
                   </div>
                 </div>

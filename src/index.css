@@ -4000,6 +4000,25 @@ body {
   line-height: 1.5;
 }
 
+.market-detail-highlight-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.market-detail-highlight-line + .market-detail-highlight-line {
+  margin-top: 6px;
+}
+
+.market-detail-highlight-copy {
+  color: var(--text-secondary);
+}
+
+.market-detail-highlight-change {
+  color: #d9ecff;
+  font-weight: 700;
+}
+
 @media (max-width: 1200px) {
   .market-analysis-shell,
   .market-analysis-summary-grid,
