@@ -83,6 +83,13 @@ pub struct VoidTraderResponse {
     pub expired: Option<bool>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketNewsResponse {
+    pub news: Vec<serde_json::Value>,
+    pub flash_sales: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WfmTopOrdersApiResponse {
@@ -271,6 +278,29 @@ pub fn get_worldstate_archon_hunt() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub fn get_worldstate_fissures() -> Result<Vec<serde_json::Value>, String> {
     fetch_wfstat_array("/pc/fissures", "fissures")
+}
+
+#[tauri::command]
+pub fn get_worldstate_market_news() -> Result<MarketNewsResponse, String> {
+    let payload = fetch_wfstat_object("/pc", "market & news")?;
+    let record = payload
+        .as_object()
+        .ok_or_else(|| "WFStat market & news response was not an object.".to_string())?;
+
+    let news = record
+        .get("news")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .ok_or_else(|| "WFStat market & news payload did not include a news array.".to_string())?;
+    let flash_sales = record
+        .get("flashSales")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .ok_or_else(|| {
+            "WFStat market & news payload did not include a flashSales array.".to_string()
+        })?;
+
+    Ok(MarketNewsResponse { news, flash_sales })
 }
 
 fn normalize_catalog_lookup_value(value: &str) -> Option<String> {

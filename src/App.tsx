@@ -17,6 +17,7 @@ import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
 import { useWorldStateEvents } from './hooks/useWorldStateEvents';
 import { useWorldStateFissures } from './hooks/useWorldStateFissures';
+import { useWorldStateMarketNews } from './hooks/useWorldStateMarketNews';
 import { useWorldStateVoidTrader } from './hooks/useWorldStateVoidTrader';
 import { useWorldStateActivities } from './hooks/useWorldStateActivities';
 
@@ -41,6 +42,7 @@ function AppShell() {
   useIntegrationSettings();
   useWorldStateEvents();
   useWorldStateFissures();
+  useWorldStateMarketNews();
   useWorldStateVoidTrader();
   useWorldStateActivities();
 

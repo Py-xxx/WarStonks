@@ -40,6 +40,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const refreshWorldStateArbitration = useAppStore((state) => state.refreshWorldStateArbitration);
   const refreshWorldStateArchonHunt = useAppStore((state) => state.refreshWorldStateArchonHunt);
   const refreshWorldStateFissures = useAppStore((state) => state.refreshWorldStateFissures);
+  const refreshWorldStateMarketNews = useAppStore((state) => state.refreshWorldStateMarketNews);
   const refreshWorldStateInvasions = useAppStore((state) => state.refreshWorldStateInvasions);
   const refreshWorldStateSyndicateMissions = useAppStore(
     (state) => state.refreshWorldStateSyndicateMissions,
@@ -67,6 +68,9 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         break;
       case 'fissures':
         void refreshWorldStateFissures();
+        break;
+      case 'market-news':
+        void refreshWorldStateMarketNews();
         break;
       case 'invasions':
         void refreshWorldStateInvasions();

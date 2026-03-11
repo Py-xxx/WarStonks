@@ -9,9 +9,11 @@ import type {
   WfstatEventInterimStep,
   WfstatEventReward,
   WfstatEventRewardCountedItem,
+  WfstatFlashSale,
   WfstatFissure,
   WfstatInvasion,
   WfstatInvasionSide,
+  WfstatNewsItem,
   WfstatSortie,
   WfstatSortieVariant,
   WfstatSyndicateJob,
@@ -27,6 +29,7 @@ import {
   getWorldStateEvents,
   getWorldStateFissures,
   getWorldStateInvasions,
+  getWorldStateMarketNews,
   getWorldStateSortie,
   getWorldStateSyndicateMissions,
   getWorldStateVoidTrader,
@@ -34,6 +37,7 @@ import {
 } from './tauriClient';
 
 const WFSTAT_EVENTS_URL = 'https://api.warframestat.us/pc/events?language=en';
+const WFSTAT_MARKET_NEWS_URL = 'https://api.warframestat.us/pc?language=en';
 const WFSTAT_ALERTS_URL = 'https://api.warframestat.us/pc/alerts?language=en';
 const WFSTAT_SORTIE_URL = 'https://api.warframestat.us/pc/sortie?language=en';
 const WFSTAT_ARBITRATION_URL = 'https://api.warframestat.us/pc/arbitration?language=en';
@@ -53,6 +57,7 @@ export const WORLDSTATE_ENDPOINT_KEYS = {
   arbitration: 'arbitration',
   archonHunt: 'archon-hunt',
   fissures: 'fissures',
+  marketNews: 'market-news',
   invasions: 'invasions',
   syndicateMissions: 'syndicate-missions',
   voidTrader: 'void-trader',
@@ -64,6 +69,7 @@ export const WORLDSTATE_ENDPOINT_LABELS: Record<WorldStateEndpointKey, string> =
   arbitration: 'Arbitrations',
   'archon-hunt': 'Archon Hunts',
   fissures: 'Fissures',
+  'market-news': 'Market & News',
   invasions: 'Invasions',
   'syndicate-missions': 'Syndicate Missions',
   'void-trader': 'Void Trader',
@@ -452,6 +458,44 @@ function normalizeFissure(entry: unknown): WfstatFissure {
   };
 }
 
+function normalizeNewsItem(entry: unknown): WfstatNewsItem {
+  const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
+
+  return {
+    id: parseOptionalString(record.id) ?? crypto.randomUUID(),
+    message: parseOptionalString(record.message) ?? 'Warframe news update',
+    link: parseOptionalString(record.link),
+    imageLink: parseOptionalString(record.imageLink),
+    priority: Boolean(record.priority),
+    date: parseOptionalString(record.date),
+    activation: parseOptionalString(record.activation),
+    expiry,
+    update: Boolean(record.update),
+    primeAccess: Boolean(record.primeAccess),
+    stream: Boolean(record.stream),
+    mobileOnly: Boolean(record.mobileOnly),
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
+  };
+}
+
+function normalizeFlashSale(entry: unknown): WfstatFlashSale {
+  const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+  const expiry = parseOptionalString(record.expiry);
+
+  return {
+    id: parseOptionalString(record.id) ?? crypto.randomUUID(),
+    item: parseOptionalString(record.item) ?? 'Unknown item',
+    activation: parseOptionalString(record.activation),
+    expiry,
+    discount: parseOptionalNumber(record.discount),
+    premiumOverride: parseOptionalNumber(record.premiumOverride),
+    regularOverride: parseOptionalNumber(record.regularOverride),
+    isShownInMarket: Boolean(record.isShownInMarket),
+    expired: hasExpired(expiry, typeof record.expired === 'boolean' ? record.expired : undefined),
+  };
+}
+
 function normalizeInvasion(entry: unknown): WfstatInvasion {
   const record = entry as Record<string, unknown>;
 
@@ -583,6 +627,56 @@ export function selectWorldStateFissuresRefreshAt(
   return selectArrayExpiryRefreshAt(fissures, nowMs);
 }
 
+function selectTimedWindowRefreshAt(
+  entries: Array<{ activation: string | null; expiry: string | null; expired?: boolean }>,
+  nowMs: number,
+  fallbackMs: number = NO_EXPIRY_WORLDSTATE_REFRESH_MS,
+): string {
+  if (entries.some((entry) => entry.expired)) {
+    return new Date(nowMs + WORLDSTATE_RETRY_DELAY_MS).toISOString();
+  }
+
+  const validTimes = entries
+    .flatMap((entry) => [entry.activation, entry.expiry])
+    .filter((value): value is string => isValidFutureExpiry(value, nowMs))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+
+  if (validTimes.length > 0) {
+    return validTimes[0];
+  }
+
+  return new Date(nowMs + fallbackMs).toISOString();
+}
+
+export function selectWorldStateNewsRefreshAt(
+  news: WfstatNewsItem[],
+  nowMs: number = Date.now(),
+): string {
+  return selectTimedWindowRefreshAt(news, nowMs);
+}
+
+export function selectWorldStateFlashSalesRefreshAt(
+  flashSales: WfstatFlashSale[],
+  nowMs: number = Date.now(),
+): string {
+  return selectTimedWindowRefreshAt(flashSales, nowMs);
+}
+
+export function selectWorldStateMarketNewsRefreshAt(
+  news: WfstatNewsItem[],
+  flashSales: WfstatFlashSale[],
+  nowMs: number = Date.now(),
+): string {
+  const candidates = [
+    selectWorldStateNewsRefreshAt(news, nowMs),
+    selectWorldStateFlashSalesRefreshAt(flashSales, nowMs),
+  ]
+    .filter((value): value is string => value.length > 0)
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+
+  return candidates[0] ?? new Date(nowMs + NO_EXPIRY_WORLDSTATE_REFRESH_MS).toISOString();
+}
+
 export function selectWorldStateSyndicateMissionsRefreshAt(
   missions: WfstatSyndicateMission[],
   nowMs: number = Date.now(),
@@ -665,6 +759,20 @@ export function restoreCachedWorldStateFissures(payload: unknown): WfstatFissure
   return Array.isArray(payload) ? payload.map((entry) => normalizeFissure(entry)) : [];
 }
 
+export function restoreCachedWorldStateMarketNews(payload: unknown): {
+  news: WfstatNewsItem[];
+  flashSales: WfstatFlashSale[];
+} {
+  const record = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+
+  return {
+    news: Array.isArray(record.news) ? record.news.map((entry) => normalizeNewsItem(entry)) : [],
+    flashSales: Array.isArray(record.flashSales)
+      ? record.flashSales.map((entry) => normalizeFlashSale(entry))
+      : [],
+  };
+}
+
 export function restoreCachedWorldStateInvasions(payload: unknown): WfstatInvasion[] {
   return Array.isArray(payload) ? payload.map((entry) => normalizeInvasion(entry)) : [];
 }
@@ -725,6 +833,43 @@ export async function fetchWorldStateEventsSnapshot(): Promise<{
   return {
     events,
     nextRefreshAt: selectWorldStateEventsRefreshAt(events),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchWorldStateMarketNewsSnapshot(): Promise<{
+  news: WfstatNewsItem[];
+  flashSales: WfstatFlashSale[];
+  nextRefreshAt: string;
+  fetchedAt: string;
+}> {
+  const payload = isTauriRuntime()
+    ? await getWorldStateMarketNews()
+    : await fetchJsonObject(WFSTAT_MARKET_NEWS_URL, 'market & news');
+
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('WFStat market & news response was not an object.');
+  }
+
+  const record = payload as Record<string, unknown>;
+  const newsPayload = record.news;
+  const flashSalesPayload = record.flashSales;
+
+  if (!Array.isArray(newsPayload)) {
+    throw new Error('WFStat market & news payload did not include a news array.');
+  }
+
+  if (!Array.isArray(flashSalesPayload)) {
+    throw new Error('WFStat market & news payload did not include a flashSales array.');
+  }
+
+  const news = newsPayload.map((entry) => normalizeNewsItem(entry));
+  const flashSales = flashSalesPayload.map((entry) => normalizeFlashSale(entry));
+
+  return {
+    news,
+    flashSales,
+    nextRefreshAt: selectWorldStateMarketNewsRefreshAt(news, flashSales),
     fetchedAt: new Date().toISOString(),
   };
 }

@@ -3068,13 +3068,184 @@ body {
 }
 .chart-body { padding: 12px 14px; }
 
+.market-news-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.market-news-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.market-news-toolbar-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.market-news-toolbar-subtitle {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.market-news-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.market-news-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 12px;
+}
+
+.market-news-card .card-body {
+  display: grid;
+  gap: 12px;
+}
+
+.market-news-list {
+  display: grid;
+  gap: 10px;
+}
+
+.market-news-item {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
+}
+
+.market-news-thumb {
+  width: 96px;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.market-news-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.market-news-copy {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.market-news-item-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.market-news-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.market-news-item-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.market-news-item-meta a {
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+
+.flash-sales-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.flash-sale-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
+}
+
+.flash-sale-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.flash-sale-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.flash-sale-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flash-sale-stat {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+}
+
+.flash-sale-stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.flash-sale-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 1024px) {
   .priority-row,
   .content-row,
   .metrics-row,
   .chart-grid,
   .plat-grid,
-  .alloc-grid {
+  .alloc-grid,
+  .market-news-layout {
     grid-template-columns: 1fr;
   }
 
@@ -3120,6 +3291,28 @@ body {
 
   .qv-order-list {
     grid-template-columns: 1fr;
+  }
+
+  .flash-sales-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .market-news-toolbar,
+  .market-news-item-topline,
+  .flash-sale-topline {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .market-news-item {
+    grid-template-columns: 1fr;
+  }
+
+  .market-news-thumb {
+    width: 100%;
+    height: 156px;
   }
 }
 
