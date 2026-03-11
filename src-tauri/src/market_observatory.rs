@@ -731,7 +731,7 @@ fn normalize_statistics_rows(
         .collect()
 }
 
-fn insert_statistics_rows(
+fn insert_statistics_rows_for_domain(
     connection: &Connection,
     item_id: i64,
     slug: &str,
@@ -747,6 +747,12 @@ fn insert_statistics_rows(
            AND domain_key = ?3",
         params![item_id, variant_key, domain_key],
     )?;
+
+    let mut deduped_rows = BTreeMap::<(String, String), InternalStatsRow>::new();
+    for row in rows {
+        let bucket_at = format_timestamp(row.bucket_at)?;
+        deduped_rows.insert((bucket_at, row.source_kind.clone()), row.clone());
+    }
 
     let mut statement = connection.prepare(
         "INSERT INTO statistics_cache (
@@ -769,16 +775,31 @@ fn insert_statistics_rows(
            donch_top,
            donch_bot,
            fetched_at
-         ) VALUES (?1, ?2, ?3, ?4, 'native', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+         ) VALUES (?1, ?2, ?3, ?4, 'native', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+         ON CONFLICT(item_id, variant_key, domain_key, bucket_origin, bucket_at, source_kind)
+         DO UPDATE SET
+           slug = excluded.slug,
+           volume = excluded.volume,
+           min_price = excluded.min_price,
+           max_price = excluded.max_price,
+           open_price = excluded.open_price,
+           closed_price = excluded.closed_price,
+           avg_price = excluded.avg_price,
+           wa_price = excluded.wa_price,
+           median = excluded.median,
+           moving_avg = excluded.moving_avg,
+           donch_top = excluded.donch_top,
+           donch_bot = excluded.donch_bot,
+           fetched_at = excluded.fetched_at",
     )?;
 
-    for row in rows {
+    for ((bucket_at, _), row) in deduped_rows {
         statement.execute(params![
             item_id,
             slug,
             variant_key,
             domain_key,
-            format_timestamp(row.bucket_at)?,
+            bucket_at,
             row.source_kind,
             row.volume,
             row.min_price,
@@ -821,18 +842,15 @@ fn fetch_and_cache_statistics(
 
     let fetched_at = format_timestamp(now_utc())?;
 
+    let mut rows_by_domain = HashMap::<String, Vec<InternalStatsRow>>::new();
+
     for (domain_key, rows) in payload.payload.statistics_closed {
         let filtered_rows = filter_variant_statistics_rows(rows, variant_key);
         let normalized_rows = normalize_statistics_rows(filtered_rows, "closed");
-        insert_statistics_rows(
-            connection,
-            item_id,
-            slug,
-            variant_key,
-            &domain_key,
-            &normalized_rows,
-            &fetched_at,
-        )?;
+        rows_by_domain
+            .entry(domain_key)
+            .or_default()
+            .extend(normalized_rows);
     }
 
     for (domain_key, rows) in payload.payload.statistics_live {
@@ -851,16 +869,23 @@ fn fetch_and_cache_statistics(
 
         for (source_kind, source_rows) in grouped_rows {
             let normalized_rows = normalize_statistics_rows(source_rows, &source_kind);
-            insert_statistics_rows(
-                connection,
-                item_id,
-                slug,
-                variant_key,
-                &domain_key,
-                &normalized_rows,
-                &fetched_at,
-            )?;
+            rows_by_domain
+                .entry(domain_key.clone())
+                .or_default()
+                .extend(normalized_rows);
         }
+    }
+
+    for (domain_key, rows) in rows_by_domain {
+        insert_statistics_rows_for_domain(
+            connection,
+            item_id,
+            slug,
+            variant_key,
+            &domain_key,
+            &rows,
+            &fetched_at,
+        )?;
     }
 
     Ok(())
@@ -2383,10 +2408,12 @@ mod tests {
     use super::{
         build_action_card, build_entry_exit_zone_overview, build_market_snapshot,
         build_orderbook_pressure, build_trend_quality_breakdown, compute_pressure_ratio,
+        initialize_market_observatory_schema, insert_statistics_rows_for_domain,
         normalize_variant_key, pressure_label, resample_rows, validate_domain_and_bucket,
         AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow,
         MarketSnapshot, WfmDetailedOrder,
     };
+    use rusqlite::Connection;
     fn sample_order(
         order_type: &str,
         platinum: f64,
@@ -2566,5 +2593,72 @@ mod tests {
         assert_eq!(pressure.pressure_label, "Entry Pressure");
         assert!(!action.suggested_action.is_empty());
         assert!(!zone.zone_quality.is_empty());
+    }
+
+    #[test]
+    fn dedupes_duplicate_statistics_rows_within_domain_insert() {
+        let connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+        let bucket_at = super::floor_timestamp(
+            super::now_utc() - time::Duration::hours(1),
+            AnalyticsBucketSizeKey::OneHour,
+        );
+        let duplicate_rows = vec![
+            InternalStatsRow {
+                bucket_at,
+                source_kind: "closed".to_string(),
+                volume: 5.0,
+                min_price: Some(10.0),
+                max_price: Some(14.0),
+                open_price: Some(10.0),
+                closed_price: Some(12.0),
+                avg_price: Some(11.0),
+                wa_price: Some(11.1),
+                median: Some(11.5),
+                moving_avg: Some(11.2),
+                donch_top: Some(14.0),
+                donch_bot: Some(9.0),
+            },
+            InternalStatsRow {
+                bucket_at,
+                source_kind: "closed".to_string(),
+                volume: 7.0,
+                min_price: Some(11.0),
+                max_price: Some(15.0),
+                open_price: Some(11.0),
+                closed_price: Some(13.0),
+                avg_price: Some(12.0),
+                wa_price: Some(12.1),
+                median: Some(12.5),
+                moving_avg: Some(12.2),
+                donch_top: Some(15.0),
+                donch_bot: Some(9.0),
+            },
+        ];
+
+        insert_statistics_rows_for_domain(
+            &connection,
+            1,
+            "test_item",
+            "base",
+            "48hours",
+            &duplicate_rows,
+            "2026-03-11T00:00:00Z",
+        )
+        .expect("insert deduped rows");
+
+        let row_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM statistics_cache
+                 WHERE item_id = 1
+                   AND variant_key = 'base'
+                   AND domain_key = '48hours'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count row");
+
+        assert_eq!(row_count, 1);
     }
 }
