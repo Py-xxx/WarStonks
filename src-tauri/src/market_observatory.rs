@@ -1923,42 +1923,75 @@ fn fair_center_anchor(row: &InternalStatsRow) -> Option<f64> {
     }
 }
 
-fn compute_zone_targets(
+struct ZoneBands {
+    entry_low: f64,
+    entry_high: f64,
+    exit_low: f64,
+    exit_high: f64,
+    entry_target: f64,
+    exit_target: f64,
+}
+
+fn round_platinum(value: f64) -> f64 {
+    value.round()
+}
+
+fn compute_zone_bands(
     lower_anchor: Option<f64>,
     upper_anchor: Option<f64>,
     fair_center: Option<f64>,
-) -> (Option<f64>, Option<f64>) {
-    let fair_center = match fair_center {
-        Some(value) => value,
-        None => return (None, None),
+) -> Option<ZoneBands> {
+    let fair_center = fair_center.or_else(|| match (lower_anchor, upper_anchor) {
+        (Some(lower), Some(upper)) => Some((lower + upper) * 0.5),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        _ => None,
+    })?;
+
+    let mut lower_bound = lower_anchor.unwrap_or(fair_center).min(fair_center).floor();
+    let mut upper_bound = upper_anchor.unwrap_or(fair_center).max(fair_center).ceil();
+    if upper_bound <= lower_bound {
+        upper_bound = lower_bound + 4.0;
+    }
+
+    let range = (upper_bound - lower_bound).max(4.0);
+    let zone_width = (range * 0.2).round().clamp(3.0, 6.0);
+    let midpoint = (lower_bound + upper_bound) * 0.5;
+    let upward_shift = if fair_center > midpoint + 0.5 {
+        ((fair_center - midpoint) * 0.8).round().clamp(0.0, zone_width)
+    } else {
+        0.0
     };
-
-    let lower_anchor = lower_anchor.unwrap_or(fair_center);
-    let upper_anchor = upper_anchor.unwrap_or(fair_center);
-    let lower_bound = lower_anchor.min(fair_center);
-    let upper_bound = upper_anchor.max(fair_center);
-    let range = (upper_bound - lower_bound).abs().max(1.0);
-    let min_zone_width = (fair_center.abs() * 0.03).max(1.0);
-    let zone_offset = (range * 0.22).max(min_zone_width);
-    let lower_guard = lower_bound + range * 0.12;
-    let upper_guard = upper_bound - range * 0.12;
-
-    let mut entry_target = (fair_center - zone_offset).max(lower_guard.min(fair_center - 0.25));
-    let mut exit_target = (fair_center + zone_offset).min(upper_guard.max(fair_center + 0.25));
-
-    if exit_target <= entry_target + 0.5 {
-        entry_target = (fair_center - min_zone_width * 0.5).max(lower_bound);
-        exit_target = (fair_center + min_zone_width * 0.5).min(upper_bound.max(fair_center + 0.5));
-    }
-    if exit_target <= entry_target + 0.5 {
-        exit_target = entry_target + 0.5;
+    let max_entry_low = (upper_bound - zone_width - 2.0).max(lower_bound);
+    let mut entry_low = (lower_bound + upward_shift).clamp(lower_bound, max_entry_low);
+    let mut entry_high = (entry_low + zone_width).min(upper_bound - 2.0);
+    if entry_high <= entry_low {
+        entry_high = entry_low + 1.0;
     }
 
-    (Some(entry_target), Some(exit_target))
-}
+    let mut exit_high = upper_bound;
+    let mut exit_low = (upper_bound - zone_width).max(entry_high + 2.0);
+    if exit_low >= exit_high {
+        exit_low = (exit_high - 1.0).max(entry_high + 1.0);
+    }
+    if exit_low >= exit_high {
+        exit_high = exit_low + 1.0;
+    }
 
-fn zone_band_width(target: Option<f64>) -> Option<f64> {
-    target.map(|value| (value.abs() * 0.03).max(1.0))
+    lower_bound = round_platinum(lower_bound);
+    upper_bound = round_platinum(upper_bound);
+    entry_low = round_platinum(entry_low.clamp(lower_bound, upper_bound));
+    entry_high = round_platinum(entry_high.clamp(entry_low + 1.0, upper_bound));
+    exit_low = round_platinum(exit_low.max(entry_high + 1.0).clamp(lower_bound, upper_bound));
+    exit_high = round_platinum(exit_high.max(exit_low + 1.0).max(upper_bound));
+
+    Some(ZoneBands {
+        entry_low,
+        entry_high,
+        exit_low,
+        exit_high,
+        entry_target: round_platinum((entry_low + entry_high) * 0.5),
+        exit_target: round_platinum((exit_low + exit_high) * 0.5),
+    })
 }
 
 fn last_defined_value(
@@ -2051,7 +2084,7 @@ fn resample_rows(
                     values.into_iter().reduce(f64::max)
                 });
             let fair_center = fair_inputs.as_ref().and_then(fair_center_anchor);
-            let (entry_zone, exit_zone) = compute_zone_targets(fair_low, fair_high, fair_center);
+            let zone_bands = compute_zone_bands(fair_low, fair_high, fair_center);
 
             AnalyticsChartPoint {
                 bucket_at: format_timestamp(bucket_at).unwrap_or_default(),
@@ -2101,8 +2134,8 @@ fn resample_rows(
                         .filter_map(row_high_anchor)
                         .reduce(f64::max)
                 }),
-                entry_zone,
-                exit_zone,
+                entry_zone: zone_bands.as_ref().map(|zone| zone.entry_target),
+                exit_zone: zone_bands.as_ref().map(|zone| zone.exit_target),
                 volume,
             }
         })
@@ -2227,31 +2260,33 @@ fn build_entry_exit_zone_overview(
 ) -> EntryExitZoneOverview {
     let fair_value_low = latest_point.and_then(|point| point.fair_value_low);
     let fair_value_high = latest_point.and_then(|point| point.fair_value_high);
-    let entry_target = latest_point.and_then(|point| point.entry_zone);
-    let exit_target = latest_point.and_then(|point| point.exit_zone);
-    let entry_zone_width = zone_band_width(entry_target).unwrap_or(1.0);
-    let exit_zone_width = zone_band_width(exit_target).unwrap_or(1.0);
-    let entry_zone_low = entry_target.map(|target| target - entry_zone_width);
-    let entry_zone_high = entry_target.map(|target| target + entry_zone_width);
-    let mut exit_zone_low = exit_target.map(|target| target - exit_zone_width);
-    let mut exit_zone_high = exit_target.map(|target| target + exit_zone_width);
-
-    if let (Some(entry_high), Some(exit_low)) = (entry_zone_high, exit_zone_low) {
-        if exit_low <= entry_high + 0.5 {
-            let shift = (entry_high + 0.5) - exit_low;
-            exit_zone_low = Some(exit_low + shift);
-            exit_zone_high = exit_zone_high.map(|value| value + shift);
-        }
-    }
+    let fair_center = latest_point.and_then(|point| {
+        point
+            .weighted_avg
+            .or(point.median_sell)
+            .or(point.average_price)
+            .or(match (point.fair_value_low, point.fair_value_high) {
+                (Some(low), Some(high)) => Some((low + high) * 0.5),
+                _ => None,
+            })
+    });
+    let zone_bands = compute_zone_bands(fair_value_low, fair_value_high, fair_center);
+    let entry_zone_low = zone_bands.as_ref().map(|zone| zone.entry_low);
+    let entry_zone_high = zone_bands.as_ref().map(|zone| zone.entry_high);
+    let exit_zone_low = zone_bands.as_ref().map(|zone| zone.exit_low);
+    let exit_zone_high = zone_bands.as_ref().map(|zone| zone.exit_high);
 
     let current_lowest_price = snapshot.and_then(|entry| entry.lowest_sell);
     let current_median_lowest_price = snapshot.and_then(|entry| entry.median_sell);
-    let zone_quality = match (current_lowest_price, entry_target, exit_target) {
-        (Some(current), Some(entry), Some(exit)) if current <= entry => "Excellent".to_string(),
-        (Some(current), Some(entry), Some(exit)) if current <= (entry + exit) / 2.0 => {
+    let zone_quality = match (current_lowest_price, entry_zone_low, entry_zone_high, exit_zone_low) {
+        (Some(current), Some(low), Some(high), _) if current >= low && current <= high => {
+            "Excellent".to_string()
+        }
+        (Some(current), Some(_low), Some(high), _) if current <= high + 2.0 => {
             "Good".to_string()
         }
-        (Some(_), Some(_), Some(_)) => "Watch".to_string(),
+        (Some(current), _, _, Some(exit_low)) if current >= exit_low => "Extended".to_string(),
+        (Some(_), Some(_), Some(_), _) => "Watch".to_string(),
         _ => "Thin data".to_string(),
     };
     let entry_rationale = match (current_lowest_price, entry_zone_low, entry_zone_high) {
@@ -2267,7 +2302,7 @@ fn build_entry_exit_zone_overview(
         (Some(current), Some(low), Some(high)) if current >= low && current <= high => {
             "Recent median market price is inside the calculated exit band, which supports taking profit into strength.".to_string()
         }
-        (Some(current), Some(low), Some(_high)) if current >= low * 0.96 => {
+        (Some(current), Some(low), Some(_high)) if current >= low - 2.0 => {
             "Recent median market price is approaching the calculated exit band, which supports preparing exits rather than chasing more upside.".to_string()
         }
         _ => "Recent median market price is still below the calculated exit band, so there is more room before a preferred take-profit area.".to_string(),
@@ -2780,7 +2815,7 @@ mod tests {
     use super::{
         build_action_card, build_entry_exit_zone_overview, build_market_snapshot,
         build_orderbook_pressure, build_trend_quality_breakdown, compute_pressure_ratio,
-        compute_zone_targets,
+        compute_zone_bands,
         initialize_market_observatory_schema, insert_statistics_rows_for_domain,
         normalize_variant_key, pressure_label, resample_rows, AnalyticsBucketSizeKey,
         AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow, MarketSnapshot,
@@ -2967,8 +3002,8 @@ mod tests {
                 highest_buy: Some(58.0 + index as f64),
                 fair_value_low: Some(59.0),
                 fair_value_high: Some(66.0),
-                entry_zone: Some(60.5),
-                exit_zone: Some(64.5),
+                entry_zone: Some(61.0),
+                exit_zone: Some(65.0),
                 volume: 10.0,
             })
             .collect::<Vec<_>>();
@@ -3018,8 +3053,8 @@ mod tests {
                 highest_buy: Some(10.0),
                 fair_value_low: Some(11.2),
                 fair_value_high: Some(12.5),
-                entry_zone: Some(10.9),
-                exit_zone: Some(12.2),
+                entry_zone: Some(11.0),
+                exit_zone: Some(12.0),
                 volume: 8.0,
             },
             AnalyticsChartPoint {
@@ -3036,8 +3071,8 @@ mod tests {
                 highest_buy: Some(9.0),
                 fair_value_low: Some(11.1),
                 fair_value_high: Some(12.6),
-                entry_zone: Some(10.8),
-                exit_zone: Some(12.3),
+                entry_zone: Some(11.0),
+                exit_zone: Some(12.0),
                 volume: 10.0,
             },
         ];
@@ -3053,17 +3088,15 @@ mod tests {
     }
 
     #[test]
-    fn computes_zone_targets_inside_the_historical_range() {
-        let (entry, exit) = compute_zone_targets(Some(60.0), Some(80.0), Some(70.0));
+    fn computes_integer_zone_bands_inside_the_historical_range() {
+        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(63.0)).expect("zone bands");
 
-        let entry = entry.expect("entry target");
-        let exit = exit.expect("exit target");
-
-        assert!(entry > 60.0);
-        assert!(entry < 70.0);
-        assert!(exit > 70.0);
-        assert!(exit < 80.0);
-        assert!(exit > entry);
+        assert_eq!(zone.entry_low, 55.0);
+        assert_eq!(zone.entry_high, 58.0);
+        assert_eq!(zone.exit_low, 67.0);
+        assert_eq!(zone.exit_high, 70.0);
+        assert_eq!(zone.entry_target, 57.0);
+        assert_eq!(zone.exit_target, 69.0);
     }
 
     #[test]

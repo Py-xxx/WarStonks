@@ -162,6 +162,25 @@ function renderChartY(value: number, chartHeight: number, minValue: number, maxV
   return chartHeight - ((value - minValue) / valueRange) * chartHeight;
 }
 
+function buildZoneBandRect(
+  low: number | null | undefined,
+  high: number | null | undefined,
+  chartHeight: number,
+  minValue: number,
+  maxValue: number,
+) {
+  if (low === null || low === undefined || high === null || high === undefined) {
+    return null;
+  }
+
+  const top = renderChartY(high, chartHeight, minValue, maxValue);
+  const bottom = renderChartY(low, chartHeight, minValue, maxValue);
+  return {
+    y: Math.min(top, bottom),
+    height: Math.max(8, Math.abs(bottom - top)),
+  };
+}
+
 function StaticAnalyticsChart({
   itemName,
   analytics,
@@ -198,6 +217,9 @@ function StaticAnalyticsChart({
     roundTo(maxValue - (index / 4) * valueRange, 1),
   );
   const visibleSeries = SERIES_OPTIONS.filter((option) => seriesToggles[option.key]);
+  const visibleLineSeries = visibleSeries.filter(
+    (series) => series.key !== 'entryZone' && series.key !== 'exitZone',
+  );
   const volumeMax = Math.max(...points.map((point) => point.volume), 1);
   const latestPoint = points[points.length - 1] ?? null;
   const latestDelta =
@@ -211,6 +233,20 @@ function StaticAnalyticsChart({
     latestDelta !== null && latestPoint?.open !== null && latestPoint.open > 0
       ? roundTo((latestDelta / latestPoint.open) * 100, 2)
       : null;
+  const entryBand = buildZoneBandRect(
+    analytics?.entryExitZoneOverview.entryZoneLow,
+    analytics?.entryExitZoneOverview.entryZoneHigh,
+    pricePlotHeight,
+    minValue,
+    maxValue,
+  );
+  const exitBand = buildZoneBandRect(
+    analytics?.entryExitZoneOverview.exitZoneLow,
+    analytics?.entryExitZoneOverview.exitZoneHigh,
+    pricePlotHeight,
+    minValue,
+    maxValue,
+  );
 
   function toggleSeries(key: ChartSeriesKey) {
     setSeriesToggles((current) => ({
@@ -368,6 +404,27 @@ function StaticAnalyticsChart({
                   y2={volumeTop - 8}
                 />
 
+                {seriesToggles.entryZone && entryBand ? (
+                  <rect
+                    className="market-chart-band market-chart-band-entry"
+                    x="0"
+                    y={entryBand.y}
+                    width={plotWidth}
+                    height={entryBand.height}
+                    rx="8"
+                  />
+                ) : null}
+                {seriesToggles.exitZone && exitBand ? (
+                  <rect
+                    className="market-chart-band market-chart-band-exit"
+                    x="0"
+                    y={exitBand.y}
+                    width={plotWidth}
+                    height={exitBand.height}
+                    rx="8"
+                  />
+                ) : null}
+
                 {chartMode === 'candlestick'
                   ? points.map((point, index) => {
                       if (
@@ -412,7 +469,7 @@ function StaticAnalyticsChart({
                     })
                   : null}
 
-                {visibleSeries.map((series) => (
+                {visibleLineSeries.map((series) => (
                   <path
                     key={series.key}
                     className={`market-chart-line market-chart-line-${series.colorClass}`}
@@ -509,8 +566,11 @@ function formatNumber(value: number | null | undefined, digits = 1): string {
 }
 
 function formatPrice(value: number | null | undefined): string {
-  const rendered = formatNumber(value, 1);
-  return rendered === '—' ? rendered : `${rendered} pt`;
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  return `${Math.round(value)} pt`;
 }
 
 function formatPercent(value: number | null | undefined): string {
