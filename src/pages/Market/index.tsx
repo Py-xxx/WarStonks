@@ -1,15 +1,48 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ensureMarketTracking, getItemAnalytics, stopMarketTracking } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   AnalyticsBucketSizeKey,
+  AnalyticsChartPoint,
   AnalyticsDomainKey,
   ItemAnalyticsResponse,
 } from '../../types';
 
-const DEFAULT_ANALYTICS_DOMAIN_KEY: AnalyticsDomainKey = '30d';
-const DEFAULT_ANALYTICS_BUCKET_SIZE_KEY: AnalyticsBucketSizeKey = '24h';
+const DOMAIN_OPTIONS: { key: AnalyticsDomainKey; label: string }[] = [
+  { key: '1d', label: '1 day' },
+  { key: '7d', label: '7 days' },
+  { key: '30d', label: '30 days' },
+  { key: '90d', label: '90 days' },
+];
+
+const BUCKET_OPTIONS: { key: AnalyticsBucketSizeKey; label: string }[] = [
+  { key: '1h', label: '60 min' },
+  { key: '3h', label: '180 min' },
+  { key: '12h', label: '12 h' },
+  { key: '18h', label: '18 h' },
+  { key: '24h', label: '24 h' },
+  { key: '7d', label: '7 d' },
+  { key: '14d', label: '14 d' },
+];
+
+const SUPPORTED_BUCKETS: Record<AnalyticsDomainKey, AnalyticsBucketSizeKey[]> = {
+  '1d': ['1h', '3h', '12h', '18h', '24h'],
+  '7d': ['24h', '7d'],
+  '30d': ['24h', '7d', '14d'],
+  '90d': ['24h', '7d', '14d'],
+};
+
+const HISTORY_SERIES = [
+  { key: 'median', label: 'Median', colorClass: 'median' },
+  { key: 'lowest', label: 'Lowest', colorClass: 'lowest' },
+  { key: 'moving', label: 'SMA', colorClass: 'moving' },
+  { key: 'weighted', label: 'Weighted', colorClass: 'weighted' },
+  { key: 'entry', label: 'Entry Zone', colorClass: 'entry' },
+  { key: 'exit', label: 'Exit Zone', colorClass: 'exit' },
+] as const;
+
+type HistorySeriesKey = (typeof HISTORY_SERIES)[number]['key'];
 
 function formatNumber(value: number | null | undefined, digits = 1): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -54,6 +87,264 @@ function formatRelativeTimestamp(value: string | null | undefined): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function formatTimelineLabel(value: string, includeDate = false): string {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: includeDate ? 'short' : undefined,
+    day: includeDate ? 'numeric' : undefined,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(timestamp);
+}
+
+function formatDomainLabel(domainKey: AnalyticsDomainKey): string {
+  return DOMAIN_OPTIONS.find((option) => option.key === domainKey)?.label ?? domainKey;
+}
+
+function formatBucketLabel(bucketKey: AnalyticsBucketSizeKey): string {
+  return BUCKET_OPTIONS.find((option) => option.key === bucketKey)?.label ?? bucketKey;
+}
+
+function buildLinePath(
+  values: Array<number | null>,
+  width: number,
+  height: number,
+  minValue: number,
+  maxValue: number,
+): string {
+  const range = maxValue - minValue || 1;
+  const step = values.length <= 1 ? 0 : width / Math.max(values.length - 1, 1);
+  let path = '';
+  let started = false;
+
+  values.forEach((value, index) => {
+    if (value === null) {
+      started = false;
+      return;
+    }
+
+    const x = values.length <= 1 ? width / 2 : index * step;
+    const y = height - ((value - minValue) / range) * height;
+    path += `${started ? ' L' : 'M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    started = true;
+  });
+
+  return path;
+}
+
+function buildHistorySeriesValues(
+  points: AnalyticsChartPoint[],
+  analytics: ItemAnalyticsResponse | null,
+): Record<HistorySeriesKey, Array<number | null>> {
+  const entryMidpoint =
+    analytics?.entryExitZoneOverview.entryZoneLow !== null &&
+    analytics?.entryExitZoneOverview.entryZoneLow !== undefined &&
+    analytics?.entryExitZoneOverview.entryZoneHigh !== null &&
+    analytics?.entryExitZoneOverview.entryZoneHigh !== undefined
+      ? (analytics.entryExitZoneOverview.entryZoneLow + analytics.entryExitZoneOverview.entryZoneHigh) / 2
+      : null;
+  const exitMidpoint =
+    analytics?.entryExitZoneOverview.exitZoneLow !== null &&
+    analytics?.entryExitZoneOverview.exitZoneLow !== undefined &&
+    analytics?.entryExitZoneOverview.exitZoneHigh !== null &&
+    analytics?.entryExitZoneOverview.exitZoneHigh !== undefined
+      ? (analytics.entryExitZoneOverview.exitZoneLow + analytics.entryExitZoneOverview.exitZoneHigh) / 2
+      : null;
+
+  return {
+    median: points.map((point) => point.medianSell),
+    lowest: points.map((point) => point.lowestSell),
+    moving: points.map((point) => point.movingAvg),
+    weighted: points.map((point) => point.weightedAvg),
+    entry: points.map(() => entryMidpoint),
+    exit: points.map(() => exitMidpoint),
+  };
+}
+
+function HistoryPanel({
+  selectedItemName,
+  domainKey,
+  bucketSizeKey,
+  onDomainChange,
+  onBucketChange,
+  supportedBuckets,
+  toggles,
+  onToggle,
+  analytics,
+  loading,
+  errorMessage,
+}: {
+  selectedItemName: string;
+  domainKey: AnalyticsDomainKey;
+  bucketSizeKey: AnalyticsBucketSizeKey;
+  onDomainChange: (value: AnalyticsDomainKey) => void;
+  onBucketChange: (value: AnalyticsBucketSizeKey) => void;
+  supportedBuckets: AnalyticsBucketSizeKey[];
+  toggles: Record<HistorySeriesKey, boolean>;
+  onToggle: (key: HistorySeriesKey) => void;
+  analytics: ItemAnalyticsResponse | null;
+  loading: boolean;
+  errorMessage: string | null;
+}) {
+  const points = analytics?.chartPoints ?? [];
+  const seriesValues = buildHistorySeriesValues(points, analytics);
+  const enabledValues = Object.entries(seriesValues).flatMap(([key, values]) =>
+    toggles[key as HistorySeriesKey] ? values : [],
+  );
+  const definedValues = enabledValues.filter((value): value is number => value !== null);
+  const minValue = definedValues.length > 0 ? Math.min(...definedValues) : 0;
+  const maxValue = definedValues.length > 0 ? Math.max(...definedValues) : 1;
+  const yTicks = Array.from({ length: 5 }, (_, index) => maxValue - ((maxValue - minValue || 1) * index) / 4);
+  const tickIndexes = points.length > 1
+    ? Array.from(new Set([0, Math.floor((points.length - 1) * 0.25), Math.floor((points.length - 1) * 0.5), Math.floor((points.length - 1) * 0.75), points.length - 1]))
+    : [0];
+
+  const chartStatusMessage = loading
+    ? 'Loading item history and refreshing the current market snapshot.'
+    : errorMessage
+      ? errorMessage
+      : points.length === 0
+        ? 'No historical rows are available for the active selection yet.'
+        : null;
+  const latestPoint = points.length > 0 ? points[points.length - 1] : null;
+
+  return (
+    <div className="card market-history-panel">
+      <div className="card-body">
+        <div className="market-history-topbar">
+          <div className="market-history-item-pill">Selected item: <strong>{selectedItemName}</strong></div>
+          <div className="market-history-controls">
+            <label className="market-history-select-wrap">
+              <span>Domain</span>
+              <select value={domainKey} onChange={(event) => onDomainChange(event.target.value as AnalyticsDomainKey)}>
+                {DOMAIN_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="market-history-select-wrap">
+              <span>Bucket</span>
+              <select value={bucketSizeKey} onChange={(event) => onBucketChange(event.target.value as AnalyticsBucketSizeKey)}>
+                {BUCKET_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key} disabled={!supportedBuckets.includes(option.key)}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div className="market-history-header">
+          <div className="market-history-title-group">
+            <span className="panel-title-eyebrow">Item Price History</span>
+            <span className="market-history-subtitle">
+              {formatDomainLabel(domainKey)} · {formatBucketLabel(bucketSizeKey)} buckets
+            </span>
+          </div>
+          <div className="market-history-legend">
+            {HISTORY_SERIES.map((series) => (
+              <button
+                key={series.key}
+                type="button"
+                className={`market-history-toggle${toggles[series.key] ? ' active' : ''}`}
+                onClick={() => onToggle(series.key)}
+              >
+                <span className={`market-history-dot ${series.colorClass}`} />
+                {series.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="market-history-chart-shell">
+          {chartStatusMessage ? (
+            <div className={`market-chart-status${errorMessage ? ' is-error' : ''}`}>
+              {chartStatusMessage}
+            </div>
+          ) : null}
+
+          <div className="market-history-plot">
+            <div className="market-history-y-axis">
+              {yTicks.map((tick) => (
+                <span key={tick}>{formatPrice(tick)}</span>
+              ))}
+            </div>
+            <div className="market-history-plot-main">
+              <svg viewBox="0 0 1000 320" className="market-history-svg" preserveAspectRatio="none" aria-label="Item price history">
+                {[0, 0.25, 0.5, 0.75, 1].map((position) => (
+                  <line
+                    key={`h-${position}`}
+                    x1="0"
+                    y1={16 + position * 288}
+                    x2="1000"
+                    y2={16 + position * 288}
+                    className="market-history-gridline"
+                  />
+                ))}
+                {tickIndexes.map((tickIndex) => {
+                  const x = points.length <= 1 ? 500 : (tickIndex / Math.max(points.length - 1, 1)) * 1000;
+                  return (
+                    <line
+                      key={`v-${tickIndex}`}
+                      x1={x}
+                      y1="16"
+                      x2={x}
+                      y2="304"
+                      className="market-history-gridline market-history-gridline-vertical"
+                    />
+                  );
+                })}
+                {HISTORY_SERIES.map((series) => {
+                  if (!toggles[series.key]) {
+                    return null;
+                  }
+
+                  const path = buildLinePath(seriesValues[series.key], 1000, 288, minValue, maxValue);
+                  if (!path) {
+                    return null;
+                  }
+
+                  return (
+                    <path
+                      key={series.key}
+                      d={path}
+                      className={`market-history-line ${series.colorClass}`}
+                    />
+                  );
+                })}
+              </svg>
+              <div className="market-history-x-axis">
+                {tickIndexes.map((tickIndex, renderIndex) => (
+                  <span key={`${tickIndex}-${renderIndex}`}>
+                    {points[tickIndex] ? formatTimelineLabel(points[tickIndex].bucketAt, domainKey !== '1d') : '—'}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="market-history-footer">
+          <span>Bucket: {formatBucketLabel(bucketSizeKey)}</span>
+          <span>Points: {points.length}</span>
+          <span>Latest median: {formatPrice(latestPoint?.medianSell)}</span>
+          <span>Latest lowest: {formatPrice(latestPoint?.lowestSell)}</span>
+          <span>
+            Visible depth: {analytics ? `${formatNumber(analytics.orderbookPressure.exitDepth, 0)} / ${formatNumber(analytics.orderbookPressure.entryDepth, 0)}` : '—'}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EmptyAnalyticsState({ body }: { body: string }) {
   return (
     <div className="market-empty-state">
@@ -93,11 +384,29 @@ function AnalyticsTab() {
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
+  const [domainKey, setDomainKey] = useState<AnalyticsDomainKey>('7d');
+  const [bucketSizeKey, setBucketSizeKey] = useState<AnalyticsBucketSizeKey>('24h');
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [trendTab, setTrendTab] = useState<'lowestSell' | 'medianSell' | 'weightedAvg'>('lowestSell');
+  const [historyToggles, setHistoryToggles] = useState<Record<HistorySeriesKey, boolean>>({
+    median: true,
+    lowest: true,
+    moving: true,
+    weighted: false,
+    entry: true,
+    exit: true,
+  });
+
+  const supportedBuckets = useMemo(() => SUPPORTED_BUCKETS[domainKey], [domainKey]);
+
+  useEffect(() => {
+    if (!supportedBuckets.includes(bucketSizeKey)) {
+      setBucketSizeKey(supportedBuckets[0]);
+    }
+  }, [bucketSizeKey, supportedBuckets]);
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -136,8 +445,8 @@ function AnalyticsTab() {
           selectedItem.itemId,
           selectedItem.slug,
           selectedMarketVariantKey,
-          DEFAULT_ANALYTICS_DOMAIN_KEY,
-          DEFAULT_ANALYTICS_BUCKET_SIZE_KEY,
+          domainKey,
+          bucketSizeKey,
         ),
       )
       .then((response) => {
@@ -166,7 +475,7 @@ function AnalyticsTab() {
         'analytics',
       ).catch(() => undefined);
     };
-  }, [selectedItem, selectedMarketVariantKey, refreshNonce]);
+  }, [selectedItem, selectedMarketVariantKey, domainKey, bucketSizeKey, refreshNonce]);
 
   const trendMetrics =
     analytics?.trendQualityBreakdown.tabs[trendTab] ??
@@ -235,20 +544,24 @@ function AnalyticsTab() {
         </div>
       </div>
 
-      {loading ? (
-        <div className="market-empty-state">
-          <span className="empty-primary">Loading analytics</span>
-          <span className="empty-sub">Refreshing the live orderbook and computing the current market structure.</span>
-        </div>
-      ) : null}
-
-      {errorMessage ? (
-        <div className="market-error-card card">
-          <div className="card-body">
-            <span className="watchlist-form-error">{errorMessage}</span>
-          </div>
-        </div>
-      ) : null}
+      <HistoryPanel
+        selectedItemName={selectedItem.name}
+        domainKey={domainKey}
+        bucketSizeKey={bucketSizeKey}
+        onDomainChange={setDomainKey}
+        onBucketChange={setBucketSizeKey}
+        supportedBuckets={supportedBuckets}
+        toggles={historyToggles}
+        onToggle={(key) =>
+          setHistoryToggles((current) => ({
+            ...current,
+            [key]: !current[key],
+          }))
+        }
+        analytics={analytics}
+        loading={loading}
+        errorMessage={errorMessage}
+      />
 
       {analytics ? (
         <>
