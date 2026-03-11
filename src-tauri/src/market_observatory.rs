@@ -1681,6 +1681,55 @@ fn aggregate_weighted(values: impl Iterator<Item = (Option<f64>, f64)>) -> Optio
     }
 }
 
+fn row_low_anchor(row: &InternalStatsRow) -> Option<f64> {
+    [
+        row.min_price,
+        row.open_price,
+        row.closed_price,
+        row.avg_price,
+        row.wa_price,
+        row.median,
+        row.moving_avg,
+    ]
+    .into_iter()
+    .flatten()
+    .reduce(f64::min)
+}
+
+fn row_high_anchor(row: &InternalStatsRow) -> Option<f64> {
+    [
+        row.max_price,
+        row.open_price,
+        row.closed_price,
+        row.avg_price,
+        row.wa_price,
+        row.median,
+        row.moving_avg,
+        row.donch_top,
+    ]
+    .into_iter()
+    .flatten()
+    .reduce(f64::max)
+}
+
+fn row_median_anchor(row: &InternalStatsRow) -> Option<f64> {
+    row.median
+        .or(row.wa_price)
+        .or(row.avg_price)
+        .or(row.closed_price)
+        .or(row.open_price)
+        .or(row.moving_avg)
+        .or(row.min_price)
+        .or(row.max_price)
+}
+
+fn last_defined_value(
+    rows: &[InternalStatsRow],
+    selector: impl Fn(&InternalStatsRow) -> Option<f64>,
+) -> Option<f64> {
+    rows.iter().rev().find_map(selector)
+}
+
 fn floor_timestamp(timestamp: OffsetDateTime, bucket_size_key: AnalyticsBucketSizeKey) -> OffsetDateTime {
     let unix = timestamp.unix_timestamp();
     let bucket_seconds = bucket_size_key.duration().whole_seconds();
@@ -1731,7 +1780,7 @@ fn resample_rows(
                 .as_ref()
                 .and_then(|row| {
                     let mut values = vec![];
-                    if let Some(value) = row.median {
+                    if let Some(value) = row_median_anchor(row) {
                         values.push(value);
                     }
                     if let Some(value) = row.wa_price {
@@ -1749,7 +1798,7 @@ fn resample_rows(
                 .as_ref()
                 .and_then(|row| {
                     let mut values = vec![];
-                    if let Some(value) = row.median {
+                    if let Some(value) = row_median_anchor(row) {
                         values.push(value);
                     }
                     if let Some(value) = row.wa_price {
@@ -1768,24 +1817,46 @@ fn resample_rows(
                 bucket_at: format_timestamp(bucket_at).unwrap_or_default(),
                 lowest_sell: bucket_rows
                     .iter()
-                    .filter_map(|row| row.min_price)
+                    .filter_map(row_low_anchor)
                     .reduce(f64::min),
                 median_sell: aggregate_weighted(
-                    bucket_rows.iter().map(|row| (row.median, row.volume)),
+                    bucket_rows.iter().map(|row| (row_median_anchor(row), row.volume)),
                 ),
-                moving_avg: bucket_rows.last().and_then(|row| row.moving_avg),
+                moving_avg: last_defined_value(&bucket_rows, |row| {
+                    row.moving_avg
+                        .or(row.wa_price)
+                        .or(row.avg_price)
+                        .or(row.median)
+                        .or(row.closed_price)
+                }),
                 weighted_avg: aggregate_weighted(
-                    bucket_rows.iter().map(|row| (row.wa_price, row.volume)),
+                    bucket_rows
+                        .iter()
+                        .map(|row| (row.wa_price.or(row.avg_price).or(row.median), row.volume)),
                 ),
                 average_price: aggregate_weighted(
-                    bucket_rows.iter().map(|row| (row.avg_price, row.volume)),
+                    bucket_rows
+                        .iter()
+                        .map(|row| (row.avg_price.or(row.wa_price).or(row.median), row.volume)),
                 ),
                 highest_buy: live_bucket_rows
                     .iter()
-                    .filter_map(|row| row.max_price.or(row.median).or(row.avg_price))
+                    .filter_map(|row| {
+                        row.max_price
+                            .or(row.median)
+                            .or(row.avg_price)
+                            .or(row.wa_price)
+                            .or(row.closed_price)
+                            .or(row.open_price)
+                    })
                     .reduce(f64::max),
                 fair_value_low: fair_low,
-                fair_value_high: fair_high,
+                fair_value_high: fair_high.or_else(|| {
+                    bucket_rows
+                        .iter()
+                        .filter_map(row_high_anchor)
+                        .reduce(f64::max)
+                }),
                 volume,
             }
         })
@@ -2153,9 +2224,25 @@ fn load_cached_analytics(
         return Ok(None);
     }
 
-    Ok(Some(
-        serde_json::from_str(&payload_json).context("failed to parse analytics cache payload")?,
-    ))
+    let parsed =
+        serde_json::from_str::<ItemAnalyticsResponse>(&payload_json).context("failed to parse analytics cache payload")?;
+
+    if !analytics_response_has_renderable_chart(&parsed) {
+        return Ok(None);
+    }
+
+    Ok(Some(parsed))
+}
+
+fn analytics_response_has_renderable_chart(response: &ItemAnalyticsResponse) -> bool {
+    response.chart_points.iter().any(|point| {
+        point.lowest_sell.is_some()
+            || point.median_sell.is_some()
+            || point.moving_avg.is_some()
+            || point.weighted_avg.is_some()
+            || point.average_price.is_some()
+            || point.highest_buy.is_some()
+    })
 }
 
 fn persist_analytics_cache(
@@ -2582,6 +2669,59 @@ mod tests {
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].lowest_sell, Some(10.0));
         assert_eq!(points[0].volume, 12.0);
+    }
+
+    #[test]
+    fn resamples_sparse_rows_into_visible_chart_points() {
+        let base_time = super::floor_timestamp(
+            super::now_utc() - time::Duration::days(2),
+            AnalyticsBucketSizeKey::TwentyFourHours,
+        );
+        let rows = vec![
+            InternalStatsRow {
+                bucket_at: base_time,
+                source_kind: "closed".to_string(),
+                volume: 12.0,
+                min_price: None,
+                max_price: None,
+                open_price: None,
+                closed_price: None,
+                avg_price: None,
+                wa_price: None,
+                median: Some(67.0),
+                moving_avg: None,
+                donch_top: None,
+                donch_bot: None,
+            },
+            InternalStatsRow {
+                bucket_at: base_time + time::Duration::hours(6),
+                source_kind: "closed".to_string(),
+                volume: 18.0,
+                min_price: None,
+                max_price: None,
+                open_price: None,
+                closed_price: None,
+                avg_price: None,
+                wa_price: Some(69.0),
+                median: Some(68.0),
+                moving_avg: None,
+                donch_top: None,
+                donch_bot: None,
+            },
+        ];
+
+        let points = resample_rows(
+            &rows,
+            &[],
+            AnalyticsDomainKey::SevenDays,
+            AnalyticsBucketSizeKey::TwentyFourHours,
+        );
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].lowest_sell, Some(67.0));
+        assert_eq!(points[0].median_sell, Some(67.6));
+        assert_eq!(points[0].weighted_avg, Some(68.2));
+        assert_eq!(points[0].fair_value_high, Some(69.0));
     }
 
     #[test]
