@@ -587,14 +587,31 @@ fn compare_sell_orders(left: &WfmTopSellOrder, right: &WfmTopSellOrder) -> Order
     })
 }
 
+fn order_matches_variant(rank: Option<i64>, variant_key: Option<&str>) -> bool {
+    let normalized_variant = variant_key.unwrap_or("base").trim();
+    if normalized_variant.is_empty() || normalized_variant == "base" {
+        return rank.is_none();
+    }
+
+    normalized_variant
+        .strip_prefix("rank:")
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|expected_rank| rank == Some(expected_rank))
+        .unwrap_or(true)
+}
+
 fn normalize_top_sell_orders(
     slug: &str,
     api_version: Option<String>,
     sell_orders: Vec<WfmOrderWithUser>,
+    variant_key: Option<&str>,
 ) -> WfmTopSellOrdersResponse {
     let mut normalized = sell_orders
         .into_iter()
         .filter_map(|order| {
+            if !order_matches_variant(order.rank, variant_key) {
+                return None;
+            }
             let username = order.user.ingame_name?;
             Some(WfmTopSellOrder {
                 order_id: order.id,
@@ -619,7 +636,10 @@ fn normalize_top_sell_orders(
     }
 }
 
-fn fetch_wfm_top_sell_orders_inner(slug: String) -> Result<WfmTopSellOrdersResponse> {
+fn fetch_wfm_top_sell_orders_inner(
+    slug: String,
+    variant_key: Option<String>,
+) -> Result<WfmTopSellOrdersResponse> {
     let trimmed_slug = slug.trim();
     if trimmed_slug.is_empty() {
         return Err(anyhow::anyhow!("item slug cannot be empty"));
@@ -644,6 +664,7 @@ fn fetch_wfm_top_sell_orders_inner(slug: String) -> Result<WfmTopSellOrdersRespo
         trimmed_slug,
         payload.api_version,
         payload.data.sell,
+        variant_key.as_deref(),
     ))
 }
 
@@ -733,8 +754,11 @@ pub async fn get_relic_tier_icons(app: tauri::AppHandle) -> Result<Vec<RelicTier
 }
 
 #[tauri::command]
-pub async fn get_wfm_top_sell_orders(slug: String) -> Result<WfmTopSellOrdersResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || fetch_wfm_top_sell_orders_inner(slug))
+pub async fn get_wfm_top_sell_orders(
+    slug: String,
+    variant_key: Option<String>,
+) -> Result<WfmTopSellOrdersResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_wfm_top_sell_orders_inner(slug, variant_key))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
@@ -873,6 +897,7 @@ mod tests {
                     },
                 },
             ],
+            Some("rank:0"),
         );
 
         assert_eq!(response.slug, "arcane_energize");

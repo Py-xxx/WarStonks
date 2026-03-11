@@ -1,5 +1,6 @@
 mod commands;
 mod item_catalog;
+mod market_observatory;
 mod settings;
 mod worldstate_cache;
 
@@ -13,6 +14,13 @@ pub fn run() {
             commands::get_wfm_autocomplete_items,
             commands::get_relic_tier_icons,
             commands::get_wfm_top_sell_orders,
+            market_observatory::get_wfm_item_orders,
+            market_observatory::get_wfm_item_statistics,
+            market_observatory::ensure_market_tracking,
+            market_observatory::stop_market_tracking,
+            market_observatory::refresh_market_tracking,
+            market_observatory::get_item_variants_for_market,
+            market_observatory::get_item_analytics,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
             commands::get_worldstate_sortie,

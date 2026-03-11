@@ -1,9 +1,14 @@
 import { create } from 'zustand';
 import {
+  ensureMarketTracking,
   getAppSettings,
   getCurrencyBalances,
+  getItemVariantsForMarket,
+  getWfmItemOrders,
+  getWfmTopSellOrdersForVariant,
   getWfmTopSellOrders,
   saveAlecaframeSettings,
+  stopMarketTracking,
 } from '../lib/tauriClient';
 import {
   fetchWorldStateAlertsSnapshot,
@@ -66,6 +71,7 @@ import type {
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
   AppSettings,
+  MarketVariant,
   WalletSnapshot,
   WfmAutocompleteItem,
   WfmTopSellOrder,
@@ -136,6 +142,14 @@ function buildWatchlistId(item: WfmAutocompleteItem): string {
   return item.slug;
 }
 
+function buildMarketDisplayName(name: string, variantLabel: string | null | undefined): string {
+  if (!variantLabel || variantLabel === 'Base Market') {
+    return name;
+  }
+
+  return `${name} · ${variantLabel}`;
+}
+
 function buildWatchlistAlertId(watchlistId: string, orderId: string): string {
   return `${watchlistId}:${orderId}`;
 }
@@ -147,7 +161,7 @@ function buildWatchlistAlert(
   return {
     id: buildWatchlistAlertId(item.id, order.orderId),
     watchlistId: item.id,
-    itemName: item.name,
+    itemName: item.displayName,
     itemSlug: item.slug,
     itemImagePath: item.imagePath,
     username: order.username,
@@ -278,6 +292,8 @@ function applyWatchlistOrder(
 
 function createWatchlistItem(
   item: WfmAutocompleteItem,
+  variantKey: string,
+  variantLabel: string,
   targetPrice: number,
   currentOrder: WfmTopSellOrder | null,
   currentCount: number,
@@ -288,10 +304,13 @@ function createWatchlistItem(
     : Date.now();
 
   return {
-    id: buildWatchlistId(item),
+    id: `${buildWatchlistId(item)}:${variantKey}`,
     itemId: item.itemId,
     name: item.name,
+    displayName: buildMarketDisplayName(item.name, variantLabel),
     slug: item.slug,
+    variantKey,
+    variantLabel,
     imagePath: item.imagePath,
     itemFamily: item.itemFamily,
     targetPrice,
@@ -311,6 +330,85 @@ function createWatchlistItem(
     retryCount: 0,
     lastError: currentOrder ? null : 'Waiting for the first market refresh.',
     ignoredUserKeys,
+  };
+}
+
+async function stopTrackedSelection(
+  trackedSelection: { itemId: number; slug: string; variantKey: string } | null,
+) {
+  if (!trackedSelection) {
+    return;
+  }
+
+  try {
+    await stopMarketTracking(
+      trackedSelection.itemId,
+      trackedSelection.slug,
+      trackedSelection.variantKey,
+      'search',
+    );
+  } catch (error) {
+    console.error('[market] failed to stop tracked search selection', error);
+  }
+}
+
+async function loadQuickViewOrdersForSelection(
+  item: WfmAutocompleteItem,
+  variantKey: string | null,
+): Promise<{ sellOrders: WfmTopSellOrder[]; apiVersion: string | null }> {
+  const response = variantKey
+    ? await getWfmTopSellOrdersForVariant(item.slug, variantKey)
+    : await getWfmTopSellOrders(item.slug);
+
+  return {
+    sellOrders: response.sellOrders,
+    apiVersion: response.apiVersion,
+  };
+}
+
+async function syncSearchTrackingSelection(
+  previousSelection: { itemId: number; slug: string; variantKey: string } | null,
+  item: WfmAutocompleteItem,
+  variantKey: string | null,
+): Promise<{
+  nextTrackedSelection: { itemId: number; slug: string; variantKey: string } | null;
+  selectedVariantLabel: string | null;
+}> {
+  if (!variantKey) {
+    await stopTrackedSelection(previousSelection);
+    return {
+      nextTrackedSelection: null,
+      selectedVariantLabel: null,
+    };
+  }
+
+  if (
+    previousSelection &&
+    previousSelection.itemId === item.itemId &&
+    previousSelection.slug === item.slug &&
+    previousSelection.variantKey === variantKey
+  ) {
+    return {
+      nextTrackedSelection: previousSelection,
+      selectedVariantLabel: variantKey.startsWith('rank:')
+        ? `Rank ${variantKey.slice(5)}`
+        : 'Base Market',
+    };
+  }
+
+  await stopTrackedSelection(previousSelection);
+  await ensureMarketTracking(item.itemId, item.slug, variantKey, 'search');
+  const nextTrackedSelection = {
+    itemId: item.itemId,
+    slug: item.slug,
+    variantKey,
+  };
+
+  return {
+    nextTrackedSelection,
+    selectedVariantLabel: variantKey.startsWith('rank:')
+      ? `Rank ${variantKey.slice(5)}`
+      : 'Base Market',
   };
 }
 
@@ -428,7 +526,18 @@ interface AppStore {
   refreshWatchlistItem: (id: string) => Promise<WatchlistRefreshResult>;
 
   quickView: QuickViewSelection;
+  marketVariants: MarketVariant[];
+  marketVariantsLoading: boolean;
+  marketVariantsError: string | null;
+  selectedMarketVariantKey: string | null;
+  selectedMarketVariantLabel: string | null;
+  searchTrackingSource: {
+    itemId: number;
+    slug: string;
+    variantKey: string;
+  } | null;
   loadQuickViewItem: (item: WfmAutocompleteItem) => Promise<void>;
+  setSelectedMarketVariantKey: (variantKey: string | null) => Promise<void>;
 
   tradesSubTab: TradesSubTab;
   setTradesSubTab: (tab: TradesSubTab) => void;
@@ -1233,10 +1342,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   addSelectedQuickViewToWatchlist: () => {
     const state = get();
     const selectedItem = state.quickView.selectedItem;
+    const selectedVariantKey = state.selectedMarketVariantKey;
+    const selectedVariantLabel = state.selectedMarketVariantLabel;
 
     if (!selectedItem) {
       set({
         watchlistFormError: 'Search and load a WFM item before adding it to the watchlist.',
+      });
+      return;
+    }
+
+    if (state.marketVariants.length > 1 && !selectedVariantKey) {
+      set({
+        watchlistFormError: 'Select a rank variant before adding this item to the watchlist.',
       });
       return;
     }
@@ -1247,7 +1365,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
-    const existingItem = state.watchlist.find((item) => item.slug === selectedItem.slug);
+    const variantKey = selectedVariantKey ?? 'base';
+    const variantLabel = selectedVariantLabel ?? 'Base Market';
+    const existingItem = state.watchlist.find(
+      (item) => item.slug === selectedItem.slug && item.variantKey === variantKey,
+    );
     const preferredOrder = selectPreferredWatchlistOrder(
       state.quickView.sellOrders,
       existingItem?.ignoredUserKeys ?? [],
@@ -1257,6 +1379,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       : state.watchlist.length + 1;
     const nextItem = createWatchlistItem(
       selectedItem,
+      variantKey,
+      variantLabel,
       targetPrice,
       preferredOrder,
       watchlistCount,
@@ -1289,17 +1413,37 @@ export const useAppStore = create<AppStore>((set, get) => ({
       watchlistTargetInput: '',
       watchlistFormError: null,
     }));
+
+    void ensureMarketTracking(selectedItem.itemId, selectedItem.slug, variantKey, 'watchlist').catch(
+      (error) => {
+        console.error('[watchlist] failed to start tracking item', error);
+      },
+    );
   },
   removeWatchlistItem: (id) =>
-    set((state) => ({
-      watchlist: state.watchlist.filter((item) => item.id !== id),
-      alerts: state.alerts.filter((alert) => alert.watchlistId !== id),
-      selectedWatchlistId:
-        state.selectedWatchlistId === id
-          ? state.watchlist.find((item) => item.id !== id)?.id ?? null
-          : state.selectedWatchlistId,
-      watchlistFormError: null,
-    })),
+    set((state) => {
+      const itemToRemove = state.watchlist.find((item) => item.id === id);
+      if (itemToRemove) {
+        void stopMarketTracking(
+          itemToRemove.itemId,
+          itemToRemove.slug,
+          itemToRemove.variantKey,
+          'watchlist',
+        ).catch((error) => {
+          console.error('[watchlist] failed to stop tracking item', error);
+        });
+      }
+
+      return {
+        watchlist: state.watchlist.filter((item) => item.id !== id),
+        alerts: state.alerts.filter((alert) => alert.watchlistId !== id),
+        selectedWatchlistId:
+          state.selectedWatchlistId === id
+            ? state.watchlist.find((item) => item.id !== id)?.id ?? null
+            : state.selectedWatchlistId,
+        watchlistFormError: null,
+      };
+    }),
   dismissAlert: (id) =>
     set((state) => ({
       alerts: state.alerts.filter((alert) => alert.id !== id),
@@ -1397,7 +1541,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
 
     try {
-      const response = await getWfmTopSellOrders(item.slug);
+      const response = await getWfmItemOrders(item.slug, item.variantKey);
       const latestState = get();
       const latestItem = latestState.watchlist.find((entry) => entry.id === id);
       if (!latestItem) {
@@ -1406,8 +1550,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
       const nextScanAt =
         Date.now() + getWatchlistPollIntervalMs(Math.max(latestState.watchlist.length, 1));
+      const candidateOrders = response.sellOrders.map((order) => ({
+        orderId: order.orderId,
+        platinum: order.platinum,
+        quantity: order.quantity,
+        perTrade: order.perTrade,
+        rank: order.rank,
+        username: order.username,
+        userSlug: order.userSlug,
+        status: order.status,
+      }));
       const preferredOrder = selectPreferredWatchlistOrder(
-        response.sellOrders,
+        candidateOrders,
         latestItem.ignoredUserKeys,
       );
       const updatedItem = applyWatchlistOrder(latestItem, preferredOrder, nextScanAt);
@@ -1472,12 +1626,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
     loading: false,
     errorMessage: null,
   },
+  marketVariants: [],
+  marketVariantsLoading: false,
+  marketVariantsError: null,
+  selectedMarketVariantKey: null,
+  selectedMarketVariantLabel: null,
+  searchTrackingSource: null,
   loadQuickViewItem: async (item) => {
     const requestId = ++quickViewRequestSequence;
+    const previousTrackedSelection = get().searchTrackingSource;
 
     set({
-      activePage: 'home',
-      homeSubTab: 'overview',
       quickView: {
         selectedItem: item,
         sellOrders: [],
@@ -1485,10 +1644,41 @@ export const useAppStore = create<AppStore>((set, get) => ({
         loading: true,
         errorMessage: null,
       },
+      marketVariants: [],
+      marketVariantsLoading: true,
+      marketVariantsError: null,
+      selectedMarketVariantKey: null,
+      selectedMarketVariantLabel: null,
     });
 
     try {
-      const response = await getWfmTopSellOrders(item.slug);
+      const [variants, response] = await Promise.all([
+        getItemVariantsForMarket(item.itemId, item.slug),
+        loadQuickViewOrdersForSelection(item, item.maxRank && item.maxRank > 0 ? null : 'base'),
+      ]);
+      if (requestId !== quickViewRequestSequence) {
+        return;
+      }
+
+      let nextTrackedSelection = previousTrackedSelection;
+      let nextSelectedVariantKey: string | null = null;
+      let nextSelectedVariantLabel: string | null = null;
+
+      if (variants.length === 1) {
+        nextSelectedVariantKey = variants[0].key;
+        nextSelectedVariantLabel = variants[0].label;
+        const syncedSelection = await syncSearchTrackingSelection(
+          previousTrackedSelection,
+          item,
+          nextSelectedVariantKey,
+        );
+        nextTrackedSelection = syncedSelection.nextTrackedSelection;
+        nextSelectedVariantLabel = syncedSelection.selectedVariantLabel;
+      } else {
+        await stopTrackedSelection(previousTrackedSelection);
+        nextTrackedSelection = null;
+      }
+
       if (requestId !== quickViewRequestSequence) {
         return;
       }
@@ -1501,6 +1691,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
           loading: false,
           errorMessage: null,
         },
+        marketVariants: variants,
+        marketVariantsLoading: false,
+        marketVariantsError: null,
+        selectedMarketVariantKey: nextSelectedVariantKey,
+        selectedMarketVariantLabel: nextSelectedVariantLabel,
+        searchTrackingSource: nextTrackedSelection,
       });
     } catch (error) {
       if (requestId !== quickViewRequestSequence) {
@@ -1515,7 +1711,68 @@ export const useAppStore = create<AppStore>((set, get) => ({
           loading: false,
           errorMessage: toErrorMessage(error),
         },
+        marketVariants: [],
+        marketVariantsLoading: false,
+        marketVariantsError: toErrorMessage(error),
+        selectedMarketVariantKey: null,
+        selectedMarketVariantLabel: null,
       });
+    }
+  },
+  setSelectedMarketVariantKey: async (variantKey) => {
+    const state = get();
+    const selectedItem = state.quickView.selectedItem;
+    const previousTrackedSelection = state.searchTrackingSource;
+
+    if (!selectedItem) {
+      set({
+        selectedMarketVariantKey: null,
+        selectedMarketVariantLabel: null,
+        searchTrackingSource: null,
+      });
+      return;
+    }
+
+    set({
+      selectedMarketVariantKey: variantKey,
+      selectedMarketVariantLabel:
+        state.marketVariants.find((entry) => entry.key === variantKey)?.label ?? null,
+      quickView: {
+        ...state.quickView,
+        loading: true,
+        errorMessage: null,
+      },
+    });
+
+    try {
+      const syncedSelection = await syncSearchTrackingSelection(
+        previousTrackedSelection,
+        selectedItem,
+        variantKey,
+      );
+      const response = await loadQuickViewOrdersForSelection(selectedItem, variantKey);
+      set((currentState) => ({
+        selectedMarketVariantKey: variantKey,
+        selectedMarketVariantLabel:
+          currentState.marketVariants.find((entry) => entry.key === variantKey)?.label ?? null,
+        searchTrackingSource: syncedSelection.nextTrackedSelection,
+        quickView: {
+          ...currentState.quickView,
+          selectedItem,
+          sellOrders: response.sellOrders,
+          apiVersion: response.apiVersion,
+          loading: false,
+          errorMessage: null,
+        },
+      }));
+    } catch (error) {
+      set((currentState) => ({
+        quickView: {
+          ...currentState.quickView,
+          loading: false,
+          errorMessage: toErrorMessage(error),
+        },
+      }));
     }
   },
 
@@ -1536,7 +1793,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tradePeriod: '30d',
   setTradePeriod: (period) => set({ tradePeriod: period }),
 
-  marketSubTab: 'analysis',
+  marketSubTab: 'analytics',
   setMarketSubTab: (tab) => set({ marketSubTab: tab }),
 
   eventsSubTab: 'active-events',
