@@ -406,6 +406,8 @@ pub struct ItemDetailSummary {
     pub estimated_vault_date: Option<String>,
     pub vault_date: Option<String>,
     pub tags: Vec<String>,
+    pub rank_scale_label: Option<String>,
+    pub stat_highlights: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3118,6 +3120,112 @@ fn build_time_of_day_liquidity(
     })
 }
 
+fn compress_rank_stat_line(start: &str, end: &str) -> String {
+    let start_chars = start.chars().collect::<Vec<_>>();
+    let end_chars = end.chars().collect::<Vec<_>>();
+
+    let mut prefix_len = 0usize;
+    while prefix_len < start_chars.len()
+        && prefix_len < end_chars.len()
+        && start_chars[prefix_len] == end_chars[prefix_len]
+    {
+        prefix_len += 1;
+    }
+
+    let mut suffix_len = 0usize;
+    while suffix_len < start_chars.len().saturating_sub(prefix_len)
+        && suffix_len < end_chars.len().saturating_sub(prefix_len)
+        && start_chars[start_chars.len() - 1 - suffix_len]
+            == end_chars[end_chars.len() - 1 - suffix_len]
+    {
+        suffix_len += 1;
+    }
+
+    while suffix_len > 0
+        && (prefix_len + suffix_len >= start_chars.len()
+            || prefix_len + suffix_len >= end_chars.len())
+    {
+        suffix_len -= 1;
+    }
+
+    let prefix = start_chars[..prefix_len].iter().collect::<String>();
+    let suffix = if suffix_len == 0 {
+        String::new()
+    } else {
+        start_chars[start_chars.len() - suffix_len..]
+            .iter()
+            .collect::<String>()
+    };
+    let start_middle = start_chars[prefix_len..start_chars.len() - suffix_len]
+        .iter()
+        .collect::<String>()
+        .trim()
+        .to_string();
+    let end_middle = end_chars[prefix_len..end_chars.len() - suffix_len]
+        .iter()
+        .collect::<String>()
+        .trim()
+        .to_string();
+
+    if prefix.trim().is_empty() && suffix.trim().is_empty() {
+        return format!("{} -> {}", start.trim(), end.trim());
+    }
+
+    format!("{prefix}{start_middle} -> {end_middle}{suffix}")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" %", "%")
+}
+
+fn extract_rank_stat_highlights(raw_json: &str) -> Result<(Option<String>, Vec<String>)> {
+    let payload = serde_json::from_str::<serde_json::Value>(raw_json)
+        .context("failed to parse wfstat raw json for item details")?;
+    let Some(level_stats) = payload.get("levelStats").and_then(|value| value.as_array()) else {
+        return Ok((None, Vec::new()));
+    };
+    if level_stats.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+
+    let extract_lines = |value: &serde_json::Value| {
+        value
+            .get("stats")
+            .and_then(|stats| stats.as_array())
+            .map(|stats| {
+                stats
+                    .iter()
+                    .filter_map(|entry| entry.as_str())
+                    .map(|entry| entry.trim().to_string())
+                    .filter(|entry| !entry.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    let first_lines = extract_lines(&level_stats[0]);
+    let last_lines = extract_lines(level_stats.last().unwrap_or(&level_stats[0]));
+    let max_line_count = first_lines.len().max(last_lines.len());
+    let mut highlights = Vec::new();
+
+    for index in 0..max_line_count {
+        match (first_lines.get(index), last_lines.get(index)) {
+            (Some(first), Some(last)) if first == last => highlights.push(first.clone()),
+            (Some(first), Some(last)) => highlights.push(compress_rank_stat_line(first, last)),
+            (Some(first), None) => highlights.push(first.clone()),
+            (None, Some(last)) => highlights.push(last.clone()),
+            (None, None) => {}
+        }
+    }
+
+    highlights.dedup();
+
+    Ok((
+        Some(format!("Rank 0 -> Rank {}", level_stats.len().saturating_sub(1))),
+        highlights,
+    ))
+}
+
 fn load_item_detail_summary(
     app: &tauri::AppHandle,
     item_id: i64,
@@ -3143,7 +3251,8 @@ fn load_item_detail_summary(
            COALESCE(ws.vaulted, w.vaulted),
            ws.release_date,
            ws.estimated_vault_date,
-           ws.vault_date
+           ws.vault_date,
+           ws.raw_json
          FROM items i
          LEFT JOIN wfm_items w ON w.item_id = i.item_id
          LEFT JOIN wfstat_items ws ON ws.item_id = i.item_id
@@ -3170,6 +3279,7 @@ fn load_item_detail_summary(
                 row.get::<_, Option<String>>(15)?,
                 row.get::<_, Option<String>>(16)?,
                 row.get::<_, Option<String>>(17)?,
+                row.get::<_, Option<String>>(18)?,
             ))
         },
     )?;
@@ -3185,6 +3295,13 @@ fn load_item_detail_summary(
         let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
+
+    let (rank_scale_label, stat_highlights) = detail_row
+        .18
+        .as_deref()
+        .map(extract_rank_stat_highlights)
+        .transpose()?
+        .unwrap_or((None, Vec::new()));
 
     Ok(ItemDetailSummary {
         item_id,
@@ -3207,6 +3324,8 @@ fn load_item_detail_summary(
         estimated_vault_date: detail_row.16,
         vault_date: detail_row.17,
         tags,
+        rank_scale_label,
+        stat_highlights,
     })
 }
 
@@ -3986,7 +4105,7 @@ mod tests {
     use super::{
         build_action_card, build_entry_exit_zone_overview, build_market_snapshot,
         build_orderbook_pressure, build_trend_quality_breakdown, compute_pressure_ratio,
-        compute_zone_bands,
+        compute_zone_bands, extract_rank_stat_highlights,
         initialize_market_observatory_schema, insert_statistics_rows_for_domain,
         normalize_variant_key, pressure_label, resample_rows, AnalyticsBucketSizeKey,
         AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow, MarketSnapshot,
@@ -4278,6 +4397,21 @@ mod tests {
         assert_eq!(zone.entry_high, 60.0);
         assert_eq!(zone.exit_low, 67.0);
         assert_eq!(zone.exit_high, 70.0);
+    }
+
+    #[test]
+    fn extracts_rank_stat_highlights_from_raw_json() {
+        let raw_json = r#"{
+          "levelStats": [
+            { "stats": ["Increase Critical Chance by 5%."] },
+            { "stats": ["Increase Critical Chance by 75%."] }
+          ]
+        }"#;
+
+        let (label, highlights) = extract_rank_stat_highlights(raw_json).expect("highlights");
+
+        assert_eq!(label.as_deref(), Some("Rank 0 -> Rank 1"));
+        assert_eq!(highlights, vec!["Increase Critical Chance by 5 -> 75%."]);
     }
 
     #[test]
