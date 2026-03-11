@@ -4082,7 +4082,19 @@ pub async fn get_item_analytics(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_item_detail_summary(
+    app: tauri::AppHandle,
+    item_id: i64,
+    slug: String,
+) -> Result<ItemDetailSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || load_item_detail_summary(&app, item_id, &slug))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

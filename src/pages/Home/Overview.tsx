@@ -17,6 +17,19 @@ const colorMap = {
   red: 'var(--accent-red)',
 };
 
+function CardLoadingOverlay({ visible, label }: { visible: boolean; label: string }) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <div className="market-panel-overlay">
+      <span className="market-panel-spinner" aria-hidden="true" />
+      <span className="market-panel-overlay-copy">{label}</span>
+    </div>
+  );
+}
+
 function buildSparklinePath(points: number[]): string {
   if (points.length === 0) {
     return '';
@@ -207,7 +220,7 @@ function EventsCard() {
         </div>
       </div>
 
-      <div className="card-body">
+      <div className="card-body dashboard-panel-shell">
         <div className="watchlist-alert-summary">
           {worldStateEventsError && worldStateEvents.length === 0 ? (
             <button
@@ -266,6 +279,10 @@ function EventsCard() {
             </button>
           ) : null}
         </div>
+        <CardLoadingOverlay
+          visible={worldStateEventsLoading}
+          label="Refreshing active dashboard events"
+        />
       </div>
     </div>
   );
@@ -372,7 +389,7 @@ function QuickViewCard() {
         </div>
       </div>
 
-      <div className="card-body">
+      <div className="card-body dashboard-panel-shell">
         {!selectedItem ? (
           <div className="empty-state">
             <span className="empty-primary">Search a WFM item to load quick view</span>
@@ -478,6 +495,10 @@ function QuickViewCard() {
             </div>
           </div>
         ) : null}
+        <CardLoadingOverlay
+          visible={Boolean(selectedItem && quickView.loading)}
+          label={`Loading quick view for ${selectedItem?.name ?? 'item'}`}
+        />
       </div>
     </div>
   );
