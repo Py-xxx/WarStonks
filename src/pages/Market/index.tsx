@@ -115,25 +115,31 @@ function buildLinePath(
   height: number,
   minValue: number,
   maxValue: number,
-): string {
+): Array<Array<{ x: number; y: number; value: number }>> {
   const range = maxValue - minValue || 1;
   const step = values.length <= 1 ? 0 : width / Math.max(values.length - 1, 1);
-  let path = '';
-  let started = false;
+  const segments: Array<Array<{ x: number; y: number; value: number }>> = [];
+  let currentSegment: Array<{ x: number; y: number; value: number }> = [];
 
   values.forEach((value, index) => {
     if (value === null) {
-      started = false;
+      if (currentSegment.length > 0) {
+        segments.push(currentSegment);
+        currentSegment = [];
+      }
       return;
     }
 
     const x = values.length <= 1 ? width / 2 : index * step;
     const y = height - ((value - minValue) / range) * height;
-    path += `${started ? ' L' : 'M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    started = true;
+    currentSegment.push({ x, y, value });
   });
 
-  return path;
+  if (currentSegment.length > 0) {
+    segments.push(currentSegment);
+  }
+
+  return segments;
 }
 
 function buildHistorySeriesValues(
@@ -286,7 +292,15 @@ function HistoryPanel({
               ))}
             </div>
             <div className="market-history-plot-main">
-              <svg viewBox="0 0 1000 320" className="market-history-svg" preserveAspectRatio="none" aria-label="Item price history">
+              <svg
+                viewBox="0 0 1000 320"
+                width="1000"
+                height="320"
+                className="market-history-svg"
+                preserveAspectRatio="none"
+                aria-label="Item price history"
+              >
+                <rect x="0" y="0" width="1000" height="320" className="market-history-surface" />
                 {[0, 0.25, 0.5, 0.75, 1].map((position) => (
                   <line
                     key={`h-${position}`}
@@ -315,17 +329,32 @@ function HistoryPanel({
                     return null;
                   }
 
-                  const path = buildLinePath(seriesValues[series.key], 1000, 288, minValue, maxValue);
-                  if (!path) {
+                  const segments = buildLinePath(seriesValues[series.key], 1000, 288, minValue, maxValue);
+                  if (segments.length === 0) {
                     return null;
                   }
 
                   return (
-                    <path
-                      key={series.key}
-                      d={path}
-                      className={`market-history-line ${series.colorClass}`}
-                    />
+                    <g key={series.key}>
+                      {segments.map((segment, index) => (
+                        <polyline
+                          key={`${series.key}-segment-${index}`}
+                          points={segment.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ')}
+                          className={`market-history-line ${series.colorClass}`}
+                        />
+                      ))}
+                      {segments.flatMap((segment, segmentIndex) =>
+                        segment.map((point, pointIndex) => (
+                          <circle
+                            key={`${series.key}-point-${segmentIndex}-${pointIndex}`}
+                            cx={point.x}
+                            cy={point.y}
+                            r={series.key === 'entry' || series.key === 'exit' ? 2.4 : 2.8}
+                            className={`market-history-point ${series.colorClass}`}
+                          />
+                        )),
+                      )}
+                    </g>
                   );
                 })}
               </svg>
