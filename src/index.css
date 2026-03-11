@@ -3612,6 +3612,22 @@ body {
   font-size: 11px;
 }
 
+.market-chart-status {
+  border: 1px solid rgba(121, 184, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(16, 27, 48, 0.74);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+}
+
+.market-chart-status.is-error {
+  border-color: rgba(240, 79, 88, 0.28);
+  background: rgba(49, 18, 24, 0.82);
+  color: #f2b2b7;
+}
+
 .legend-swatch {
   display: inline-block;
   width: 12px;

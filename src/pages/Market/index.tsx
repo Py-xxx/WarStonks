@@ -149,9 +149,11 @@ function buildPointMarkers(
 function PriceChart({
   points,
   toggles,
+  emptyMessage,
 }: {
   points: AnalyticsChartPoint[];
   toggles: Record<SeriesToggleKey, boolean>;
+  emptyMessage?: string | null;
 }) {
   const chartWidth = 820;
   const chartHeight = 260;
@@ -297,7 +299,9 @@ function PriceChart({
         </svg>
       </div>
       {points.length === 0 ? (
-        <div className="market-chart-empty">No cached price history is available for the active domain yet.</div>
+        <div className="market-chart-empty">
+          {emptyMessage ?? 'No cached price history is available for the active domain yet.'}
+        </div>
       ) : null}
       {points.length > 0 && !hasRenderableSeries ? (
         <div className="market-chart-empty">
@@ -413,6 +417,14 @@ function AnalyticsTab() {
   });
 
   const supportedBuckets = SUPPORTED_BUCKETS[domainKey];
+  const chartPoints = analytics?.chartPoints ?? [];
+  const chartStatusMessage = loading
+    ? 'Loading cached history, refreshing the live orderbook, and computing current market structure.'
+    : errorMessage
+      ? errorMessage
+      : chartPoints.length === 0
+        ? 'The chart panel is ready. Historical series will appear here as soon as analytics data is available for this item.'
+        : null;
 
   useEffect(() => {
     if (!supportedBuckets.includes(bucketSizeKey)) {
@@ -644,36 +656,30 @@ function AnalyticsTab() {
         </div>
       </div>
 
-      {loading ? (
-        <div className="market-empty-state">
-          <span className="empty-primary">Loading analytics</span>
-          <span className="empty-sub">Pulling cached history, refreshing the live orderbook, and computing current market structure.</span>
-        </div>
-      ) : null}
-
-      {errorMessage ? (
-        <div className="market-error-card card">
-          <div className="card-body">
-            <span className="watchlist-form-error">{errorMessage}</span>
+      <div className="market-chart-stack card">
+        <div className="card-header">
+          <div className="market-panel-header">
+            <span className="panel-title-eyebrow">Price History</span>
+            <span className="card-label">Lowest vs Median Lowest</span>
           </div>
         </div>
-      ) : null}
+        <div className="card-body">
+          {chartStatusMessage ? (
+            <div className={`market-chart-status${errorMessage ? ' is-error' : ''}`}>
+              {chartStatusMessage}
+            </div>
+          ) : null}
+          <PriceChart
+            points={chartPoints}
+            toggles={toggles}
+            emptyMessage={chartStatusMessage}
+          />
+          <VolumeChart points={chartPoints} />
+        </div>
+      </div>
 
       {analytics ? (
         <>
-          <div className="market-chart-stack card">
-            <div className="card-header">
-              <div className="market-panel-header">
-                <span className="panel-title-eyebrow">Price History</span>
-                <span className="card-label">Lowest vs Median Lowest</span>
-              </div>
-            </div>
-            <div className="card-body">
-              <PriceChart points={analytics.chartPoints} toggles={toggles} />
-              <VolumeChart points={analytics.chartPoints} />
-            </div>
-          </div>
-
           <div className="market-analytics-grid">
             <AnalyticsPanel title="Entry / Exit Zone Overview" eyebrow="Market State">
               <div className="market-metric-grid">
