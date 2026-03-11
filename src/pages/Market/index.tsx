@@ -5,44 +5,12 @@ import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   AnalyticsBucketSizeKey,
-  AnalyticsChartPoint,
   AnalyticsDomainKey,
   ItemAnalyticsResponse,
 } from '../../types';
 
-const DOMAIN_OPTIONS: { key: AnalyticsDomainKey; label: string }[] = [
-  { key: '1d', label: '1D' },
-  { key: '7d', label: '7D' },
-  { key: '30d', label: '30D' },
-  { key: '90d', label: '90D' },
-];
-
-const BUCKET_OPTIONS: { key: AnalyticsBucketSizeKey; label: string }[] = [
-  { key: '1h', label: '1H' },
-  { key: '3h', label: '3H' },
-  { key: '12h', label: '12H' },
-  { key: '18h', label: '18H' },
-  { key: '24h', label: '24H' },
-  { key: '7d', label: '7D' },
-  { key: '14d', label: '14D' },
-];
-
-const SUPPORTED_BUCKETS: Record<AnalyticsDomainKey, AnalyticsBucketSizeKey[]> = {
-  '1d': ['1h', '3h', '12h', '18h', '24h'],
-  '7d': ['24h', '7d'],
-  '30d': ['24h', '7d', '14d'],
-  '90d': ['24h', '7d', '14d'],
-};
-
-const SERIES_TOGGLE_ORDER = [
-  { key: 'movingAvg', label: 'Moving Avg' },
-  { key: 'weightedAvg', label: 'Weighted Avg' },
-  { key: 'averagePrice', label: 'Average Price' },
-  { key: 'highestBuy', label: 'Highest Buy' },
-  { key: 'fairValueBand', label: 'Fair Value Band' },
-] as const;
-
-type SeriesToggleKey = (typeof SERIES_TOGGLE_ORDER)[number]['key'];
+const DEFAULT_ANALYTICS_DOMAIN_KEY: AnalyticsDomainKey = '30d';
+const DEFAULT_ANALYTICS_BUCKET_SIZE_KEY: AnalyticsBucketSizeKey = '24h';
 
 function formatNumber(value: number | null | undefined, digits = 1): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -87,281 +55,6 @@ function formatRelativeTimestamp(value: string | null | undefined): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function buildSeriesPath(
-  points: AnalyticsChartPoint[],
-  selector: (point: AnalyticsChartPoint) => number | null,
-  width: number,
-  height: number,
-): string {
-  const seriesValues = points.map(selector);
-  const definedValues = seriesValues.filter((value): value is number => value !== null);
-  if (definedValues.length === 0) {
-    return '';
-  }
-
-  const max = Math.max(...definedValues);
-  const min = Math.min(...definedValues);
-  const range = max - min || 1;
-  const step = points.length === 1 ? width : width / Math.max(points.length - 1, 1);
-
-  let path = '';
-  seriesValues.forEach((value, index) => {
-    if (value === null) {
-      return;
-    }
-
-    const x = index * step;
-    const y = height - ((value - min) / range) * height;
-    path += `${path ? ' L' : 'M'} ${x.toFixed(1)} ${y.toFixed(1)}`;
-  });
-
-  return path;
-}
-
-function buildPointMarkers(
-  points: AnalyticsChartPoint[],
-  selector: (point: AnalyticsChartPoint) => number | null,
-  width: number,
-  height: number,
-): { x: number; y: number; key: string }[] {
-  const seriesValues = points.map(selector);
-  const definedValues = seriesValues.filter((value): value is number => value !== null);
-  if (definedValues.length === 0) {
-    return [];
-  }
-
-  const max = Math.max(...definedValues);
-  const min = Math.min(...definedValues);
-  const range = max - min || 1;
-  const step = points.length === 1 ? width / 2 : width / Math.max(points.length - 1, 1);
-
-  return seriesValues.flatMap((value, index) => {
-    if (value === null) {
-      return [];
-    }
-
-    const x = points.length === 1 ? width / 2 : index * step;
-    const y = height - ((value - min) / range) * height;
-    return [{ x, y, key: `${points[index]?.bucketAt ?? index}-${index}` }];
-  });
-}
-
-function PriceChart({
-  points,
-  toggles,
-  emptyMessage,
-}: {
-  points: AnalyticsChartPoint[];
-  toggles: Record<SeriesToggleKey, boolean>;
-  emptyMessage?: string | null;
-}) {
-  const chartWidth = 820;
-  const chartHeight = 260;
-  const lowestSellPath = buildSeriesPath(points, (point) => point.lowestSell, chartWidth, chartHeight);
-  const medianSellPath = buildSeriesPath(points, (point) => point.medianSell, chartWidth, chartHeight);
-  const movingAvgPath = toggles.movingAvg
-    ? buildSeriesPath(points, (point) => point.movingAvg, chartWidth, chartHeight)
-    : '';
-  const weightedAvgPath = toggles.weightedAvg
-    ? buildSeriesPath(points, (point) => point.weightedAvg, chartWidth, chartHeight)
-    : '';
-  const averagePricePath = toggles.averagePrice
-    ? buildSeriesPath(points, (point) => point.averagePrice, chartWidth, chartHeight)
-    : '';
-  const highestBuyPath = toggles.highestBuy
-    ? buildSeriesPath(points, (point) => point.highestBuy, chartWidth, chartHeight)
-    : '';
-  const allValues = points.flatMap((point) => [
-    point.lowestSell,
-    point.medianSell,
-    toggles.movingAvg ? point.movingAvg : null,
-    toggles.weightedAvg ? point.weightedAvg : null,
-    toggles.averagePrice ? point.averagePrice : null,
-    toggles.highestBuy ? point.highestBuy : null,
-    toggles.fairValueBand ? point.fairValueLow : null,
-    toggles.fairValueBand ? point.fairValueHigh : null,
-  ]);
-  const definedValues = allValues.filter((value): value is number => value !== null);
-  const max = definedValues.length > 0 ? Math.max(...definedValues) : 1;
-  const min = definedValues.length > 0 ? Math.min(...definedValues) : 0;
-  const range = max - min || 1;
-  const step = points.length === 1 ? chartWidth : chartWidth / Math.max(points.length - 1, 1);
-
-  const projectY = (value: number) => chartHeight - ((value - min) / range) * chartHeight;
-  const fairValuePolygon = toggles.fairValueBand
-    ? (() => {
-        const lowPoints = points
-          .map((point, index) =>
-            point.fairValueLow === null ? null : `${(index * step).toFixed(1)},${projectY(point.fairValueLow).toFixed(1)}`,
-          )
-          .filter((value): value is string => value !== null);
-        const highPoints = points
-          .map((point, index) =>
-            point.fairValueHigh === null ? null : `${(index * step).toFixed(1)},${projectY(point.fairValueHigh).toFixed(1)}`,
-          )
-          .filter((value): value is string => value !== null)
-          .reverse();
-
-        if (lowPoints.length === 0 || highPoints.length === 0) {
-          return '';
-        }
-
-        return `${lowPoints.join(' ')} ${highPoints.join(' ')}`;
-      })()
-    : '';
-
-  const yAxisLabels = [max, max - range * 0.33, max - range * 0.66, min];
-  const lowestSellMarkers = buildPointMarkers(
-    points,
-    (point) => point.lowestSell,
-    chartWidth,
-    chartHeight,
-  );
-  const medianSellMarkers = buildPointMarkers(
-    points,
-    (point) => point.medianSell,
-    chartWidth,
-    chartHeight,
-  );
-  const hasRenderableSeries =
-    Boolean(lowestSellPath) ||
-    Boolean(medianSellPath) ||
-    Boolean(movingAvgPath) ||
-    Boolean(weightedAvgPath) ||
-    Boolean(averagePricePath) ||
-    Boolean(highestBuyPath);
-
-  return (
-    <div className="market-chart-card">
-      <div className="market-chart-surface">
-        <div className="market-chart-y-axis">
-          {yAxisLabels.map((value) => (
-            <span key={value}>{formatPrice(value)}</span>
-          ))}
-        </div>
-        <svg
-          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-          className="market-chart-svg"
-          preserveAspectRatio="none"
-          width={chartWidth}
-          height={chartHeight}
-          aria-label="Price history chart"
-        >
-          {[0.15, 0.4, 0.65, 0.9].map((position) => (
-            <line
-              key={position}
-              x1="0"
-              y1={chartHeight * position}
-              x2={chartWidth}
-              y2={chartHeight * position}
-              className="market-chart-gridline"
-            />
-          ))}
-          {fairValuePolygon ? (
-            <polygon points={fairValuePolygon} className="market-chart-band" />
-          ) : null}
-          {lowestSellPath ? (
-            <path d={lowestSellPath} className="market-chart-line market-chart-line-primary" />
-          ) : null}
-          {lowestSellMarkers.map((marker) => (
-            <circle
-              key={`lowest-${marker.key}`}
-              cx={marker.x}
-              cy={marker.y}
-              r="3.25"
-              className="market-chart-marker market-chart-marker-primary"
-            />
-          ))}
-          {medianSellPath ? (
-            <path d={medianSellPath} className="market-chart-line market-chart-line-secondary" />
-          ) : null}
-          {medianSellMarkers.map((marker) => (
-            <circle
-              key={`median-${marker.key}`}
-              cx={marker.x}
-              cy={marker.y}
-              r="3.25"
-              className="market-chart-marker market-chart-marker-secondary"
-            />
-          ))}
-          {movingAvgPath ? (
-            <path d={movingAvgPath} className="market-chart-line market-chart-line-moving" />
-          ) : null}
-          {weightedAvgPath ? (
-            <path d={weightedAvgPath} className="market-chart-line market-chart-line-weighted" />
-          ) : null}
-          {averagePricePath ? (
-            <path d={averagePricePath} className="market-chart-line market-chart-line-average" />
-          ) : null}
-          {highestBuyPath ? (
-            <path d={highestBuyPath} className="market-chart-line market-chart-line-buy" />
-          ) : null}
-        </svg>
-      </div>
-      {points.length === 0 ? (
-        <div className="market-chart-empty">
-          {emptyMessage ?? 'No cached price history is available for the active domain yet.'}
-        </div>
-      ) : null}
-      {points.length > 0 && !hasRenderableSeries ? (
-        <div className="market-chart-empty">
-          Cached history loaded, but the active series does not contain enough usable points to draw a line yet.
-        </div>
-      ) : null}
-      <div className="market-chart-legend">
-        <span><i className="legend-swatch primary" /> Lowest Sell</span>
-        <span><i className="legend-swatch secondary" /> Median Lowest</span>
-        {toggles.movingAvg ? <span><i className="legend-swatch moving" /> Moving Avg</span> : null}
-        {toggles.weightedAvg ? <span><i className="legend-swatch weighted" /> Weighted Avg</span> : null}
-        {toggles.averagePrice ? <span><i className="legend-swatch average" /> Avg Price</span> : null}
-        {toggles.highestBuy ? <span><i className="legend-swatch buy" /> Highest Buy</span> : null}
-        {toggles.fairValueBand ? <span><i className="legend-swatch band" /> Fair Value Band</span> : null}
-      </div>
-    </div>
-  );
-}
-
-function VolumeChart({ points }: { points: AnalyticsChartPoint[] }) {
-  const width = 820;
-  const height = 110;
-  const maxVolume = Math.max(...points.map((point) => point.volume), 1);
-  const barWidth = points.length === 0 ? 0 : width / Math.max(points.length, 1);
-
-  return (
-    <div className="market-volume-card">
-      <div className="market-volume-header">
-        <span className="card-label">Volume</span>
-        <span className="market-volume-subtitle">Aligned to the active chart domain and buckets</span>
-      </div>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="market-volume-svg"
-        preserveAspectRatio="none"
-        width={width}
-        height={height}
-        aria-label="Volume chart"
-      >
-        {points.map((point, index) => {
-          const barHeight = (point.volume / maxVolume) * (height - 8);
-          const x = index * barWidth + 2;
-          const y = height - barHeight;
-          return (
-            <rect
-              key={point.bucketAt}
-              x={x}
-              y={y}
-              width={Math.max(barWidth - 4, 6)}
-              height={barHeight}
-              rx="4"
-              className="market-volume-bar"
-            />
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
 function EmptyAnalyticsState({ body }: { body: string }) {
   return (
     <div className="market-empty-state">
@@ -401,36 +94,11 @@ function AnalyticsTab() {
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
-  const [domainKey, setDomainKey] = useState<AnalyticsDomainKey>('30d');
-  const [bucketSizeKey, setBucketSizeKey] = useState<AnalyticsBucketSizeKey>('24h');
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [trendTab, setTrendTab] = useState<'lowestSell' | 'medianSell' | 'weightedAvg'>('lowestSell');
-  const [toggles, setToggles] = useState<Record<SeriesToggleKey, boolean>>({
-    movingAvg: true,
-    weightedAvg: true,
-    averagePrice: false,
-    highestBuy: true,
-    fairValueBand: true,
-  });
-
-  const supportedBuckets = SUPPORTED_BUCKETS[domainKey];
-  const chartPoints = analytics?.chartPoints ?? [];
-  const chartStatusMessage = loading
-    ? 'Loading cached history, refreshing the live orderbook, and computing current market structure.'
-    : errorMessage
-      ? errorMessage
-      : chartPoints.length === 0
-        ? 'The chart panel is ready. Historical series will appear here as soon as analytics data is available for this item.'
-        : null;
-
-  useEffect(() => {
-    if (!supportedBuckets.includes(bucketSizeKey)) {
-      setBucketSizeKey(supportedBuckets[0]);
-    }
-  }, [bucketSizeKey, supportedBuckets]);
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -469,8 +137,8 @@ function AnalyticsTab() {
           selectedItem.itemId,
           selectedItem.slug,
           selectedMarketVariantKey,
-          domainKey,
-          bucketSizeKey,
+          DEFAULT_ANALYTICS_DOMAIN_KEY,
+          DEFAULT_ANALYTICS_BUCKET_SIZE_KEY,
         ),
       )
       .then((response) => {
@@ -499,7 +167,7 @@ function AnalyticsTab() {
         'analytics',
       ).catch(() => undefined);
     };
-  }, [selectedItem, selectedMarketVariantKey, domainKey, bucketSizeKey, refreshNonce]);
+  }, [selectedItem, selectedMarketVariantKey, refreshNonce]);
 
   const selectedVariant = useMemo(
     () => marketVariants.find((entry) => entry.key === selectedMarketVariantKey) ?? null,
@@ -602,91 +270,20 @@ function AnalyticsTab() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-body market-toolbar">
-          <div className="market-toolbar-row">
-            <div className="market-toolbar-group">
-              <span className="market-toolbar-label">Domain</span>
-              <div className="market-chip-row">
-                {DOMAIN_OPTIONS.map((option) => (
-                  <button
-                    key={option.key}
-                    className={`market-chip${option.key === domainKey ? ' active' : ''}`}
-                    type="button"
-                    onClick={() => setDomainKey(option.key)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="market-toolbar-group">
-              <span className="market-toolbar-label">Bucket Size</span>
-              <div className="market-chip-row">
-                {BUCKET_OPTIONS.map((option) => {
-                  const supported = supportedBuckets.includes(option.key);
-                  return (
-                    <button
-                      key={option.key}
-                      className={`market-chip${option.key === bucketSizeKey ? ' active' : ''}`}
-                      type="button"
-                      disabled={!supported}
-                      onClick={() => supported && setBucketSizeKey(option.key)}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+      {loading ? (
+        <div className="market-empty-state">
+          <span className="empty-primary">Loading analytics</span>
+          <span className="empty-sub">Refreshing the live orderbook and computing the current market structure.</span>
+        </div>
+      ) : null}
 
-          <div className="market-toolbar-row">
-            <div className="market-toolbar-group">
-              <span className="market-toolbar-label">Overlays</span>
-              <div className="market-toggle-row">
-                {SERIES_TOGGLE_ORDER.map((toggle) => (
-                  <button
-                    key={toggle.key}
-                    className={`market-toggle${toggles[toggle.key] ? ' active' : ''}`}
-                    type="button"
-                    onClick={() =>
-                      setToggles((current) => ({
-                        ...current,
-                        [toggle.key]: !current[toggle.key],
-                      }))
-                    }
-                  >
-                    {toggle.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+      {errorMessage ? (
+        <div className="market-error-card card">
+          <div className="card-body">
+            <span className="watchlist-form-error">{errorMessage}</span>
           </div>
         </div>
-      </div>
-
-      <div className="market-chart-stack card">
-        <div className="card-header">
-          <div className="market-panel-header">
-            <span className="panel-title-eyebrow">Price History</span>
-            <span className="card-label">Lowest vs Median Lowest</span>
-          </div>
-        </div>
-        <div className="card-body">
-          {chartStatusMessage ? (
-            <div className={`market-chart-status${errorMessage ? ' is-error' : ''}`}>
-              {chartStatusMessage}
-            </div>
-          ) : null}
-          <PriceChart
-            points={chartPoints}
-            toggles={toggles}
-            emptyMessage={chartStatusMessage}
-          />
-          <VolumeChart points={chartPoints} />
-        </div>
-      </div>
+      ) : null}
 
       {analytics ? (
         <>
