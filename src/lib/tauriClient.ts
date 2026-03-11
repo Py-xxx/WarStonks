@@ -6,15 +6,12 @@
 import type {
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
-  AnalyticsBucketSizeKey,
-  AnalyticsDomainKey,
   AppSettings,
   ItemAnalyticsResponse,
   MarketSnapshot,
   MarketTrackingSource,
   MarketVariant,
   PersistedWorldStateCacheEntry,
-  StatisticsBucketRow,
   WfmDetailedOrder,
   WfstatFlashSale,
   WfstatNewsItem,
@@ -236,22 +233,6 @@ export async function getWfmItemOrders(
   });
 }
 
-export async function getWfmItemStatistics(
-  itemId: number,
-  slug: string,
-  variantKey: string | null,
-  domainKey: AnalyticsDomainKey,
-  bucketSizeKey: AnalyticsBucketSizeKey,
-): Promise<StatisticsBucketRow[]> {
-  return invoke<StatisticsBucketRow[]>('get_wfm_item_statistics', {
-    itemId,
-    slug,
-    variantKey,
-    domainKey,
-    bucketSizeKey,
-  });
-}
-
 export async function ensureMarketTracking(
   itemId: number,
   slug: string,
@@ -298,15 +279,11 @@ export async function getItemAnalytics(
   itemId: number,
   slug: string,
   variantKey: string | null,
-  domainKey: AnalyticsDomainKey,
-  bucketSizeKey: AnalyticsBucketSizeKey,
 ): Promise<ItemAnalyticsResponse> {
   return invoke<ItemAnalyticsResponse>('get_item_analytics', {
     itemId,
     slug,
     variantKey,
-    domainKey,
-    bucketSizeKey,
   });
 }
 

@@ -20,7 +20,7 @@ const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const STATISTICS_STALE_MINUTES: i64 = 45;
-const ANALYTICS_CACHE_VERSION: i64 = 2;
+const ANALYTICS_CACHE_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,24 +194,6 @@ pub struct MarketSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StatisticsBucketRow {
-    pub bucket_at: String,
-    pub source_kind: String,
-    pub volume: f64,
-    pub min_price: Option<f64>,
-    pub max_price: Option<f64>,
-    pub open_price: Option<f64>,
-    pub closed_price: Option<f64>,
-    pub avg_price: Option<f64>,
-    pub wa_price: Option<f64>,
-    pub median: Option<f64>,
-    pub moving_avg: Option<f64>,
-    pub donch_top: Option<f64>,
-    pub donch_bot: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AnalyticsChartPoint {
     pub bucket_at: String,
     pub lowest_sell: Option<f64>,
@@ -300,8 +282,6 @@ pub struct ItemAnalyticsResponse {
     pub computed_at: String,
     pub source_snapshot_at: Option<String>,
     pub source_stats_fetched_at: Option<String>,
-    pub chart_points: Vec<AnalyticsChartPoint>,
-    pub statistics_rows: Vec<StatisticsBucketRow>,
     pub current_snapshot: Option<MarketSnapshot>,
     pub entry_exit_zone_overview: EntryExitZoneOverview,
     pub orderbook_pressure: OrderbookPressureSummary,
@@ -394,7 +374,6 @@ struct WfmStatisticsPayload {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct WfmStatisticsRowApi {
     datetime: String,
     #[serde(default)]
@@ -648,42 +627,6 @@ fn derive_variant_label(variant_key: &str) -> String {
         format!("Rank {rank}")
     } else {
         "Base Market".to_string()
-    }
-}
-
-fn supported_bucket_sizes(domain: AnalyticsDomainKey) -> &'static [AnalyticsBucketSizeKey] {
-    match domain {
-        AnalyticsDomainKey::FortyEightHours => &[
-            AnalyticsBucketSizeKey::OneHour,
-            AnalyticsBucketSizeKey::ThreeHours,
-            AnalyticsBucketSizeKey::TwelveHours,
-            AnalyticsBucketSizeKey::EighteenHours,
-            AnalyticsBucketSizeKey::TwentyFourHours,
-        ],
-        AnalyticsDomainKey::SevenDays => &[
-            AnalyticsBucketSizeKey::TwentyFourHours,
-            AnalyticsBucketSizeKey::SevenDays,
-        ],
-        AnalyticsDomainKey::ThirtyDays | AnalyticsDomainKey::NinetyDays => &[
-            AnalyticsBucketSizeKey::TwentyFourHours,
-            AnalyticsBucketSizeKey::SevenDays,
-            AnalyticsBucketSizeKey::FourteenDays,
-        ],
-    }
-}
-
-fn validate_domain_and_bucket(
-    domain_key: AnalyticsDomainKey,
-    bucket_size_key: AnalyticsBucketSizeKey,
-) -> Result<()> {
-    if supported_bucket_sizes(domain_key).contains(&bucket_size_key) {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "bucket {} is not supported for domain {}",
-            bucket_size_key.as_str(),
-            domain_key.as_str()
-        ))
     }
 }
 
@@ -1084,40 +1027,6 @@ fn load_statistics_rows_for_domain(
     }
 
     Ok((closed_rows, live_buy_rows, latest_fetched_at))
-}
-
-fn merge_extended_chart_rows(
-    domain_key: AnalyticsDomainKey,
-    hourly_rows: &[InternalStatsRow],
-    extended_rows: &[InternalStatsRow],
-) -> Vec<InternalStatsRow> {
-    if domain_key == AnalyticsDomainKey::FortyEightHours {
-        return hourly_rows.to_vec();
-    }
-
-    let hourly_cutoff = now_utc() - AnalyticsDomainKey::FortyEightHours.lookback();
-    let mut merged_rows = extended_rows
-        .iter()
-        .filter(|row| row.bucket_at < hourly_cutoff)
-        .cloned()
-        .collect::<Vec<_>>();
-    merged_rows.extend(
-        hourly_rows
-            .iter()
-            .filter(|row| row.bucket_at >= hourly_cutoff)
-            .cloned(),
-    );
-    merged_rows.sort_by_key(|row| row.bucket_at);
-    merged_rows
-}
-
-fn latest_fetched_at(values: &[Option<String>]) -> Option<String> {
-    values
-        .iter()
-        .flatten()
-        .filter_map(|value| parse_timestamp(value).map(|parsed| (parsed, value.clone())))
-        .max_by_key(|(parsed, _)| *parsed)
-        .map(|(_, value)| value)
 }
 
 fn filter_supported_order(order: &WfmOrderRecord, variant_key: &str) -> bool {
@@ -1919,27 +1828,6 @@ fn resample_rows(
         .collect()
 }
 
-fn statistics_rows_from_points(points: &[AnalyticsChartPoint]) -> Vec<StatisticsBucketRow> {
-    points
-        .iter()
-        .map(|point| StatisticsBucketRow {
-            bucket_at: point.bucket_at.clone(),
-            source_kind: "closed".to_string(),
-            volume: point.volume,
-            min_price: point.lowest_sell,
-            max_price: point.fair_value_high,
-            open_price: None,
-            closed_price: None,
-            avg_price: point.average_price,
-            wa_price: point.weighted_avg,
-            median: point.median_sell,
-            moving_avg: point.moving_avg,
-            donch_top: point.fair_value_high,
-            donch_bot: point.fair_value_low,
-        })
-        .collect()
-}
-
 fn slope_over_hours(points: &[AnalyticsChartPoint], series_key: &str, hours: i64) -> Option<f64> {
     let latest = points.last()?;
     let latest_time = parse_timestamp(&latest.bucket_at)?;
@@ -2285,22 +2173,7 @@ fn load_cached_analytics(
     let parsed =
         serde_json::from_str::<ItemAnalyticsResponse>(&payload_json).context("failed to parse analytics cache payload")?;
 
-    if !analytics_response_has_renderable_chart(&parsed) {
-        return Ok(None);
-    }
-
     Ok(Some(parsed))
-}
-
-fn analytics_response_has_renderable_chart(response: &ItemAnalyticsResponse) -> bool {
-    response.chart_points.iter().any(|point| {
-        point.lowest_sell.is_some()
-            || point.median_sell.is_some()
-            || point.moving_avg.is_some()
-            || point.weighted_avg.is_some()
-            || point.average_price.is_some()
-            || point.highest_buy.is_some()
-    })
 }
 
 fn persist_analytics_cache(
@@ -2351,56 +2224,27 @@ fn build_item_analytics_inner(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
-    domain_key: String,
-    bucket_size_key: String,
 ) -> Result<ItemAnalyticsResponse> {
-    let domain_key = AnalyticsDomainKey::try_from(domain_key.as_str())?;
-    let bucket_size_key = AnalyticsBucketSizeKey::try_from(bucket_size_key.as_str())?;
-    validate_domain_and_bucket(domain_key, bucket_size_key)?;
-
+    let analytics_domain_key = AnalyticsDomainKey::FortyEightHours;
+    let analytics_bucket_size_key = AnalyticsBucketSizeKey::OneHour;
     let variant_key = normalize_variant_key(variant_key.as_deref());
     let variant_label = derive_variant_label(&variant_key);
     let connection = open_market_observatory_database(&app)?;
 
     if statistics_cache_is_stale(&connection, item_id, &variant_key)?
-        || !statistics_cache_is_usable(&connection, item_id, &variant_key, domain_key)?
+        || !statistics_cache_is_usable(
+            &connection,
+            item_id,
+            &variant_key,
+            AnalyticsDomainKey::FortyEightHours,
+        )?
     {
         fetch_and_cache_statistics(&connection, item_id, &slug, &variant_key)?;
     }
 
     let snapshot = maybe_capture_fresh_snapshot(&connection, item_id, &slug, &variant_key)?;
-    let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
+    let (hourly_closed_rows, hourly_live_buy_rows, latest_stats_fetched_at) =
         load_statistics_rows_for_domain(&connection, item_id, &variant_key, "48hours")?;
-    let (chart_closed_rows, chart_live_buy_rows, latest_stats_fetched_at) =
-        if domain_key == AnalyticsDomainKey::FortyEightHours {
-            (
-                hourly_closed_rows.clone(),
-                hourly_live_buy_rows.clone(),
-                hourly_stats_fetched_at.clone(),
-            )
-        } else {
-            let (extended_closed_rows, extended_live_buy_rows, extended_stats_fetched_at) =
-                load_statistics_rows_for_domain(&connection, item_id, &variant_key, "90days")?;
-            (
-                merge_extended_chart_rows(
-                    domain_key,
-                    &hourly_closed_rows,
-                    &extended_closed_rows,
-                ),
-                merge_extended_chart_rows(
-                    domain_key,
-                    &hourly_live_buy_rows,
-                    &extended_live_buy_rows,
-                ),
-                latest_fetched_at(&[
-                    hourly_stats_fetched_at.clone(),
-                    extended_stats_fetched_at.clone(),
-                ]),
-            )
-        };
-
-    let chart_points =
-        resample_rows(&chart_closed_rows, &chart_live_buy_rows, domain_key, bucket_size_key);
     let trend_points = resample_rows(
         &hourly_closed_rows,
         &hourly_live_buy_rows,
@@ -2412,15 +2256,15 @@ fn build_item_analytics_inner(
         &connection,
         item_id,
         &variant_key,
-        domain_key,
-        bucket_size_key,
+        analytics_domain_key,
+        analytics_bucket_size_key,
         source_snapshot_at.as_deref(),
         latest_stats_fetched_at.as_deref(),
     )? {
         return Ok(cached);
     }
 
-    let latest_point = chart_points.last();
+    let latest_point = trend_points.last();
     let zone_overview = build_entry_exit_zone_overview(Some(&snapshot), latest_point);
     let orderbook_pressure = build_orderbook_pressure(Some(&snapshot));
     let trend_quality_breakdown = build_trend_quality_breakdown(&trend_points);
@@ -2438,8 +2282,6 @@ fn build_item_analytics_inner(
         computed_at: format_timestamp(now_utc())?,
         source_snapshot_at,
         source_stats_fetched_at: latest_stats_fetched_at,
-        chart_points: chart_points.clone(),
-        statistics_rows: statistics_rows_from_points(&chart_points),
         current_snapshot: Some(snapshot),
         entry_exit_zone_overview: zone_overview,
         orderbook_pressure,
@@ -2447,7 +2289,12 @@ fn build_item_analytics_inner(
         action_card,
     };
 
-    persist_analytics_cache(&connection, &response, domain_key, bucket_size_key)?;
+    persist_analytics_cache(
+        &connection,
+        &response,
+        analytics_domain_key,
+        analytics_bucket_size_key,
+    )?;
     Ok(response)
 }
 
@@ -2480,24 +2327,6 @@ pub async fn get_wfm_item_orders(
             buy_orders: buy_orders.into_iter().take(50).collect(),
             snapshot,
         })
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn get_wfm_item_statistics(
-    app: tauri::AppHandle,
-    item_id: i64,
-    slug: String,
-    variant_key: Option<String>,
-    domain_key: String,
-    bucket_size_key: String,
-) -> Result<Vec<StatisticsBucketRow>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let response = build_item_analytics_inner(app, item_id, slug, variant_key, domain_key, bucket_size_key)?;
-        Ok::<_, anyhow::Error>(response.statistics_rows)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -2622,11 +2451,9 @@ pub async fn get_item_analytics(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
-    domain_key: String,
-    bucket_size_key: String,
 ) -> Result<ItemAnalyticsResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analytics_inner(app, item_id, slug, variant_key, domain_key, bucket_size_key)
+        build_item_analytics_inner(app, item_id, slug, variant_key)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -2639,9 +2466,9 @@ mod tests {
         build_action_card, build_entry_exit_zone_overview, build_market_snapshot,
         build_orderbook_pressure, build_trend_quality_breakdown, compute_pressure_ratio,
         initialize_market_observatory_schema, insert_statistics_rows_for_domain,
-        normalize_variant_key, pressure_label, resample_rows, validate_domain_and_bucket,
-        AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow,
-        MarketSnapshot, WfmDetailedOrder,
+        normalize_variant_key, pressure_label, resample_rows, AnalyticsBucketSizeKey,
+        AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow, MarketSnapshot,
+        WfmDetailedOrder,
     };
     use rusqlite::Connection;
     fn sample_order(
@@ -2669,20 +2496,6 @@ mod tests {
         assert_eq!(normalize_variant_key(None), "base");
         assert_eq!(normalize_variant_key(Some("  ")), "base");
         assert_eq!(normalize_variant_key(Some("rank:5")), "rank:5");
-    }
-
-    #[test]
-    fn validates_bucket_support() {
-        assert!(validate_domain_and_bucket(
-            AnalyticsDomainKey::FortyEightHours,
-            AnalyticsBucketSizeKey::OneHour
-        )
-        .is_ok());
-        assert!(validate_domain_and_bucket(
-            AnalyticsDomainKey::SevenDays,
-            AnalyticsBucketSizeKey::ThreeHours
-        )
-        .is_err());
     }
 
     #[test]
@@ -2817,86 +2630,6 @@ mod tests {
         assert_eq!(points[0].median_sell, Some(67.6));
         assert_eq!(points[0].weighted_avg, Some(68.2));
         assert_eq!(points[0].fair_value_high, Some(69.0));
-    }
-
-    #[test]
-    fn merges_recent_hourly_rows_over_extended_daily_rows() {
-        let cutoff = super::now_utc() - AnalyticsDomainKey::FortyEightHours.lookback();
-        let hourly_rows = vec![
-            InternalStatsRow {
-                bucket_at: cutoff + time::Duration::hours(1),
-                source_kind: "closed".to_string(),
-                volume: 5.0,
-                min_price: Some(64.0),
-                max_price: Some(66.0),
-                open_price: Some(64.0),
-                closed_price: Some(65.0),
-                avg_price: Some(65.0),
-                wa_price: Some(65.2),
-                median: Some(65.0),
-                moving_avg: Some(64.8),
-                donch_top: Some(66.0),
-                donch_bot: Some(63.5),
-            },
-            InternalStatsRow {
-                bucket_at: cutoff + time::Duration::hours(2),
-                source_kind: "closed".to_string(),
-                volume: 7.0,
-                min_price: Some(66.0),
-                max_price: Some(68.0),
-                open_price: Some(66.0),
-                closed_price: Some(67.0),
-                avg_price: Some(67.0),
-                wa_price: Some(67.1),
-                median: Some(67.0),
-                moving_avg: Some(66.7),
-                donch_top: Some(68.0),
-                donch_bot: Some(65.8),
-            },
-        ];
-        let extended_rows = vec![
-            InternalStatsRow {
-                bucket_at: cutoff - time::Duration::days(2),
-                source_kind: "closed".to_string(),
-                volume: 10.0,
-                min_price: Some(60.0),
-                max_price: Some(62.0),
-                open_price: Some(60.0),
-                closed_price: Some(61.0),
-                avg_price: Some(61.0),
-                wa_price: Some(61.0),
-                median: Some(61.0),
-                moving_avg: Some(60.5),
-                donch_top: Some(62.0),
-                donch_bot: Some(59.5),
-            },
-            InternalStatsRow {
-                bucket_at: cutoff + time::Duration::hours(3),
-                source_kind: "closed".to_string(),
-                volume: 20.0,
-                min_price: Some(90.0),
-                max_price: Some(92.0),
-                open_price: Some(90.0),
-                closed_price: Some(91.0),
-                avg_price: Some(91.0),
-                wa_price: Some(91.0),
-                median: Some(91.0),
-                moving_avg: Some(90.5),
-                donch_top: Some(92.0),
-                donch_bot: Some(89.5),
-            },
-        ];
-
-        let merged = super::merge_extended_chart_rows(
-            AnalyticsDomainKey::SevenDays,
-            &hourly_rows,
-            &extended_rows,
-        );
-
-        assert_eq!(merged.len(), 3);
-        assert_eq!(merged[0].median, Some(61.0));
-        assert_eq!(merged[1].median, Some(65.0));
-        assert_eq!(merged[2].median, Some(67.0));
     }
 
     #[test]
