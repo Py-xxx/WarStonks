@@ -85,8 +85,8 @@ function buildChartPoints(points: AnalyticsChartPoint[]): MockBucketPoint[] {
         median: point.medianSell,
         average: point.averagePrice,
         movingAverage: point.movingAvg,
-        entryZone: point.fairValueLow,
-        exitZone: point.fairValueHigh,
+        entryZone: point.entryZone,
+        exitZone: point.exitZone,
         volume: point.volume,
       };
     })

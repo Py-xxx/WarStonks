@@ -211,6 +211,8 @@ pub struct AnalyticsChartPoint {
     pub highest_buy: Option<f64>,
     pub fair_value_low: Option<f64>,
     pub fair_value_high: Option<f64>,
+    pub entry_zone: Option<f64>,
+    pub exit_zone: Option<f64>,
     pub volume: f64,
 }
 
@@ -1160,6 +1162,8 @@ fn load_snapshot_chart_points(
                 highest_buy,
                 fair_value_low: None,
                 fair_value_high: None,
+                entry_zone: None,
+                exit_zone: None,
                 volume: 0.0,
             }
         })
@@ -1203,6 +1207,12 @@ fn merge_snapshot_chart_points(
         }
         if entry.highest_buy.is_none() {
             entry.highest_buy = snapshot_point.highest_buy;
+        }
+        if entry.entry_zone.is_none() {
+            entry.entry_zone = snapshot_point.entry_zone;
+        }
+        if entry.exit_zone.is_none() {
+            entry.exit_zone = snapshot_point.exit_zone;
         }
     }
 
@@ -1890,6 +1900,67 @@ fn row_close_anchor(row: &InternalStatsRow) -> Option<f64> {
         .or(row.moving_avg)
 }
 
+fn fair_center_anchor(row: &InternalStatsRow) -> Option<f64> {
+    let mut weighted_sum = 0.0;
+    let mut total_weight = 0.0;
+
+    for (value, weight) in [
+        (row.median, 0.45),
+        (row.wa_price, 0.3),
+        (row.moving_avg, 0.15),
+        (row.avg_price, 0.1),
+    ] {
+        if let Some(value) = value {
+            weighted_sum += value * weight;
+            total_weight += weight;
+        }
+    }
+
+    if total_weight > 0.0 {
+        Some(weighted_sum / total_weight)
+    } else {
+        row_median_anchor(row)
+    }
+}
+
+fn compute_zone_targets(
+    lower_anchor: Option<f64>,
+    upper_anchor: Option<f64>,
+    fair_center: Option<f64>,
+) -> (Option<f64>, Option<f64>) {
+    let fair_center = match fair_center {
+        Some(value) => value,
+        None => return (None, None),
+    };
+
+    let lower_anchor = lower_anchor.unwrap_or(fair_center);
+    let upper_anchor = upper_anchor.unwrap_or(fair_center);
+    let lower_bound = lower_anchor.min(fair_center);
+    let upper_bound = upper_anchor.max(fair_center);
+    let range = (upper_bound - lower_bound).abs().max(1.0);
+    let min_zone_width = (fair_center.abs() * 0.03).max(1.0);
+    let zone_offset = (range * 0.22).max(min_zone_width);
+    let lower_guard = lower_bound + range * 0.12;
+    let upper_guard = upper_bound - range * 0.12;
+
+    let mut entry_target = (fair_center - zone_offset).max(lower_guard.min(fair_center - 0.25));
+    let mut exit_target = (fair_center + zone_offset).min(upper_guard.max(fair_center + 0.25));
+
+    if exit_target <= entry_target + 0.5 {
+        entry_target = (fair_center - min_zone_width * 0.5).max(lower_bound);
+        exit_target = (fair_center + min_zone_width * 0.5).min(upper_bound.max(fair_center + 0.5));
+    }
+    if exit_target <= entry_target + 0.5 {
+        exit_target = entry_target + 0.5;
+    }
+
+    (Some(entry_target), Some(exit_target))
+}
+
+fn zone_band_width(target: Option<f64>) -> Option<f64> {
+    target.map(|value| (value.abs() * 0.03).max(1.0))
+}
+
 fn last_defined_value(
     rows: &[InternalStatsRow],
     selector: impl Fn(&InternalStatsRow) -> Option<f64>,
@@ -1979,6 +2050,8 @@ fn resample_rows(
                     }
                     values.into_iter().reduce(f64::max)
                 });
+            let fair_center = fair_inputs.as_ref().and_then(fair_center_anchor);
+            let (entry_zone, exit_zone) = compute_zone_targets(fair_low, fair_high, fair_center);
 
             AnalyticsChartPoint {
                 bucket_at: format_timestamp(bucket_at).unwrap_or_default(),
@@ -2028,6 +2101,8 @@ fn resample_rows(
                         .filter_map(row_high_anchor)
                         .reduce(f64::max)
                 }),
+                entry_zone,
+                exit_zone,
                 volume,
             }
         })
@@ -2152,49 +2227,50 @@ fn build_entry_exit_zone_overview(
 ) -> EntryExitZoneOverview {
     let fair_value_low = latest_point.and_then(|point| point.fair_value_low);
     let fair_value_high = latest_point.and_then(|point| point.fair_value_high);
-    let entry_zone_low = match (fair_value_low, latest_point.and_then(|point| point.lowest_sell)) {
-        (Some(fair_low), Some(lowest)) => Some(fair_low.min(lowest)),
-        (Some(fair_low), None) => Some(fair_low),
-        _ => None,
-    };
-    let entry_zone_high = fair_value_low;
-    let exit_zone_low = fair_value_high;
-    let exit_zone_high = match (
-        fair_value_high,
-        latest_point.and_then(|point| point.fair_value_high).or(latest_point.and_then(|point| point.average_price)),
-    ) {
-        (Some(fair_high), Some(ceiling)) => Some(fair_high.max(ceiling)),
-        (Some(fair_high), None) => Some(fair_high),
-        _ => None,
-    };
+    let entry_target = latest_point.and_then(|point| point.entry_zone);
+    let exit_target = latest_point.and_then(|point| point.exit_zone);
+    let entry_zone_width = zone_band_width(entry_target).unwrap_or(1.0);
+    let exit_zone_width = zone_band_width(exit_target).unwrap_or(1.0);
+    let entry_zone_low = entry_target.map(|target| target - entry_zone_width);
+    let entry_zone_high = entry_target.map(|target| target + entry_zone_width);
+    let mut exit_zone_low = exit_target.map(|target| target - exit_zone_width);
+    let mut exit_zone_high = exit_target.map(|target| target + exit_zone_width);
+
+    if let (Some(entry_high), Some(exit_low)) = (entry_zone_high, exit_zone_low) {
+        if exit_low <= entry_high + 0.5 {
+            let shift = (entry_high + 0.5) - exit_low;
+            exit_zone_low = Some(exit_low + shift);
+            exit_zone_high = exit_zone_high.map(|value| value + shift);
+        }
+    }
 
     let current_lowest_price = snapshot.and_then(|entry| entry.lowest_sell);
     let current_median_lowest_price = snapshot.and_then(|entry| entry.median_sell);
-    let zone_quality = match (current_lowest_price, fair_value_low, fair_value_high) {
-        (Some(current), Some(low), Some(high)) if current <= low => "Excellent".to_string(),
-        (Some(current), Some(low), Some(high)) if current <= (low + high) / 2.0 => {
+    let zone_quality = match (current_lowest_price, entry_target, exit_target) {
+        (Some(current), Some(entry), Some(exit)) if current <= entry => "Excellent".to_string(),
+        (Some(current), Some(entry), Some(exit)) if current <= (entry + exit) / 2.0 => {
             "Good".to_string()
         }
         (Some(_), Some(_), Some(_)) => "Watch".to_string(),
         _ => "Thin data".to_string(),
     };
-    let entry_rationale = match (current_lowest_price, fair_value_low) {
-        (Some(current), Some(low)) if current <= low => {
-            "Current floor is trading below the lower fair-value anchor, which improves entry quality.".to_string()
+    let entry_rationale = match (current_lowest_price, entry_zone_low, entry_zone_high) {
+        (Some(current), Some(low), Some(high)) if current >= low && current <= high => {
+            "Current floor is inside the calculated entry band, which supports buying into the market without chasing extremes.".to_string()
         }
-        (Some(current), Some(low)) if current <= low * 1.04 => {
-            "Current floor is close to the lower fair-value anchor, so the item is approaching an attractive entry zone.".to_string()
+        (Some(current), Some(_low), Some(high)) if current < high => {
+            "Current floor is approaching the calculated entry band and is close to a favorable reversion level.".to_string()
         }
-        _ => "Current floor is not yet discounted against the recent fair-value anchors.".to_string(),
+        _ => "Current floor is still above the calculated entry band, so patience is likely better than forcing an entry.".to_string(),
     };
-    let exit_rationale = match (current_median_lowest_price, fair_value_high) {
-        (Some(current), Some(high)) if current >= high => {
-            "Recent median market price is already testing the upper fair-value zone, which supports taking profit.".to_string()
+    let exit_rationale = match (current_median_lowest_price, exit_zone_low, exit_zone_high) {
+        (Some(current), Some(low), Some(high)) if current >= low && current <= high => {
+            "Recent median market price is inside the calculated exit band, which supports taking profit into strength.".to_string()
         }
-        (Some(current), Some(high)) if current >= high * 0.96 => {
-            "Recent median market price is approaching the upper fair-value zone, which supports preparing exits.".to_string()
+        (Some(current), Some(low), Some(_high)) if current >= low * 0.96 => {
+            "Recent median market price is approaching the calculated exit band, which supports preparing exits rather than chasing more upside.".to_string()
         }
-        _ => "Recent median market price is still below the upper fair-value zone, so exits are less favorable than entries.".to_string(),
+        _ => "Recent median market price is still below the calculated exit band, so there is more room before a preferred take-profit area.".to_string(),
     };
 
     EntryExitZoneOverview {
@@ -2704,6 +2780,7 @@ mod tests {
     use super::{
         build_action_card, build_entry_exit_zone_overview, build_market_snapshot,
         build_orderbook_pressure, build_trend_quality_breakdown, compute_pressure_ratio,
+        compute_zone_targets,
         initialize_market_observatory_schema, insert_statistics_rows_for_domain,
         normalize_variant_key, pressure_label, resample_rows, AnalyticsBucketSizeKey,
         AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow, MarketSnapshot,
@@ -2890,6 +2967,8 @@ mod tests {
                 highest_buy: Some(58.0 + index as f64),
                 fair_value_low: Some(59.0),
                 fair_value_high: Some(66.0),
+                entry_zone: Some(60.5),
+                exit_zone: Some(64.5),
                 volume: 10.0,
             })
             .collect::<Vec<_>>();
@@ -2939,6 +3018,8 @@ mod tests {
                 highest_buy: Some(10.0),
                 fair_value_low: Some(11.2),
                 fair_value_high: Some(12.5),
+                entry_zone: Some(10.9),
+                exit_zone: Some(12.2),
                 volume: 8.0,
             },
             AnalyticsChartPoint {
@@ -2955,6 +3036,8 @@ mod tests {
                 highest_buy: Some(9.0),
                 fair_value_low: Some(11.1),
                 fair_value_high: Some(12.6),
+                entry_zone: Some(10.8),
+                exit_zone: Some(12.3),
                 volume: 10.0,
             },
         ];
@@ -2967,6 +3050,20 @@ mod tests {
         assert_eq!(pressure.pressure_label, "Entry Pressure");
         assert!(!action.suggested_action.is_empty());
         assert!(!zone.zone_quality.is_empty());
+    }
+
+    #[test]
+    fn computes_zone_targets_inside_the_historical_range() {
+        let (entry, exit) = compute_zone_targets(Some(60.0), Some(80.0), Some(70.0));
+
+        let entry = entry.expect("entry target");
+        let exit = exit.expect("exit target");
+
+        assert!(entry > 60.0);
+        assert!(entry < 70.0);
+        assert!(exit > 70.0);
+        assert!(exit < 80.0);
+        assert!(exit > entry);
     }
 
     #[test]
