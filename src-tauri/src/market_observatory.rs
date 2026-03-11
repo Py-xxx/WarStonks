@@ -1956,8 +1956,10 @@ fn compute_zone_bands(
     let range = (upper_bound - lower_bound).max(4.0);
     let zone_width = (range * 0.2).round().clamp(3.0, 6.0);
     let midpoint = (lower_bound + upper_bound) * 0.5;
-    let upward_shift = if fair_center > midpoint + 0.5 {
-        ((fair_center - midpoint) * 0.8).round().clamp(0.0, zone_width)
+    let upward_shift = if fair_center > midpoint + 0.75 {
+        ((fair_center - midpoint) * 0.6)
+            .round()
+            .clamp(0.0, (zone_width - 1.0).max(0.0))
     } else {
         0.0
     };
@@ -3097,6 +3099,16 @@ mod tests {
         assert_eq!(zone.exit_high, 70.0);
         assert_eq!(zone.entry_target, 57.0);
         assert_eq!(zone.exit_target, 69.0);
+    }
+
+    #[test]
+    fn keeps_entry_zone_from_climbing_too_high_when_market_bias_rises() {
+        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(66.0)).expect("zone bands");
+
+        assert_eq!(zone.entry_low, 57.0);
+        assert_eq!(zone.entry_high, 60.0);
+        assert_eq!(zone.exit_low, 67.0);
+        assert_eq!(zone.exit_high, 70.0);
     }
 
     #[test]

@@ -56,7 +56,7 @@ const SERIES_OPTIONS: ChartSeriesOption[] = [
 const DEFAULT_SERIES_TOGGLES: Record<ChartSeriesKey, boolean> = {
   median: true,
   lowest: true,
-  movingAverage: true,
+  movingAverage: false,
   average: false,
   entryZone: true,
   exitZone: true,
