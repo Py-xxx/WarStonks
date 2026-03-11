@@ -434,9 +434,6 @@ export type MarketTrackingSource =
   | 'analytics'
   | 'trade-health';
 
-export type AnalyticsDomainKey = '48h' | '7d' | '30d' | '90d';
-export type AnalyticsBucketSizeKey = '1h' | '3h' | '12h' | '18h' | '24h' | '7d' | '14d';
-
 export interface MarketVariant {
   key: string;
   label: string;
@@ -484,35 +481,6 @@ export interface WfmDetailedOrder {
   userSlug: string | null;
   status: string | null;
   updatedAt: string | null;
-}
-
-export interface StatisticsBucketRow {
-  bucketAt: string;
-  sourceKind: string;
-  volume: number;
-  minPrice: number | null;
-  maxPrice: number | null;
-  openPrice: number | null;
-  closedPrice: number | null;
-  avgPrice: number | null;
-  waPrice: number | null;
-  median: number | null;
-  movingAvg: number | null;
-  donchTop: number | null;
-  donchBot: number | null;
-}
-
-export interface AnalyticsChartPoint {
-  bucketAt: string;
-  lowestSell: number | null;
-  medianSell: number | null;
-  movingAvg: number | null;
-  weightedAvg: number | null;
-  averagePrice: number | null;
-  highestBuy: number | null;
-  fairValueLow: number | null;
-  fairValueHigh: number | null;
-  volume: number;
 }
 
 export interface EntryExitZoneOverview {
@@ -578,8 +546,6 @@ export interface ItemAnalyticsResponse {
   computedAt: string;
   sourceSnapshotAt: string | null;
   sourceStatsFetchedAt: string | null;
-  chartPoints: AnalyticsChartPoint[];
-  statisticsRows: StatisticsBucketRow[];
   currentSnapshot: MarketSnapshot | null;
   entryExitZoneOverview: EntryExitZoneOverview;
   orderbookPressure: OrderbookPressureSummary;

@@ -15,7 +15,6 @@ pub fn run() {
             commands::get_relic_tier_icons,
             commands::get_wfm_top_sell_orders,
             market_observatory::get_wfm_item_orders,
-            market_observatory::get_wfm_item_statistics,
             market_observatory::ensure_market_tracking,
             market_observatory::stop_market_tracking,
             market_observatory::refresh_market_tracking,
