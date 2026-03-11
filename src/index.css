@@ -3455,6 +3455,9 @@ body {
 .market-chip,
 .market-toggle,
 .market-variant-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 32px;
   padding: 0 12px;
   border-radius: 999px;
@@ -3522,8 +3525,12 @@ body {
 .market-chart-svg,
 .market-volume-svg {
   width: 100%;
-  height: auto;
+  height: 260px;
   display: block;
+}
+
+.market-volume-svg {
+  height: 110px;
 }
 
 .market-chart-gridline {
@@ -3549,6 +3556,26 @@ body {
   fill: rgba(88, 205, 177, 0.14);
   stroke: rgba(88, 205, 177, 0.18);
   stroke-width: 1;
+}
+
+.market-chart-marker {
+  stroke-width: 1.5;
+}
+
+.market-chart-marker-primary {
+  fill: #79b8ff;
+  stroke: rgba(13, 18, 34, 0.85);
+}
+
+.market-chart-marker-secondary {
+  fill: #ffd166;
+  stroke: rgba(13, 18, 34, 0.85);
+}
+
+.market-chart-empty {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .market-chart-legend {

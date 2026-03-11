@@ -919,6 +919,52 @@ fn statistics_cache_is_stale(
     Ok(now_utc() - parsed_fetched_at >= TimeDuration::minutes(STATISTICS_STALE_MINUTES))
 }
 
+fn statistics_cache_is_usable(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+    domain_key: AnalyticsDomainKey,
+) -> Result<bool> {
+    let expected_min_rows = match domain_key {
+        AnalyticsDomainKey::OneDay => 8_i64,
+        AnalyticsDomainKey::SevenDays => 5_i64,
+        AnalyticsDomainKey::ThirtyDays | AnalyticsDomainKey::NinetyDays => 10_i64,
+    };
+
+    let (closed_row_count, rich_anchor_count): (i64, i64) = connection.query_row(
+        "SELECT
+           COUNT(*),
+           SUM(
+             CASE
+               WHEN min_price IS NOT NULL
+                 OR max_price IS NOT NULL
+                 OR open_price IS NOT NULL
+                 OR closed_price IS NOT NULL
+                 OR avg_price IS NOT NULL
+                 OR wa_price IS NOT NULL
+                 OR moving_avg IS NOT NULL
+                 OR donch_top IS NOT NULL
+                 OR donch_bot IS NOT NULL
+               THEN 1
+               ELSE 0
+             END
+           )
+         FROM statistics_cache
+         WHERE item_id = ?1
+           AND variant_key = ?2
+           AND domain_key = ?3
+           AND source_kind = 'closed'",
+        params![item_id, variant_key, domain_key.source_domain()],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+    )?;
+
+    if closed_row_count < expected_min_rows {
+        return Ok(false);
+    }
+
+    Ok(rich_anchor_count > 0 && rich_anchor_count * 2 >= closed_row_count)
+}
+
 fn load_statistics_rows(
     connection: &Connection,
     item_id: i64,
@@ -2168,7 +2214,9 @@ fn build_item_analytics_inner(
     let variant_label = derive_variant_label(&variant_key);
     let connection = open_market_observatory_database(&app)?;
 
-    if statistics_cache_is_stale(&connection, item_id, &variant_key)? {
+    if statistics_cache_is_stale(&connection, item_id, &variant_key)?
+        || !statistics_cache_is_usable(&connection, item_id, &variant_key, domain_key)?
+    {
         fetch_and_cache_statistics(&connection, item_id, &slug, &variant_key)?;
     }
 
@@ -2660,5 +2708,54 @@ mod tests {
             .expect("count row");
 
         assert_eq!(row_count, 1);
+    }
+
+    #[test]
+    fn flags_sparse_closed_cache_as_unusable() {
+        let connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+        let base_time = super::floor_timestamp(
+            super::now_utc() - time::Duration::days(20),
+            AnalyticsBucketSizeKey::TwentyFourHours,
+        );
+
+        let sparse_rows = (0..12)
+            .map(|index| InternalStatsRow {
+                bucket_at: base_time + time::Duration::days(index),
+                source_kind: "closed".to_string(),
+                volume: 10.0,
+                min_price: None,
+                max_price: None,
+                open_price: None,
+                closed_price: None,
+                avg_price: None,
+                wa_price: None,
+                median: Some(69.0),
+                moving_avg: None,
+                donch_top: None,
+                donch_bot: None,
+            })
+            .collect::<Vec<_>>();
+
+        insert_statistics_rows_for_domain(
+            &connection,
+            5,
+            "wisp_prime_set",
+            "base",
+            "90days",
+            &sparse_rows,
+            "2026-03-11T00:00:00Z",
+        )
+        .expect("insert sparse rows");
+
+        assert!(
+            !super::statistics_cache_is_usable(
+                &connection,
+                5,
+                "base",
+                AnalyticsDomainKey::ThirtyDays
+            )
+            .expect("cache usability"),
+        );
     }
 }

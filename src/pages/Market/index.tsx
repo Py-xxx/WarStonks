@@ -118,6 +118,34 @@ function buildSeriesPath(
   return path;
 }
 
+function buildPointMarkers(
+  points: AnalyticsChartPoint[],
+  selector: (point: AnalyticsChartPoint) => number | null,
+  width: number,
+  height: number,
+): { x: number; y: number; key: string }[] {
+  const seriesValues = points.map(selector);
+  const definedValues = seriesValues.filter((value): value is number => value !== null);
+  if (definedValues.length === 0) {
+    return [];
+  }
+
+  const max = Math.max(...definedValues);
+  const min = Math.min(...definedValues);
+  const range = max - min || 1;
+  const step = points.length === 1 ? width / 2 : width / Math.max(points.length - 1, 1);
+
+  return seriesValues.flatMap((value, index) => {
+    if (value === null) {
+      return [];
+    }
+
+    const x = points.length === 1 ? width / 2 : index * step;
+    const y = height - ((value - min) / range) * height;
+    return [{ x, y, key: `${points[index]?.bucketAt ?? index}-${index}` }];
+  });
+}
+
 function PriceChart({
   points,
   toggles,
@@ -167,6 +195,18 @@ function PriceChart({
     : '';
 
   const yAxisLabels = [max, max - range * 0.33, max - range * 0.66, min];
+  const lowestSellMarkers = buildPointMarkers(
+    points,
+    (point) => point.lowestSell,
+    chartWidth,
+    chartHeight,
+  );
+  const medianSellMarkers = buildPointMarkers(
+    points,
+    (point) => point.medianSell,
+    chartWidth,
+    chartHeight,
+  );
 
   return (
     <div className="market-chart-card">
@@ -194,10 +234,28 @@ function PriceChart({
             d={buildSeriesPath(points, (point) => point.lowestSell, chartWidth, chartHeight)}
             className="market-chart-line market-chart-line-primary"
           />
+          {lowestSellMarkers.map((marker) => (
+            <circle
+              key={`lowest-${marker.key}`}
+              cx={marker.x}
+              cy={marker.y}
+              r="3.25"
+              className="market-chart-marker market-chart-marker-primary"
+            />
+          ))}
           <path
             d={buildSeriesPath(points, (point) => point.medianSell, chartWidth, chartHeight)}
             className="market-chart-line market-chart-line-secondary"
           />
+          {medianSellMarkers.map((marker) => (
+            <circle
+              key={`median-${marker.key}`}
+              cx={marker.x}
+              cy={marker.y}
+              r="3.25"
+              className="market-chart-marker market-chart-marker-secondary"
+            />
+          ))}
           {toggles.movingAvg ? (
             <path
               d={buildSeriesPath(points, (point) => point.movingAvg, chartWidth, chartHeight)}
@@ -224,6 +282,9 @@ function PriceChart({
           ) : null}
         </svg>
       </div>
+      {points.length === 0 ? (
+        <div className="market-chart-empty">No cached price history is available for the active domain yet.</div>
+      ) : null}
       <div className="market-chart-legend">
         <span><i className="legend-swatch primary" /> Lowest Sell</span>
         <span><i className="legend-swatch secondary" /> Median Lowest</span>
