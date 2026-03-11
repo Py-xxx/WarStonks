@@ -3527,6 +3527,12 @@ body {
   gap: 10px;
   align-items: stretch;
   min-height: 260px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(121, 184, 255, 0.12);
+  background:
+    radial-gradient(circle at top, rgba(58, 102, 194, 0.1), transparent 52%),
+    linear-gradient(180deg, rgba(9, 14, 27, 0.98), rgba(7, 10, 18, 0.98));
 }
 
 .market-chart-y-axis {
@@ -3552,15 +3558,16 @@ body {
 }
 
 .market-chart-gridline {
-  stroke: rgba(198, 212, 255, 0.08);
+  stroke: rgba(198, 212, 255, 0.12);
   stroke-width: 1;
 }
 
 .market-chart-line {
   fill: none;
-  stroke-width: 2.4;
+  stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
+  filter: drop-shadow(0 0 6px rgba(121, 184, 255, 0.14));
 }
 
 .market-chart-line-primary { stroke: #79b8ff; }
