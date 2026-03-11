@@ -578,6 +578,136 @@ export interface ItemAnalyticsResponse {
   actionCard: AnalyticsActionCard;
 }
 
+export interface AnalysisHeadline {
+  entryPrice: number | null;
+  exitPrice: number | null;
+  exitPercentileLabel: string;
+  netMargin: number | null;
+  liquidityScore: number | null;
+  liquidityLabel: string;
+}
+
+export interface FlipAnalysisSummary {
+  entryPrice: number | null;
+  exitPrice: number | null;
+  grossMargin: number | null;
+  netMargin: number | null;
+  efficiencyScore: number | null;
+  efficiencyLabel: string;
+}
+
+export interface LiquidityDetailSummary {
+  demandRatio: number | null;
+  state: string;
+  sellersWithinTwoPt: number;
+  undercutVelocity: number | null;
+  quantityWeightedDemand: number | null;
+  liquidityScore: number | null;
+}
+
+export interface TrendSummary {
+  direction: string;
+  confidence: number | null;
+  summary: string;
+  slope1h: number | null;
+  slope3h: number | null;
+  slope6h: number | null;
+}
+
+export interface ManipulationSignalState {
+  key: string;
+  label: string;
+  active: boolean;
+  detail: string;
+}
+
+export interface ManipulationRiskSummary {
+  riskLevel: string;
+  activeSignals: number;
+  efficiencyPenaltyPct: number;
+  signals: ManipulationSignalState[];
+}
+
+export interface TimeOfDayLiquidityBucket {
+  hour: number;
+  label: string;
+  avgVisibleQuantity: number;
+  avgSellOrders: number;
+  avgSpreadPct: number | null;
+}
+
+export interface TimeOfDayLiquiditySummary {
+  currentHourLabel: string;
+  strongestWindowLabel: string | null;
+  weakestWindowLabel: string | null;
+  buckets: TimeOfDayLiquidityBucket[];
+}
+
+export interface ItemDetailSummary {
+  itemId: number;
+  name: string;
+  slug: string;
+  imagePath: string | null;
+  wikiLink: string | null;
+  description: string | null;
+  itemFamily: string | null;
+  category: string | null;
+  itemType: string | null;
+  rarity: string | null;
+  masteryReq: number | null;
+  maxRank: number | null;
+  ducats: number | null;
+  tradable: boolean | null;
+  prime: boolean | null;
+  vaulted: boolean | null;
+  releaseDate: string | null;
+  estimatedVaultDate: string | null;
+  vaultDate: string | null;
+  tags: string[];
+}
+
+export interface SetComponentAnalysisEntry {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  currentLowestPrice: number | null;
+  recommendedEntryPrice: number | null;
+  variantKey: string;
+  variantLabel: string;
+}
+
+export interface DropSourceEntry {
+  location: string;
+  chance: number | null;
+  rarity: string | null;
+  sourceType: string | null;
+}
+
+export interface ItemSupplyContext {
+  mode: 'set-components' | 'drop-sources' | 'none';
+  components: SetComponentAnalysisEntry[];
+  dropSources: DropSourceEntry[];
+}
+
+export interface ItemAnalysisResponse {
+  itemId: number;
+  slug: string;
+  variantKey: string;
+  variantLabel: string;
+  computedAt: string;
+  sourceSnapshotAt: string | null;
+  sourceStatsFetchedAt: string | null;
+  headline: AnalysisHeadline;
+  flipAnalysis: FlipAnalysisSummary;
+  liquidityDetail: LiquidityDetailSummary;
+  trend: TrendSummary;
+  manipulationRisk: ManipulationRiskSummary;
+  timeOfDayLiquidity: TimeOfDayLiquiditySummary;
+  itemDetails: ItemDetailSummary;
+  supplyContext: ItemSupplyContext;
+}
+
 export interface QuickViewSelection {
   selectedItem: WfmAutocompleteItem | null;
   sellOrders: WfmTopSellOrder[];

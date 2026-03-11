@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -303,6 +304,162 @@ pub struct ItemAnalyticsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AnalysisHeadline {
+    pub entry_price: Option<f64>,
+    pub exit_price: Option<f64>,
+    pub exit_percentile_label: String,
+    pub net_margin: Option<f64>,
+    pub liquidity_score: Option<f64>,
+    pub liquidity_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlipAnalysisSummary {
+    pub entry_price: Option<f64>,
+    pub exit_price: Option<f64>,
+    pub gross_margin: Option<f64>,
+    pub net_margin: Option<f64>,
+    pub efficiency_score: Option<f64>,
+    pub efficiency_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiquidityDetailSummary {
+    pub demand_ratio: Option<f64>,
+    pub state: String,
+    pub sellers_within_two_pt: i64,
+    pub undercut_velocity: Option<f64>,
+    pub quantity_weighted_demand: Option<f64>,
+    pub liquidity_score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrendSummary {
+    pub direction: String,
+    pub confidence: Option<f64>,
+    pub summary: String,
+    pub slope_1h: Option<f64>,
+    pub slope_3h: Option<f64>,
+    pub slope_6h: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManipulationSignalState {
+    pub key: String,
+    pub label: String,
+    pub active: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManipulationRiskSummary {
+    pub risk_level: String,
+    pub active_signals: usize,
+    pub efficiency_penalty_pct: i64,
+    pub signals: Vec<ManipulationSignalState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeOfDayLiquidityBucket {
+    pub hour: i64,
+    pub label: String,
+    pub avg_visible_quantity: f64,
+    pub avg_sell_orders: f64,
+    pub avg_spread_pct: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeOfDayLiquiditySummary {
+    pub current_hour_label: String,
+    pub strongest_window_label: Option<String>,
+    pub weakest_window_label: Option<String>,
+    pub buckets: Vec<TimeOfDayLiquidityBucket>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemDetailSummary {
+    pub item_id: i64,
+    pub name: String,
+    pub slug: String,
+    pub image_path: Option<String>,
+    pub wiki_link: Option<String>,
+    pub description: Option<String>,
+    pub item_family: Option<String>,
+    pub category: Option<String>,
+    pub item_type: Option<String>,
+    pub rarity: Option<String>,
+    pub mastery_req: Option<i64>,
+    pub max_rank: Option<i64>,
+    pub ducats: Option<i64>,
+    pub tradable: Option<bool>,
+    pub prime: Option<bool>,
+    pub vaulted: Option<bool>,
+    pub release_date: Option<String>,
+    pub estimated_vault_date: Option<String>,
+    pub vault_date: Option<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetComponentAnalysisEntry {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub current_lowest_price: Option<f64>,
+    pub recommended_entry_price: Option<f64>,
+    pub variant_key: String,
+    pub variant_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropSourceEntry {
+    pub location: String,
+    pub chance: Option<f64>,
+    pub rarity: Option<String>,
+    pub source_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemSupplyContext {
+    pub mode: String,
+    pub components: Vec<SetComponentAnalysisEntry>,
+    pub drop_sources: Vec<DropSourceEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemAnalysisResponse {
+    pub item_id: i64,
+    pub slug: String,
+    pub variant_key: String,
+    pub variant_label: String,
+    pub computed_at: String,
+    pub source_snapshot_at: Option<String>,
+    pub source_stats_fetched_at: Option<String>,
+    pub headline: AnalysisHeadline,
+    pub flip_analysis: FlipAnalysisSummary,
+    pub liquidity_detail: LiquidityDetailSummary,
+    pub trend: TrendSummary,
+    pub manipulation_risk: ManipulationRiskSummary,
+    pub time_of_day_liquidity: TimeOfDayLiquiditySummary,
+    pub item_details: ItemDetailSummary,
+    pub supply_context: ItemSupplyContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WfmDetailedOrder {
     pub order_id: String,
     pub order_type: String,
@@ -339,6 +496,38 @@ pub struct TrackingRefreshSummary {
 struct WfmOrdersApiResponse {
     api_version: Option<String>,
     data: Vec<WfmOrderRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmSetApiResponse {
+    data: WfmSetData,
+}
+
+#[derive(Debug, Deserialize)]
+struct WfmSetData {
+    items: Vec<WfmSetItemRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmSetItemRecord {
+    slug: String,
+    #[serde(default)]
+    set_root: Option<bool>,
+    #[serde(default)]
+    i18n: HashMap<String, WfmSetI18nRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmSetI18nRecord {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    thumb: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2419,6 +2608,712 @@ fn build_action_card(
     }
 }
 
+fn bool_from_i64(value: Option<i64>) -> Option<bool> {
+    value.map(|entry| entry != 0)
+}
+
+fn round_price_option(value: Option<f64>) -> Option<f64> {
+    value.map(round_platinum)
+}
+
+fn liquidity_score_percent(snapshot: &MarketSnapshot) -> f64 {
+    let demand_ratio = compute_pressure_ratio(
+        snapshot.buy_quantity,
+        snapshot.sell_quantity,
+        snapshot.buy_order_count,
+        snapshot.sell_order_count,
+    )
+    .unwrap_or(0.0);
+    let demand_balance = if demand_ratio >= 1.35 {
+        100.0
+    } else if demand_ratio >= 1.10 {
+        80.0
+    } else if demand_ratio >= 0.85 {
+        60.0
+    } else if demand_ratio >= 0.60 {
+        40.0
+    } else {
+        20.0
+    };
+
+    let low_price_competition = if snapshot.near_floor_seller_count <= 2
+        && snapshot.near_floor_quantity <= 5
+        && snapshot.unique_sell_users <= 2
+    {
+        100.0
+    } else if snapshot.near_floor_seller_count <= 4
+        && snapshot.near_floor_quantity <= 10
+        && snapshot.unique_sell_users <= 4
+    {
+        80.0
+    } else if snapshot.near_floor_seller_count <= 7 && snapshot.near_floor_quantity <= 20 {
+        60.0
+    } else if snapshot.near_floor_seller_count <= 12 && snapshot.near_floor_quantity <= 40 {
+        40.0
+    } else {
+        20.0
+    };
+
+    let activity_index = (snapshot.sell_order_count + snapshot.buy_order_count) as f64 * 0.3
+        + (snapshot.sell_quantity + snapshot.buy_quantity) as f64 * 0.5
+        + (snapshot.unique_sell_users + snapshot.unique_buy_users) as f64 * 0.2;
+    let market_depth = if activity_index >= 120.0 {
+        100.0
+    } else if activity_index >= 80.0 {
+        80.0
+    } else if activity_index >= 45.0 {
+        60.0
+    } else if activity_index >= 20.0 {
+        40.0
+    } else {
+        20.0
+    };
+
+    let spread_tightness = match snapshot.spread_pct {
+        Some(value) if value <= 2.0 => 100.0,
+        Some(value) if value <= 5.0 => 80.0,
+        Some(value) if value <= 10.0 => 60.0,
+        Some(value) if value <= 20.0 => 40.0,
+        Some(_) => 20.0,
+        None => 20.0,
+    };
+
+    let score: f64 = demand_balance * 0.40
+        + low_price_competition * 0.25
+        + market_depth * 0.20
+        + spread_tightness * 0.15;
+
+    score.clamp(0.0, 100.0)
+}
+
+fn liquidity_label(score: f64) -> String {
+    if score >= 75.0 {
+        "Deep".to_string()
+    } else if score >= 55.0 {
+        "Tradable".to_string()
+    } else if score >= 35.0 {
+        "Thin".to_string()
+    } else {
+        "Fragile".to_string()
+    }
+}
+
+fn weighted_sell_percentile_price(sell_orders: &[WfmDetailedOrder], percentile: f64) -> Option<f64> {
+    if sell_orders.is_empty() {
+        return None;
+    }
+
+    let mut ladder = sell_orders
+        .iter()
+        .map(|order| {
+            (
+                order.platinum,
+                (order.quantity.max(1) as f64).sqrt(),
+            )
+        })
+        .collect::<Vec<_>>();
+    ladder.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+    let prices = ladder.iter().map(|entry| entry.0).collect::<Vec<_>>();
+    let median = median_price(&prices)?;
+    let max_allowed = median + median.max(10.0) * 0.35;
+    ladder.retain(|entry| entry.0 <= max_allowed);
+    if ladder.is_empty() {
+        return Some(median);
+    }
+
+    let total_weight = ladder.iter().map(|entry| entry.1).sum::<f64>();
+    let target_weight = total_weight * (percentile / 100.0);
+    let mut running_weight = 0.0;
+    for (price, weight) in ladder {
+        running_weight += weight;
+        if running_weight >= target_weight {
+            return Some(price);
+        }
+    }
+
+    prices.last().copied()
+}
+
+fn historical_exit_ceiling(rows: &[InternalStatsRow]) -> Option<f64> {
+    let cutoff = now_utc() - TimeDuration::days(14);
+    rows.iter()
+        .filter(|row| row.bucket_at >= cutoff)
+        .filter_map(|row| row.max_price.or(row.donch_top).or(row.median))
+        .reduce(f64::max)
+}
+
+fn recommended_exit_price(
+    entry_price: Option<f64>,
+    sell_orders: &[WfmDetailedOrder],
+    snapshot: &MarketSnapshot,
+    stats_rows: &[InternalStatsRow],
+    zone_overview: &EntryExitZoneOverview,
+) -> Option<f64> {
+    let p60 = weighted_sell_percentile_price(sell_orders, 60.0);
+    let historical_ceiling = historical_exit_ceiling(stats_rows)
+        .or(zone_overview.exit_zone_high)
+        .or(zone_overview.fair_value_high);
+    let depth_based_cushion = if snapshot.sell_order_count < 12 { 2.0 } else { 1.0 };
+
+    let candidate = match (p60, historical_ceiling) {
+        (Some(percentile), Some(ceiling)) => percentile.max(ceiling - depth_based_cushion).min(ceiling),
+        (Some(percentile), None) => percentile,
+        (None, Some(ceiling)) => ceiling - depth_based_cushion,
+        (None, None) => return entry_price,
+    };
+
+    let candidate = round_platinum(candidate);
+    Some(candidate.max(round_platinum(entry_price.unwrap_or(candidate))))
+}
+
+fn efficiency_score_percent(
+    entry_price: Option<f64>,
+    exit_price: Option<f64>,
+    liquidity_score: f64,
+    efficiency_penalty_pct: i64,
+) -> Option<f64> {
+    let entry = entry_price?;
+    let exit = exit_price?;
+    if entry <= 0.0 {
+        return None;
+    }
+
+    let profit_percent = ((exit - entry) / entry).max(0.0);
+    let profit_normalization = (profit_percent / 0.25).clamp(0.0, 1.0);
+    let market_quality = (liquidity_score / 100.0).clamp(0.0, 1.0);
+    let base_score = (0.65 * profit_normalization) + (0.35 * market_quality);
+    let liquidity_multiplier = 0.70 + (0.60 * market_quality);
+    let risk_penalty = (100 - efficiency_penalty_pct).max(0) as f64 / 100.0;
+
+    Some((100.0 * base_score * liquidity_multiplier * risk_penalty).clamp(0.0, 100.0))
+}
+
+fn efficiency_label(score: Option<f64>) -> String {
+    match score {
+        Some(value) if value >= 75.0 => "Plat Machine".to_string(),
+        Some(value) if value >= 50.0 => "Balanced".to_string(),
+        Some(value) if value >= 25.0 => "Slow Burn".to_string(),
+        Some(_) => "Capital Trap".to_string(),
+        None => "Pending".to_string(),
+    }
+}
+
+fn recent_snapshots(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+    limit: i64,
+) -> Result<Vec<MarketSnapshot>> {
+    let mut statement = connection.prepare(
+        "SELECT
+           captured_at,
+           lowest_sell,
+           median_sell,
+           highest_buy,
+           spread,
+           spread_pct,
+           sell_order_count,
+           sell_quantity,
+           buy_order_count,
+           buy_quantity,
+           near_floor_seller_count,
+           near_floor_quantity,
+           unique_sell_users,
+           unique_buy_users,
+           pressure_ratio,
+           entry_depth,
+           exit_depth
+         FROM orderbook_snapshots
+         WHERE item_id = ?1
+           AND variant_key = ?2
+         ORDER BY captured_at DESC
+         LIMIT ?3",
+    )?;
+
+    let rows = statement.query_map(params![item_id, variant_key, limit], |row| {
+        Ok(MarketSnapshot {
+            captured_at: row.get(0)?,
+            lowest_sell: row.get(1)?,
+            median_sell: row.get(2)?,
+            highest_buy: row.get(3)?,
+            spread: row.get(4)?,
+            spread_pct: row.get(5)?,
+            sell_order_count: row.get(6)?,
+            sell_quantity: row.get(7)?,
+            buy_order_count: row.get(8)?,
+            buy_quantity: row.get(9)?,
+            near_floor_seller_count: row.get(10)?,
+            near_floor_quantity: row.get(11)?,
+            unique_sell_users: row.get(12)?,
+            unique_buy_users: row.get(13)?,
+            pressure_ratio: row.get(14)?,
+            entry_depth: row.get(15)?,
+            exit_depth: row.get(16)?,
+            depth_levels: Vec::new(),
+        })
+    })?;
+
+    let mut snapshots = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    snapshots.reverse();
+    Ok(snapshots)
+}
+
+fn undercut_velocity_per_hour(snapshots: &[MarketSnapshot]) -> Option<f64> {
+    if snapshots.len() < 2 {
+        return None;
+    }
+
+    let mut undercut_steps = 0.0;
+    let first_time = parse_timestamp(&snapshots.first()?.captured_at)?;
+    let last_time = parse_timestamp(&snapshots.last()?.captured_at)?;
+    let hours = ((last_time - first_time).whole_minutes().max(1) as f64) / 60.0;
+
+    for window in snapshots.windows(2) {
+        if let [previous, current] = window {
+            if let (Some(previous_floor), Some(current_floor)) = (previous.lowest_sell, current.lowest_sell) {
+                if current_floor < previous_floor {
+                    undercut_steps += 1.0;
+                }
+            }
+        }
+    }
+
+    Some(undercut_steps / hours.max(1.0))
+}
+
+fn snapshot_std_dev(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values
+        .iter()
+        .map(|entry| (entry - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64;
+    Some(variance.sqrt())
+}
+
+fn build_manipulation_risk(
+    snapshot: &MarketSnapshot,
+    recent_snapshots: &[MarketSnapshot],
+) -> ManipulationRiskSummary {
+    let price_wall_active = snapshot
+        .depth_levels
+        .iter()
+        .filter(|level| level.side == "sell")
+        .map(|level| level.quantity as f64 / snapshot.sell_quantity.max(1) as f64)
+        .reduce(f64::max)
+        .unwrap_or(0.0)
+        >= 0.40;
+
+    let liquidity_withdrawal_active = if recent_snapshots.len() >= 6 {
+        let split_index = recent_snapshots.len() / 2;
+        let previous_avg = recent_snapshots[..split_index]
+            .iter()
+            .map(|entry| entry.buy_quantity as f64)
+            .sum::<f64>()
+            / split_index as f64;
+        let recent_avg = recent_snapshots[split_index..]
+            .iter()
+            .map(|entry| entry.buy_quantity as f64)
+            .sum::<f64>()
+            / (recent_snapshots.len() - split_index) as f64;
+        let floor_start = recent_snapshots[split_index - 1].lowest_sell.unwrap_or(0.0);
+        let floor_end = recent_snapshots.last().and_then(|entry| entry.lowest_sell).unwrap_or(0.0);
+        previous_avg > 0.0 && recent_avg <= previous_avg * 0.65 && (floor_end - floor_start).abs() <= 2.0
+    } else {
+        false
+    };
+
+    let volatile_undercut_active = if recent_snapshots.len() >= 4 {
+        let mut direction_changes = 0;
+        let mut previous_direction = 0_i8;
+        for window in recent_snapshots.windows(2) {
+            if let [previous, current] = window {
+                if let (Some(previous_floor), Some(current_floor)) = (previous.lowest_sell, current.lowest_sell) {
+                    let direction = match current_floor.partial_cmp(&previous_floor) {
+                        Some(Ordering::Less) => -1,
+                        Some(Ordering::Greater) => 1,
+                        _ => 0,
+                    };
+                    if direction != 0 && previous_direction != 0 && direction != previous_direction {
+                        direction_changes += 1;
+                    }
+                    if direction != 0 {
+                        previous_direction = direction;
+                    }
+                }
+            }
+        }
+        direction_changes >= 3 || undercut_velocity_per_hour(recent_snapshots).unwrap_or(0.0) >= 0.45
+    } else {
+        false
+    };
+
+    let unstable_buy_pressure_active = snapshot_std_dev(
+        &recent_snapshots
+            .iter()
+            .filter_map(|entry| entry.pressure_ratio)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or(0.0)
+        >= 0.35;
+
+    let thin_market_active =
+        snapshot.sell_order_count < 6 || snapshot.unique_sell_users < 4 || snapshot.buy_order_count < 3;
+
+    let signals = vec![
+        ManipulationSignalState {
+            key: "price_wall".to_string(),
+            label: "Price Wall".to_string(),
+            active: price_wall_active,
+            detail: if price_wall_active {
+                "A single sell level is carrying an outsized share of visible supply.".to_string()
+            } else {
+                "Visible sell supply is not concentrated at one price wall.".to_string()
+            },
+        },
+        ManipulationSignalState {
+            key: "liquidity_withdrawal".to_string(),
+            label: "Liquidity Withdrawal".to_string(),
+            active: liquidity_withdrawal_active,
+            detail: if liquidity_withdrawal_active {
+                "Buy-side quantity has fallen materially without the floor repricing down.".to_string()
+            } else {
+                "Buy-side liquidity is not showing a sharp withdrawal pattern.".to_string()
+            },
+        },
+        ManipulationSignalState {
+            key: "volatile_undercut_cycling".to_string(),
+            label: "Volatile Undercut Cycling".to_string(),
+            active: volatile_undercut_active,
+            detail: if volatile_undercut_active {
+                "Recent floor changes are cycling fast enough to suggest unstable queue behavior.".to_string()
+            } else {
+                "Recent floor changes are not cycling aggressively.".to_string()
+            },
+        },
+        ManipulationSignalState {
+            key: "unstable_buy_pressure".to_string(),
+            label: "Unstable Buy Pressure".to_string(),
+            active: unstable_buy_pressure_active,
+            detail: if unstable_buy_pressure_active {
+                "Pressure ratio is moving around too aggressively across recent snapshots.".to_string()
+            } else {
+                "Buy pressure has been comparatively stable across recent snapshots.".to_string()
+            },
+        },
+        ManipulationSignalState {
+            key: "thin_market".to_string(),
+            label: "Thin Market".to_string(),
+            active: thin_market_active,
+            detail: if thin_market_active {
+                "Visible supply and demand are both too light for stable execution.".to_string()
+            } else {
+                "The live book is deep enough to avoid the thinnest-market warning.".to_string()
+            },
+        },
+    ];
+
+    let active_signals = signals.iter().filter(|signal| signal.active).count();
+    let risk_level = if active_signals >= 3 {
+        "High"
+    } else if active_signals >= 2 {
+        "Moderate"
+    } else {
+        "Low"
+    };
+    let efficiency_penalty_pct = match risk_level {
+        "High" => 45,
+        "Moderate" => 20,
+        _ => 0,
+    };
+
+    ManipulationRiskSummary {
+        risk_level: risk_level.to_string(),
+        active_signals,
+        efficiency_penalty_pct,
+        signals,
+    }
+}
+
+fn build_time_of_day_liquidity(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+) -> Result<TimeOfDayLiquiditySummary> {
+    let cutoff = format_timestamp(now_utc() - TimeDuration::days(30))?;
+    let mut statement = connection.prepare(
+        "SELECT captured_at, sell_quantity + buy_quantity AS visible_quantity, sell_order_count, spread_pct
+         FROM orderbook_snapshots
+         WHERE item_id = ?1
+           AND variant_key = ?2
+           AND captured_at >= ?3
+         ORDER BY captured_at ASC",
+    )?;
+    let rows = statement.query_map(params![item_id, variant_key, cutoff], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, Option<f64>>(3)?,
+        ))
+    })?;
+
+    let mut per_hour = BTreeMap::<i64, Vec<(f64, f64, Option<f64>)>>::new();
+    for row in rows {
+        let (captured_at, visible_quantity, sell_orders, spread_pct) = row?;
+        let Some(timestamp) = parse_timestamp(&captured_at) else {
+            continue;
+        };
+        per_hour
+            .entry(timestamp.hour() as i64)
+            .or_default()
+            .push((visible_quantity as f64, sell_orders as f64, spread_pct));
+    }
+
+    let buckets = per_hour
+        .into_iter()
+        .map(|(hour, entries)| {
+            let avg_visible_quantity =
+                entries.iter().map(|entry| entry.0).sum::<f64>() / entries.len() as f64;
+            let avg_sell_orders =
+                entries.iter().map(|entry| entry.1).sum::<f64>() / entries.len() as f64;
+            let spread_values = entries
+                .iter()
+                .filter_map(|entry| entry.2)
+                .collect::<Vec<_>>();
+
+            TimeOfDayLiquidityBucket {
+                hour,
+                label: format!("{hour:02}:00"),
+                avg_visible_quantity,
+                avg_sell_orders,
+                avg_spread_pct: if spread_values.is_empty() {
+                    None
+                } else {
+                    Some(spread_values.iter().sum::<f64>() / spread_values.len() as f64)
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let strongest_window_label = buckets
+        .iter()
+        .max_by(|left, right| left.avg_visible_quantity.total_cmp(&right.avg_visible_quantity))
+        .map(|bucket| bucket.label.clone());
+    let weakest_window_label = buckets
+        .iter()
+        .min_by(|left, right| left.avg_visible_quantity.total_cmp(&right.avg_visible_quantity))
+        .map(|bucket| bucket.label.clone());
+    let current_hour_label = format!("{:02}:00", now_utc().hour());
+
+    Ok(TimeOfDayLiquiditySummary {
+        current_hour_label,
+        strongest_window_label,
+        weakest_window_label,
+        buckets,
+    })
+}
+
+fn load_item_detail_summary(
+    app: &tauri::AppHandle,
+    item_id: i64,
+    slug: &str,
+) -> Result<ItemDetailSummary> {
+    let connection = open_catalog_database(app)?;
+    let detail_row = connection.query_row(
+        "SELECT
+           COALESCE(i.preferred_name, w.name_en, ws.name, i.canonical_name, ?2),
+           COALESCE(i.wfm_slug, w.slug, ?2),
+           COALESCE(i.preferred_image, w.thumb, w.icon, ws.wikia_thumbnail),
+           COALESCE(ws.wikia_url, json_extract(w.raw_json, '$.i18n.en.wikiLink')),
+           ws.description,
+           i.item_family,
+           ws.category,
+           ws.type,
+           ws.rarity,
+           ws.mastery_req,
+           w.max_rank,
+           w.ducats,
+           ws.tradable,
+           ws.is_prime,
+           COALESCE(ws.vaulted, w.vaulted),
+           ws.release_date,
+           ws.estimated_vault_date,
+           ws.vault_date
+         FROM items i
+         LEFT JOIN wfm_items w ON w.item_id = i.item_id
+         LEFT JOIN wfstat_items ws ON ws.item_id = i.item_id
+         WHERE i.item_id = ?1
+         LIMIT 1",
+        params![item_id, slug],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<i64>>(11)?,
+                row.get::<_, Option<i64>>(12)?,
+                row.get::<_, Option<i64>>(13)?,
+                row.get::<_, Option<i64>>(14)?,
+                row.get::<_, Option<String>>(15)?,
+                row.get::<_, Option<String>>(16)?,
+                row.get::<_, Option<String>>(17)?,
+            ))
+        },
+    )?;
+
+    let tags = {
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT tag
+             FROM wfm_item_tags
+             JOIN wfm_items ON wfm_items.wfm_id = wfm_item_tags.wfm_id
+             WHERE wfm_items.item_id = ?1
+             ORDER BY tag ASC",
+        )?;
+        let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+
+    Ok(ItemDetailSummary {
+        item_id,
+        name: detail_row.0,
+        slug: detail_row.1,
+        image_path: detail_row.2,
+        wiki_link: detail_row.3,
+        description: detail_row.4,
+        item_family: detail_row.5,
+        category: detail_row.6,
+        item_type: detail_row.7,
+        rarity: detail_row.8,
+        mastery_req: detail_row.9,
+        max_rank: detail_row.10,
+        ducats: detail_row.11,
+        tradable: bool_from_i64(detail_row.12),
+        prime: bool_from_i64(detail_row.13),
+        vaulted: bool_from_i64(detail_row.14),
+        release_date: detail_row.15,
+        estimated_vault_date: detail_row.16,
+        vault_date: detail_row.17,
+        tags,
+    })
+}
+
+fn resolve_item_id_by_slug(connection: &Connection, slug: &str) -> Result<Option<i64>> {
+    connection
+        .query_row(
+            "SELECT item_id
+             FROM items
+             WHERE wfm_slug = ?1 OR preferred_slug = ?1
+             LIMIT 1",
+            params![slug],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
+    let client = build_wfm_client()?;
+    let response = client
+        .get(format!("{WFM_API_BASE_URL_V2}/item/{slug}/set"))
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Language", WFM_LANGUAGE_HEADER)
+        .header("Platform", WFM_PLATFORM_HEADER)
+        .header("Crossplay", WFM_CROSSPLAY_HEADER)
+        .send()
+        .context("failed to request WFM set payload")?
+        .error_for_status()
+        .context("WFM set request failed")?;
+
+    Ok(response
+        .json::<WfmSetApiResponse>()
+        .context("failed to parse WFM set response")?
+        .data
+        .items)
+}
+
+fn load_drop_sources(
+    app: &tauri::AppHandle,
+    item_id: i64,
+) -> Result<Vec<DropSourceEntry>> {
+    let connection = open_catalog_database(app)?;
+    let primary_unique_name = connection
+        .query_row(
+            "SELECT primary_wfstat_unique_name
+             FROM items
+             WHERE item_id = ?1",
+            params![item_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+
+    let mut sources = Vec::new();
+    if let Some(unique_name) = primary_unique_name {
+        let mut statement = connection.prepare(
+            "SELECT location, chance, rarity, type
+             FROM wfstat_item_drops
+             WHERE wfstat_unique_name = ?1",
+        )?;
+        let rows = statement.query_map(params![unique_name], |row| {
+            Ok(DropSourceEntry {
+                location: row.get(0)?,
+                chance: row.get(1)?,
+                rarity: row.get(2)?,
+                source_type: row.get(3)?,
+            })
+        })?;
+        sources.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
+    }
+
+    let mut component_statement = connection.prepare(
+        "SELECT cd.location, cd.chance, cd.rarity, cd.type
+         FROM wfstat_component_drops cd
+         JOIN wfstat_item_components c ON c.component_id = cd.component_id
+         WHERE c.component_item_id = ?1",
+    )?;
+    let component_rows = component_statement.query_map(params![item_id], |row| {
+        Ok(DropSourceEntry {
+            location: row.get(0)?,
+            chance: row.get(1)?,
+            rarity: row.get(2)?,
+            source_type: row.get(3)?,
+        })
+    })?;
+    sources.extend(component_rows.collect::<std::result::Result<Vec<_>, _>>()?);
+
+    let mut deduped = BTreeMap::<(String, Option<String>, Option<String>), DropSourceEntry>::new();
+    for source in sources {
+        let key = (
+            source.location.clone(),
+            source.rarity.clone(),
+            source.source_type.clone(),
+        );
+        deduped
+            .entry(key)
+            .and_modify(|entry| {
+                if entry.chance.unwrap_or(0.0) < source.chance.unwrap_or(0.0) {
+                    entry.chance = source.chance;
+                }
+            })
+            .or_insert(source);
+    }
+
+    Ok(deduped.into_values().take(10).collect())
+}
+
 fn build_trend_quality_breakdown(points: &[AnalyticsChartPoint]) -> TrendQualityBreakdown {
     let mut tabs = HashMap::new();
     tabs.insert(
@@ -2442,6 +3337,265 @@ fn build_trend_quality_breakdown(points: &[AnalyticsChartPoint]) -> TrendQuality
         volatility,
         noise,
     }
+}
+
+fn build_trend_summary(breakdown: &TrendQualityBreakdown) -> TrendSummary {
+    let lowest_sell = breakdown.tabs.get("lowestSell");
+    let slope_1h = lowest_sell.and_then(|entry| entry.slope_1h);
+    let slope_3h = lowest_sell.and_then(|entry| entry.slope_3h);
+    let slope_6h = lowest_sell.and_then(|entry| entry.slope_6h);
+
+    let direction = match (slope_3h.unwrap_or(0.0), slope_6h.unwrap_or(0.0)) {
+        (short, medium) if short > 0.4 && medium >= 0.0 => "Rising",
+        (short, medium) if short < -0.4 && medium <= 0.0 => "Falling",
+        _ => "Flat",
+    };
+
+    let summary = match direction {
+        "Rising" => "Short-term momentum is positive and the live structure is leaning upward.".to_string(),
+        "Falling" => "Recent slope structure is still pointing down, so patience matters more than chase entries.".to_string(),
+        _ => "Recent price structure is mixed, with neither buyers nor sellers holding a clean short-term trend.".to_string(),
+    };
+
+    TrendSummary {
+        direction: direction.to_string(),
+        confidence: lowest_sell.map(|entry| entry.confidence),
+        summary,
+        slope_1h,
+        slope_3h,
+        slope_6h,
+    }
+}
+
+fn build_supply_context(
+    app: &tauri::AppHandle,
+    item_id: i64,
+    slug: &str,
+    item_details: &ItemDetailSummary,
+) -> Result<ItemSupplyContext> {
+    let looks_like_set = item_details.tags.iter().any(|tag| tag == "set")
+        || item_details.name.ends_with(" Set");
+
+    if looks_like_set {
+        let connection = open_catalog_database(app)?;
+        let mut components = Vec::new();
+        for component in fetch_wfm_set_items(slug)? {
+            if component.set_root == Some(true) || component.slug == slug {
+                continue;
+            }
+
+            let item_id = resolve_item_id_by_slug(&connection, &component.slug)?;
+            let name = component
+                .i18n
+                .get("en")
+                .and_then(|entry| entry.name.clone())
+                .unwrap_or_else(|| component.slug.replace('_', " "));
+            let image_path = component
+                .i18n
+                .get("en")
+                .and_then(|entry| entry.thumb.clone().or(entry.icon.clone()));
+
+            let (current_lowest_price, recommended_entry_price) = match item_id {
+                Some(component_item_id) => match build_item_analytics_inner(
+                    app.clone(),
+                    component_item_id,
+                    component.slug.clone(),
+                    Some("base".to_string()),
+                    Some("48h".to_string()),
+                    Some("1h".to_string()),
+                ) {
+                    Ok(component_analytics) => (
+                        component_analytics
+                            .current_snapshot
+                            .as_ref()
+                            .and_then(|entry| entry.lowest_sell)
+                            .map(round_platinum),
+                        component_analytics
+                            .entry_exit_zone_overview
+                            .entry_zone_low
+                            .map(round_platinum)
+                            .or_else(|| {
+                                component_analytics
+                                    .current_snapshot
+                                    .as_ref()
+                                    .and_then(|entry| entry.lowest_sell)
+                                    .map(round_platinum)
+                            }),
+                    ),
+                    Err(_) => {
+                        let (_, _, _, snapshot) = fetch_filtered_orders(&component.slug, "base")?;
+                        (
+                            snapshot.lowest_sell.map(round_platinum),
+                            snapshot.lowest_sell.map(round_platinum),
+                        )
+                    }
+                },
+                None => {
+                    let (_, _, _, snapshot) = fetch_filtered_orders(&component.slug, "base")?;
+                    (
+                        snapshot.lowest_sell.map(round_platinum),
+                        snapshot.lowest_sell.map(round_platinum),
+                    )
+                }
+            };
+
+            components.push(SetComponentAnalysisEntry {
+                item_id,
+                slug: component.slug,
+                name,
+                image_path,
+                current_lowest_price,
+                recommended_entry_price,
+                variant_key: "base".to_string(),
+                variant_label: "Base Market".to_string(),
+            });
+        }
+
+        return Ok(ItemSupplyContext {
+            mode: "set-components".to_string(),
+            components,
+            drop_sources: Vec::new(),
+        });
+    }
+
+    let drop_sources = load_drop_sources(app, item_id)?;
+    Ok(ItemSupplyContext {
+        mode: if drop_sources.is_empty() {
+            "none".to_string()
+        } else {
+            "drop-sources".to_string()
+        },
+        components: Vec::new(),
+        drop_sources,
+    })
+}
+
+fn build_item_analysis_inner(
+    app: tauri::AppHandle,
+    item_id: i64,
+    slug: String,
+    variant_key: Option<String>,
+) -> Result<ItemAnalysisResponse> {
+    let variant_key = normalize_variant_key(variant_key.as_deref());
+    let analytics = build_item_analytics_inner(
+        app.clone(),
+        item_id,
+        slug.clone(),
+        Some(variant_key.clone()),
+        Some("48h".to_string()),
+        Some("1h".to_string()),
+    )?;
+
+    let live_orders = fetch_filtered_orders(&slug, &variant_key).ok();
+    let current_snapshot = live_orders
+        .as_ref()
+        .map(|entry| entry.3.clone())
+        .or_else(|| analytics.current_snapshot.clone())
+        .ok_or_else(|| anyhow!("market snapshot unavailable for analysis"))?;
+    let sell_orders = live_orders
+        .as_ref()
+        .map(|entry| entry.1.clone())
+        .unwrap_or_default();
+
+    let connection = open_market_observatory_database(&app)?;
+    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, 12)?;
+    let (stats_rows, _, _) = load_chart_statistics_rows(
+        &connection,
+        item_id,
+        &variant_key,
+        AnalyticsDomainKey::ThirtyDays,
+    )?;
+
+    let manipulation_risk = build_manipulation_risk(&current_snapshot, &recent_snapshots);
+    let liquidity_score = liquidity_score_percent(&current_snapshot);
+    let entry_price = round_price_option(current_snapshot.lowest_sell);
+    let exit_price = round_price_option(recommended_exit_price(
+        entry_price,
+        &sell_orders,
+        &current_snapshot,
+        &stats_rows,
+        &analytics.entry_exit_zone_overview,
+    ));
+    let gross_margin = match (
+        historical_exit_ceiling(&stats_rows).map(round_platinum),
+        entry_price,
+    ) {
+        (Some(exit_ceiling), Some(entry)) => Some(exit_ceiling - entry),
+        _ => None,
+    };
+    let net_margin = match (exit_price, entry_price) {
+        (Some(exit), Some(entry)) => Some(exit - entry),
+        _ => None,
+    };
+    let efficiency_score = efficiency_score_percent(
+        entry_price,
+        exit_price,
+        liquidity_score,
+        manipulation_risk.efficiency_penalty_pct,
+    );
+    let demand_ratio = compute_pressure_ratio(
+        current_snapshot.buy_quantity,
+        current_snapshot.sell_quantity,
+        current_snapshot.buy_order_count,
+        current_snapshot.sell_order_count,
+    );
+    let quantity_weighted_demand = if current_snapshot.sell_quantity > 0 {
+        Some(
+            (current_snapshot.buy_quantity as f64
+                / (current_snapshot.buy_quantity + current_snapshot.sell_quantity) as f64)
+                * 100.0,
+        )
+    } else {
+        None
+    };
+    let liquidity_state = match demand_ratio {
+        Some(value) if value >= 1.1 => "Demand Heavy",
+        Some(value) if value <= 0.9 => "Supply Heavy",
+        Some(_) => "Balanced",
+        None => "Balanced",
+    };
+    let trend = build_trend_summary(&analytics.trend_quality_breakdown);
+    let item_details = load_item_detail_summary(&app, item_id, &slug)?;
+    let supply_context = build_supply_context(&app, item_id, &slug, &item_details)?;
+
+    Ok(ItemAnalysisResponse {
+        item_id,
+        slug,
+        variant_key: analytics.variant_key.clone(),
+        variant_label: analytics.variant_label.clone(),
+        computed_at: format_timestamp(now_utc())?,
+        source_snapshot_at: Some(current_snapshot.captured_at.clone()),
+        source_stats_fetched_at: analytics.source_stats_fetched_at.clone(),
+        headline: AnalysisHeadline {
+            entry_price,
+            exit_price,
+            exit_percentile_label: "P60".to_string(),
+            net_margin,
+            liquidity_score: Some(liquidity_score),
+            liquidity_label: liquidity_label(liquidity_score),
+        },
+        flip_analysis: FlipAnalysisSummary {
+            entry_price,
+            exit_price,
+            gross_margin,
+            net_margin,
+            efficiency_score,
+            efficiency_label: efficiency_label(efficiency_score),
+        },
+        liquidity_detail: LiquidityDetailSummary {
+            demand_ratio,
+            state: liquidity_state.to_string(),
+            sellers_within_two_pt: current_snapshot.near_floor_seller_count,
+            undercut_velocity: undercut_velocity_per_hour(&recent_snapshots),
+            quantity_weighted_demand,
+            liquidity_score: Some(liquidity_score),
+        },
+        trend,
+        manipulation_risk,
+        time_of_day_liquidity: build_time_of_day_liquidity(&connection, item_id, &variant_key)?,
+        item_details,
+        supply_context,
+    })
 }
 
 fn load_cached_analytics(
@@ -2806,6 +3960,21 @@ pub async fn get_item_analytics(
 ) -> Result<ItemAnalyticsResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         build_item_analytics_inner(app, item_id, slug, variant_key, domain_key, bucket_size_key)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_item_analysis(
+    app: tauri::AppHandle,
+    item_id: i64,
+    slug: String,
+    variant_key: Option<String>,
+) -> Result<ItemAnalysisResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        build_item_analysis_inner(app, item_id, slug, variant_key)
     })
     .await
     .map_err(|error| error.to_string())?

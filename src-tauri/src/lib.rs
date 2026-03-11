@@ -20,6 +20,7 @@ pub fn run() {
             market_observatory::refresh_market_tracking,
             market_observatory::get_item_variants_for_market,
             market_observatory::get_item_analytics,
+            market_observatory::get_item_analysis,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
             commands::get_worldstate_sortie,
