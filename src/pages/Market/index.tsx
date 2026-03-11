@@ -187,7 +187,11 @@ function StaticAnalyticsChart({
   const bucketOptions = BUCKET_OPTIONS_BY_DOMAIN[domain];
   const points = buildChartPoints(analytics?.chartPoints ?? []);
   const plotWidth = 900;
-  const plotHeight = 240;
+  const pricePlotHeight = 252;
+  const volumePlotHeight = 92;
+  const xAxisHeight = 24;
+  const volumeTop = pricePlotHeight + 18;
+  const totalPlotHeight = volumeTop + volumePlotHeight;
   const { minValue, maxValue } = getChartBounds(points);
   const valueRange = Math.max(1, maxValue - minValue);
   const tickValues = Array.from({ length: 5 }, (_, index) =>
@@ -195,6 +199,18 @@ function StaticAnalyticsChart({
   );
   const visibleSeries = SERIES_OPTIONS.filter((option) => seriesToggles[option.key]);
   const volumeMax = Math.max(...points.map((point) => point.volume), 1);
+  const latestPoint = points[points.length - 1] ?? null;
+  const latestDelta =
+    latestPoint?.open !== null &&
+    latestPoint?.close !== null &&
+    latestPoint?.open !== undefined &&
+    latestPoint?.close !== undefined
+      ? roundTo(latestPoint.close - latestPoint.open, 1)
+      : null;
+  const latestDeltaPct =
+    latestDelta !== null && latestPoint?.open !== null && latestPoint.open > 0
+      ? roundTo((latestDelta / latestPoint.open) * 100, 2)
+      : null;
 
   function toggleSeries(key: ChartSeriesKey) {
     setSeriesToggles((current) => ({
@@ -268,9 +284,22 @@ function StaticAnalyticsChart({
       <div className="card-body">
         <div className="market-chart-card">
           <div className="market-chart-toolbar">
-            <span className="market-chart-note">
-              WFM statistics history with local observatory snapshots filling recent live context.
-            </span>
+            <div className="market-chart-toolbar-copy">
+              <span className="market-chart-note">
+                WFM statistics history with local observatory snapshots filling recent live context.
+              </span>
+              <div className="market-chart-ohlc-row">
+                <span>O {formatPrice(latestPoint?.open ?? null)}</span>
+                <span>H {formatPrice(latestPoint?.high ?? null)}</span>
+                <span>L {formatPrice(latestPoint?.low ?? null)}</span>
+                <span>C {formatPrice(latestPoint?.close ?? null)}</span>
+                <span className={`market-chart-delta${latestDelta !== null && latestDelta < 0 ? ' is-down' : ' is-up'}`}>
+                  {latestDelta !== null && latestDelta > 0 ? '+' : ''}{formatPrice(latestDelta)}
+                  {' '}
+                  ({latestDeltaPct !== null && latestDeltaPct > 0 ? '+' : ''}{formatPercent(latestDeltaPct)})
+                </span>
+              </div>
+            </div>
             <div className="market-toggle-row">
               {SERIES_OPTIONS.map((option) => (
                 <button
@@ -301,12 +330,12 @@ function StaticAnalyticsChart({
             ) : (
               <svg
                 className="market-chart-svg"
-                viewBox={`0 0 ${plotWidth} ${plotHeight + 28}`}
+                viewBox={`0 0 ${plotWidth} ${totalPlotHeight + xAxisHeight}`}
                 preserveAspectRatio="none"
                 aria-label="Market price graph"
               >
                 {Array.from({ length: 5 }, (_, index) => {
-                  const y = (index / 4) * plotHeight;
+                  const y = (index / 4) * pricePlotHeight;
                   return (
                     <line
                       key={`h-${index}`}
@@ -327,10 +356,17 @@ function StaticAnalyticsChart({
                       x1={x}
                       y1="0"
                       x2={x}
-                      y2={plotHeight}
+                      y2={totalPlotHeight}
                     />
                   );
                 })}
+                <line
+                  className="market-chart-gridline market-chart-divider"
+                  x1="0"
+                  y1={volumeTop - 8}
+                  x2={plotWidth}
+                  y2={volumeTop - 8}
+                />
 
                 {chartMode === 'candlestick'
                   ? points.map((point, index) => {
@@ -346,10 +382,10 @@ function StaticAnalyticsChart({
                       const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length - 1);
                       const candleWidth = Math.max(6, Math.min(22, step * 0.45));
                       const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
-                      const openY = renderChartY(point.open, plotHeight, minValue, maxValue);
-                      const closeY = renderChartY(point.close, plotHeight, minValue, maxValue);
-                      const highY = renderChartY(point.high, plotHeight, minValue, maxValue);
-                      const lowY = renderChartY(point.low, plotHeight, minValue, maxValue);
+                      const openY = renderChartY(point.open, pricePlotHeight, minValue, maxValue);
+                      const closeY = renderChartY(point.close, pricePlotHeight, minValue, maxValue);
+                      const highY = renderChartY(point.high, pricePlotHeight, minValue, maxValue);
+                      const lowY = renderChartY(point.low, pricePlotHeight, minValue, maxValue);
                       const bodyY = Math.min(openY, closeY);
                       const bodyHeight = Math.max(3, Math.abs(closeY - openY));
                       const isUp = point.close >= point.open;
@@ -380,7 +416,7 @@ function StaticAnalyticsChart({
                   <path
                     key={series.key}
                     className={`market-chart-line market-chart-line-${series.colorClass}`}
-                    d={buildSeriesPath(points, series.key, plotWidth, plotHeight, minValue, maxValue)}
+                    d={buildSeriesPath(points, series.key, plotWidth, pricePlotHeight, minValue, maxValue)}
                   />
                 ))}
 
@@ -393,7 +429,7 @@ function StaticAnalyticsChart({
                         return null;
                       }
                       const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
-                      const y = renderChartY(value, plotHeight, minValue, maxValue);
+                      const y = renderChartY(value, pricePlotHeight, minValue, maxValue);
                       return (
                         <circle
                           key={`${series.key}-${point.timestamp}`}
@@ -405,6 +441,27 @@ function StaticAnalyticsChart({
                       );
                     }),
                   )}
+
+                {points.map((point, index) => {
+                  const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length);
+                  const width = Math.max(8, Math.min(24, step * 0.7));
+                  const x = points.length === 1 ? (plotWidth - width) / 2 : (index / points.length) * plotWidth + (step - width) / 2;
+                  const height = Math.max(4, (point.volume / Math.max(volumeMax, 1)) * volumePlotHeight);
+                  const isUp =
+                    point.close !== null && point.open !== null ? point.close >= point.open : point.volume > 0;
+
+                  return (
+                    <rect
+                      key={`volume-${point.timestamp}`}
+                      className={`market-volume-bar${isUp ? ' is-up' : ' is-down'}`}
+                      x={x}
+                      y={totalPlotHeight - height}
+                      width={width}
+                      height={height}
+                      rx="3"
+                    />
+                  );
+                })}
 
                 {points
                   .filter((_, index) => index % Math.max(1, Math.ceil(points.length / 6)) === 0 || index === points.length - 1)
@@ -419,7 +476,7 @@ function StaticAnalyticsChart({
                         key={`x-${point.timestamp}`}
                         className="market-chart-axis-label"
                         x={x}
-                        y={plotHeight + 20}
+                        y={totalPlotHeight + 18}
                         textAnchor={anchor}
                       >
                         {formatChartTimestamp(point.timestamp, domain)}
@@ -437,59 +494,6 @@ function StaticAnalyticsChart({
             <span>Latest lowest: {formatPrice(points[points.length - 1]?.lowest ?? null)}</span>
             <span>Latest volume: {formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
           </div>
-        </div>
-
-        <div className="market-volume-card">
-          <div className="market-volume-header">
-            <div className="market-panel-header">
-              <span className="panel-title-eyebrow">Participation</span>
-              <span className="card-label">Volume</span>
-            </div>
-            <span className="market-volume-subtitle">Bucket-aligned volume from WFM statistics</span>
-          </div>
-          {loading ? (
-            <div className="market-chart-status">Loading volume history.</div>
-          ) : points.length === 0 ? (
-            <div className="market-chart-status">No volume data is available for the selected timeframe.</div>
-          ) : (
-            <svg
-              className="market-volume-svg"
-              viewBox={`0 0 ${plotWidth} 120`}
-              preserveAspectRatio="none"
-              aria-label="Market volume graph"
-            >
-              {Array.from({ length: 4 }, (_, index) => {
-                const y = 12 + index * 26;
-                return (
-                  <line
-                    key={`volume-grid-${index}`}
-                    className="market-chart-gridline"
-                    x1="0"
-                    y1={y}
-                    x2={plotWidth}
-                    y2={y}
-                  />
-                );
-              })}
-              {points.map((point, index) => {
-                const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length);
-                const width = Math.max(8, Math.min(24, step * 0.7));
-                const x = points.length === 1 ? (plotWidth - width) / 2 : (index / points.length) * plotWidth + (step - width) / 2;
-                const height = Math.max(4, (point.volume / Math.max(volumeMax, 1)) * 92);
-                return (
-                  <rect
-                    key={point.timestamp}
-                    className="market-volume-bar"
-                    x={x}
-                    y={104 - height}
-                    width={width}
-                    height={height}
-                    rx="3"
-                  />
-                );
-              })}
-            </svg>
-          )}
         </div>
       </div>
     </div>
