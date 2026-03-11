@@ -1863,7 +1863,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tradePeriod: '30d',
   setTradePeriod: (period) => set({ tradePeriod: period }),
 
-  marketSubTab: 'analytics',
+  marketSubTab: 'analysis',
   setMarketSubTab: (tab) => set({ marketSubTab: tab }),
 
   eventsSubTab: 'active-events',

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import {
   ensureMarketTracking,
   getItemAnalysis,
   getItemAnalytics,
+  getItemDetailSummary,
   openExternalUrl,
   stopMarketTracking,
 } from '../../lib/tauriClient';
@@ -13,6 +14,7 @@ import type {
   AnalyticsChartPoint,
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
+  ItemDetailSummary,
   WfmAutocompleteItem,
 } from '../../types';
 
@@ -20,6 +22,36 @@ type ChartDomainKey = '48h' | '7d' | '30d' | '90d';
 type ChartBucketKey = '1h' | '3h' | '6h' | '12h' | '24h' | '7d' | '14d';
 type ChartSeriesKey = 'median' | 'lowest' | 'movingAverage' | 'average' | 'entryZone' | 'exitZone';
 type ChartMode = 'line' | 'candlestick';
+type AnalyticsPanelKey = 'chart' | 'overview' | 'pressure' | 'trend' | 'action';
+type AnalysisPanelKey =
+  | 'itemDetails'
+  | 'headline'
+  | 'flip'
+  | 'liquidity'
+  | 'trend'
+  | 'eventContext'
+  | 'manipulation'
+  | 'timeOfDay'
+  | 'supply';
+
+const PANEL_REVEAL_STEP_MS = 85;
+const ANALYTICS_PANEL_SEQUENCE: AnalyticsPanelKey[] = [
+  'chart',
+  'overview',
+  'pressure',
+  'trend',
+  'action',
+];
+const ANALYSIS_PANEL_SEQUENCE: AnalysisPanelKey[] = [
+  'headline',
+  'flip',
+  'liquidity',
+  'trend',
+  'eventContext',
+  'manipulation',
+  'timeOfDay',
+  'supply',
+];
 
 interface MockBucketPoint {
   timestamp: number;
@@ -40,6 +72,32 @@ interface ChartSeriesOption {
   key: ChartSeriesKey;
   label: string;
   colorClass: string;
+}
+
+function createRevealState<T extends string>(keys: readonly T[]): Record<T, boolean> {
+  return Object.fromEntries(keys.map((key) => [key, false])) as Record<T, boolean>;
+}
+
+function clearRevealTimeouts(timeoutsRef: MutableRefObject<number[]>) {
+  timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+  timeoutsRef.current = [];
+}
+
+function queuePanelReveal<T extends string>(
+  keys: readonly T[],
+  setState: Dispatch<SetStateAction<Record<T, boolean>>>,
+  timeoutsRef: MutableRefObject<number[]>,
+) {
+  clearRevealTimeouts(timeoutsRef);
+  keys.forEach((key, index) => {
+    const timeoutId = window.setTimeout(() => {
+      setState((current) => ({
+        ...current,
+        [key]: true,
+      }));
+    }, index * PANEL_REVEAL_STEP_MS);
+    timeoutsRef.current.push(timeoutId);
+  });
 }
 
 const DOMAIN_OPTIONS: Array<{ key: ChartDomainKey; label: string; hours: number }> = [
@@ -237,6 +295,7 @@ function StaticAnalyticsChart({
   itemName,
   analytics,
   loading,
+  revealed,
   errorMessage,
   domain,
   bucket,
@@ -246,6 +305,7 @@ function StaticAnalyticsChart({
   itemName: string;
   analytics: ItemAnalyticsResponse | null;
   loading: boolean;
+  revealed: boolean;
   errorMessage: string | null;
   domain: ChartDomainKey;
   bucket: ChartBucketKey;
@@ -292,6 +352,7 @@ function StaticAnalyticsChart({
     minValue,
     maxValue,
   );
+  const chartLoading = loading || !revealed;
   const exitBand = buildZoneBandRect(
     analytics?.entryExitZoneOverview.exitZoneLow,
     analytics?.entryExitZoneOverview.exitZoneHigh,
@@ -369,7 +430,7 @@ function StaticAnalyticsChart({
           </div>
         </div>
       </div>
-      <div className="card-body">
+      <div className="card-body market-panel-body">
         <div className="market-chart-card">
           <div className="market-chart-toolbar">
             <div className="market-chart-toolbar-copy">
@@ -409,9 +470,7 @@ function StaticAnalyticsChart({
                 <span key={value}>{formatPrice(value)}</span>
               ))}
             </div>
-            {loading ? (
-              <div className="market-chart-status">Loading history from WFM statistics and local market snapshots.</div>
-            ) : errorMessage ? (
+            {errorMessage && !chartLoading ? (
               <div className="market-chart-status is-error">{errorMessage}</div>
             ) : points.length === 0 ? (
               <div className="market-chart-status">No chart history is available for the selected item and variant.</div>
@@ -604,6 +663,11 @@ function StaticAnalyticsChart({
             <span>Latest volume: {formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
           </div>
         </div>
+        <PanelOverlay
+          loading={chartLoading}
+          errorMessage={!chartLoading ? errorMessage : null}
+          label="Loading chart history"
+        />
       </div>
     </div>
   );
@@ -807,14 +871,43 @@ function EmptyAnalyticsState({ body }: { body: string }) {
   );
 }
 
+function PanelOverlay({
+  loading,
+  errorMessage,
+  label,
+}: {
+  loading: boolean;
+  errorMessage?: string | null;
+  label: string;
+}) {
+  if (!loading && !errorMessage) {
+    return null;
+  }
+
+  return (
+    <div className={`market-panel-overlay${errorMessage ? ' is-error' : ''}`}>
+      {loading ? <span className="market-panel-spinner" aria-hidden="true" /> : null}
+      <span className="market-panel-overlay-copy">
+        {errorMessage ?? label}
+      </span>
+    </div>
+  );
+}
+
 function AnalyticsPanel({
   title,
   eyebrow,
   children,
+  loading = false,
+  errorMessage = null,
+  loadingLabel = 'Loading panel',
 }: {
   title: string;
   eyebrow: string;
   children: ReactNode;
+  loading?: boolean;
+  errorMessage?: string | null;
+  loadingLabel?: string;
 }) {
   return (
     <div className="card market-panel">
@@ -824,13 +917,17 @@ function AnalyticsPanel({
           <span className="card-label">{title}</span>
         </div>
       </div>
-      <div className="card-body">{children}</div>
+      <div className="card-body market-panel-body">
+        {children}
+        <PanelOverlay loading={loading} errorMessage={errorMessage} label={loadingLabel} />
+      </div>
     </div>
   );
 }
 
 function AnalyticsTab() {
   const pageContentRef = useRef<HTMLDivElement | null>(null);
+  const revealTimeoutsRef = useRef<number[]>([]);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
@@ -844,6 +941,9 @@ function AnalyticsTab() {
   const [trendTab, setTrendTab] = useState<'lowestSell' | 'medianSell' | 'weightedAvg'>('lowestSell');
   const [chartDomain, setChartDomain] = useState<ChartDomainKey>('48h');
   const [chartBucket, setChartBucket] = useState<ChartBucketKey>('1h');
+  const [revealedPanels, setRevealedPanels] = useState<Record<AnalyticsPanelKey, boolean>>(
+    () => createRevealState(ANALYTICS_PANEL_SEQUENCE),
+  );
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -857,26 +957,21 @@ function AnalyticsTab() {
   }, [chartDomain, chartBucket]);
 
   useEffect(() => {
-    if (loading) {
-      return;
-    }
-
-    if (analytics || errorMessage) {
-      pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    }
-  }, [analytics, errorMessage, loading]);
-
-  useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey) {
+      clearRevealTimeouts(revealTimeoutsRef);
       setAnalytics(null);
       setLoading(false);
       setErrorMessage(null);
+      setRevealedPanels(createRevealState(ANALYTICS_PANEL_SEQUENCE));
       return;
     }
 
     let isMounted = true;
+    clearRevealTimeouts(revealTimeoutsRef);
     setLoading(true);
     setErrorMessage(null);
+    setAnalytics(null);
+    setRevealedPanels(createRevealState(ANALYTICS_PANEL_SEQUENCE));
 
     void ensureMarketTracking(
       selectedItem.itemId,
@@ -900,6 +995,7 @@ function AnalyticsTab() {
         setAnalytics(response);
         setLoading(false);
         setErrorMessage(null);
+        queuePanelReveal(ANALYTICS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       })
       .catch((error) => {
         if (!isMounted) {
@@ -908,10 +1004,12 @@ function AnalyticsTab() {
         setAnalytics(null);
         setLoading(false);
         setErrorMessage(error instanceof Error ? error.message : String(error));
+        clearRevealTimeouts(revealTimeoutsRef);
       });
 
     return () => {
       isMounted = false;
+      clearRevealTimeouts(revealTimeoutsRef);
       void stopMarketTracking(
         selectedItem.itemId,
         selectedItem.slug,
@@ -998,90 +1096,107 @@ function AnalyticsTab() {
         itemName={selectedItem.name}
         analytics={analytics}
         loading={loading}
+        revealed={revealedPanels.chart}
         errorMessage={errorMessage}
         domain={chartDomain}
         bucket={chartBucket}
         onDomainChange={setChartDomain}
         onBucketChange={setChartBucket}
       />
-      {analytics ? (
-        <>
-          <div className="market-analytics-grid">
-            <AnalyticsPanel title="Entry / Exit Zone Overview" eyebrow="Market State">
+      <div className="market-analytics-grid">
+            <AnalyticsPanel
+              title="Entry / Exit Zone Overview"
+              eyebrow="Market State"
+              loading={!revealedPanels.overview && !errorMessage}
+              errorMessage={!revealedPanels.overview ? errorMessage : null}
+              loadingLabel="Calculating entry and exit zones"
+            >
               <div className="market-metric-grid">
                 <div className="market-metric-card">
                   <span className="market-metric-label">Current Lowest</span>
-                  <span className="market-metric-value">{formatPrice(analytics.entryExitZoneOverview.currentLowestPrice)}</span>
+                  <span className="market-metric-value">{formatPrice(analytics?.entryExitZoneOverview.currentLowestPrice)}</span>
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">Median Lowest</span>
-                  <span className="market-metric-value">{formatPrice(analytics.entryExitZoneOverview.currentMedianLowestPrice)}</span>
+                  <span className="market-metric-value">{formatPrice(analytics?.entryExitZoneOverview.currentMedianLowestPrice)}</span>
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">Fair Value Band</span>
                   <span className="market-metric-value">
-                    {formatPrice(analytics.entryExitZoneOverview.fairValueLow)} - {formatPrice(analytics.entryExitZoneOverview.fairValueHigh)}
+                    {formatPrice(analytics?.entryExitZoneOverview.fairValueLow)} - {formatPrice(analytics?.entryExitZoneOverview.fairValueHigh)}
                   </span>
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">Zone Quality</span>
-                  <span className="market-metric-value">{analytics.entryExitZoneOverview.zoneQuality}</span>
+                  <span className="market-metric-value">{analytics?.entryExitZoneOverview.zoneQuality ?? '—'}</span>
                 </div>
               </div>
               <div className="market-copy-block">
                 <span className="market-copy-title">Entry Zone</span>
                 <span>
-                  {formatPrice(analytics.entryExitZoneOverview.entryZoneLow)} - {formatPrice(analytics.entryExitZoneOverview.entryZoneHigh)}
+                  {formatPrice(analytics?.entryExitZoneOverview.entryZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.entryZoneHigh)}
                 </span>
-                <p>{analytics.entryExitZoneOverview.entryRationale}</p>
+                <p>{analytics?.entryExitZoneOverview.entryRationale ?? '—'}</p>
               </div>
               <div className="market-copy-block">
                 <span className="market-copy-title">Exit Zone</span>
                 <span>
-                  {formatPrice(analytics.entryExitZoneOverview.exitZoneLow)} - {formatPrice(analytics.entryExitZoneOverview.exitZoneHigh)}
+                  {formatPrice(analytics?.entryExitZoneOverview.exitZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.exitZoneHigh)}
                 </span>
-                <p>{analytics.entryExitZoneOverview.exitRationale}</p>
+                <p>{analytics?.entryExitZoneOverview.exitRationale ?? '—'}</p>
               </div>
             </AnalyticsPanel>
 
-            <AnalyticsPanel title="Orderbook Pressure" eyebrow="Execution">
+            <AnalyticsPanel
+              title="Orderbook Pressure"
+              eyebrow="Execution"
+              loading={!revealedPanels.pressure && !errorMessage}
+              errorMessage={!revealedPanels.pressure ? errorMessage : null}
+              loadingLabel="Reading current orderbook pressure"
+            >
               <div className="market-metric-grid">
                 <div className="market-metric-card">
                   <span className="market-metric-label">Cheapest Sell</span>
-                  <span className="market-metric-value">{formatPrice(analytics.orderbookPressure.cheapestSell)}</span>
+                  <span className="market-metric-value">{formatPrice(analytics?.orderbookPressure.cheapestSell)}</span>
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">Highest Buy</span>
-                  <span className="market-metric-value">{formatPrice(analytics.orderbookPressure.highestBuy)}</span>
+                  <span className="market-metric-value">{formatPrice(analytics?.orderbookPressure.highestBuy)}</span>
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">Spread</span>
                   <span className="market-metric-value">
-                    {formatPrice(analytics.orderbookPressure.spread)} · {formatPercent(analytics.orderbookPressure.spreadPct)}
+                    {formatPrice(analytics?.orderbookPressure.spread)} · {formatPercent(analytics?.orderbookPressure.spreadPct)}
                   </span>
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">Pressure</span>
-                  <span className="market-metric-value">{analytics.orderbookPressure.pressureLabel}</span>
+                  <span className="market-metric-value">{analytics?.orderbookPressure.pressureLabel ?? '—'}</span>
                 </div>
               </div>
               <div className="market-pressure-row">
                 <div>
                   <span className="market-copy-title">Entry Depth</span>
-                  <span>{formatNumber(analytics.orderbookPressure.entryDepth, 0)} visible quantity</span>
+                  <span>{formatNumber(analytics?.orderbookPressure.entryDepth, 0)} visible quantity</span>
                 </div>
                 <div>
                   <span className="market-copy-title">Exit Depth</span>
-                  <span>{formatNumber(analytics.orderbookPressure.exitDepth, 0)} visible quantity</span>
+                  <span>{formatNumber(analytics?.orderbookPressure.exitDepth, 0)} visible quantity</span>
                 </div>
                 <div>
                   <span className="market-copy-title">Pressure Ratio</span>
-                  <span>{formatNumber(analytics.orderbookPressure.pressureRatio, 2)}</span>
+                  <span>{formatNumber(analytics?.orderbookPressure.pressureRatio, 2)}</span>
                 </div>
               </div>
             </AnalyticsPanel>
 
-            <AnalyticsPanel title="Trend Quality Breakdown" eyebrow="Structure">
+            <AnalyticsPanel
+              title="Trend Quality Breakdown"
+              eyebrow="Structure"
+              loading={!revealedPanels.trend && !errorMessage}
+              errorMessage={!revealedPanels.trend ? errorMessage : null}
+              loadingLabel="Scoring short-term trend quality"
+            >
               <div className="market-tab-row">
                 {(['lowestSell', 'medianSell', 'weightedAvg'] as const).map((key) => (
                   <button
@@ -1094,100 +1209,101 @@ function AnalyticsTab() {
                   </button>
                 ))}
               </div>
-              {trendMetrics ? (
-                <>
-                  <div className="market-metric-grid">
-                    <div className="market-metric-card">
-                      <span className="market-metric-label">1H Slope</span>
-                      <span className="market-metric-value">{formatPercent(trendMetrics.slope1h)}</span>
-                    </div>
-                    <div className="market-metric-card">
-                      <span className="market-metric-label">3H Slope</span>
-                      <span className="market-metric-value">{formatPercent(trendMetrics.slope3h)}</span>
-                    </div>
-                    <div className="market-metric-card">
-                      <span className="market-metric-label">6H Slope</span>
-                      <span className="market-metric-value">{formatPercent(trendMetrics.slope6h)}</span>
-                    </div>
-                    <div className="market-metric-card">
-                      <span className="market-metric-label">Confidence</span>
-                      <span className="market-metric-value">{formatPercent(trendMetrics.confidence)}</span>
-                    </div>
-                  </div>
-                  <div className="market-copy-block">
-                    <span className="market-copy-title">Cross Signal</span>
-                    <p>{trendMetrics.crossSignal}</p>
-                  </div>
-                  <div className="market-copy-block">
-                    <span className="market-copy-title">Reversal</span>
-                    <p>{trendMetrics.reversal}</p>
-                  </div>
-                  <div className="market-signal-list">
-                    {trendMetrics.confirmingSignals.map((signal) => (
-                      <span key={signal} className="market-signal-pill">{signal}</span>
-                    ))}
-                  </div>
-                  <div className="market-pressure-row">
-                    <div>
-                      <span className="market-copy-title">Stability</span>
-                      <span>{formatPercent(analytics.trendQualityBreakdown.stability)}</span>
-                    </div>
-                    <div>
-                      <span className="market-copy-title">Volatility</span>
-                      <span>{formatPercent(analytics.trendQualityBreakdown.volatility)}</span>
-                    </div>
-                    <div>
-                      <span className="market-copy-title">Noise</span>
-                      <span>{formatPercent(analytics.trendQualityBreakdown.noise)}</span>
-                    </div>
-                  </div>
-                </>
-              ) : null}
+              <div className="market-metric-grid">
+                <div className="market-metric-card">
+                  <span className="market-metric-label">1H Slope</span>
+                  <span className="market-metric-value">{formatPercent(trendMetrics?.slope1h)}</span>
+                </div>
+                <div className="market-metric-card">
+                  <span className="market-metric-label">3H Slope</span>
+                  <span className="market-metric-value">{formatPercent(trendMetrics?.slope3h)}</span>
+                </div>
+                <div className="market-metric-card">
+                  <span className="market-metric-label">6H Slope</span>
+                  <span className="market-metric-value">{formatPercent(trendMetrics?.slope6h)}</span>
+                </div>
+                <div className="market-metric-card">
+                  <span className="market-metric-label">Confidence</span>
+                  <span className="market-metric-value">{formatPercent(trendMetrics?.confidence)}</span>
+                </div>
+              </div>
+              <div className="market-copy-block">
+                <span className="market-copy-title">Cross Signal</span>
+                <p>{trendMetrics?.crossSignal ?? '—'}</p>
+              </div>
+              <div className="market-copy-block">
+                <span className="market-copy-title">Reversal</span>
+                <p>{trendMetrics?.reversal ?? '—'}</p>
+              </div>
+              <div className="market-signal-list">
+                {(trendMetrics?.confirmingSignals ?? []).map((signal) => (
+                  <span key={signal} className="market-signal-pill">{signal}</span>
+                ))}
+              </div>
+              <div className="market-pressure-row">
+                <div>
+                  <span className="market-copy-title">Stability</span>
+                  <span>{formatPercent(analytics?.trendQualityBreakdown.stability)}</span>
+                </div>
+                <div>
+                  <span className="market-copy-title">Volatility</span>
+                  <span>{formatPercent(analytics?.trendQualityBreakdown.volatility)}</span>
+                </div>
+                <div>
+                  <span className="market-copy-title">Noise</span>
+                  <span>{formatPercent(analytics?.trendQualityBreakdown.noise)}</span>
+                </div>
+              </div>
             </AnalyticsPanel>
 
-            <AnalyticsPanel title="Action Card" eyebrow="Readout">
-              <div className={`market-action-card tone-${analytics.actionCard.tone}`}>
+            <AnalyticsPanel
+              title="Action Card"
+              eyebrow="Readout"
+              loading={!revealedPanels.action && !errorMessage}
+              errorMessage={!revealedPanels.action ? errorMessage : null}
+              loadingLabel="Building the market readout"
+            >
+              <div className={`market-action-card tone-${analytics?.actionCard.tone ?? 'neutral'}`}>
                 <div className="market-action-header">
                   <span className="market-action-label">Suggested Action</span>
-                  <span className="market-action-value">{analytics.actionCard.suggestedAction}</span>
+                  <span className="market-action-value">{analytics?.actionCard.suggestedAction ?? '—'}</span>
                 </div>
                 <div className="market-metric-grid">
                   <div className="market-metric-card">
                     <span className="market-metric-label">Zone Quality</span>
-                    <span className="market-metric-value">{analytics.actionCard.zoneQuality}</span>
+                    <span className="market-metric-value">{analytics?.actionCard.zoneQuality ?? '—'}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Zone Adjusted Edge</span>
-                    <span className="market-metric-value">{formatPrice(analytics.actionCard.zoneAdjustedEdge)}</span>
+                    <span className="market-metric-value">{formatPrice(analytics?.actionCard.zoneAdjustedEdge)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Spread</span>
                     <span className="market-metric-value">
-                      {formatPrice(analytics.actionCard.spread)} · {formatPercent(analytics.actionCard.spreadPct)}
+                      {formatPrice(analytics?.actionCard.spread)} · {formatPercent(analytics?.actionCard.spreadPct)}
                     </span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Book Bias</span>
-                    <span className="market-metric-value">{analytics.actionCard.pressureLabel}</span>
+                    <span className="market-metric-value">{analytics?.actionCard.pressureLabel ?? '—'}</span>
                   </div>
                 </div>
-                <p className="market-action-rationale">{analytics.actionCard.rationale}</p>
+                <p className="market-action-rationale">{analytics?.actionCard.rationale ?? '—'}</p>
                 <div className="market-signal-list">
-                  {analytics.actionCard.alignedSignals.map((signal) => (
+                  {(analytics?.actionCard.alignedSignals ?? []).map((signal) => (
                     <span key={signal} className="market-signal-pill">{signal}</span>
                   ))}
                 </div>
               </div>
             </AnalyticsPanel>
           </div>
-        </>
-      ) : null}
     </div>
   );
 }
 
 function AnalysisTab() {
   const pageContentRef = useRef<HTMLDivElement | null>(null);
+  const revealTimeoutsRef = useRef<number[]>([]);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
@@ -1202,10 +1318,18 @@ function AnalysisTab() {
   const worldStateVoidTrader = useAppStore((state) => state.worldStateVoidTrader);
   const worldStateFlashSales = useAppStore((state) => state.worldStateFlashSales);
   const [analysis, setAnalysis] = useState<ItemAnalysisResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [itemDetails, setItemDetails] = useState<ItemDetailSummary | null>(null);
+  const [itemDetailsLoading, setItemDetailsLoading] = useState(false);
+  const [itemDetailsError, setItemDetailsError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
+  const [revealedPanels, setRevealedPanels] = useState<Record<AnalysisPanelKey, boolean>>(
+    () => ({
+      ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
+      itemDetails: false,
+    }),
+  );
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -1213,15 +1337,54 @@ function AnalysisTab() {
 
   useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey) {
+      clearRevealTimeouts(revealTimeoutsRef);
       setAnalysis(null);
-      setLoading(false);
+      setItemDetails(null);
+      setItemDetailsLoading(false);
+      setItemDetailsError(null);
       setErrorMessage(null);
+      setComponentTargets({});
+      setRevealedPanels({
+        ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
+        itemDetails: false,
+      });
       return;
     }
 
     let isMounted = true;
-    setLoading(true);
+    clearRevealTimeouts(revealTimeoutsRef);
+    setAnalysis(null);
+    setItemDetails(null);
+    setItemDetailsLoading(true);
+    setItemDetailsError(null);
     setErrorMessage(null);
+    setComponentTargets({});
+    setRevealedPanels({
+      ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
+      itemDetails: false,
+    });
+
+    void getItemDetailSummary(selectedItem.itemId, selectedItem.slug)
+      .then((response) => {
+        if (!isMounted) {
+          return;
+        }
+        setItemDetails(response);
+        setItemDetailsLoading(false);
+        setItemDetailsError(null);
+        setRevealedPanels((current) => ({
+          ...current,
+          itemDetails: true,
+        }));
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+        setItemDetails(null);
+        setItemDetailsLoading(false);
+        setItemDetailsError(error instanceof Error ? error.message : String(error));
+      });
 
     void ensureMarketTracking(
       selectedItem.itemId,
@@ -1236,6 +1399,15 @@ function AnalysisTab() {
         }
 
         setAnalysis(response);
+        if (!itemDetails) {
+          setItemDetails(response.itemDetails);
+          setItemDetailsLoading(false);
+          setItemDetailsError(null);
+          setRevealedPanels((current) => ({
+            ...current,
+            itemDetails: true,
+          }));
+        }
         setComponentTargets(
           Object.fromEntries(
             response.supplyContext.components.map((component) => [
@@ -1244,20 +1416,21 @@ function AnalysisTab() {
             ]),
           ),
         );
-        setLoading(false);
         setErrorMessage(null);
+        queuePanelReveal(ANALYSIS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       })
       .catch((error) => {
         if (!isMounted) {
           return;
         }
         setAnalysis(null);
-        setLoading(false);
         setErrorMessage(error instanceof Error ? error.message : String(error));
+        clearRevealTimeouts(revealTimeoutsRef);
       });
 
     return () => {
       isMounted = false;
+      clearRevealTimeouts(revealTimeoutsRef);
     };
   }, [selectedItem, selectedMarketVariantKey, refreshNonce]);
 
@@ -1311,7 +1484,8 @@ function AnalysisTab() {
     );
   }
 
-  const itemImageUrl = resolveWfmAssetUrl(analysis?.itemDetails.imagePath);
+  const effectiveItemDetails = itemDetails ?? analysis?.itemDetails ?? null;
+  const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath);
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
@@ -1341,128 +1515,147 @@ function AnalysisTab() {
           <span>Computed {formatRelativeTimestamp(analysis?.computedAt ?? null)}</span>
         </div>
       </div>
-
-      {loading ? (
-        <div className="market-empty-state">
-          <span className="empty-primary">Building item analysis</span>
-          <span className="empty-sub">Pulling live orders, observatory snapshots, and catalog context.</span>
-        </div>
-      ) : errorMessage ? (
-        <div className="market-empty-state">
-          <span className="empty-primary">Analysis could not be built</span>
-          <span className="empty-sub">{errorMessage}</span>
-        </div>
-      ) : analysis ? (
-        <div className="market-analysis-shell">
+      <div className="market-analysis-shell">
           <div className="market-analysis-main">
-            <div className="market-analysis-summary-grid">
+            <div className="market-summary-grid-shell">
+              <div className="market-analysis-summary-grid">
               <div className="market-summary-card">
                 <span className="market-summary-label">Entry Price</span>
-                <span className="market-summary-value">{formatPrice(analysis.headline.entryPrice)}</span>
+                <span className="market-summary-value">{formatPrice(analysis?.headline.entryPrice)}</span>
               </div>
               <div className="market-summary-card">
-                <span className="market-summary-label">Exit Price ({analysis.headline.exitPercentileLabel})</span>
-                <span className="market-summary-value">{formatPrice(analysis.headline.exitPrice)}</span>
+                <span className="market-summary-label">Exit Price ({analysis?.headline.exitPercentileLabel ?? 'P60'})</span>
+                <span className="market-summary-value">{formatPrice(analysis?.headline.exitPrice)}</span>
               </div>
               <div className="market-summary-card">
                 <span className="market-summary-label">Net Margin</span>
-                <span className="market-summary-value">{formatPrice(analysis.headline.netMargin)}</span>
+                <span className="market-summary-value">{formatPrice(analysis?.headline.netMargin)}</span>
               </div>
               <div className="market-summary-card">
                 <span className="market-summary-label">Liquidity</span>
                 <span className="market-summary-value">
-                  {formatPercent(analysis.headline.liquidityScore)} · {analysis.headline.liquidityLabel}
+                  {formatPercent(analysis?.headline.liquidityScore)} · {analysis?.headline.liquidityLabel ?? '—'}
                 </span>
               </div>
             </div>
+              <PanelOverlay
+                loading={!revealedPanels.headline && !errorMessage}
+                errorMessage={!revealedPanels.headline ? errorMessage : null}
+                label="Building headline metrics"
+              />
+            </div>
 
             <div className="market-analysis-grid">
-              <AnalyticsPanel title="Flip Analysis" eyebrow="Execution Model">
+              <AnalyticsPanel
+                title="Flip Analysis"
+                eyebrow="Execution Model"
+                loading={!revealedPanels.flip && !errorMessage}
+                errorMessage={!revealedPanels.flip ? errorMessage : null}
+                loadingLabel="Calculating flip margins"
+              >
                 <div className="market-metric-grid">
                   <div className="market-metric-card">
                     <span className="market-metric-label">Entry Price</span>
-                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.entryPrice)}</span>
+                    <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.entryPrice)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Exit Price</span>
-                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.exitPrice)}</span>
+                    <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.exitPrice)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Gross Margin</span>
-                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.grossMargin)}</span>
+                    <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.grossMargin)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Net Margin</span>
-                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.netMargin)}</span>
+                    <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.netMargin)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Efficiency Score</span>
                     <span className="market-metric-value">
-                      {formatPercent(analysis.flipAnalysis.efficiencyScore)} · {analysis.flipAnalysis.efficiencyLabel}
+                      {formatPercent(analysis?.flipAnalysis.efficiencyScore)} · {analysis?.flipAnalysis.efficiencyLabel ?? '—'}
                     </span>
                   </div>
                 </div>
               </AnalyticsPanel>
 
-              <AnalyticsPanel title="Liquidity Detail" eyebrow="Market Structure">
+              <AnalyticsPanel
+                title="Liquidity Detail"
+                eyebrow="Market Structure"
+                loading={!revealedPanels.liquidity && !errorMessage}
+                errorMessage={!revealedPanels.liquidity ? errorMessage : null}
+                loadingLabel="Profiling live liquidity"
+              >
                 <div className="market-metric-grid">
                   <div className="market-metric-card">
                     <span className="market-metric-label">Demand Ratio</span>
-                    <span className="market-metric-value">{formatNumber(analysis.liquidityDetail.demandRatio, 2)}</span>
+                    <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.demandRatio, 2)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">State</span>
-                    <span className="market-metric-value">{analysis.liquidityDetail.state}</span>
+                    <span className="market-metric-value">{analysis?.liquidityDetail.state ?? '—'}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Sellers Within +2pt</span>
-                    <span className="market-metric-value">{formatNumber(analysis.liquidityDetail.sellersWithinTwoPt, 0)}</span>
+                    <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Undercut Velocity</span>
-                    <span className="market-metric-value">{formatNumber(analysis.liquidityDetail.undercutVelocity, 2)} / h</span>
+                    <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.undercutVelocity, 2)} / h</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Qty-Weighted Demand</span>
-                    <span className="market-metric-value">{formatPercent(analysis.liquidityDetail.quantityWeightedDemand)}</span>
+                    <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Liquidity</span>
-                    <span className="market-metric-value">{formatPercent(analysis.liquidityDetail.liquidityScore)}</span>
+                    <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.liquidityScore)}</span>
                   </div>
                 </div>
               </AnalyticsPanel>
 
-              <AnalyticsPanel title="Trend" eyebrow="Analytics Carryover">
+              <AnalyticsPanel
+                title="Trend"
+                eyebrow="Analytics Carryover"
+                loading={!revealedPanels.trend && !errorMessage}
+                errorMessage={!revealedPanels.trend ? errorMessage : null}
+                loadingLabel="Summarizing the current trend"
+              >
                 <div className="market-metric-grid">
                   <div className="market-metric-card">
                     <span className="market-metric-label">Direction</span>
-                    <span className="market-metric-value">{analysis.trend.direction}</span>
+                    <span className="market-metric-value">{analysis?.trend.direction ?? '—'}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Confidence</span>
-                    <span className="market-metric-value">{formatPercent(analysis.trend.confidence)}</span>
+                    <span className="market-metric-value">{formatPercent(analysis?.trend.confidence)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">1H Slope</span>
-                    <span className="market-metric-value">{formatPercent(analysis.trend.slope1h)}</span>
+                    <span className="market-metric-value">{formatPercent(analysis?.trend.slope1h)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">3H Slope</span>
-                    <span className="market-metric-value">{formatPercent(analysis.trend.slope3h)}</span>
+                    <span className="market-metric-value">{formatPercent(analysis?.trend.slope3h)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">6H Slope</span>
-                    <span className="market-metric-value">{formatPercent(analysis.trend.slope6h)}</span>
+                    <span className="market-metric-value">{formatPercent(analysis?.trend.slope6h)}</span>
                   </div>
                 </div>
                 <div className="market-copy-block">
                   <span className="market-copy-title">Summary</span>
-                  <p>{analysis.trend.summary}</p>
+                  <p>{analysis?.trend.summary ?? '—'}</p>
                 </div>
               </AnalyticsPanel>
 
-              <AnalyticsPanel title="Event Context" eyebrow="World State">
+              <AnalyticsPanel
+                title="Event Context"
+                eyebrow="World State"
+                loading={!revealedPanels.eventContext && !errorMessage}
+                errorMessage={!revealedPanels.eventContext ? errorMessage : null}
+                loadingLabel="Matching worldstate context"
+              >
                 {eventContextEntries.length > 0 ? (
                   <div className="market-context-list">
                     {eventContextEntries.map((entry) => (
@@ -1480,23 +1673,29 @@ function AnalysisTab() {
                 )}
               </AnalyticsPanel>
 
-              <AnalyticsPanel title="Manipulation Risk" eyebrow="Safety">
+              <AnalyticsPanel
+                title="Manipulation Risk"
+                eyebrow="Safety"
+                loading={!revealedPanels.manipulation && !errorMessage}
+                errorMessage={!revealedPanels.manipulation ? errorMessage : null}
+                loadingLabel="Scanning manipulation signals"
+              >
                 <div className="market-metric-grid">
                   <div className="market-metric-card">
                     <span className="market-metric-label">Risk Level</span>
-                    <span className="market-metric-value">{analysis.manipulationRisk.riskLevel}</span>
+                    <span className="market-metric-value">{analysis?.manipulationRisk.riskLevel ?? '—'}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Active Signals</span>
-                    <span className="market-metric-value">{formatNumber(analysis.manipulationRisk.activeSignals, 0)}</span>
+                    <span className="market-metric-value">{formatNumber(analysis?.manipulationRisk.activeSignals, 0)}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">Efficiency Penalty</span>
-                    <span className="market-metric-value">{formatPercent(analysis.manipulationRisk.efficiencyPenaltyPct)}</span>
+                    <span className="market-metric-value">{formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)}</span>
                   </div>
                 </div>
                 <div className="market-analysis-signal-list">
-                  {analysis.manipulationRisk.signals.map((signal) => (
+                  {(analysis?.manipulationRisk.signals ?? []).map((signal) => (
                     <div
                       key={signal.key}
                       className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
@@ -1511,23 +1710,29 @@ function AnalysisTab() {
                 </div>
               </AnalyticsPanel>
 
-              <AnalyticsPanel title="Time of Day Liquidity" eyebrow="Observatory Tape">
+              <AnalyticsPanel
+                title="Time of Day Liquidity"
+                eyebrow="Observatory Tape"
+                loading={!revealedPanels.timeOfDay && !errorMessage}
+                errorMessage={!revealedPanels.timeOfDay ? errorMessage : null}
+                loadingLabel="Aggregating observatory tape"
+              >
                 <div className="market-pressure-row">
                   <div>
                     <span className="market-copy-title">Current Hour</span>
-                    <span>{analysis.timeOfDayLiquidity.currentHourLabel}</span>
+                    <span>{analysis?.timeOfDayLiquidity.currentHourLabel ?? '—'}</span>
                   </div>
                   <div>
                     <span className="market-copy-title">Strongest Window</span>
-                    <span>{analysis.timeOfDayLiquidity.strongestWindowLabel ?? '—'}</span>
+                    <span>{analysis?.timeOfDayLiquidity.strongestWindowLabel ?? '—'}</span>
                   </div>
                   <div>
                     <span className="market-copy-title">Weakest Window</span>
-                    <span>{analysis.timeOfDayLiquidity.weakestWindowLabel ?? '—'}</span>
+                    <span>{analysis?.timeOfDayLiquidity.weakestWindowLabel ?? '—'}</span>
                   </div>
                 </div>
                 <div className="market-time-grid">
-                  {analysis.timeOfDayLiquidity.buckets.map((bucket) => (
+                  {(analysis?.timeOfDayLiquidity.buckets ?? []).map((bucket) => (
                     <div key={bucket.hour} className="market-time-card">
                       <span className="market-copy-title">{bucket.label}</span>
                       <span>{formatNumber(bucket.avgVisibleQuantity, 0)} visible qty</span>
@@ -1540,17 +1745,20 @@ function AnalysisTab() {
 
               <AnalyticsPanel
                 title={
-                  analysis.supplyContext.mode === 'set-components'
+                  analysis?.supplyContext.mode === 'set-components'
                     ? 'Set Components'
-                    : analysis.supplyContext.mode === 'drop-sources'
+                    : analysis?.supplyContext.mode === 'drop-sources'
                       ? 'Drop Sources'
                       : 'Drop Sources / Set Components'
                 }
                 eyebrow="Supply Context"
+                loading={!revealedPanels.supply && !errorMessage}
+                errorMessage={!revealedPanels.supply ? errorMessage : null}
+                loadingLabel="Building supply context"
               >
-                {analysis.supplyContext.mode === 'set-components' ? (
+                {analysis?.supplyContext.mode === 'set-components' ? (
                   <div className="market-component-list">
-                    {analysis.supplyContext.components.map((component) => {
+                    {(analysis?.supplyContext.components ?? []).map((component) => {
                       const imageUrl = resolveWfmAssetUrl(component.imagePath);
                       const targetValue = componentTargets[component.slug] ?? '';
                       const watchlistItem: WfmAutocompleteItem | null =
@@ -1620,10 +1828,10 @@ function AnalysisTab() {
                       );
                     })}
                   </div>
-                ) : analysis.supplyContext.mode === 'drop-sources' ? (
+                ) : analysis?.supplyContext.mode === 'drop-sources' ? (
                   <div className="market-drop-list">
-                    {analysis.supplyContext.dropSources.map((source) => (
-                      <div key={`${source.location}-${source.type ?? 'none'}`} className="market-drop-card">
+                    {(analysis?.supplyContext.dropSources ?? []).map((source) => (
+                      <div key={`${source.location}-${source.sourceType ?? 'none'}`} className="market-drop-card">
                         <span className="market-copy-title">{source.location}</span>
                         <span>Chance: {formatPercent(source.chance)}</span>
                         <span>Rarity: {source.rarity ?? '—'}</span>
@@ -1642,46 +1850,52 @@ function AnalysisTab() {
           </div>
 
           <aside className="market-analysis-sidebar">
-            <AnalyticsPanel title="Item Details" eyebrow="Reference">
+            <AnalyticsPanel
+              title="Item Details"
+              eyebrow="Reference"
+              loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
+              errorMessage={itemDetailsError}
+              loadingLabel="Loading item details from the local catalog"
+            >
               <div className="market-item-detail-card">
                 {itemImageUrl ? (
                   <img
                     className="market-item-detail-image"
                     src={itemImageUrl}
-                    alt={analysis.itemDetails.name}
+                    alt={effectiveItemDetails?.name ?? selectedItem.name}
                   />
                 ) : (
                   <div className="market-item-detail-image placeholder" />
                 )}
                 <div className="market-item-detail-copy">
-                  <span className="market-item-detail-name">{analysis.itemDetails.name}</span>
-                  <span className="market-item-detail-slug">{analysis.itemDetails.slug}</span>
-                  {analysis.itemDetails.wikiLink ? (
+                  <span className="market-item-detail-name">{effectiveItemDetails?.name ?? selectedItem.name}</span>
+                  <span className="market-item-detail-slug">{effectiveItemDetails?.slug ?? selectedItem.slug}</span>
+                  {effectiveItemDetails?.wikiLink ? (
                     <button
                       type="button"
                       className="market-item-detail-link"
                       onClick={() => {
-                        void handleOpenExternalLink(analysis.itemDetails.wikiLink);
+                        void handleOpenExternalLink(effectiveItemDetails.wikiLink);
                       }}
                     >
                       Open Wiki
-                    </button>
+                  </button>
                   ) : null}
                 </div>
               </div>
-              {analysis.itemDetails.description ? (
+              {effectiveItemDetails?.description ? (
                 <div className="market-copy-block">
                   <span className="market-copy-title">Description</span>
-                  <p>{analysis.itemDetails.description}</p>
+                  <p>{effectiveItemDetails.description}</p>
                 </div>
               ) : null}
-              {analysis.itemDetails.statHighlights.length > 0 ? (
+              {(effectiveItemDetails?.statHighlights.length ?? 0) > 0 ? (
                 <div className="market-copy-block">
                   <span className="market-copy-title">
-                    {analysis.itemDetails.rankScaleLabel ?? 'Rank Scaling'}
+                    {effectiveItemDetails?.rankScaleLabel ?? 'Rank Scaling'}
                   </span>
                   <div className="market-detail-highlight-list">
-                    {analysis.itemDetails.statHighlights.map((line) => (
+                    {(effectiveItemDetails?.statHighlights ?? []).map((line) => (
                       <div key={line} className="market-detail-highlight">
                         {normalizeStatHighlightText(line).map((segment, segmentIndex) => (
                           <div key={`${line}-${segmentIndex}`} className="market-detail-highlight-line">
@@ -1694,22 +1908,22 @@ function AnalysisTab() {
                 </div>
               ) : null}
               <div className="market-detail-grid">
-                <div><span className="market-copy-title">Family</span><span>{analysis.itemDetails.itemFamily ?? '—'}</span></div>
-                <div><span className="market-copy-title">Category</span><span>{analysis.itemDetails.category ?? '—'}</span></div>
-                <div><span className="market-copy-title">Type</span><span>{analysis.itemDetails.itemType ?? '—'}</span></div>
-                <div><span className="market-copy-title">Rarity</span><span>{analysis.itemDetails.rarity ?? '—'}</span></div>
-                <div><span className="market-copy-title">Mastery</span><span>{formatNumber(analysis.itemDetails.masteryReq, 0)}</span></div>
-                <div><span className="market-copy-title">Max Rank</span><span>{formatNumber(analysis.itemDetails.maxRank, 0)}</span></div>
-                <div><span className="market-copy-title">Tradable</span><span>{formatNullableBoolean(analysis.itemDetails.tradable)}</span></div>
-                <div><span className="market-copy-title">Prime</span><span>{formatNullableBoolean(analysis.itemDetails.prime)}</span></div>
-                <div><span className="market-copy-title">Vaulted</span><span>{formatNullableBoolean(analysis.itemDetails.vaulted)}</span></div>
-                <div><span className="market-copy-title">Ducats</span><span>{formatNumber(analysis.itemDetails.ducats, 0)}</span></div>
-                <div><span className="market-copy-title">Release</span><span>{formatDateCompact(analysis.itemDetails.releaseDate)}</span></div>
-                <div><span className="market-copy-title">Est. Vault</span><span>{formatDateCompact(analysis.itemDetails.estimatedVaultDate)}</span></div>
+                <div><span className="market-copy-title">Family</span><span>{effectiveItemDetails?.itemFamily ?? '—'}</span></div>
+                <div><span className="market-copy-title">Category</span><span>{effectiveItemDetails?.category ?? '—'}</span></div>
+                <div><span className="market-copy-title">Type</span><span>{effectiveItemDetails?.itemType ?? '—'}</span></div>
+                <div><span className="market-copy-title">Rarity</span><span>{effectiveItemDetails?.rarity ?? '—'}</span></div>
+                <div><span className="market-copy-title">Mastery</span><span>{formatNumber(effectiveItemDetails?.masteryReq, 0)}</span></div>
+                <div><span className="market-copy-title">Max Rank</span><span>{formatNumber(effectiveItemDetails?.maxRank, 0)}</span></div>
+                <div><span className="market-copy-title">Tradable</span><span>{formatNullableBoolean(effectiveItemDetails?.tradable)}</span></div>
+                <div><span className="market-copy-title">Prime</span><span>{formatNullableBoolean(effectiveItemDetails?.prime)}</span></div>
+                <div><span className="market-copy-title">Vaulted</span><span>{formatNullableBoolean(effectiveItemDetails?.vaulted)}</span></div>
+                <div><span className="market-copy-title">Ducats</span><span>{formatNumber(effectiveItemDetails?.ducats, 0)}</span></div>
+                <div><span className="market-copy-title">Release</span><span>{formatDateCompact(effectiveItemDetails?.releaseDate)}</span></div>
+                <div><span className="market-copy-title">Est. Vault</span><span>{formatDateCompact(effectiveItemDetails?.estimatedVaultDate)}</span></div>
               </div>
-              {analysis.itemDetails.tags.length > 0 ? (
+              {(effectiveItemDetails?.tags.length ?? 0) > 0 ? (
                 <div className="market-signal-list">
-                  {analysis.itemDetails.tags.map((tag) => (
+                  {(effectiveItemDetails?.tags ?? []).map((tag) => (
                     <span key={tag} className="market-signal-pill">{tag}</span>
                   ))}
                 </div>
@@ -1717,7 +1931,6 @@ function AnalysisTab() {
             </AnalyticsPanel>
           </aside>
         </div>
-      ) : null}
     </div>
   );
 }
@@ -1725,6 +1938,10 @@ function AnalysisTab() {
 export function MarketPage() {
   const marketSubTab = useAppStore((s) => s.marketSubTab);
   const setMarketSubTab = useAppStore((s) => s.setMarketSubTab);
+
+  useEffect(() => {
+    setMarketSubTab('analysis');
+  }, [setMarketSubTab]);
 
   return (
     <>

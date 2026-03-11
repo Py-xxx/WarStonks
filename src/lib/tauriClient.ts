@@ -11,6 +11,7 @@ import type {
   AppSettings,
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
+  ItemDetailSummary,
   MarketSnapshot,
   MarketTrackingSource,
   MarketVariant,
@@ -295,6 +296,16 @@ export async function getItemAnalytics(
     variantKey,
     domainKey,
     bucketSizeKey,
+  });
+}
+
+export async function getItemDetailSummary(
+  itemId: number,
+  slug: string,
+): Promise<ItemDetailSummary> {
+  return invoke<ItemDetailSummary>('get_item_detail_summary', {
+    itemId,
+    slug,
   });
 }
 
