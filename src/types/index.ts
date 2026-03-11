@@ -434,7 +434,7 @@ export type MarketTrackingSource =
   | 'analytics'
   | 'trade-health';
 
-export type AnalyticsDomainKey = '1d' | '7d' | '30d' | '90d';
+export type AnalyticsDomainKey = '48h' | '7d' | '30d' | '90d';
 export type AnalyticsBucketSizeKey = '1h' | '3h' | '12h' | '18h' | '24h' | '7d' | '14d';
 
 export interface MarketVariant {
