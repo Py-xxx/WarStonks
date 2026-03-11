@@ -122,18 +122,21 @@ function normalizeStatHighlightText(value: string): string[] {
 }
 
 function renderStatHighlightLine(line: string): ReactNode {
-  const firstDigitIndex = line.search(/\d/);
-  if (firstDigitIndex === -1) {
+  const changedRangeMatch = line.match(/(\d[\d.,%+\-xX ]*->\s*\d[\d.,%+\-xX ]*)/);
+  if (!changedRangeMatch || changedRangeMatch.index === undefined) {
     return <span className="market-detail-highlight-copy">{line}</span>;
   }
 
-  const label = line.slice(0, firstDigitIndex);
-  const changedText = line.slice(firstDigitIndex);
+  const rangeStart = changedRangeMatch.index;
+  const changedText = changedRangeMatch[1].trim();
+  const label = line.slice(0, rangeStart);
+  const suffix = line.slice(rangeStart + changedRangeMatch[1].length);
 
   return (
     <>
       {label ? <span className="market-detail-highlight-copy">{label}</span> : null}
       <span className="market-detail-highlight-change">{changedText}</span>
+      {suffix ? <span className="market-detail-highlight-copy">{suffix}</span> : null}
     </>
   );
 }
