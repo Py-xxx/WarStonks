@@ -155,6 +155,20 @@ function PriceChart({
 }) {
   const chartWidth = 820;
   const chartHeight = 260;
+  const lowestSellPath = buildSeriesPath(points, (point) => point.lowestSell, chartWidth, chartHeight);
+  const medianSellPath = buildSeriesPath(points, (point) => point.medianSell, chartWidth, chartHeight);
+  const movingAvgPath = toggles.movingAvg
+    ? buildSeriesPath(points, (point) => point.movingAvg, chartWidth, chartHeight)
+    : '';
+  const weightedAvgPath = toggles.weightedAvg
+    ? buildSeriesPath(points, (point) => point.weightedAvg, chartWidth, chartHeight)
+    : '';
+  const averagePricePath = toggles.averagePrice
+    ? buildSeriesPath(points, (point) => point.averagePrice, chartWidth, chartHeight)
+    : '';
+  const highestBuyPath = toggles.highestBuy
+    ? buildSeriesPath(points, (point) => point.highestBuy, chartWidth, chartHeight)
+    : '';
   const allValues = points.flatMap((point) => [
     point.lowestSell,
     point.medianSell,
@@ -207,6 +221,13 @@ function PriceChart({
     chartWidth,
     chartHeight,
   );
+  const hasRenderableSeries =
+    Boolean(lowestSellPath) ||
+    Boolean(medianSellPath) ||
+    Boolean(movingAvgPath) ||
+    Boolean(weightedAvgPath) ||
+    Boolean(averagePricePath) ||
+    Boolean(highestBuyPath);
 
   return (
     <div className="market-chart-card">
@@ -216,7 +237,14 @@ function PriceChart({
             <span key={value}>{formatPrice(value)}</span>
           ))}
         </div>
-        <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="market-chart-svg" preserveAspectRatio="none">
+        <svg
+          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+          className="market-chart-svg"
+          preserveAspectRatio="none"
+          width={chartWidth}
+          height={chartHeight}
+          aria-label="Price history chart"
+        >
           {[0.15, 0.4, 0.65, 0.9].map((position) => (
             <line
               key={position}
@@ -230,10 +258,9 @@ function PriceChart({
           {fairValuePolygon ? (
             <polygon points={fairValuePolygon} className="market-chart-band" />
           ) : null}
-          <path
-            d={buildSeriesPath(points, (point) => point.lowestSell, chartWidth, chartHeight)}
-            className="market-chart-line market-chart-line-primary"
-          />
+          {lowestSellPath ? (
+            <path d={lowestSellPath} className="market-chart-line market-chart-line-primary" />
+          ) : null}
           {lowestSellMarkers.map((marker) => (
             <circle
               key={`lowest-${marker.key}`}
@@ -243,10 +270,9 @@ function PriceChart({
               className="market-chart-marker market-chart-marker-primary"
             />
           ))}
-          <path
-            d={buildSeriesPath(points, (point) => point.medianSell, chartWidth, chartHeight)}
-            className="market-chart-line market-chart-line-secondary"
-          />
+          {medianSellPath ? (
+            <path d={medianSellPath} className="market-chart-line market-chart-line-secondary" />
+          ) : null}
           {medianSellMarkers.map((marker) => (
             <circle
               key={`median-${marker.key}`}
@@ -256,34 +282,27 @@ function PriceChart({
               className="market-chart-marker market-chart-marker-secondary"
             />
           ))}
-          {toggles.movingAvg ? (
-            <path
-              d={buildSeriesPath(points, (point) => point.movingAvg, chartWidth, chartHeight)}
-              className="market-chart-line market-chart-line-moving"
-            />
+          {movingAvgPath ? (
+            <path d={movingAvgPath} className="market-chart-line market-chart-line-moving" />
           ) : null}
-          {toggles.weightedAvg ? (
-            <path
-              d={buildSeriesPath(points, (point) => point.weightedAvg, chartWidth, chartHeight)}
-              className="market-chart-line market-chart-line-weighted"
-            />
+          {weightedAvgPath ? (
+            <path d={weightedAvgPath} className="market-chart-line market-chart-line-weighted" />
           ) : null}
-          {toggles.averagePrice ? (
-            <path
-              d={buildSeriesPath(points, (point) => point.averagePrice, chartWidth, chartHeight)}
-              className="market-chart-line market-chart-line-average"
-            />
+          {averagePricePath ? (
+            <path d={averagePricePath} className="market-chart-line market-chart-line-average" />
           ) : null}
-          {toggles.highestBuy ? (
-            <path
-              d={buildSeriesPath(points, (point) => point.highestBuy, chartWidth, chartHeight)}
-              className="market-chart-line market-chart-line-buy"
-            />
+          {highestBuyPath ? (
+            <path d={highestBuyPath} className="market-chart-line market-chart-line-buy" />
           ) : null}
         </svg>
       </div>
       {points.length === 0 ? (
         <div className="market-chart-empty">No cached price history is available for the active domain yet.</div>
+      ) : null}
+      {points.length > 0 && !hasRenderableSeries ? (
+        <div className="market-chart-empty">
+          Cached history loaded, but the active series does not contain enough usable points to draw a line yet.
+        </div>
       ) : null}
       <div className="market-chart-legend">
         <span><i className="legend-swatch primary" /> Lowest Sell</span>
@@ -310,7 +329,14 @@ function VolumeChart({ points }: { points: AnalyticsChartPoint[] }) {
         <span className="card-label">Volume</span>
         <span className="market-volume-subtitle">Aligned to the active chart domain and buckets</span>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="market-volume-svg" preserveAspectRatio="none">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="market-volume-svg"
+        preserveAspectRatio="none"
+        width={width}
+        height={height}
+        aria-label="Volume chart"
+      >
         {points.map((point, index) => {
           const barHeight = (point.volume / maxVolume) * (height - 8);
           const x = index * barWidth + 2;
@@ -468,15 +494,17 @@ function AnalyticsTab() {
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
-        <div className="market-item-header card">
-          <div className="market-item-media">
-            <div className="market-item-thumb">
-              {imageUrl ? <img src={imageUrl} alt="" /> : <span>{selectedItem.name.slice(0, 1)}</span>}
-            </div>
-            <div className="market-item-copy">
-              <span className="panel-title-eyebrow">Analytics</span>
-              <span className="market-item-title">{selectedItem.name}</span>
-              <span className="market-item-meta">{selectedItem.slug.replace(/_/g, ' / ')}</span>
+        <div className="card">
+          <div className="card-body market-item-header">
+            <div className="market-item-media">
+              <div className="market-item-thumb">
+                {imageUrl ? <img src={imageUrl} alt="" /> : <span>{selectedItem.name.slice(0, 1)}</span>}
+              </div>
+              <div className="market-item-copy">
+                <span className="panel-title-eyebrow">Analytics</span>
+                <span className="market-item-title">{selectedItem.name}</span>
+                <span className="market-item-meta">{selectedItem.slug.replace(/_/g, ' / ')}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -505,103 +533,107 @@ function AnalyticsTab() {
 
   return (
     <div className="page-content market-page-content">
-      <div className="market-item-header card">
-        <div className="market-item-media">
-          <div className="market-item-thumb">
-            {imageUrl ? <img src={imageUrl} alt="" /> : <span>{selectedItem.name.slice(0, 1)}</span>}
-          </div>
-          <div className="market-item-copy">
-            <span className="panel-title-eyebrow">Analytics</span>
-            <span className="market-item-title">{selectedItem.name}</span>
-            <span className="market-item-meta">{selectedItem.slug}</span>
-            <div className="market-item-freshness">
-              <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
-              <span>Stats {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
-              <span>Computed {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
+      <div className="card">
+        <div className="card-body market-item-header">
+          <div className="market-item-media">
+            <div className="market-item-thumb">
+              {imageUrl ? <img src={imageUrl} alt="" /> : <span>{selectedItem.name.slice(0, 1)}</span>}
+            </div>
+            <div className="market-item-copy">
+              <span className="panel-title-eyebrow">Analytics</span>
+              <span className="market-item-title">{selectedItem.name}</span>
+              <span className="market-item-meta">{selectedItem.slug}</span>
+              <div className="market-item-freshness">
+                <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
+                <span>Stats {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
+                <span>Computed {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="market-header-actions">
-          {marketVariants.length > 0 ? (
-            <select
-              className="market-variant-select"
-              value={selectedVariant?.key ?? ''}
-              onChange={(event) => {
-                void setSelectedMarketVariantKey(event.target.value || null);
-              }}
-              aria-label="Select market variant"
-            >
-              {marketVariants.map((variant) => (
-                <option key={variant.key} value={variant.key}>
-                  {variant.label}
-                </option>
-              ))}
-            </select>
-          ) : null}
-          <button className="btn-sm" type="button" onClick={() => setRefreshNonce((value) => value + 1)}>
-            Refresh
-          </button>
+          <div className="market-header-actions">
+            {marketVariants.length > 0 ? (
+              <select
+                className="market-variant-select"
+                value={selectedVariant?.key ?? ''}
+                onChange={(event) => {
+                  void setSelectedMarketVariantKey(event.target.value || null);
+                }}
+                aria-label="Select market variant"
+              >
+                {marketVariants.map((variant) => (
+                  <option key={variant.key} value={variant.key}>
+                    {variant.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <button className="btn-sm" type="button" onClick={() => setRefreshNonce((value) => value + 1)}>
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="market-toolbar card">
-        <div className="market-toolbar-row">
-          <div className="market-toolbar-group">
-            <span className="market-toolbar-label">Domain</span>
-            <div className="market-chip-row">
-              {DOMAIN_OPTIONS.map((option) => (
-                <button
-                  key={option.key}
-                  className={`market-chip${option.key === domainKey ? ' active' : ''}`}
-                  type="button"
-                  onClick={() => setDomainKey(option.key)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="market-toolbar-group">
-            <span className="market-toolbar-label">Bucket Size</span>
-            <div className="market-chip-row">
-              {BUCKET_OPTIONS.map((option) => {
-                const supported = supportedBuckets.includes(option.key);
-                return (
+      <div className="card">
+        <div className="card-body market-toolbar">
+          <div className="market-toolbar-row">
+            <div className="market-toolbar-group">
+              <span className="market-toolbar-label">Domain</span>
+              <div className="market-chip-row">
+                {DOMAIN_OPTIONS.map((option) => (
                   <button
                     key={option.key}
-                    className={`market-chip${option.key === bucketSizeKey ? ' active' : ''}`}
+                    className={`market-chip${option.key === domainKey ? ' active' : ''}`}
                     type="button"
-                    disabled={!supported}
-                    onClick={() => supported && setBucketSizeKey(option.key)}
+                    onClick={() => setDomainKey(option.key)}
                   >
                     {option.label}
                   </button>
-                );
-              })}
+                ))}
+              </div>
+            </div>
+            <div className="market-toolbar-group">
+              <span className="market-toolbar-label">Bucket Size</span>
+              <div className="market-chip-row">
+                {BUCKET_OPTIONS.map((option) => {
+                  const supported = supportedBuckets.includes(option.key);
+                  return (
+                    <button
+                      key={option.key}
+                      className={`market-chip${option.key === bucketSizeKey ? ' active' : ''}`}
+                      type="button"
+                      disabled={!supported}
+                      onClick={() => supported && setBucketSizeKey(option.key)}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="market-toolbar-row">
-          <div className="market-toolbar-group">
-            <span className="market-toolbar-label">Overlays</span>
-            <div className="market-toggle-row">
-              {SERIES_TOGGLE_ORDER.map((toggle) => (
-                <button
-                  key={toggle.key}
-                  className={`market-toggle${toggles[toggle.key] ? ' active' : ''}`}
-                  type="button"
-                  onClick={() =>
-                    setToggles((current) => ({
-                      ...current,
-                      [toggle.key]: !current[toggle.key],
-                    }))
-                  }
-                >
-                  {toggle.label}
-                </button>
-              ))}
+          <div className="market-toolbar-row">
+            <div className="market-toolbar-group">
+              <span className="market-toolbar-label">Overlays</span>
+              <div className="market-toggle-row">
+                {SERIES_TOGGLE_ORDER.map((toggle) => (
+                  <button
+                    key={toggle.key}
+                    className={`market-toggle${toggles[toggle.key] ? ' active' : ''}`}
+                    type="button"
+                    onClick={() =>
+                      setToggles((current) => ({
+                        ...current,
+                        [toggle.key]: !current[toggle.key],
+                      }))
+                    }
+                  >
+                    {toggle.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
