@@ -2,35 +2,25 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ensureMarketTracking, getItemAnalytics, stopMarketTracking } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
-import type { ItemAnalyticsResponse } from '../../types';
+import type { AnalyticsChartPoint, ItemAnalyticsResponse } from '../../types';
 
 type ChartDomainKey = '48h' | '7d' | '30d' | '90d';
 type ChartBucketKey = '1h' | '3h' | '6h' | '12h' | '24h' | '7d' | '14d';
 type ChartSeriesKey = 'median' | 'lowest' | 'movingAverage' | 'average' | 'entryZone' | 'exitZone';
 type ChartMode = 'line' | 'candlestick';
 
-interface MockHourlyPoint {
-  timestamp: number;
-  lowest: number;
-  median: number;
-  average: number;
-  weighted: number;
-  volume: number;
-}
-
 interface MockBucketPoint {
   timestamp: number;
-  open: number;
-  close: number;
-  low: number;
-  high: number;
-  lowest: number;
-  median: number;
-  average: number;
-  weighted: number;
-  movingAverage: number;
-  entryZone: number;
-  exitZone: number;
+  open: number | null;
+  close: number | null;
+  low: number | null;
+  high: number | null;
+  lowest: number | null;
+  median: number | null;
+  average: number | null;
+  movingAverage: number | null;
+  entryZone: number | null;
+  exitZone: number | null;
   volume: number;
 }
 
@@ -72,116 +62,35 @@ const DEFAULT_SERIES_TOGGLES: Record<ChartSeriesKey, boolean> = {
   exitZone: true,
 };
 
-const MOCK_HISTORY: MockHourlyPoint[] = buildMockHourlyHistory();
-
-function buildMockHourlyHistory(): MockHourlyPoint[] {
-  const pointCount = 24 * 90;
-  const now = Date.now();
-  const roundedNow = now - (now % (60 * 60 * 1000));
-  const start = roundedNow - (pointCount - 1) * 60 * 60 * 1000;
-
-  return Array.from({ length: pointCount }, (_, index) => {
-    const timestamp = start + index * 60 * 60 * 1000;
-    const longWave = Math.sin(index / 18) * 5.2;
-    const midWave = Math.cos(index / 7.5) * 2.7;
-    const shortWave = Math.sin(index / 2.9) * 1.1;
-    const drift = (index / pointCount) * 9.5;
-    const base = 72 + longWave + midWave + shortWave + drift;
-    const lowest = Math.max(12, base - 4.6 + Math.cos(index / 5.5) * 0.85);
-    const median = lowest + 3.2 + Math.sin(index / 9) * 1.35;
-    const average = median + 0.85 + Math.cos(index / 14) * 0.55;
-    const weighted = average + Math.sin(index / 15) * 0.45;
-    const volume = Math.max(10, 46 + Math.sin(index / 8) * 14 + Math.cos(index / 19) * 8 + ((index % 24) / 24) * 10);
-
-    return {
-      timestamp,
-      lowest: roundTo(lowest, 1),
-      median: roundTo(median, 1),
-      average: roundTo(average, 1),
-      weighted: roundTo(weighted, 1),
-      volume: roundTo(volume, 0),
-    };
-  });
-}
-
 function roundTo(value: number, digits: number): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
 }
 
-function getDomainHours(domain: ChartDomainKey): number {
-  return DOMAIN_OPTIONS.find((option) => option.key === domain)?.hours ?? 48;
-}
+function buildChartPoints(points: AnalyticsChartPoint[]): MockBucketPoint[] {
+  return points
+    .map((point) => {
+      const timestamp = new Date(point.bucketAt).getTime();
+      if (Number.isNaN(timestamp)) {
+        return null;
+      }
 
-function getBucketHours(bucket: ChartBucketKey): number {
-  switch (bucket) {
-    case '1h':
-      return 1;
-    case '3h':
-      return 3;
-    case '6h':
-      return 6;
-    case '12h':
-      return 12;
-    case '24h':
-      return 24;
-    case '7d':
-      return 24 * 7;
-    case '14d':
-      return 24 * 14;
-    default:
-      return 1;
-  }
-}
-
-function movingAverage(values: number[], index: number, windowSize: number): number {
-  const start = Math.max(0, index - windowSize + 1);
-  const window = values.slice(start, index + 1);
-  return roundTo(window.reduce((sum, value) => sum + value, 0) / window.length, 1);
-}
-
-function buildMockBucketHistory(domain: ChartDomainKey, bucket: ChartBucketKey): MockBucketPoint[] {
-  const domainHours = getDomainHours(domain);
-  const bucketHours = getBucketHours(bucket);
-  const cutoffTimestamp = MOCK_HISTORY[MOCK_HISTORY.length - 1].timestamp - (domainHours - 1) * 60 * 60 * 1000;
-  const rawPoints = MOCK_HISTORY.filter((point) => point.timestamp >= cutoffTimestamp);
-  const groupedPoints: MockBucketPoint[] = [];
-
-  for (let index = 0; index < rawPoints.length; index += bucketHours) {
-    const slice = rawPoints.slice(index, index + bucketHours);
-    if (!slice.length) {
-      continue;
-    }
-
-    const lowestValues = slice.map((point) => point.lowest);
-    const medianValues = slice.map((point) => point.median);
-    const averageValues = slice.map((point) => point.average);
-    const weightedValues = slice.map((point) => point.weighted);
-    const close = lowestValues[lowestValues.length - 1];
-    const weighted = weightedValues.reduce((sum, value) => sum + value, 0) / weightedValues.length;
-
-    groupedPoints.push({
-      timestamp: slice[slice.length - 1].timestamp,
-      open: lowestValues[0],
-      close,
-      low: Math.min(...lowestValues),
-      high: Math.max(...medianValues, ...lowestValues, ...averageValues),
-      lowest: roundTo(lowestValues.reduce((sum, value) => sum + value, 0) / lowestValues.length, 1),
-      median: roundTo(medianValues.reduce((sum, value) => sum + value, 0) / medianValues.length, 1),
-      average: roundTo(averageValues.reduce((sum, value) => sum + value, 0) / averageValues.length, 1),
-      weighted: roundTo(weighted, 1),
-      movingAverage: 0,
-      entryZone: roundTo(weighted - 3.1, 1),
-      exitZone: roundTo(weighted + 4.3, 1),
-      volume: roundTo(slice.reduce((sum, point) => sum + point.volume, 0), 0),
-    });
-  }
-
-  const lowestSeries = groupedPoints.map((point) => point.lowest);
-  return groupedPoints.map((point, index) => ({
-    ...point,
-    movingAverage: movingAverage(lowestSeries, index, Math.min(6, Math.max(2, Math.ceil(24 / bucketHours)))),
-  }));
+      return {
+        timestamp,
+        open: point.openPrice,
+        close: point.closedPrice,
+        low: point.lowPrice,
+        high: point.highPrice,
+        lowest: point.lowestSell,
+        median: point.medianSell,
+        average: point.averagePrice,
+        movingAverage: point.movingAvg,
+        entryZone: point.fairValueLow,
+        exitZone: point.fairValueHigh,
+        volume: point.volume,
+      };
+    })
+    .filter((point): point is MockBucketPoint => point !== null);
 }
 
 function formatChartTimestamp(timestamp: number, domain: ChartDomainKey): string {
@@ -201,54 +110,85 @@ function buildSeriesPath(
   minValue: number,
   maxValue: number,
 ): string {
-  if (!points.length) {
+  const drawablePoints = points
+    .map((point, index) => ({
+      index,
+      value: point[valueKey],
+    }))
+    .filter((point): point is { index: number; value: number } => point.value !== null);
+
+  if (!drawablePoints.length) {
     return '';
   }
 
   const valueRange = Math.max(1, maxValue - minValue);
-  return points
-    .map((point, index) => {
-      const x = points.length === 1 ? chartWidth / 2 : (index / (points.length - 1)) * chartWidth;
-      const y = chartHeight - (((point[valueKey] as number) - minValue) / valueRange) * chartHeight;
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  return drawablePoints
+    .map((point, pathIndex) => {
+      const x = points.length === 1 ? chartWidth / 2 : (point.index / (points.length - 1)) * chartWidth;
+      const y = chartHeight - ((point.value - minValue) / valueRange) * chartHeight;
+      return `${pathIndex === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(' ');
 }
 
+function getChartBounds(points: MockBucketPoint[]) {
+  const values = points.flatMap((point) => [
+    point.low,
+    point.high,
+    point.lowest,
+    point.median,
+    point.average,
+    point.movingAverage,
+    point.entryZone,
+    point.exitZone,
+  ]);
+  const numericValues = values.filter((value): value is number => value !== null);
+
+  if (!numericValues.length) {
+    return { minValue: 0, maxValue: 100 };
+  }
+
+  const rawMin = Math.min(...numericValues);
+  const rawMax = Math.max(...numericValues);
+  const padding = Math.max(2, ((rawMax - rawMin) || 1) * 0.12);
+  return {
+    minValue: rawMin - padding,
+    maxValue: rawMax + padding,
+  };
+}
+
+function renderChartY(value: number, chartHeight: number, minValue: number, maxValue: number): number {
+  const valueRange = Math.max(1, maxValue - minValue);
+  return chartHeight - ((value - minValue) / valueRange) * chartHeight;
+}
+
 function StaticAnalyticsChart({
   itemName,
+  analytics,
+  loading,
+  errorMessage,
+  domain,
+  bucket,
+  onDomainChange,
+  onBucketChange,
 }: {
   itemName: string;
+  analytics: ItemAnalyticsResponse | null;
+  loading: boolean;
+  errorMessage: string | null;
+  domain: ChartDomainKey;
+  bucket: ChartBucketKey;
+  onDomainChange: (value: ChartDomainKey) => void;
+  onBucketChange: (value: ChartBucketKey) => void;
 }) {
-  const [domain, setDomain] = useState<ChartDomainKey>('48h');
-  const [bucket, setBucket] = useState<ChartBucketKey>('1h');
   const [chartMode, setChartMode] = useState<ChartMode>('line');
   const [seriesToggles, setSeriesToggles] = useState<Record<ChartSeriesKey, boolean>>(DEFAULT_SERIES_TOGGLES);
 
-  useEffect(() => {
-    const allowedBuckets = BUCKET_OPTIONS_BY_DOMAIN[domain];
-    if (!allowedBuckets.includes(bucket)) {
-      setBucket(allowedBuckets[0]);
-    }
-  }, [domain, bucket]);
-
   const bucketOptions = BUCKET_OPTIONS_BY_DOMAIN[domain];
-  const points = buildMockBucketHistory(domain, bucket);
+  const points = buildChartPoints(analytics?.chartPoints ?? []);
   const plotWidth = 900;
   const plotHeight = 240;
-  const displayedValues = points.flatMap((point) => [
-    point.low,
-    point.high,
-    point.entryZone,
-    point.exitZone,
-    point.movingAverage,
-    point.average,
-  ]);
-  const rawMin = Math.min(...displayedValues);
-  const rawMax = Math.max(...displayedValues);
-  const padding = Math.max(2, (rawMax - rawMin) * 0.12);
-  const minValue = rawMin - padding;
-  const maxValue = rawMax + padding;
+  const { minValue, maxValue } = getChartBounds(points);
   const valueRange = Math.max(1, maxValue - minValue);
   const tickValues = Array.from({ length: 5 }, (_, index) =>
     roundTo(maxValue - (index / 4) * valueRange, 1),
@@ -268,7 +208,7 @@ function StaticAnalyticsChart({
       <div className="card-header">
         <div className="market-chart-header">
           <div className="market-chart-header-copy">
-            <span className="panel-title-eyebrow">Preview Graph</span>
+            <span className="panel-title-eyebrow">Live Market Graph</span>
             <span className="card-label">Item Price History</span>
           </div>
           <div className="market-chart-header-tools">
@@ -279,7 +219,7 @@ function StaticAnalyticsChart({
                 <select
                   className="market-variant-select"
                   value={domain}
-                  onChange={(event) => setDomain(event.target.value as ChartDomainKey)}
+                  onChange={(event) => onDomainChange(event.target.value as ChartDomainKey)}
                 >
                   {DOMAIN_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>
@@ -293,7 +233,7 @@ function StaticAnalyticsChart({
                 <select
                   className="market-variant-select"
                   value={bucket}
-                  onChange={(event) => setBucket(event.target.value as ChartBucketKey)}
+                  onChange={(event) => onBucketChange(event.target.value as ChartBucketKey)}
                 >
                   {bucketOptions.map((option) => (
                     <option key={option} value={option}>
@@ -329,7 +269,7 @@ function StaticAnalyticsChart({
         <div className="market-chart-card">
           <div className="market-chart-toolbar">
             <span className="market-chart-note">
-              Static preview data. Backend graph wiring will be connected later.
+              WFM statistics history with local observatory snapshots filling recent live context.
             </span>
             <div className="market-toggle-row">
               {SERIES_OPTIONS.map((option) => (
@@ -352,122 +292,142 @@ function StaticAnalyticsChart({
                 <span key={value}>{formatPrice(value)}</span>
               ))}
             </div>
-            <svg
-              className="market-chart-svg"
-              viewBox={`0 0 ${plotWidth} ${plotHeight + 28}`}
-              preserveAspectRatio="none"
-              aria-label="Static market price graph"
-            >
-              {Array.from({ length: 5 }, (_, index) => {
-                const y = (index / 4) * plotHeight;
-                return (
-                  <line
-                    key={`h-${index}`}
-                    className="market-chart-gridline"
-                    x1="0"
-                    y1={y}
-                    x2={plotWidth}
-                    y2={y}
-                  />
-                );
-              })}
-              {Array.from({ length: Math.min(points.length, 6) }, (_, index) => {
-                const x = points.length <= 1 ? plotWidth / 2 : (index / Math.max(1, Math.min(points.length, 6) - 1)) * plotWidth;
-                return (
-                  <line
-                    key={`v-${index}`}
-                    className="market-chart-gridline market-chart-gridline-vertical"
-                    x1={x}
-                    y1="0"
-                    x2={x}
-                    y2={plotHeight}
-                  />
-                );
-              })}
-
-              {chartMode === 'candlestick'
-                ? points.map((point, index) => {
-                    const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length - 1);
-                    const candleWidth = Math.max(6, Math.min(22, step * 0.45));
-                    const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
-                    const openY = plotHeight - ((point.open - minValue) / valueRange) * plotHeight;
-                    const closeY = plotHeight - ((point.close - minValue) / valueRange) * plotHeight;
-                    const highY = plotHeight - ((point.high - minValue) / valueRange) * plotHeight;
-                    const lowY = plotHeight - ((point.low - minValue) / valueRange) * plotHeight;
-                    const bodyY = Math.min(openY, closeY);
-                    const bodyHeight = Math.max(3, Math.abs(closeY - openY));
-                    const isUp = point.close <= point.open;
-
-                    return (
-                      <g key={point.timestamp}>
-                        <line
-                          className={`market-candle-wick${isUp ? ' is-up' : ' is-down'}`}
-                          x1={x}
-                          y1={highY}
-                          x2={x}
-                          y2={lowY}
-                        />
-                        <rect
-                          className={`market-candle-body${isUp ? ' is-up' : ' is-down'}`}
-                          x={x - candleWidth / 2}
-                          y={bodyY}
-                          width={candleWidth}
-                          height={bodyHeight}
-                          rx="2"
-                        />
-                      </g>
-                    );
-                  })
-                : null}
-
-              {visibleSeries.map((series) => (
-                <path
-                  key={series.key}
-                  className={`market-chart-line market-chart-line-${series.colorClass}`}
-                  d={buildSeriesPath(points, series.key, plotWidth, plotHeight, minValue, maxValue)}
-                />
-              ))}
-
-              {visibleSeries
-                .filter((series) => series.key === 'median' || series.key === 'lowest')
-                .flatMap((series) =>
-                  points.map((point, index) => {
-                    const value = point[series.key];
-                    const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
-                    const y = plotHeight - ((value - minValue) / valueRange) * plotHeight;
-                    return (
-                      <circle
-                        key={`${series.key}-${point.timestamp}`}
-                        className={`market-chart-marker market-chart-marker-${series.colorClass}`}
-                        cx={x}
-                        cy={y}
-                        r="3.5"
-                      />
-                    );
-                  }),
-                )}
-
-              {points
-                .filter((_, index) => index % Math.max(1, Math.ceil(points.length / 6)) === 0 || index === points.length - 1)
-                .map((point, labelIndex, source) => {
-                  const dataIndex = points.findIndex((entry) => entry.timestamp === point.timestamp);
-                  const x = points.length === 1 ? plotWidth / 2 : (dataIndex / (points.length - 1)) * plotWidth;
-                  const anchor =
-                    labelIndex === 0 ? 'start' : labelIndex === source.length - 1 ? 'end' : 'middle';
-
+            {loading ? (
+              <div className="market-chart-status">Loading history from WFM statistics and local market snapshots.</div>
+            ) : errorMessage ? (
+              <div className="market-chart-status is-error">{errorMessage}</div>
+            ) : points.length === 0 ? (
+              <div className="market-chart-status">No chart history is available for the selected item and variant.</div>
+            ) : (
+              <svg
+                className="market-chart-svg"
+                viewBox={`0 0 ${plotWidth} ${plotHeight + 28}`}
+                preserveAspectRatio="none"
+                aria-label="Market price graph"
+              >
+                {Array.from({ length: 5 }, (_, index) => {
+                  const y = (index / 4) * plotHeight;
                   return (
-                    <text
-                      key={`x-${point.timestamp}`}
-                      className="market-chart-axis-label"
-                      x={x}
-                      y={plotHeight + 20}
-                      textAnchor={anchor}
-                    >
-                      {formatChartTimestamp(point.timestamp, domain)}
-                    </text>
+                    <line
+                      key={`h-${index}`}
+                      className="market-chart-gridline"
+                      x1="0"
+                      y1={y}
+                      x2={plotWidth}
+                      y2={y}
+                    />
                   );
                 })}
-            </svg>
+                {Array.from({ length: Math.min(points.length, 6) }, (_, index) => {
+                  const x = points.length <= 1 ? plotWidth / 2 : (index / Math.max(1, Math.min(points.length, 6) - 1)) * plotWidth;
+                  return (
+                    <line
+                      key={`v-${index}`}
+                      className="market-chart-gridline market-chart-gridline-vertical"
+                      x1={x}
+                      y1="0"
+                      x2={x}
+                      y2={plotHeight}
+                    />
+                  );
+                })}
+
+                {chartMode === 'candlestick'
+                  ? points.map((point, index) => {
+                      if (
+                        point.open === null ||
+                        point.close === null ||
+                        point.low === null ||
+                        point.high === null
+                      ) {
+                        return null;
+                      }
+
+                      const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length - 1);
+                      const candleWidth = Math.max(6, Math.min(22, step * 0.45));
+                      const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
+                      const openY = renderChartY(point.open, plotHeight, minValue, maxValue);
+                      const closeY = renderChartY(point.close, plotHeight, minValue, maxValue);
+                      const highY = renderChartY(point.high, plotHeight, minValue, maxValue);
+                      const lowY = renderChartY(point.low, plotHeight, minValue, maxValue);
+                      const bodyY = Math.min(openY, closeY);
+                      const bodyHeight = Math.max(3, Math.abs(closeY - openY));
+                      const isUp = point.close >= point.open;
+
+                      return (
+                        <g key={point.timestamp}>
+                          <line
+                            className={`market-candle-wick${isUp ? ' is-up' : ' is-down'}`}
+                            x1={x}
+                            y1={highY}
+                            x2={x}
+                            y2={lowY}
+                          />
+                          <rect
+                            className={`market-candle-body${isUp ? ' is-up' : ' is-down'}`}
+                            x={x - candleWidth / 2}
+                            y={bodyY}
+                            width={candleWidth}
+                            height={bodyHeight}
+                            rx="2"
+                          />
+                        </g>
+                      );
+                    })
+                  : null}
+
+                {visibleSeries.map((series) => (
+                  <path
+                    key={series.key}
+                    className={`market-chart-line market-chart-line-${series.colorClass}`}
+                    d={buildSeriesPath(points, series.key, plotWidth, plotHeight, minValue, maxValue)}
+                  />
+                ))}
+
+                {visibleSeries
+                  .filter((series) => series.key === 'median' || series.key === 'lowest')
+                  .flatMap((series) =>
+                    points.map((point, index) => {
+                      const value = point[series.key];
+                      if (value === null) {
+                        return null;
+                      }
+                      const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
+                      const y = renderChartY(value, plotHeight, minValue, maxValue);
+                      return (
+                        <circle
+                          key={`${series.key}-${point.timestamp}`}
+                          className={`market-chart-marker market-chart-marker-${series.colorClass}`}
+                          cx={x}
+                          cy={y}
+                          r="3.5"
+                        />
+                      );
+                    }),
+                  )}
+
+                {points
+                  .filter((_, index) => index % Math.max(1, Math.ceil(points.length / 6)) === 0 || index === points.length - 1)
+                  .map((point, labelIndex, source) => {
+                    const dataIndex = points.findIndex((entry) => entry.timestamp === point.timestamp);
+                    const x = points.length === 1 ? plotWidth / 2 : (dataIndex / (points.length - 1)) * plotWidth;
+                    const anchor =
+                      labelIndex === 0 ? 'start' : labelIndex === source.length - 1 ? 'end' : 'middle';
+
+                    return (
+                      <text
+                        key={`x-${point.timestamp}`}
+                        className="market-chart-axis-label"
+                        x={x}
+                        y={plotHeight + 20}
+                        textAnchor={anchor}
+                      >
+                        {formatChartTimestamp(point.timestamp, domain)}
+                      </text>
+                    );
+                  })}
+              </svg>
+            )}
           </div>
 
           <div className="market-chart-legend market-chart-footer">
@@ -485,45 +445,51 @@ function StaticAnalyticsChart({
               <span className="panel-title-eyebrow">Participation</span>
               <span className="card-label">Volume</span>
             </div>
-            <span className="market-volume-subtitle">Bucket-aligned static preview volume</span>
+            <span className="market-volume-subtitle">Bucket-aligned volume from WFM statistics</span>
           </div>
-          <svg
-            className="market-volume-svg"
-            viewBox={`0 0 ${plotWidth} 120`}
-            preserveAspectRatio="none"
-            aria-label="Static market volume graph"
-          >
-            {Array.from({ length: 4 }, (_, index) => {
-              const y = 12 + index * 26;
-              return (
-                <line
-                  key={`volume-grid-${index}`}
-                  className="market-chart-gridline"
-                  x1="0"
-                  y1={y}
-                  x2={plotWidth}
-                  y2={y}
-                />
-              );
-            })}
-            {points.map((point, index) => {
-              const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length);
-              const width = Math.max(8, Math.min(24, step * 0.7));
-              const x = points.length === 1 ? (plotWidth - width) / 2 : (index / points.length) * plotWidth + (step - width) / 2;
-              const height = Math.max(4, (point.volume / volumeMax) * 92);
-              return (
-                <rect
-                  key={point.timestamp}
-                  className="market-volume-bar"
-                  x={x}
-                  y={104 - height}
-                  width={width}
-                  height={height}
-                  rx="3"
-                />
-              );
-            })}
-          </svg>
+          {loading ? (
+            <div className="market-chart-status">Loading volume history.</div>
+          ) : points.length === 0 ? (
+            <div className="market-chart-status">No volume data is available for the selected timeframe.</div>
+          ) : (
+            <svg
+              className="market-volume-svg"
+              viewBox={`0 0 ${plotWidth} 120`}
+              preserveAspectRatio="none"
+              aria-label="Market volume graph"
+            >
+              {Array.from({ length: 4 }, (_, index) => {
+                const y = 12 + index * 26;
+                return (
+                  <line
+                    key={`volume-grid-${index}`}
+                    className="market-chart-gridline"
+                    x1="0"
+                    y1={y}
+                    x2={plotWidth}
+                    y2={y}
+                  />
+                );
+              })}
+              {points.map((point, index) => {
+                const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length);
+                const width = Math.max(8, Math.min(24, step * 0.7));
+                const x = points.length === 1 ? (plotWidth - width) / 2 : (index / points.length) * plotWidth + (step - width) / 2;
+                const height = Math.max(4, (point.volume / Math.max(volumeMax, 1)) * 92);
+                return (
+                  <rect
+                    key={point.timestamp}
+                    className="market-volume-bar"
+                    x={x}
+                    y={104 - height}
+                    width={width}
+                    height={height}
+                    rx="3"
+                  />
+                );
+              })}
+            </svg>
+          )}
         </div>
       </div>
     </div>
@@ -617,10 +583,19 @@ function AnalyticsTab() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [trendTab, setTrendTab] = useState<'lowestSell' | 'medianSell' | 'weightedAvg'>('lowestSell');
+  const [chartDomain, setChartDomain] = useState<ChartDomainKey>('48h');
+  const [chartBucket, setChartBucket] = useState<ChartBucketKey>('1h');
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [selectedItem?.itemId, selectedMarketVariantKey]);
+
+  useEffect(() => {
+    const allowedBuckets = BUCKET_OPTIONS_BY_DOMAIN[chartDomain];
+    if (!allowedBuckets.includes(chartBucket)) {
+      setChartBucket(allowedBuckets[0]);
+    }
+  }, [chartDomain, chartBucket]);
 
   useEffect(() => {
     if (loading) {
@@ -655,6 +630,8 @@ function AnalyticsTab() {
           selectedItem.itemId,
           selectedItem.slug,
           selectedMarketVariantKey,
+          chartDomain,
+          chartBucket,
         ),
       )
       .then((response) => {
@@ -683,7 +660,7 @@ function AnalyticsTab() {
         'analytics',
       ).catch(() => undefined);
     };
-  }, [selectedItem, selectedMarketVariantKey, refreshNonce]);
+  }, [selectedItem, selectedMarketVariantKey, refreshNonce, chartDomain, chartBucket]);
 
   const trendMetrics =
     analytics?.trendQualityBreakdown.tabs[trendTab] ??
@@ -758,7 +735,16 @@ function AnalyticsTab() {
           <span>Computed {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
         </div>
       </div>
-      <StaticAnalyticsChart itemName={selectedItem.name} />
+      <StaticAnalyticsChart
+        itemName={selectedItem.name}
+        analytics={analytics}
+        loading={loading}
+        errorMessage={errorMessage}
+        domain={chartDomain}
+        bucket={chartBucket}
+        onDomainChange={setChartDomain}
+        onBucketChange={setChartBucket}
+      />
       {analytics ? (
         <>
           <div className="market-analytics-grid">

@@ -538,15 +538,38 @@ export interface AnalyticsActionCard {
   rationale: string;
 }
 
+export type AnalyticsDomainKey = '48h' | '7d' | '30d' | '90d';
+export type AnalyticsBucketSizeKey = '1h' | '3h' | '6h' | '12h' | '18h' | '24h' | '7d' | '14d';
+
+export interface AnalyticsChartPoint {
+  bucketAt: string;
+  openPrice: number | null;
+  closedPrice: number | null;
+  lowPrice: number | null;
+  highPrice: number | null;
+  lowestSell: number | null;
+  medianSell: number | null;
+  movingAvg: number | null;
+  weightedAvg: number | null;
+  averagePrice: number | null;
+  highestBuy: number | null;
+  fairValueLow: number | null;
+  fairValueHigh: number | null;
+  volume: number;
+}
+
 export interface ItemAnalyticsResponse {
   itemId: number;
   slug: string;
   variantKey: string;
   variantLabel: string;
+  chartDomainKey: AnalyticsDomainKey;
+  chartBucketSizeKey: AnalyticsBucketSizeKey;
   computedAt: string;
   sourceSnapshotAt: string | null;
   sourceStatsFetchedAt: string | null;
   currentSnapshot: MarketSnapshot | null;
+  chartPoints: AnalyticsChartPoint[];
   entryExitZoneOverview: EntryExitZoneOverview;
   orderbookPressure: OrderbookPressureSummary;
   trendQualityBreakdown: TrendQualityBreakdown;
