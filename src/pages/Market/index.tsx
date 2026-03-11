@@ -437,6 +437,16 @@ function AnalyticsTab() {
   }, [selectedItem?.itemId, selectedMarketVariantKey]);
 
   useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    if (analytics || errorMessage) {
+      pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    }
+  }, [analytics, errorMessage, loading]);
+
+  useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey) {
       setAnalytics(null);
       setLoading(false);
