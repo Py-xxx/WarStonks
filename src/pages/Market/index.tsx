@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ensureMarketTracking, getItemAnalytics, stopMarketTracking } from '../../lib/tauriClient';
-import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   AnalyticsBucketSizeKey,
@@ -169,11 +168,6 @@ function AnalyticsTab() {
     };
   }, [selectedItem, selectedMarketVariantKey, refreshNonce]);
 
-  const selectedVariant = useMemo(
-    () => marketVariants.find((entry) => entry.key === selectedMarketVariantKey) ?? null,
-    [marketVariants, selectedMarketVariantKey],
-  );
-  const imageUrl = resolveWfmAssetUrl(selectedItem?.imagePath ?? null);
   const trendMetrics =
     analytics?.trendQualityBreakdown.tabs[trendTab] ??
     analytics?.trendQualityBreakdown.tabs.lowestSell;
@@ -189,20 +183,6 @@ function AnalyticsTab() {
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
-        <div className="card">
-          <div className="card-body market-item-header">
-            <div className="market-item-media">
-              <div className="market-item-thumb">
-                {imageUrl ? <img src={imageUrl} alt="" /> : <span>{selectedItem.name.slice(0, 1)}</span>}
-              </div>
-              <div className="market-item-copy">
-                <span className="panel-title-eyebrow">Analytics</span>
-                <span className="market-item-title">{selectedItem.name}</span>
-                <span className="market-item-meta">{selectedItem.slug.replace(/_/g, ' / ')}</span>
-              </div>
-            </div>
-          </div>
-        </div>
         <EmptyAnalyticsState body="This item has separate rank markets. Pick the rank variant below before loading analytics so the history and live orders never mix different variants." />
         <div className="market-variant-card card">
           <div className="card-body market-variant-grid">
@@ -228,45 +208,30 @@ function AnalyticsTab() {
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
-      <div className="card">
-        <div className="card-body market-item-header">
-          <div className="market-item-media">
-            <div className="market-item-thumb">
-              {imageUrl ? <img src={imageUrl} alt="" /> : <span>{selectedItem.name.slice(0, 1)}</span>}
-            </div>
-            <div className="market-item-copy">
-              <span className="panel-title-eyebrow">Analytics</span>
-              <span className="market-item-title">{selectedItem.name}</span>
-              <span className="market-item-meta">{selectedItem.slug}</span>
-              <div className="market-item-freshness">
-                <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
-                <span>Stats {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
-                <span>Computed {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="market-header-actions">
-            {marketVariants.length > 0 ? (
-              <select
-                className="market-variant-select"
-                value={selectedVariant?.key ?? ''}
-                onChange={(event) => {
-                  void setSelectedMarketVariantKey(event.target.value || null);
-                }}
-                aria-label="Select market variant"
-              >
-                {marketVariants.map((variant) => (
-                  <option key={variant.key} value={variant.key}>
-                    {variant.label}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            <button className="btn-sm" type="button" onClick={() => setRefreshNonce((value) => value + 1)}>
-              Refresh
-            </button>
-          </div>
+      <div className="market-header-actions">
+        {marketVariants.length > 0 ? (
+          <select
+            className="market-variant-select"
+            value={selectedMarketVariantKey ?? ''}
+            onChange={(event) => {
+              void setSelectedMarketVariantKey(event.target.value || null);
+            }}
+            aria-label="Select market variant"
+          >
+            {marketVariants.map((variant) => (
+              <option key={variant.key} value={variant.key}>
+                {variant.label}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <button className="btn-sm" type="button" onClick={() => setRefreshNonce((value) => value + 1)}>
+          Refresh
+        </button>
+        <div className="market-item-freshness">
+          <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
+          <span>Stats {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
+          <span>Computed {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
         </div>
       </div>
 
