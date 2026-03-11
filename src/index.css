@@ -3652,13 +3652,34 @@ body {
 .market-chart-line-moving { stroke: #7ce0b6; }
 .market-chart-line-weighted { stroke: #f28cb1; }
 .market-chart-line-average { stroke: #c8d2ea; }
-.market-chart-line-entry { stroke: #f6c945; stroke-dasharray: 8 5; }
-.market-chart-line-exit { stroke: #ff7c9c; stroke-dasharray: 8 5; }
 .market-chart-line-buy { stroke: #8c7cff; stroke-dasharray: 6 4; }
 
 .market-chart-band {
-  fill: rgba(88, 205, 177, 0.14);
-  stroke: rgba(88, 205, 177, 0.18);
+  stroke-width: 1;
+}
+
+.market-chart-band-entry {
+  fill: rgba(246, 201, 69, 0.12);
+  stroke: rgba(246, 201, 69, 0.42);
+}
+
+.market-chart-band-exit {
+  fill: rgba(255, 124, 156, 0.12);
+  stroke: rgba(255, 124, 156, 0.42);
+}
+
+.market-chart-line-entry {
+  stroke: rgba(246, 201, 69, 0.92);
+  stroke-dasharray: 8 5;
+}
+
+.market-chart-line-exit {
+  stroke: rgba(255, 124, 156, 0.92);
+  stroke-dasharray: 8 5;
+}
+
+.market-chart-line-entry,
+.market-chart-line-exit {
   stroke-width: 1;
 }
 
