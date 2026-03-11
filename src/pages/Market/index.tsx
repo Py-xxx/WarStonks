@@ -1,8 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ensureMarketTracking, getItemAnalytics, stopMarketTracking } from '../../lib/tauriClient';
+import {
+  ensureMarketTracking,
+  getItemAnalysis,
+  getItemAnalytics,
+  stopMarketTracking,
+} from '../../lib/tauriClient';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import type { AnalyticsChartPoint, ItemAnalyticsResponse } from '../../types';
+import type {
+  AnalyticsChartPoint,
+  ItemAnalysisResponse,
+  ItemAnalyticsResponse,
+  WfmAutocompleteItem,
+} from '../../types';
 
 type ChartDomainKey = '48h' | '7d' | '30d' | '90d';
 type ChartBucketKey = '1h' | '3h' | '6h' | '12h' | '24h' | '7d' | '14d';
@@ -603,6 +614,149 @@ function formatRelativeTimestamp(value: string | null | undefined): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function formatDateCompact(value: string | null | undefined): string {
+  if (!value) {
+    return '—';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(parsed);
+}
+
+function formatNullableBoolean(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) {
+    return '—';
+  }
+
+  return value ? 'Yes' : 'No';
+}
+
+function normalizeMatchValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  return normalized || null;
+}
+
+function containsItemMatch(haystack: string | null | undefined, needles: string[]): boolean {
+  const normalizedHaystack = normalizeMatchValue(haystack);
+  if (!normalizedHaystack) {
+    return false;
+  }
+
+  return needles.some((needle) => normalizedHaystack.includes(needle));
+}
+
+interface EventContextEntry {
+  label: string;
+  impact: string;
+}
+
+function buildEventContextEntries(
+  analysis: ItemAnalysisResponse | null,
+  eventData: {
+    alerts: ReturnType<typeof useAppStore.getState>['worldStateAlerts'];
+    events: ReturnType<typeof useAppStore.getState>['worldStateEvents'];
+    invasions: ReturnType<typeof useAppStore.getState>['worldStateInvasions'];
+    syndicateMissions: ReturnType<typeof useAppStore.getState>['worldStateSyndicateMissions'];
+    voidTrader: ReturnType<typeof useAppStore.getState>['worldStateVoidTrader'];
+    flashSales: ReturnType<typeof useAppStore.getState>['worldStateFlashSales'];
+  },
+): EventContextEntry[] {
+  if (!analysis) {
+    return [];
+  }
+
+  const matchNeedles = [
+    normalizeMatchValue(analysis.itemDetails.name),
+    normalizeMatchValue(analysis.itemDetails.slug.replace(/_/g, ' ')),
+  ].filter((value): value is string => Boolean(value));
+
+  const entries: EventContextEntry[] = [];
+
+  for (const alert of eventData.alerts) {
+    const rewardItems = alert.mission?.reward?.items ?? [];
+    if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
+      entries.push({
+        label: 'Alert Reward',
+        impact: `${alert.mission?.node ?? 'Unknown node'} is currently rewarding this item.`,
+      });
+    }
+  }
+
+  for (const event of eventData.events) {
+    const rewardItems = event.rewards.flatMap((reward) => reward.items);
+    if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
+      entries.push({
+        label: 'Active Event',
+        impact: `${event.description} currently includes this item in its reward pool.`,
+      });
+    }
+  }
+
+  for (const invasion of eventData.invasions) {
+    const rewardItems = [
+      ...(invasion.attacker.reward?.items ?? []),
+      ...(invasion.defender.reward?.items ?? []),
+    ];
+    if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
+      entries.push({
+        label: 'Invasion Reward',
+        impact: `${invasion.node ?? 'Unknown node'} currently offers this item through invasion rewards.`,
+      });
+    }
+  }
+
+  for (const mission of eventData.syndicateMissions) {
+    const rewardItems = mission.jobs.flatMap((job) => job.rewardPool);
+    if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
+      entries.push({
+        label: 'Syndicate Mission',
+        impact: `${mission.syndicate ?? 'Syndicate'} currently has a mission reward pool that includes this item.`,
+      });
+    }
+  }
+
+  if (
+    eventData.voidTrader?.inventory.some((entry) =>
+      containsItemMatch(entry.item, matchNeedles),
+    )
+  ) {
+    entries.push({
+      label: 'Void Trader',
+      impact: 'Baro Ki’Teer is currently selling this item, which can pressure short-term pricing.',
+    });
+  }
+
+  if (
+    eventData.flashSales.some((entry) =>
+      containsItemMatch(entry.item, matchNeedles),
+    )
+  ) {
+    entries.push({
+      label: 'Flash Sale',
+      impact: 'A flash sale is active for this item, which can distort short-term market behavior.',
+    });
+  }
+
+  return entries;
+}
+
 function EmptyAnalyticsState({ body }: { body: string }) {
   return (
     <div className="market-empty-state">
@@ -992,14 +1146,518 @@ function AnalyticsTab() {
 }
 
 function AnalysisTab() {
-  return (
-    <div className="page-content">
-      <div className="market-empty-state">
-        <span className="empty-primary">Analysis will layer on top of analytics next</span>
-        <span className="empty-sub">
-          Flip models, execution reliability, manipulation risk, and deeper strategy signals are intentionally being kept separate from the analytics view.
-        </span>
+  const pageContentRef = useRef<HTMLDivElement | null>(null);
+  const selectedItem = useAppStore((state) => state.quickView.selectedItem);
+  const marketVariants = useAppStore((state) => state.marketVariants);
+  const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
+  const marketVariantsError = useAppStore((state) => state.marketVariantsError);
+  const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
+  const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
+  const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
+  const worldStateAlerts = useAppStore((state) => state.worldStateAlerts);
+  const worldStateEvents = useAppStore((state) => state.worldStateEvents);
+  const worldStateInvasions = useAppStore((state) => state.worldStateInvasions);
+  const worldStateSyndicateMissions = useAppStore((state) => state.worldStateSyndicateMissions);
+  const worldStateVoidTrader = useAppStore((state) => state.worldStateVoidTrader);
+  const worldStateFlashSales = useAppStore((state) => state.worldStateFlashSales);
+  const [analysis, setAnalysis] = useState<ItemAnalysisResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [selectedItem?.itemId, selectedMarketVariantKey]);
+
+  useEffect(() => {
+    if (!selectedItem || !selectedMarketVariantKey) {
+      setAnalysis(null);
+      setLoading(false);
+      setErrorMessage(null);
+      return;
+    }
+
+    let isMounted = true;
+    setLoading(true);
+    setErrorMessage(null);
+
+    void ensureMarketTracking(
+      selectedItem.itemId,
+      selectedItem.slug,
+      selectedMarketVariantKey,
+      'analytics',
+    )
+      .then(() => getItemAnalysis(selectedItem.itemId, selectedItem.slug, selectedMarketVariantKey))
+      .then((response) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setAnalysis(response);
+        setComponentTargets(
+          Object.fromEntries(
+            response.supplyContext.components.map((component) => [
+              component.slug,
+              `${Math.round(component.recommendedEntryPrice ?? component.currentLowestPrice ?? 0)}`,
+            ]),
+          ),
+        );
+        setLoading(false);
+        setErrorMessage(null);
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+        setAnalysis(null);
+        setLoading(false);
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedItem, selectedMarketVariantKey, refreshNonce]);
+
+  const eventContextEntries = buildEventContextEntries(analysis, {
+    alerts: worldStateAlerts,
+    events: worldStateEvents,
+    invasions: worldStateInvasions,
+    syndicateMissions: worldStateSyndicateMissions,
+    voidTrader: worldStateVoidTrader,
+    flashSales: worldStateFlashSales,
+  });
+
+  if (!selectedItem) {
+    return (
+      <div className="page-content">
+        <EmptyAnalyticsState body="Use the global search to select a WFM item, then this page will build a trading analysis from live orders, observatory snapshots, and item-catalog context." />
       </div>
+    );
+  }
+
+  if (marketVariantsLoading) {
+    return (
+      <div className="page-content">
+        <EmptyAnalyticsState body="Loading market variants before building the analysis model." />
+      </div>
+    );
+  }
+
+  if (marketVariants.length > 1 && !selectedMarketVariantKey) {
+    return (
+      <div className="page-content">
+        <EmptyAnalyticsState body="Pick the correct market variant first so the analysis never mixes rank-specific orders." />
+        <div className="market-variant-card card">
+          <div className="card-body market-variant-grid">
+            {marketVariantsError ? <span className="watchlist-form-error">{marketVariantsError}</span> : null}
+            {marketVariants.map((variant) => (
+              <button
+                key={variant.key}
+                className={`market-variant-pill${variant.key === selectedMarketVariantKey ? ' active' : ''}`}
+                type="button"
+                onClick={() => {
+                  void setSelectedMarketVariantKey(variant.key);
+                }}
+              >
+                {variant.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const itemImageUrl = resolveWfmAssetUrl(analysis?.itemDetails.imagePath);
+
+  return (
+    <div ref={pageContentRef} className="page-content market-page-content">
+      <div className="market-header-actions">
+        {marketVariants.length > 0 ? (
+          <select
+            className="market-variant-select"
+            value={selectedMarketVariantKey ?? ''}
+            onChange={(event) => {
+              void setSelectedMarketVariantKey(event.target.value || null);
+            }}
+            aria-label="Select market variant"
+          >
+            {marketVariants.map((variant) => (
+              <option key={variant.key} value={variant.key}>
+                {variant.label}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <button className="btn-sm" type="button" onClick={() => setRefreshNonce((value) => value + 1)}>
+          Refresh
+        </button>
+        <div className="market-item-freshness">
+          <span>Snapshot {formatRelativeTimestamp(analysis?.sourceSnapshotAt ?? null)}</span>
+          <span>Stats {formatRelativeTimestamp(analysis?.sourceStatsFetchedAt ?? null)}</span>
+          <span>Computed {formatRelativeTimestamp(analysis?.computedAt ?? null)}</span>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="market-empty-state">
+          <span className="empty-primary">Building item analysis</span>
+          <span className="empty-sub">Pulling live orders, observatory snapshots, and catalog context.</span>
+        </div>
+      ) : errorMessage ? (
+        <div className="market-empty-state">
+          <span className="empty-primary">Analysis could not be built</span>
+          <span className="empty-sub">{errorMessage}</span>
+        </div>
+      ) : analysis ? (
+        <div className="market-analysis-shell">
+          <div className="market-analysis-main">
+            <div className="market-analysis-summary-grid">
+              <div className="market-summary-card">
+                <span className="market-summary-label">Entry Price</span>
+                <span className="market-summary-value">{formatPrice(analysis.headline.entryPrice)}</span>
+              </div>
+              <div className="market-summary-card">
+                <span className="market-summary-label">Exit Price ({analysis.headline.exitPercentileLabel})</span>
+                <span className="market-summary-value">{formatPrice(analysis.headline.exitPrice)}</span>
+              </div>
+              <div className="market-summary-card">
+                <span className="market-summary-label">Net Margin</span>
+                <span className="market-summary-value">{formatPrice(analysis.headline.netMargin)}</span>
+              </div>
+              <div className="market-summary-card">
+                <span className="market-summary-label">Liquidity</span>
+                <span className="market-summary-value">
+                  {formatPercent(analysis.headline.liquidityScore)} · {analysis.headline.liquidityLabel}
+                </span>
+              </div>
+            </div>
+
+            <div className="market-analysis-grid">
+              <AnalyticsPanel title="Flip Analysis" eyebrow="Execution Model">
+                <div className="market-metric-grid">
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Entry Price</span>
+                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.entryPrice)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Exit Price</span>
+                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.exitPrice)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Gross Margin</span>
+                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.grossMargin)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Net Margin</span>
+                    <span className="market-metric-value">{formatPrice(analysis.flipAnalysis.netMargin)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Efficiency Score</span>
+                    <span className="market-metric-value">
+                      {formatPercent(analysis.flipAnalysis.efficiencyScore)} · {analysis.flipAnalysis.efficiencyLabel}
+                    </span>
+                  </div>
+                </div>
+              </AnalyticsPanel>
+
+              <AnalyticsPanel title="Liquidity Detail" eyebrow="Market Structure">
+                <div className="market-metric-grid">
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Demand Ratio</span>
+                    <span className="market-metric-value">{formatNumber(analysis.liquidityDetail.demandRatio, 2)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">State</span>
+                    <span className="market-metric-value">{analysis.liquidityDetail.state}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Sellers Within +2pt</span>
+                    <span className="market-metric-value">{formatNumber(analysis.liquidityDetail.sellersWithinTwoPt, 0)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Undercut Velocity</span>
+                    <span className="market-metric-value">{formatNumber(analysis.liquidityDetail.undercutVelocity, 2)} / h</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Qty-Weighted Demand</span>
+                    <span className="market-metric-value">{formatPercent(analysis.liquidityDetail.quantityWeightedDemand)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Liquidity</span>
+                    <span className="market-metric-value">{formatPercent(analysis.liquidityDetail.liquidityScore)}</span>
+                  </div>
+                </div>
+              </AnalyticsPanel>
+
+              <AnalyticsPanel title="Trend" eyebrow="Analytics Carryover">
+                <div className="market-metric-grid">
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Direction</span>
+                    <span className="market-metric-value">{analysis.trend.direction}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Confidence</span>
+                    <span className="market-metric-value">{formatPercent(analysis.trend.confidence)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">1H Slope</span>
+                    <span className="market-metric-value">{formatPercent(analysis.trend.slope1h)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">3H Slope</span>
+                    <span className="market-metric-value">{formatPercent(analysis.trend.slope3h)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">6H Slope</span>
+                    <span className="market-metric-value">{formatPercent(analysis.trend.slope6h)}</span>
+                  </div>
+                </div>
+                <div className="market-copy-block">
+                  <span className="market-copy-title">Summary</span>
+                  <p>{analysis.trend.summary}</p>
+                </div>
+              </AnalyticsPanel>
+
+              <AnalyticsPanel title="Event Context" eyebrow="World State">
+                {eventContextEntries.length > 0 ? (
+                  <div className="market-context-list">
+                    {eventContextEntries.map((entry) => (
+                      <div key={`${entry.label}-${entry.impact}`} className="market-context-card">
+                        <span className="market-copy-title">{entry.label}</span>
+                        <p>{entry.impact}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="market-copy-block">
+                    <span className="market-copy-title">No active context</span>
+                    <p>No current worldstate rewards or live event hooks are matching this item right now.</p>
+                  </div>
+                )}
+              </AnalyticsPanel>
+
+              <AnalyticsPanel title="Manipulation Risk" eyebrow="Safety">
+                <div className="market-metric-grid">
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Risk Level</span>
+                    <span className="market-metric-value">{analysis.manipulationRisk.riskLevel}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Active Signals</span>
+                    <span className="market-metric-value">{formatNumber(analysis.manipulationRisk.activeSignals, 0)}</span>
+                  </div>
+                  <div className="market-metric-card">
+                    <span className="market-metric-label">Efficiency Penalty</span>
+                    <span className="market-metric-value">{formatPercent(analysis.manipulationRisk.efficiencyPenaltyPct)}</span>
+                  </div>
+                </div>
+                <div className="market-analysis-signal-list">
+                  {analysis.manipulationRisk.signals.map((signal) => (
+                    <div
+                      key={signal.key}
+                      className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
+                    >
+                      <span className="market-copy-title">{signal.label}</span>
+                      <span className="market-analysis-signal-state">
+                        {signal.active ? 'Active' : 'Clear'}
+                      </span>
+                      <p>{signal.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </AnalyticsPanel>
+
+              <AnalyticsPanel title="Time of Day Liquidity" eyebrow="Observatory Tape">
+                <div className="market-pressure-row">
+                  <div>
+                    <span className="market-copy-title">Current Hour</span>
+                    <span>{analysis.timeOfDayLiquidity.currentHourLabel}</span>
+                  </div>
+                  <div>
+                    <span className="market-copy-title">Strongest Window</span>
+                    <span>{analysis.timeOfDayLiquidity.strongestWindowLabel ?? '—'}</span>
+                  </div>
+                  <div>
+                    <span className="market-copy-title">Weakest Window</span>
+                    <span>{analysis.timeOfDayLiquidity.weakestWindowLabel ?? '—'}</span>
+                  </div>
+                </div>
+                <div className="market-time-grid">
+                  {analysis.timeOfDayLiquidity.buckets.map((bucket) => (
+                    <div key={bucket.hour} className="market-time-card">
+                      <span className="market-copy-title">{bucket.label}</span>
+                      <span>{formatNumber(bucket.avgVisibleQuantity, 0)} visible qty</span>
+                      <span>{formatNumber(bucket.avgSellOrders, 1)} avg sell orders</span>
+                      <span>Spread {formatPercent(bucket.avgSpreadPct)}</span>
+                    </div>
+                  ))}
+                </div>
+              </AnalyticsPanel>
+
+              <AnalyticsPanel
+                title={
+                  analysis.supplyContext.mode === 'set-components'
+                    ? 'Set Components'
+                    : analysis.supplyContext.mode === 'drop-sources'
+                      ? 'Drop Sources'
+                      : 'Drop Sources / Set Components'
+                }
+                eyebrow="Supply Context"
+              >
+                {analysis.supplyContext.mode === 'set-components' ? (
+                  <div className="market-component-list">
+                    {analysis.supplyContext.components.map((component) => {
+                      const imageUrl = resolveWfmAssetUrl(component.imagePath);
+                      const targetValue = componentTargets[component.slug] ?? '';
+                      const watchlistItem: WfmAutocompleteItem | null =
+                        component.itemId !== null
+                          ? {
+                              itemId: component.itemId,
+                              name: component.name,
+                              slug: component.slug,
+                              maxRank: null,
+                              itemFamily: null,
+                              imagePath: component.imagePath,
+                            }
+                          : null;
+
+                      return (
+                        <div key={component.slug} className="market-component-card">
+                          <div className="market-component-main">
+                            {imageUrl ? (
+                              <img
+                                className="market-component-image"
+                                src={imageUrl}
+                                alt={component.name}
+                              />
+                            ) : (
+                              <div className="market-component-image placeholder" />
+                            )}
+                            <div className="market-component-copy">
+                              <span className="market-copy-title">{component.name}</span>
+                              <span>Current lowest: {formatPrice(component.currentLowestPrice)}</span>
+                              <span>Recommended entry: {formatPrice(component.recommendedEntryPrice)}</span>
+                            </div>
+                          </div>
+                          <div className="market-component-actions">
+                            <input
+                              className="price-input"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={targetValue}
+                              onChange={(event) =>
+                                setComponentTargets((current) => ({
+                                  ...current,
+                                  [component.slug]: event.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              className="btn-sm"
+                              type="button"
+                              disabled={!watchlistItem}
+                              onClick={() => {
+                                if (!watchlistItem) {
+                                  return;
+                                }
+                                addExplicitItemToWatchlist(
+                                  watchlistItem,
+                                  component.variantKey,
+                                  component.variantLabel,
+                                  Number.parseInt(targetValue || '0', 10),
+                                );
+                              }}
+                            >
+                              Add to Watchlist
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : analysis.supplyContext.mode === 'drop-sources' ? (
+                  <div className="market-drop-list">
+                    {analysis.supplyContext.dropSources.map((source) => (
+                      <div key={`${source.location}-${source.type ?? 'none'}`} className="market-drop-card">
+                        <span className="market-copy-title">{source.location}</span>
+                        <span>Chance: {formatPercent(source.chance)}</span>
+                        <span>Rarity: {source.rarity ?? '—'}</span>
+                        <span>Type: {source.sourceType ?? '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="market-copy-block">
+                    <span className="market-copy-title">No supply context</span>
+                    <p>This item does not currently have set-component or catalog drop-source data available.</p>
+                  </div>
+                )}
+              </AnalyticsPanel>
+            </div>
+          </div>
+
+          <aside className="market-analysis-sidebar">
+            <AnalyticsPanel title="Item Details" eyebrow="Reference">
+              <div className="market-item-detail-card">
+                {itemImageUrl ? (
+                  <img
+                    className="market-item-detail-image"
+                    src={itemImageUrl}
+                    alt={analysis.itemDetails.name}
+                  />
+                ) : (
+                  <div className="market-item-detail-image placeholder" />
+                )}
+                <div className="market-item-detail-copy">
+                  <span className="market-item-detail-name">{analysis.itemDetails.name}</span>
+                  <span className="market-item-detail-slug">{analysis.itemDetails.slug}</span>
+                  {analysis.itemDetails.wikiLink ? (
+                    <a
+                      className="market-item-detail-link"
+                      href={analysis.itemDetails.wikiLink}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Wiki
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+              {analysis.itemDetails.description ? (
+                <div className="market-copy-block">
+                  <span className="market-copy-title">Description</span>
+                  <p>{analysis.itemDetails.description}</p>
+                </div>
+              ) : null}
+              <div className="market-detail-grid">
+                <div><span className="market-copy-title">Family</span><span>{analysis.itemDetails.itemFamily ?? '—'}</span></div>
+                <div><span className="market-copy-title">Category</span><span>{analysis.itemDetails.category ?? '—'}</span></div>
+                <div><span className="market-copy-title">Type</span><span>{analysis.itemDetails.itemType ?? '—'}</span></div>
+                <div><span className="market-copy-title">Rarity</span><span>{analysis.itemDetails.rarity ?? '—'}</span></div>
+                <div><span className="market-copy-title">Mastery</span><span>{formatNumber(analysis.itemDetails.masteryReq, 0)}</span></div>
+                <div><span className="market-copy-title">Max Rank</span><span>{formatNumber(analysis.itemDetails.maxRank, 0)}</span></div>
+                <div><span className="market-copy-title">Tradable</span><span>{formatNullableBoolean(analysis.itemDetails.tradable)}</span></div>
+                <div><span className="market-copy-title">Prime</span><span>{formatNullableBoolean(analysis.itemDetails.prime)}</span></div>
+                <div><span className="market-copy-title">Vaulted</span><span>{formatNullableBoolean(analysis.itemDetails.vaulted)}</span></div>
+                <div><span className="market-copy-title">Ducats</span><span>{formatNumber(analysis.itemDetails.ducats, 0)}</span></div>
+                <div><span className="market-copy-title">Release</span><span>{formatDateCompact(analysis.itemDetails.releaseDate)}</span></div>
+                <div><span className="market-copy-title">Est. Vault</span><span>{formatDateCompact(analysis.itemDetails.estimatedVaultDate)}</span></div>
+              </div>
+              {analysis.itemDetails.tags.length > 0 ? (
+                <div className="market-signal-list">
+                  {analysis.itemDetails.tags.map((tag) => (
+                    <span key={tag} className="market-signal-pill">{tag}</span>
+                  ))}
+                </div>
+              ) : null}
+            </AnalyticsPanel>
+          </aside>
+        </div>
+      ) : null}
     </div>
   );
 }

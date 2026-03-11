@@ -9,6 +9,7 @@ import type {
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
   AppSettings,
+  ItemAnalysisResponse,
   ItemAnalyticsResponse,
   MarketSnapshot,
   MarketTrackingSource,
@@ -290,6 +291,18 @@ export async function getItemAnalytics(
     variantKey,
     domainKey,
     bucketSizeKey,
+  });
+}
+
+export async function getItemAnalysis(
+  itemId: number,
+  slug: string,
+  variantKey: string | null,
+): Promise<ItemAnalysisResponse> {
+  return invoke<ItemAnalysisResponse>('get_item_analysis', {
+    itemId,
+    slug,
+    variantKey,
   });
 }
 

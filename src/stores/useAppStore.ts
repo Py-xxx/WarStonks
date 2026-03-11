@@ -333,6 +333,58 @@ function createWatchlistItem(
   };
 }
 
+function buildWatchlistUpdateState(
+  currentState: AppStore,
+  item: WfmAutocompleteItem,
+  variantKey: string,
+  variantLabel: string,
+  targetPrice: number,
+  preferredOrder: WfmTopSellOrder | null,
+) {
+  const existingItem = currentState.watchlist.find(
+    (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
+  );
+  const watchlistCount = existingItem
+    ? currentState.watchlist.length
+    : currentState.watchlist.length + 1;
+  const nextItem = createWatchlistItem(
+    item,
+    variantKey,
+    variantLabel,
+    targetPrice,
+    preferredOrder,
+    watchlistCount,
+    existingItem?.ignoredUserKeys ?? [],
+  );
+  const nextAlert =
+    preferredOrder && targetPrice >= preferredOrder.platinum
+      ? buildWatchlistAlert(nextItem, preferredOrder)
+      : null;
+
+  return {
+    watchlist: existingItem
+      ? currentState.watchlist.map((entry) =>
+          entry.id === existingItem.id
+            ? {
+                ...nextItem,
+                retryCount: existingItem.retryCount,
+                ignoredUserKeys: existingItem.ignoredUserKeys,
+              }
+            : entry,
+        )
+      : [...currentState.watchlist, nextItem],
+    alerts: nextAlert
+      ? [
+          nextAlert,
+          ...currentState.alerts.filter((alert) => alert.watchlistId !== nextItem.id),
+        ]
+      : currentState.alerts,
+    selectedWatchlistId: existingItem?.id ?? nextItem.id,
+    watchlistTargetInput: '',
+    watchlistFormError: null,
+  };
+}
+
 async function stopTrackedSelection(
   trackedSelection: { itemId: number; slug: string; variantKey: string } | null,
 ) {
@@ -528,6 +580,12 @@ interface AppStore {
   setSelectedWatchlist: (id: string | null) => void;
   setWatchlistTargetInput: (val: string) => void;
   addSelectedQuickViewToWatchlist: () => void;
+  addExplicitItemToWatchlist: (
+    item: WfmAutocompleteItem,
+    variantKey: string,
+    variantLabel: string,
+    targetPrice: number,
+  ) => void;
   removeWatchlistItem: (id: string) => void;
   dismissAlert: (id: string) => void;
   clearAllAlerts: () => void;
@@ -1380,58 +1438,56 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     const variantKey = selectedVariantKey ?? 'base';
     const variantLabel = selectedVariantLabel ?? 'Base Market';
-    const existingItem = state.watchlist.find(
-      (item) => item.slug === selectedItem.slug && item.variantKey === variantKey,
-    );
     const preferredOrder = selectPreferredWatchlistOrder(
       state.quickView.sellOrders,
-      existingItem?.ignoredUserKeys ?? [],
+      state.watchlist.find(
+        (item) => item.slug === selectedItem.slug && item.variantKey === variantKey,
+      )?.ignoredUserKeys ?? [],
     );
-    const watchlistCount = existingItem
-      ? state.watchlist.length
-      : state.watchlist.length + 1;
-    const nextItem = createWatchlistItem(
-      selectedItem,
-      variantKey,
-      variantLabel,
-      targetPrice,
-      preferredOrder,
-      watchlistCount,
-      existingItem?.ignoredUserKeys ?? [],
+    set((currentState) =>
+      buildWatchlistUpdateState(
+        currentState,
+        selectedItem,
+        variantKey,
+        variantLabel,
+        targetPrice,
+        preferredOrder,
+      ),
     );
-    const nextAlert =
-      preferredOrder && targetPrice >= preferredOrder.platinum
-        ? buildWatchlistAlert(nextItem, preferredOrder)
-        : null;
-
-    set((currentState) => ({
-      watchlist: existingItem
-        ? currentState.watchlist.map((item) =>
-            item.id === existingItem.id
-              ? {
-                  ...nextItem,
-                  retryCount: existingItem.retryCount,
-                  ignoredUserKeys: existingItem.ignoredUserKeys,
-                }
-              : item,
-          )
-        : [...currentState.watchlist, nextItem],
-      alerts: nextAlert
-        ? [
-            nextAlert,
-            ...currentState.alerts.filter((alert) => alert.watchlistId !== nextItem.id),
-          ]
-        : currentState.alerts,
-      selectedWatchlistId: existingItem?.id ?? nextItem.id,
-      watchlistTargetInput: '',
-      watchlistFormError: null,
-    }));
 
     void ensureMarketTracking(selectedItem.itemId, selectedItem.slug, variantKey, 'watchlist').catch(
       (error) => {
         console.error('[watchlist] failed to start tracking item', error);
       },
     );
+  },
+  addExplicitItemToWatchlist: (item, variantKey, variantLabel, targetPrice) => {
+    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+      set({ watchlistFormError: 'Enter a desired price greater than 0.' });
+      return;
+    }
+
+    void getWfmTopSellOrdersForVariant(item.slug, variantKey)
+      .then((response) => {
+        const preferredOrder = selectPreferredWatchlistOrder(response.sellOrders, []);
+        set((currentState) =>
+          buildWatchlistUpdateState(
+            currentState,
+            item,
+            variantKey,
+            variantLabel,
+            targetPrice,
+            preferredOrder,
+          ),
+        );
+        return ensureMarketTracking(item.itemId, item.slug, variantKey, 'watchlist');
+      })
+      .catch((error) => {
+        console.error('[watchlist] failed to add explicit item', error);
+        set({
+          watchlistFormError: toErrorMessage(error),
+        });
+      });
   },
   removeWatchlistItem: (id) =>
     set((state) => {
