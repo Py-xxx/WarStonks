@@ -6,6 +6,8 @@
 import type {
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
+  AnalyticsBucketSizeKey,
+  AnalyticsDomainKey,
   AppSettings,
   ItemAnalyticsResponse,
   MarketSnapshot,
@@ -279,11 +281,15 @@ export async function getItemAnalytics(
   itemId: number,
   slug: string,
   variantKey: string | null,
+  domainKey: AnalyticsDomainKey,
+  bucketSizeKey: AnalyticsBucketSizeKey,
 ): Promise<ItemAnalyticsResponse> {
   return invoke<ItemAnalyticsResponse>('get_item_analytics', {
     itemId,
     slug,
     variantKey,
+    domainKey,
+    bucketSizeKey,
   });
 }
 

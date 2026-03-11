@@ -19,7 +19,7 @@ const WFM_CROSSPLAY_HEADER: &str = "true";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
-const ANALYTICS_CACHE_VERSION: i64 = 3;
+const ANALYTICS_CACHE_VERSION: i64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +99,7 @@ impl TryFrom<&str> for AnalyticsDomainKey {
 pub enum AnalyticsBucketSizeKey {
     OneHour,
     ThreeHours,
+    SixHours,
     TwelveHours,
     EighteenHours,
     TwentyFourHours,
@@ -111,6 +112,7 @@ impl AnalyticsBucketSizeKey {
         match self {
             Self::OneHour => "1h",
             Self::ThreeHours => "3h",
+            Self::SixHours => "6h",
             Self::TwelveHours => "12h",
             Self::EighteenHours => "18h",
             Self::TwentyFourHours => "24h",
@@ -123,6 +125,7 @@ impl AnalyticsBucketSizeKey {
         match self {
             Self::OneHour => TimeDuration::hours(1),
             Self::ThreeHours => TimeDuration::hours(3),
+            Self::SixHours => TimeDuration::hours(6),
             Self::TwelveHours => TimeDuration::hours(12),
             Self::EighteenHours => TimeDuration::hours(18),
             Self::TwentyFourHours => TimeDuration::hours(24),
@@ -139,6 +142,7 @@ impl TryFrom<&str> for AnalyticsBucketSizeKey {
         match value {
             "1h" => Ok(Self::OneHour),
             "3h" => Ok(Self::ThreeHours),
+            "6h" => Ok(Self::SixHours),
             "12h" => Ok(Self::TwelveHours),
             "18h" => Ok(Self::EighteenHours),
             "24h" => Ok(Self::TwentyFourHours),
@@ -195,6 +199,10 @@ pub struct MarketSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsChartPoint {
     pub bucket_at: String,
+    pub open_price: Option<f64>,
+    pub closed_price: Option<f64>,
+    pub low_price: Option<f64>,
+    pub high_price: Option<f64>,
     pub lowest_sell: Option<f64>,
     pub median_sell: Option<f64>,
     pub moving_avg: Option<f64>,
@@ -278,10 +286,13 @@ pub struct ItemAnalyticsResponse {
     pub slug: String,
     pub variant_key: String,
     pub variant_label: String,
+    pub chart_domain_key: String,
+    pub chart_bucket_size_key: String,
     pub computed_at: String,
     pub source_snapshot_at: Option<String>,
     pub source_stats_fetched_at: Option<String>,
     pub current_snapshot: Option<MarketSnapshot>,
+    pub chart_points: Vec<AnalyticsChartPoint>,
     pub entry_exit_zone_overview: EntryExitZoneOverview,
     pub orderbook_pressure: OrderbookPressureSummary,
     pub trend_quality_breakdown: TrendQualityBreakdown,
@@ -1000,6 +1011,204 @@ fn load_statistics_rows_for_domain(
     Ok((closed_rows, live_buy_rows, latest_fetched_at))
 }
 
+fn merge_latest_fetched_at(current: Option<String>, candidate: Option<String>) -> Option<String> {
+    match (current, candidate) {
+        (None, value) => value,
+        (value, None) => value,
+        (Some(current), Some(candidate)) => {
+            if candidate > current {
+                Some(candidate)
+            } else {
+                Some(current)
+            }
+        }
+    }
+}
+
+fn load_chart_statistics_rows(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+    domain_key: AnalyticsDomainKey,
+) -> Result<(Vec<InternalStatsRow>, Vec<InternalStatsRow>, Option<String>)> {
+    let domain_cutoff = now_utc() - domain_key.lookback();
+    let recent_cutoff = now_utc() - TimeDuration::hours(48);
+    let source_domains = match domain_key {
+        AnalyticsDomainKey::FortyEightHours => vec!["48hours"],
+        AnalyticsDomainKey::SevenDays | AnalyticsDomainKey::ThirtyDays | AnalyticsDomainKey::NinetyDays => {
+            vec!["90days", "48hours"]
+        }
+    };
+
+    let mut closed_rows = Vec::new();
+    let mut live_buy_rows = Vec::new();
+    let mut latest_fetched_at = None;
+
+    for source_domain in source_domains {
+        let (domain_closed_rows, domain_live_buy_rows, fetched_at) =
+            load_statistics_rows_for_domain(connection, item_id, variant_key, source_domain)?;
+        latest_fetched_at = merge_latest_fetched_at(latest_fetched_at, fetched_at);
+
+        let include_row = |row: &InternalStatsRow| -> bool {
+            if row.bucket_at < domain_cutoff {
+                return false;
+            }
+
+            if source_domain == "90days" {
+                return row.bucket_at < recent_cutoff;
+            }
+
+            true
+        };
+
+        closed_rows.extend(domain_closed_rows.into_iter().filter(include_row));
+        live_buy_rows.extend(domain_live_buy_rows.into_iter().filter(include_row));
+    }
+
+    closed_rows.sort_by_key(|row| row.bucket_at);
+    live_buy_rows.sort_by_key(|row| row.bucket_at);
+
+    Ok((closed_rows, live_buy_rows, latest_fetched_at))
+}
+
+fn load_snapshot_chart_points(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+    domain_key: AnalyticsDomainKey,
+    bucket_size_key: AnalyticsBucketSizeKey,
+) -> Result<Vec<AnalyticsChartPoint>> {
+    let cutoff = format_timestamp(now_utc() - domain_key.lookback())?;
+    let mut statement = connection.prepare(
+        "SELECT captured_at, lowest_sell, median_sell, highest_buy
+         FROM orderbook_snapshots
+         WHERE item_id = ?1
+           AND variant_key = ?2
+           AND captured_at >= ?3
+         ORDER BY captured_at ASC",
+    )?;
+
+    let rows = statement.query_map(params![item_id, variant_key, cutoff], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<f64>>(1)?,
+            row.get::<_, Option<f64>>(2)?,
+            row.get::<_, Option<f64>>(3)?,
+        ))
+    })?;
+
+    let mut buckets = BTreeMap::<i64, Vec<(Option<f64>, Option<f64>, Option<f64>)>>::new();
+
+    for row in rows {
+        let (captured_at_raw, lowest_sell, median_sell, highest_buy) = row?;
+        let Some(captured_at) = parse_timestamp(&captured_at_raw) else {
+            continue;
+        };
+        let bucket_start = floor_timestamp(captured_at, bucket_size_key).unix_timestamp();
+        buckets
+            .entry(bucket_start)
+            .or_default()
+            .push((lowest_sell, median_sell, highest_buy));
+    }
+
+    Ok(buckets
+        .into_iter()
+        .map(|(bucket_start, bucket_rows)| {
+            let lowest_values = bucket_rows
+                .iter()
+                .filter_map(|(lowest_sell, _, _)| *lowest_sell)
+                .collect::<Vec<_>>();
+            let median_values = bucket_rows
+                .iter()
+                .filter_map(|(_, median_sell, _)| *median_sell)
+                .collect::<Vec<_>>();
+            let highest_buy = bucket_rows
+                .iter()
+                .filter_map(|(_, _, highest_buy)| *highest_buy)
+                .reduce(f64::max);
+            let low_price = lowest_values.iter().copied().reduce(f64::min);
+            let high_price = median_values
+                .iter()
+                .copied()
+                .chain(lowest_values.iter().copied())
+                .reduce(f64::max);
+            let open_price = lowest_values.first().copied();
+            let closed_price = lowest_values.last().copied();
+
+            AnalyticsChartPoint {
+                bucket_at: format_timestamp(
+                    OffsetDateTime::from_unix_timestamp(bucket_start).unwrap_or_else(|_| now_utc()),
+                )
+                .unwrap_or_default(),
+                open_price,
+                closed_price,
+                low_price,
+                high_price,
+                lowest_sell: low_price,
+                median_sell: if median_values.is_empty() {
+                    None
+                } else {
+                    Some(median_values.iter().sum::<f64>() / median_values.len() as f64)
+                },
+                moving_avg: None,
+                weighted_avg: None,
+                average_price: if median_values.is_empty() {
+                    None
+                } else {
+                    Some(median_values.iter().sum::<f64>() / median_values.len() as f64)
+                },
+                highest_buy,
+                fair_value_low: None,
+                fair_value_high: None,
+                volume: 0.0,
+            }
+        })
+        .collect())
+}
+
+fn merge_snapshot_chart_points(
+    mut chart_points: Vec<AnalyticsChartPoint>,
+    snapshot_points: Vec<AnalyticsChartPoint>,
+) -> Vec<AnalyticsChartPoint> {
+    let mut point_by_bucket = chart_points
+        .drain(..)
+        .map(|point| (point.bucket_at.clone(), point))
+        .collect::<BTreeMap<_, _>>();
+
+    for snapshot_point in snapshot_points {
+        let entry = point_by_bucket
+            .entry(snapshot_point.bucket_at.clone())
+            .or_insert_with(|| snapshot_point.clone());
+
+        if entry.open_price.is_none() {
+            entry.open_price = snapshot_point.open_price;
+        }
+        if entry.closed_price.is_none() {
+            entry.closed_price = snapshot_point.closed_price;
+        }
+        if entry.low_price.is_none() {
+            entry.low_price = snapshot_point.low_price;
+        }
+        if entry.high_price.is_none() {
+            entry.high_price = snapshot_point.high_price;
+        }
+        if entry.lowest_sell.is_none() {
+            entry.lowest_sell = snapshot_point.lowest_sell;
+        }
+        if entry.median_sell.is_none() {
+            entry.median_sell = snapshot_point.median_sell;
+        }
+        if entry.average_price.is_none() {
+            entry.average_price = snapshot_point.average_price;
+        }
+        if entry.highest_buy.is_none() {
+            entry.highest_buy = snapshot_point.highest_buy;
+        }
+    }
+
+    point_by_bucket.into_values().collect()
+}
+
 fn filter_supported_order(order: &WfmOrderRecord, variant_key: &str) -> bool {
     if order.visible != Some(true) {
         return false;
@@ -1659,6 +1868,28 @@ fn row_median_anchor(row: &InternalStatsRow) -> Option<f64> {
         .or(row.max_price)
 }
 
+fn row_open_anchor(row: &InternalStatsRow) -> Option<f64> {
+    row.open_price
+        .or(row.closed_price)
+        .or(row.min_price)
+        .or(row.max_price)
+        .or(row.avg_price)
+        .or(row.wa_price)
+        .or(row.median)
+        .or(row.moving_avg)
+}
+
+fn row_close_anchor(row: &InternalStatsRow) -> Option<f64> {
+    row.closed_price
+        .or(row.open_price)
+        .or(row.max_price)
+        .or(row.min_price)
+        .or(row.avg_price)
+        .or(row.wa_price)
+        .or(row.median)
+        .or(row.moving_avg)
+}
+
 fn last_defined_value(
     rows: &[InternalStatsRow],
     selector: impl Fn(&InternalStatsRow) -> Option<f64>,
@@ -1751,6 +1982,10 @@ fn resample_rows(
 
             AnalyticsChartPoint {
                 bucket_at: format_timestamp(bucket_at).unwrap_or_default(),
+                open_price: bucket_rows.first().and_then(row_open_anchor),
+                closed_price: bucket_rows.last().and_then(row_close_anchor),
+                low_price: bucket_rows.iter().filter_map(row_low_anchor).reduce(f64::min),
+                high_price: bucket_rows.iter().filter_map(row_high_anchor).reduce(f64::max),
                 lowest_sell: bucket_rows
                     .iter()
                     .filter_map(row_low_anchor)
@@ -2195,9 +2430,19 @@ fn build_item_analytics_inner(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
+    domain_key: Option<String>,
+    bucket_size_key: Option<String>,
 ) -> Result<ItemAnalyticsResponse> {
-    let analytics_domain_key = AnalyticsDomainKey::FortyEightHours;
-    let analytics_bucket_size_key = AnalyticsBucketSizeKey::OneHour;
+    let analytics_domain_key = domain_key
+        .as_deref()
+        .map(AnalyticsDomainKey::try_from)
+        .transpose()?
+        .unwrap_or(AnalyticsDomainKey::FortyEightHours);
+    let analytics_bucket_size_key = bucket_size_key
+        .as_deref()
+        .map(AnalyticsBucketSizeKey::try_from)
+        .transpose()?
+        .unwrap_or(AnalyticsBucketSizeKey::OneHour);
     let variant_key = normalize_variant_key(variant_key.as_deref());
     let variant_label = derive_variant_label(&variant_key);
     let connection = open_market_observatory_database(&app)?;
@@ -2214,7 +2459,7 @@ fn build_item_analytics_inner(
     }
 
     let snapshot = maybe_capture_fresh_snapshot(&connection, item_id, &slug, &variant_key)?;
-    let (hourly_closed_rows, hourly_live_buy_rows, latest_stats_fetched_at) =
+    let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
         load_statistics_rows_for_domain(&connection, item_id, &variant_key, "48hours")?;
     let trend_points = resample_rows(
         &hourly_closed_rows,
@@ -2222,6 +2467,24 @@ fn build_item_analytics_inner(
         AnalyticsDomainKey::FortyEightHours,
         AnalyticsBucketSizeKey::OneHour,
     );
+    let (chart_closed_rows, chart_live_buy_rows, chart_stats_fetched_at) =
+        load_chart_statistics_rows(&connection, item_id, &variant_key, analytics_domain_key)?;
+    let chart_points = merge_snapshot_chart_points(
+        resample_rows(
+            &chart_closed_rows,
+            &chart_live_buy_rows,
+            analytics_domain_key,
+            analytics_bucket_size_key,
+        ),
+        load_snapshot_chart_points(
+            &connection,
+            item_id,
+            &variant_key,
+            analytics_domain_key,
+            analytics_bucket_size_key,
+        )?,
+    );
+    let latest_stats_fetched_at = merge_latest_fetched_at(hourly_stats_fetched_at, chart_stats_fetched_at);
     let source_snapshot_at = Some(snapshot.captured_at.clone());
     if let Some(cached) = load_cached_analytics(
         &connection,
@@ -2250,10 +2513,13 @@ fn build_item_analytics_inner(
         slug,
         variant_key: variant_key.clone(),
         variant_label,
+        chart_domain_key: analytics_domain_key.as_str().to_string(),
+        chart_bucket_size_key: analytics_bucket_size_key.as_str().to_string(),
         computed_at: format_timestamp(now_utc())?,
         source_snapshot_at,
         source_stats_fetched_at: latest_stats_fetched_at,
         current_snapshot: Some(snapshot),
+        chart_points,
         entry_exit_zone_overview: zone_overview,
         orderbook_pressure,
         trend_quality_breakdown,
@@ -2422,9 +2688,11 @@ pub async fn get_item_analytics(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
+    domain_key: Option<String>,
+    bucket_size_key: Option<String>,
 ) -> Result<ItemAnalyticsResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analytics_inner(app, item_id, slug, variant_key)
+        build_item_analytics_inner(app, item_id, slug, variant_key, domain_key, bucket_size_key)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -2610,6 +2878,10 @@ mod tests {
             .map(|index| AnalyticsChartPoint {
                 bucket_at: super::format_timestamp(base_time + time::Duration::hours(index as i64))
                     .expect("timestamp"),
+                open_price: Some(60.0 + index as f64),
+                closed_price: Some(60.5 + index as f64),
+                low_price: Some(60.0 + index as f64),
+                high_price: Some(61.8 + index as f64),
                 lowest_sell: Some(60.0 + index as f64),
                 median_sell: Some(61.0 + index as f64),
                 moving_avg: Some(60.5 + index as f64),
@@ -2655,6 +2927,10 @@ mod tests {
         let points = vec![
             AnalyticsChartPoint {
                 bucket_at: "2026-03-10T21:00:00Z".to_string(),
+                open_price: Some(11.2),
+                closed_price: Some(11.0),
+                low_price: Some(11.0),
+                high_price: Some(12.1),
                 lowest_sell: Some(11.0),
                 median_sell: Some(12.0),
                 moving_avg: Some(11.5),
@@ -2667,6 +2943,10 @@ mod tests {
             },
             AnalyticsChartPoint {
                 bucket_at: "2026-03-11T00:00:00Z".to_string(),
+                open_price: Some(10.8),
+                closed_price: Some(10.0),
+                low_price: Some(10.0),
+                high_price: Some(12.0),
                 lowest_sell: Some(10.0),
                 median_sell: Some(12.0),
                 moving_avg: Some(11.4),
