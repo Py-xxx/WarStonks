@@ -130,7 +130,7 @@ function WatchlistCard() {
                     }`}
                     style={{ cursor: 'pointer' }}
                   >
-                    <td>{item.name}</td>
+                    <td>{item.displayName}</td>
                     <td className="td-muted">{item.targetPrice} pt</td>
                     <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
                     <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
@@ -158,7 +158,7 @@ function WatchlistCard() {
               <span className="selected">
                 Selected:{' '}
                 <span style={{ color: 'var(--text-primary)' }}>
-                  {watchlist.find((w) => w.id === selectedId)?.name}
+                  {watchlist.find((w) => w.id === selectedId)?.displayName}
                 </span>
               </span>
             ) : null}

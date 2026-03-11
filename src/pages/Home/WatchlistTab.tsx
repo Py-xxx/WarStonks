@@ -88,10 +88,10 @@ export function WatchlistTab() {
                             {imageUrl ? (
                               <img src={imageUrl} alt="" loading="lazy" />
                             ) : (
-                              <span>{item.name.slice(0, 1)}</span>
+                              <span>{item.displayName.slice(0, 1)}</span>
                             )}
                           </span>
-                          <span>{item.name}</span>
+                          <span>{item.displayName}</span>
                         </div>
                       </td>
                       <td>{item.targetPrice} pt</td>

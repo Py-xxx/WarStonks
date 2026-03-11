@@ -6,8 +6,16 @@
 import type {
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
+  AnalyticsBucketSizeKey,
+  AnalyticsDomainKey,
   AppSettings,
+  ItemAnalyticsResponse,
+  MarketSnapshot,
+  MarketTrackingSource,
+  MarketVariant,
   PersistedWorldStateCacheEntry,
+  StatisticsBucketRow,
+  WfmDetailedOrder,
   WfstatFlashSale,
   WfstatNewsItem,
   WfstatArchonHunt,
@@ -82,6 +90,20 @@ export interface WfmTopSellOrdersResponse {
   apiVersion: string | null;
   slug: string;
   sellOrders: WfmTopSellOrder[];
+}
+
+export interface WfmItemOrdersResponse {
+  apiVersion: string | null;
+  slug: string;
+  variantKey: string;
+  sellOrders: WfmDetailedOrder[];
+  buyOrders: WfmDetailedOrder[];
+  snapshot: MarketSnapshot;
+}
+
+export interface TrackingRefreshSummary {
+  refreshedItems: number;
+  dueItems: number;
 }
 
 export interface WorldStateMarketNewsResponse {
@@ -192,6 +214,100 @@ export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> 
 
 export async function getWfmTopSellOrders(slug: string): Promise<WfmTopSellOrdersResponse> {
   return invoke<WfmTopSellOrdersResponse>('get_wfm_top_sell_orders', { slug });
+}
+
+export async function getWfmTopSellOrdersForVariant(
+  slug: string,
+  variantKey: string | null,
+): Promise<WfmTopSellOrdersResponse> {
+  return invoke<WfmTopSellOrdersResponse>('get_wfm_top_sell_orders', {
+    slug,
+    variantKey,
+  });
+}
+
+export async function getWfmItemOrders(
+  slug: string,
+  variantKey: string | null,
+): Promise<WfmItemOrdersResponse> {
+  return invoke<WfmItemOrdersResponse>('get_wfm_item_orders', {
+    slug,
+    variantKey,
+  });
+}
+
+export async function getWfmItemStatistics(
+  itemId: number,
+  slug: string,
+  variantKey: string | null,
+  domainKey: AnalyticsDomainKey,
+  bucketSizeKey: AnalyticsBucketSizeKey,
+): Promise<StatisticsBucketRow[]> {
+  return invoke<StatisticsBucketRow[]>('get_wfm_item_statistics', {
+    itemId,
+    slug,
+    variantKey,
+    domainKey,
+    bucketSizeKey,
+  });
+}
+
+export async function ensureMarketTracking(
+  itemId: number,
+  slug: string,
+  variantKey: string | null,
+  source: MarketTrackingSource,
+): Promise<MarketSnapshot> {
+  return invoke<MarketSnapshot>('ensure_market_tracking', {
+    itemId,
+    slug,
+    variantKey,
+    source,
+  });
+}
+
+export async function stopMarketTracking(
+  itemId: number,
+  slug: string,
+  variantKey: string | null,
+  source: MarketTrackingSource,
+): Promise<void> {
+  return invoke<void>('stop_market_tracking', {
+    itemId,
+    slug,
+    variantKey,
+    source,
+  });
+}
+
+export async function refreshMarketTracking(): Promise<TrackingRefreshSummary> {
+  return invoke<TrackingRefreshSummary>('refresh_market_tracking');
+}
+
+export async function getItemVariantsForMarket(
+  itemId: number,
+  slug: string,
+): Promise<MarketVariant[]> {
+  return invoke<MarketVariant[]>('get_item_variants_for_market', {
+    itemId,
+    slug,
+  });
+}
+
+export async function getItemAnalytics(
+  itemId: number,
+  slug: string,
+  variantKey: string | null,
+  domainKey: AnalyticsDomainKey,
+  bucketSizeKey: AnalyticsBucketSizeKey,
+): Promise<ItemAnalyticsResponse> {
+  return invoke<ItemAnalyticsResponse>('get_item_analytics', {
+    itemId,
+    slug,
+    variantKey,
+    domainKey,
+    bucketSizeKey,
+  });
 }
 
 export async function initializeAppCatalog(): Promise<StartupSummary> {

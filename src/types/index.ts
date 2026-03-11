@@ -31,7 +31,10 @@ export interface WatchlistItem {
   id: string;
   itemId: number;
   name: string;
+  displayName: string;
   slug: string;
+  variantKey: string;
+  variantLabel: string;
   imagePath: string | null;
   itemFamily: string | null;
   targetPrice: number;
@@ -423,6 +426,165 @@ export interface WfmTopSellOrder {
   username: string;
   userSlug: string | null;
   status: string | null;
+}
+
+export type MarketTrackingSource =
+  | 'search'
+  | 'watchlist'
+  | 'analytics'
+  | 'trade-health';
+
+export type AnalyticsDomainKey = '1d' | '7d' | '30d' | '90d';
+export type AnalyticsBucketSizeKey = '1h' | '3h' | '12h' | '18h' | '24h' | '7d' | '14d';
+
+export interface MarketVariant {
+  key: string;
+  label: string;
+  rank: number | null;
+  isDefault: boolean;
+}
+
+export interface MarketDepthLevel {
+  side: string;
+  price: number;
+  quantity: number;
+  orderCount: number;
+  bandKind: string;
+}
+
+export interface MarketSnapshot {
+  capturedAt: string;
+  lowestSell: number | null;
+  medianSell: number | null;
+  highestBuy: number | null;
+  spread: number | null;
+  spreadPct: number | null;
+  sellOrderCount: number;
+  sellQuantity: number;
+  buyOrderCount: number;
+  buyQuantity: number;
+  nearFloorSellerCount: number;
+  nearFloorQuantity: number;
+  uniqueSellUsers: number;
+  uniqueBuyUsers: number;
+  pressureRatio: number | null;
+  entryDepth: number;
+  exitDepth: number;
+  depthLevels: MarketDepthLevel[];
+}
+
+export interface WfmDetailedOrder {
+  orderId: string;
+  orderType: string;
+  platinum: number;
+  quantity: number;
+  perTrade: number;
+  rank: number | null;
+  username: string;
+  userSlug: string | null;
+  status: string | null;
+  updatedAt: string | null;
+}
+
+export interface StatisticsBucketRow {
+  bucketAt: string;
+  sourceKind: string;
+  volume: number;
+  minPrice: number | null;
+  maxPrice: number | null;
+  openPrice: number | null;
+  closedPrice: number | null;
+  avgPrice: number | null;
+  waPrice: number | null;
+  median: number | null;
+  movingAvg: number | null;
+  donchTop: number | null;
+  donchBot: number | null;
+}
+
+export interface AnalyticsChartPoint {
+  bucketAt: string;
+  lowestSell: number | null;
+  medianSell: number | null;
+  movingAvg: number | null;
+  weightedAvg: number | null;
+  averagePrice: number | null;
+  highestBuy: number | null;
+  fairValueLow: number | null;
+  fairValueHigh: number | null;
+  volume: number;
+}
+
+export interface EntryExitZoneOverview {
+  currentLowestPrice: number | null;
+  currentMedianLowestPrice: number | null;
+  fairValueLow: number | null;
+  fairValueHigh: number | null;
+  entryZoneLow: number | null;
+  entryZoneHigh: number | null;
+  exitZoneLow: number | null;
+  exitZoneHigh: number | null;
+  zoneQuality: string;
+  entryRationale: string;
+  exitRationale: string;
+}
+
+export interface OrderbookPressureSummary {
+  cheapestSell: number | null;
+  highestBuy: number | null;
+  spread: number | null;
+  spreadPct: number | null;
+  entryDepth: number;
+  exitDepth: number;
+  pressureRatio: number | null;
+  pressureLabel: string;
+}
+
+export interface TrendMetricSet {
+  slope1h: number | null;
+  slope3h: number | null;
+  slope6h: number | null;
+  crossSignal: string;
+  reversal: string;
+  confidence: number;
+  confirmingSignals: string[];
+}
+
+export interface TrendQualityBreakdown {
+  selectedTab: string;
+  tabs: Record<string, TrendMetricSet>;
+  stability: number;
+  volatility: number;
+  noise: number;
+}
+
+export interface AnalyticsActionCard {
+  suggestedAction: string;
+  tone: string;
+  zoneQuality: string;
+  zoneAdjustedEdge: number | null;
+  spread: number | null;
+  spreadPct: number | null;
+  pressureLabel: string;
+  alignedSignals: string[];
+  rationale: string;
+}
+
+export interface ItemAnalyticsResponse {
+  itemId: number;
+  slug: string;
+  variantKey: string;
+  variantLabel: string;
+  computedAt: string;
+  sourceSnapshotAt: string | null;
+  sourceStatsFetchedAt: string | null;
+  chartPoints: AnalyticsChartPoint[];
+  statisticsRows: StatisticsBucketRow[];
+  currentSnapshot: MarketSnapshot | null;
+  entryExitZoneOverview: EntryExitZoneOverview;
+  orderbookPressure: OrderbookPressureSummary;
+  trendQualityBreakdown: TrendQualityBreakdown;
+  actionCard: AnalyticsActionCard;
 }
 
 export interface QuickViewSelection {
