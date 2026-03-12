@@ -3412,9 +3412,39 @@ body {
 .market-header-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.market-header-actions .market-item-freshness {
+  margin-left: auto;
+}
+
+.market-refresh-button {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(108, 174, 255, 0.22);
+  background: rgba(12, 19, 33, 0.96);
+  color: #79b8ff;
+  cursor: pointer;
+  transition: 140ms ease;
+  flex: 0 0 auto;
+}
+
+.market-refresh-button:hover {
+  border-color: rgba(108, 174, 255, 0.5);
+  background: rgba(17, 28, 46, 0.98);
+  color: #d8ebff;
+  transform: rotate(20deg);
+}
+
+.market-refresh-button svg {
+  width: 16px;
+  height: 16px;
 }
 
 .market-chart-header {
