@@ -26,6 +26,7 @@ const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
+const TRADE_LOG_DERIVED_VERSION: i64 = 1;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://warframe.market/socket-v2";
@@ -545,6 +546,7 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
               profit INTEGER,
               margin REAL,
               status TEXT,
+              derived_version INTEGER NOT NULL DEFAULT 0,
               derived_at TEXT NOT NULL,
               PRIMARY KEY (username, order_id)
             );
@@ -581,6 +583,24 @@ fn migrate_trades_cache_schema(connection: &Connection) -> Result<()> {
                 [],
             )
             .context("failed to add keep_item column to trade log cache")?;
+    }
+
+    let mut derived_statement = connection
+        .prepare("PRAGMA table_info(portfolio_trade_log_derived)")
+        .context("failed to inspect derived trade log schema")?;
+    let derived_columns = derived_statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("failed to query derived trade log columns")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect derived trade log columns")?;
+
+    if !derived_columns.iter().any(|column| column == "derived_version") {
+        connection
+            .execute(
+                "ALTER TABLE portfolio_trade_log_derived ADD COLUMN derived_version INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("failed to add derived_version column to derived trade log")?;
     }
 
     Ok(())
@@ -907,7 +927,24 @@ fn has_complete_derived_trade_log_state(connection: &Connection, username: &str)
         )
         .context("failed to count derived trade log rows")?;
 
-    Ok(cached_count == derived_count)
+    if cached_count != derived_count {
+        return Ok(false);
+    }
+
+    let current_version_count = connection
+        .query_row(
+            "
+            SELECT COUNT(*)
+            FROM portfolio_trade_log_derived
+            WHERE username = ?1
+              AND derived_version = ?2
+            ",
+            params![trimmed_username, TRADE_LOG_DERIVED_VERSION],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("failed to count current-version derived trade log rows")?;
+
+    Ok(cached_count == current_version_count)
 }
 
 fn fetch_cached_trade_set_components(
@@ -1353,8 +1390,9 @@ fn persist_derived_trade_log_entries_inner(
                   profit,
                   margin,
                   status,
+                  derived_version,
                   derived_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 ",
             )
             .context("failed to prepare derived trade log insert")?;
@@ -1367,6 +1405,7 @@ fn persist_derived_trade_log_entries_inner(
                     entry.profit,
                     entry.margin,
                     entry.status,
+                    TRADE_LOG_DERIVED_VERSION,
                     derived_at,
                 ])
                 .context("failed to insert derived trade log row")?;
@@ -1442,7 +1481,7 @@ fn consume_set_component_buy_lots(
         return (0, 0);
     }
 
-    let mut max_sets_supported = sell_quantity;
+    let mut fully_supported_sets = sell_quantity;
     for component in components {
         let available_quantity = records
             .iter()
@@ -1461,11 +1500,7 @@ fn consume_set_component_buy_lots(
             })
             .sum::<i64>();
 
-        max_sets_supported = max_sets_supported.min(available_quantity / component.quantity_in_set);
-    }
-
-    if max_sets_supported <= 0 {
-        return (0, 0);
+        fully_supported_sets = fully_supported_sets.min(available_quantity / component.quantity_in_set);
     }
 
     let mut total_cost = 0_i64;
@@ -1475,14 +1510,14 @@ fn consume_set_component_buy_lots(
             consumption,
             &component.component_slug,
             None,
-            component.quantity_in_set * max_sets_supported,
+            component.quantity_in_set * sell_quantity,
             sell_closed_at,
             true,
         );
         total_cost += component_cost;
     }
 
-    (max_sets_supported, total_cost)
+    (fully_supported_sets.max(0), total_cost)
 }
 
 fn derive_trade_log_entries_with_components<F>(
