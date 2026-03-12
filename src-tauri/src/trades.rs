@@ -109,6 +109,21 @@ pub struct TradeUpdateListingInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PortfolioTradeLogEntry {
+    pub id: String,
+    pub item_name: String,
+    pub slug: String,
+    pub image_path: Option<String>,
+    pub order_type: String,
+    pub platinum: i64,
+    pub quantity: i64,
+    pub rank: Option<i64>,
+    pub closed_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredTradeSession {
     token: String,
     device_id: String,
@@ -177,6 +192,46 @@ struct WfmOrderUser {
     ingame_name: Option<String>,
     #[serde(default)]
     status: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WfmProfileStatisticsResponse {
+    payload: WfmProfileStatisticsPayload,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WfmProfileStatisticsPayload {
+    closed_orders: Vec<WfmProfileClosedOrder>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WfmProfileClosedOrder {
+    id: String,
+    item: WfmProfileClosedOrderItem,
+    updated_at: String,
+    quantity: i64,
+    closed_date: String,
+    order_type: String,
+    platinum: i64,
+    #[serde(default)]
+    mod_rank: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WfmProfileClosedOrderItem {
+    #[serde(rename = "url_name")]
+    url_name: String,
+    #[serde(default)]
+    thumb: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
+    en: WfmProfileClosedOrderItemName,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WfmProfileClosedOrderItemName {
+    #[serde(rename = "item_name")]
+    item_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -435,6 +490,58 @@ fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSumma
             .ok_or_else(|| anyhow!("missing WFM profile data"))?,
         &fetched_at,
     )
+}
+
+fn build_trade_log_entries_from_statistics(
+    payload: WfmProfileStatisticsPayload,
+) -> Vec<PortfolioTradeLogEntry> {
+    let mut entries = payload
+        .closed_orders
+        .into_iter()
+        .filter(|order| matches!(order.order_type.as_str(), "buy" | "sell"))
+        .map(|order| PortfolioTradeLogEntry {
+            id: order.id,
+            item_name: order.item.en.item_name,
+            slug: order.item.url_name,
+            image_path: order.item.thumb.or(order.item.icon),
+            order_type: order.order_type,
+            platinum: order.platinum,
+            quantity: order.quantity,
+            rank: order.mod_rank,
+            closed_at: order.closed_date,
+            updated_at: order.updated_at,
+        })
+        .collect::<Vec<_>>();
+
+    entries.sort_by(|left, right| right.closed_at.cmp(&left.closed_at));
+    entries
+}
+
+fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLogEntry>> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to load the trade log."));
+    }
+
+    let client = shared_wfm_client()?;
+    let mut url = reqwest::Url::parse(&format!("{WFM_API_BASE_URL_V1}/profile/"))
+        .context("failed to build WFM trade history url")?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("failed to build WFM trade history path"))?
+        .push(trimmed_username)
+        .push("statistics");
+
+    let payload = execute_wfm_request(
+        client
+            .get(url)
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Accept", "application/json"),
+        "request WFM trade history",
+    )?
+    .json::<WfmProfileStatisticsResponse>()
+    .context("failed to parse WFM trade history response")?;
+
+    Ok(build_trade_log_entries_from_statistics(payload.payload))
 }
 
 fn parse_status_from_payload(payload: &Value) -> Option<String> {
@@ -973,6 +1080,14 @@ pub async fn get_wfm_trade_overview(
 ) -> Result<TradeOverview, String> {
     tauri::async_runtime::spawn_blocking(move || build_trade_overview_inner(&app, seller_mode.trim()))
         .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_wfm_profile_trade_log(username: String) -> Result<Vec<PortfolioTradeLogEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_profile_trade_log_inner(username.trim()))
+        .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
 }
@@ -1036,7 +1151,11 @@ pub async fn delete_wfm_sell_order(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_avatar_url, parse_status_from_payload};
+    use super::{
+        build_trade_log_entries_from_statistics, normalize_avatar_url, parse_status_from_payload,
+        WfmProfileClosedOrder, WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName,
+        WfmProfileStatisticsPayload,
+    };
     use serde_json::json;
 
     #[test]
@@ -1067,5 +1186,71 @@ mod tests {
             parse_status_from_payload(&json!({ "status": "invisible" })).as_deref(),
             Some("offline")
         );
+    }
+
+    #[test]
+    fn normalizes_and_sorts_trade_log_entries() {
+        let entries = build_trade_log_entries_from_statistics(WfmProfileStatisticsPayload {
+            closed_orders: vec![
+                WfmProfileClosedOrder {
+                    id: "ignore".to_string(),
+                    item: WfmProfileClosedOrderItem {
+                        url_name: "ignored_item".to_string(),
+                        thumb: None,
+                        icon: None,
+                        en: WfmProfileClosedOrderItemName {
+                            item_name: "Ignored Item".to_string(),
+                        },
+                    },
+                    updated_at: "2026-03-10T10:00:00.000+00:00".to_string(),
+                    quantity: 1,
+                    closed_date: "2026-03-10T10:00:00.000+00:00".to_string(),
+                    order_type: "other".to_string(),
+                    platinum: 5,
+                    mod_rank: None,
+                },
+                WfmProfileClosedOrder {
+                    id: "buy-1".to_string(),
+                    item: WfmProfileClosedOrderItem {
+                        url_name: "test_item".to_string(),
+                        thumb: Some("items/images/en/thumbs/test.png".to_string()),
+                        icon: None,
+                        en: WfmProfileClosedOrderItemName {
+                            item_name: "Test Item".to_string(),
+                        },
+                    },
+                    updated_at: "2026-03-10T10:00:00.000+00:00".to_string(),
+                    quantity: 1,
+                    closed_date: "2026-03-10T10:00:00.000+00:00".to_string(),
+                    order_type: "buy".to_string(),
+                    platinum: 15,
+                    mod_rank: Some(2),
+                },
+                WfmProfileClosedOrder {
+                    id: "sell-1".to_string(),
+                    item: WfmProfileClosedOrderItem {
+                        url_name: "test_item".to_string(),
+                        thumb: None,
+                        icon: Some("items/images/en/test.png".to_string()),
+                        en: WfmProfileClosedOrderItemName {
+                            item_name: "Test Item".to_string(),
+                        },
+                    },
+                    updated_at: "2026-03-09T10:00:00.000+00:00".to_string(),
+                    quantity: 2,
+                    closed_date: "2026-03-09T10:00:00.000+00:00".to_string(),
+                    order_type: "sell".to_string(),
+                    platinum: 25,
+                    mod_rank: None,
+                },
+            ],
+        });
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "buy-1");
+        assert_eq!(entries[0].order_type, "buy");
+        assert_eq!(entries[0].rank, Some(2));
+        assert_eq!(entries[1].id, "sell-1");
+        assert_eq!(entries[1].image_path.as_deref(), Some("items/images/en/test.png"));
     }
 }

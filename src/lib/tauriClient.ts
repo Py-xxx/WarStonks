@@ -20,6 +20,7 @@ import type {
   MarketVariant,
   TradeCreateListingInput,
   TradeOverview,
+  PortfolioTradeLogEntry,
   TradeSessionState,
   TradeSignInInput,
   TradeUpdateListingInput,
@@ -244,6 +245,12 @@ export async function getWfmTradeOverview(
   sellerMode: SellerMode,
 ): Promise<TradeOverview> {
   return invoke<TradeOverview>('get_wfm_trade_overview', { sellerMode });
+}
+
+export async function getWfmProfileTradeLog(
+  username: string,
+): Promise<PortfolioTradeLogEntry[]> {
+  return invoke<PortfolioTradeLogEntry[]>('get_wfm_profile_trade_log', { username });
 }
 
 export async function createWfmSellOrder(
