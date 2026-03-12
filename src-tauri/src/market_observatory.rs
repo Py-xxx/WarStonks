@@ -3483,46 +3483,46 @@ fn load_item_detail_summary(
     };
     let polarities = {
         let mut statement = connection.prepare(
-            "SELECT polarity
+            "SELECT wfstat_item_polarities.polarity
              FROM wfstat_item_polarities
              JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_polarities.wfstat_unique_name
              WHERE wfstat_items.item_id = ?1
-             ORDER BY polarity_index ASC",
+             ORDER BY wfstat_item_polarities.polarity_index ASC",
         )?;
         let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let parent_names = {
         let mut statement = connection.prepare(
-            "SELECT parent_value
+            "SELECT wfstat_item_parents.parent_value
              FROM wfstat_item_parents
              JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_parents.wfstat_unique_name
              WHERE wfstat_items.item_id = ?1
-             ORDER BY parent_index ASC",
+             ORDER BY wfstat_item_parents.parent_index ASC",
         )?;
         let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let ability_names = {
         let mut statement = connection.prepare(
-            "SELECT ability_name
+            "SELECT wfstat_item_abilities.ability_name
              FROM wfstat_item_abilities
              JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_abilities.wfstat_unique_name
              WHERE wfstat_items.item_id = ?1
-               AND ability_name IS NOT NULL
-             ORDER BY ability_index ASC",
+               AND wfstat_item_abilities.ability_name IS NOT NULL
+             ORDER BY wfstat_item_abilities.ability_index ASC",
         )?;
         let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let attack_names = {
         let mut statement = connection.prepare(
-            "SELECT attack_name
+            "SELECT wfstat_item_attacks.attack_name
              FROM wfstat_item_attacks
              JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_attacks.wfstat_unique_name
              WHERE wfstat_items.item_id = ?1
-               AND attack_name IS NOT NULL
-             ORDER BY attack_index ASC",
+               AND wfstat_item_attacks.attack_name IS NOT NULL
+             ORDER BY wfstat_item_attacks.attack_index ASC",
         )?;
         let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
