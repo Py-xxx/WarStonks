@@ -816,6 +816,23 @@ export interface ArbitrageScannerResponse {
   results: ArbitrageScannerSetEntry[];
 }
 
+export interface ArbitrageScannerProgress {
+  scannerKey: string;
+  status: 'idle' | 'running' | 'success' | 'error' | string;
+  progressValue: number;
+  stageLabel: string;
+  statusText: string;
+  updatedAt: string;
+  startedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+}
+
+export interface ArbitrageScannerState {
+  latestScan: ArbitrageScannerResponse | null;
+  progress: ArbitrageScannerProgress;
+}
+
 export interface QuickViewSelection {
   selectedItem: WfmAutocompleteItem | null;
   sellOrders: WfmTopSellOrder[];

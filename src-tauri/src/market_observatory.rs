@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
@@ -23,6 +23,8 @@ const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
 const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
+const ARBITRAGE_SCANNER_KEY: &str = "arbitrage";
+const ARBITRAGE_SCANNER_PROGRESS_EVENT: &str = "arbitrage-scanner-progress";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -578,6 +580,27 @@ pub struct ArbitrageScannerResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ArbitrageScannerProgress {
+    pub scanner_key: String,
+    pub status: String,
+    pub progress_value: f64,
+    pub stage_label: String,
+    pub status_text: String,
+    pub updated_at: String,
+    pub started_at: Option<String>,
+    pub last_completed_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArbitrageScannerState {
+    pub latest_scan: Option<ArbitrageScannerResponse>,
+    pub progress: ArbitrageScannerProgress,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WfmDetailedOrder {
     pub order_id: String,
     pub order_type: String,
@@ -940,6 +963,24 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_set_component_cache_set_slug
           ON set_component_cache (set_slug, sort_order ASC);
+
+        CREATE TABLE IF NOT EXISTS scanner_cache (
+          scanner_key TEXT PRIMARY KEY,
+          computed_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS scanner_progress (
+          scanner_key TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          progress_value REAL NOT NULL,
+          stage_label TEXT NOT NULL,
+          status_text TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          last_completed_at TEXT,
+          last_error TEXT
+        );
 
         CREATE TABLE IF NOT EXISTS analytics_cache (
           item_id INTEGER NOT NULL,
@@ -4675,6 +4716,162 @@ fn ensure_set_components_cached(
     Ok((components, true))
 }
 
+fn default_arbitrage_scanner_progress() -> Result<ArbitrageScannerProgress> {
+    Ok(ArbitrageScannerProgress {
+        scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+        status: "idle".to_string(),
+        progress_value: 0.0,
+        stage_label: "Ready".to_string(),
+        status_text: "No saved arbitrage scan yet.".to_string(),
+        updated_at: format_timestamp(now_utc())?,
+        started_at: None,
+        last_completed_at: None,
+        last_error: None,
+    })
+}
+
+fn persist_arbitrage_scanner_progress(
+    connection: &Connection,
+    progress: &ArbitrageScannerProgress,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO scanner_progress (
+           scanner_key,
+           status,
+           progress_value,
+           stage_label,
+           status_text,
+           updated_at,
+           started_at,
+           last_completed_at,
+           last_error
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(scanner_key) DO UPDATE SET
+           status = excluded.status,
+           progress_value = excluded.progress_value,
+           stage_label = excluded.stage_label,
+           status_text = excluded.status_text,
+           updated_at = excluded.updated_at,
+           started_at = excluded.started_at,
+           last_completed_at = excluded.last_completed_at,
+           last_error = excluded.last_error",
+        params![
+            progress.scanner_key,
+            progress.status,
+            progress.progress_value,
+            progress.stage_label,
+            progress.status_text,
+            progress.updated_at,
+            progress.started_at,
+            progress.last_completed_at,
+            progress.last_error,
+        ],
+    )?;
+
+    Ok(())
+}
+
+fn load_arbitrage_scanner_progress(connection: &Connection) -> Result<ArbitrageScannerProgress> {
+    let progress = connection
+        .query_row(
+            "SELECT
+               scanner_key,
+               status,
+               progress_value,
+               stage_label,
+               status_text,
+               updated_at,
+               started_at,
+               last_completed_at,
+               last_error
+             FROM scanner_progress
+             WHERE scanner_key = ?1
+             LIMIT 1",
+            params![ARBITRAGE_SCANNER_KEY],
+            |row| {
+                Ok(ArbitrageScannerProgress {
+                    scanner_key: row.get(0)?,
+                    status: row.get(1)?,
+                    progress_value: row.get(2)?,
+                    stage_label: row.get(3)?,
+                    status_text: row.get(4)?,
+                    updated_at: row.get(5)?,
+                    started_at: row.get(6)?,
+                    last_completed_at: row.get(7)?,
+                    last_error: row.get(8)?,
+                })
+            },
+        )
+        .optional()?;
+
+    match progress {
+        Some(progress) => Ok(progress),
+        None => {
+            let progress = default_arbitrage_scanner_progress()?;
+            persist_arbitrage_scanner_progress(connection, &progress)?;
+            Ok(progress)
+        }
+    }
+}
+
+fn persist_arbitrage_scanner_cache(
+    connection: &Connection,
+    response: &ArbitrageScannerResponse,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO scanner_cache (
+           scanner_key,
+           computed_at,
+           payload_json
+         ) VALUES (?1, ?2, ?3)
+         ON CONFLICT(scanner_key) DO UPDATE SET
+           computed_at = excluded.computed_at,
+           payload_json = excluded.payload_json",
+        params![
+            ARBITRAGE_SCANNER_KEY,
+            response.computed_at,
+            serde_json::to_string(response)?,
+        ],
+    )?;
+
+    Ok(())
+}
+
+fn load_arbitrage_scanner_cache(
+    connection: &Connection,
+) -> Result<Option<ArbitrageScannerResponse>> {
+    let payload = connection
+        .query_row(
+            "SELECT payload_json
+             FROM scanner_cache
+             WHERE scanner_key = ?1
+             LIMIT 1",
+            params![ARBITRAGE_SCANNER_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    payload
+        .map(|json| serde_json::from_str::<ArbitrageScannerResponse>(&json).context("failed to parse arbitrage cache"))
+        .transpose()
+}
+
+fn load_arbitrage_scanner_state(
+    connection: &Connection,
+) -> Result<ArbitrageScannerState> {
+    Ok(ArbitrageScannerState {
+        latest_scan: load_arbitrage_scanner_cache(connection)?,
+        progress: load_arbitrage_scanner_progress(connection)?,
+    })
+}
+
+fn emit_arbitrage_scanner_progress(
+    app: &tauri::AppHandle,
+    progress: &ArbitrageScannerProgress,
+) {
+    let _ = app.emit(ARBITRAGE_SCANNER_PROGRESS_EVENT, progress.clone());
+}
+
 fn load_drop_sources(
     app: &tauri::AppHandle,
     item_id: i64,
@@ -5128,16 +5325,52 @@ fn build_arbitrage_set_entry(
 
 fn build_arbitrage_scanner_inner(
     app: tauri::AppHandle,
+    mut on_progress: impl FnMut(ArbitrageScannerProgress),
 ) -> Result<ArbitrageScannerResponse> {
     let catalog_connection = open_catalog_database(&app)?;
     let observatory_connection = open_market_observatory_database(&app)?;
     let set_roots = list_set_roots_from_catalog(&catalog_connection)?;
+    let started_at = format_timestamp(now_utc())?;
 
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
     let mut results = Vec::new();
 
-    for set_root in &set_roots {
+    on_progress(ArbitrageScannerProgress {
+        scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+        status: "running".to_string(),
+        progress_value: 0.0,
+        stage_label: "Preparing".to_string(),
+        status_text: format!("Loaded {} set roots for arbitrage scanning.", set_roots.len()),
+        updated_at: format_timestamp(now_utc())?,
+        started_at: Some(started_at.clone()),
+        last_completed_at: None,
+        last_error: None,
+    });
+
+    for (index, set_root) in set_roots.iter().enumerate() {
+        let progress_value = if set_roots.is_empty() {
+            100.0
+        } else {
+            ((index as f64 / set_roots.len() as f64) * 100.0).clamp(0.0, 99.0)
+        };
+        on_progress(ArbitrageScannerProgress {
+            scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+            status: "running".to_string(),
+            progress_value,
+            stage_label: "Scanning".to_string(),
+            status_text: format!(
+                "Scanning {} ({}/{})",
+                set_root.name,
+                index + 1,
+                set_roots.len()
+            ),
+            updated_at: format_timestamp(now_utc())?,
+            started_at: Some(started_at.clone()),
+            last_completed_at: None,
+            last_error: None,
+        });
+
         let (components, did_refresh_set) =
             ensure_set_components_cached(&catalog_connection, &observatory_connection, set_root)?;
         if did_refresh_set {
@@ -5204,7 +5437,7 @@ fn build_arbitrage_scanner_inner(
         opportunity_count,
         refreshed_set_count,
         refreshed_statistics_count,
-        results,
+            results,
     })
 }
 
@@ -5838,10 +6071,105 @@ pub async fn get_item_analysis(
 pub async fn get_arbitrage_scanner(
     app: tauri::AppHandle,
 ) -> Result<ArbitrageScannerResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || build_arbitrage_scanner_inner(app))
+    tauri::async_runtime::spawn_blocking(move || build_arbitrage_scanner_inner(app, |_| {}))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_arbitrage_scanner_state(
+    app: tauri::AppHandle,
+) -> Result<ArbitrageScannerState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)?;
+        load_arbitrage_scanner_state(&connection)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn start_arbitrage_scanner(
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    let state_connection = open_market_observatory_database(&app).map_err(|error| error.to_string())?;
+    let current_state = load_arbitrage_scanner_state(&state_connection).map_err(|error| error.to_string())?;
+    if current_state.progress.status == "running" {
+        return Ok(false);
+    }
+
+    let started_at = format_timestamp(now_utc()).map_err(|error| error.to_string())?;
+    let initial_progress = ArbitrageScannerProgress {
+        scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+        status: "running".to_string(),
+        progress_value: 0.0,
+        stage_label: "Queued".to_string(),
+        status_text: "Arbitrage scan queued.".to_string(),
+        updated_at: started_at.clone(),
+        started_at: Some(started_at.clone()),
+        last_completed_at: current_state.progress.last_completed_at.clone(),
+        last_error: None,
+    };
+    persist_arbitrage_scanner_progress(&state_connection, &initial_progress)
+        .map_err(|error| error.to_string())?;
+    emit_arbitrage_scanner_progress(&app, &initial_progress);
+
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let progress_connection = match open_market_observatory_database(&worker_app) {
+            Ok(connection) => connection,
+            Err(_) => return,
+        };
+        let emit_progress = |progress: ArbitrageScannerProgress, connection: &Connection, app: &tauri::AppHandle| {
+            let _ = persist_arbitrage_scanner_progress(connection, &progress);
+            emit_arbitrage_scanner_progress(app, &progress);
+        };
+
+        let run_result = build_arbitrage_scanner_inner(worker_app.clone(), |progress| {
+            emit_progress(progress, &progress_connection, &worker_app);
+        });
+
+        match run_result {
+            Ok(response) => {
+                let _ = persist_arbitrage_scanner_cache(&progress_connection, &response);
+                let progress = ArbitrageScannerProgress {
+                    scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+                    status: "success".to_string(),
+                    progress_value: 100.0,
+                    stage_label: "Complete".to_string(),
+                    status_text: format!(
+                        "Scanned {} sets and found {} positive opportunities.",
+                        response.scanned_set_count,
+                        response.opportunity_count
+                    ),
+                    updated_at: response.computed_at.clone(),
+                    started_at: Some(started_at.clone()),
+                    last_completed_at: Some(response.computed_at.clone()),
+                    last_error: None,
+                };
+                emit_progress(progress, &progress_connection, &worker_app);
+            }
+            Err(error) => {
+                let updated_at = format_timestamp(now_utc()).unwrap_or_else(|_| started_at.clone());
+                let progress = ArbitrageScannerProgress {
+                    scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+                    status: "error".to_string(),
+                    progress_value: current_state.progress.progress_value,
+                    stage_label: "Failed".to_string(),
+                    status_text: "Arbitrage scan failed.".to_string(),
+                    updated_at,
+                    started_at: Some(started_at.clone()),
+                    last_completed_at: current_state.progress.last_completed_at.clone(),
+                    last_error: Some(error.to_string()),
+                };
+                emit_progress(progress, &progress_connection, &worker_app);
+            }
+        }
+    });
+
+    Ok(true)
 }
 
 #[cfg(test)]

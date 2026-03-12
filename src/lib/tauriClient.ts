@@ -4,6 +4,8 @@
  */
 
 import type {
+  ArbitrageScannerProgress,
+  ArbitrageScannerState,
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
   ArbitrageScannerResponse,
@@ -342,6 +344,14 @@ export async function getArbitrageScanner(): Promise<ArbitrageScannerResponse> {
   return invoke<ArbitrageScannerResponse>('get_arbitrage_scanner');
 }
 
+export async function getArbitrageScannerState(): Promise<ArbitrageScannerState> {
+  return invoke<ArbitrageScannerState>('get_arbitrage_scanner_state');
+}
+
+export async function startArbitrageScanner(): Promise<boolean> {
+  return invoke<boolean>('start_arbitrage_scanner');
+}
+
 export async function initializeAppCatalog(): Promise<StartupSummary> {
   return invoke<StartupSummary>('initialize_app_catalog');
 }
@@ -366,6 +376,19 @@ export async function listenToStartupProgress(
 
   const { listen } = await import('@tauri-apps/api/event');
   return listen<StartupProgress>('startup-progress', (event) => {
+    onProgress(event.payload);
+  });
+}
+
+export async function listenToArbitrageScannerProgress(
+  onProgress: (progress: ArbitrageScannerProgress) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<ArbitrageScannerProgress>('arbitrage-scanner-progress', (event) => {
     onProgress(event.payload);
   });
 }
