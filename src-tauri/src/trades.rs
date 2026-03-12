@@ -223,24 +223,6 @@ fn normalize_status_command(value: &str) -> Result<&'static str> {
     }
 }
 
-fn normalize_server_status(value: &str) -> &'static str {
-    match value.trim().to_lowercase().as_str() {
-        "in_game" | "ingame" => "ingame",
-        "online" => "online",
-        "invisible" | "offline" => "offline",
-        _ => "offline",
-    }
-}
-
-fn desired_status_matches_account(desired_status: &str, account_status: &str) -> bool {
-    match desired_status {
-        "invisible" => normalize_server_status(account_status) == "offline",
-        "online" => normalize_server_status(account_status) == "online",
-        "in_game" => normalize_server_status(account_status) == "ingame",
-        _ => false,
-    }
-}
-
 fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
     match seller_mode {
         "ingame-online" => matches!(status, Some("ingame" | "in_game" | "online")),
@@ -477,6 +459,104 @@ async fn fetch_me_with_token_async(token: String) -> Result<TradeAccountSummary>
     })
     .await
     .map_err(|error| anyhow!("failed to join WFM profile refresh task: {error}"))?
+}
+
+fn parse_status_from_payload(payload: &Value) -> Option<String> {
+    payload
+        .get("status")
+        .and_then(Value::as_str)
+        .map(normalize_status_label)
+}
+
+async fn connect_wfm_websocket(
+    token: &str,
+    device_id: &str,
+) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
+    let mut request = WFM_WS_URL
+        .into_client_request()
+        .context("failed to build WFM websocket request")?;
+    let headers = request.headers_mut();
+    headers.append("Sec-WebSocket-Protocol", "wfm".parse().unwrap());
+    headers.append("User-Agent", WFM_USER_AGENT.parse().unwrap());
+
+    let (mut ws_stream, _) = timeout(Duration::from_secs(10), connect_async(request))
+        .await
+        .context("timed out while connecting to WFM websocket")?
+        .context("failed to connect to WFM websocket")?;
+
+    let auth_request_id = uuid::Uuid::new_v4().to_string();
+    let auth_message = WfmWsMessage {
+        route: "@wfm|cmd/auth/signIn".to_string(),
+        payload: Some(json!({
+            "token": token,
+            "deviceId": device_id,
+        })),
+        id: Some(auth_request_id),
+        ref_id: None,
+    };
+
+    ws_stream
+        .send(Message::Text(
+            serde_json::to_string(&auth_message)
+                .context("failed to serialize websocket auth message")?
+                .into(),
+        ))
+        .await
+        .context("failed to send websocket auth message")?;
+
+    Ok(ws_stream)
+}
+
+async fn fetch_current_trade_status_ws(token: &str, device_id: &str) -> Result<String> {
+    let mut ws_stream = connect_wfm_websocket(token, device_id).await?;
+    let mut authenticated = false;
+
+    timeout(Duration::from_secs(10), async {
+        while let Some(message) = ws_stream.next().await {
+            let message = message.context("failed to read WFM websocket message")?;
+            let Message::Text(text) = message else {
+                continue;
+            };
+
+            let payload = serde_json::from_str::<WfmWsMessage>(&text)
+                .context("failed to parse WFM websocket payload")?;
+            let route = payload
+                .route
+                .split('|')
+                .nth(1)
+                .unwrap_or(payload.route.as_str())
+                .to_string();
+
+            if !authenticated {
+                if route == "cmd/auth/signIn:ok" {
+                    authenticated = true;
+                    continue;
+                }
+
+                if route == "cmd/auth/signIn:error" {
+                    let reason = payload
+                        .payload
+                        .as_ref()
+                        .and_then(|value| value.get("reason"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("websocket authentication failed");
+                    return Err(anyhow!(reason.to_string()));
+                }
+
+                continue;
+            }
+
+            if route == "event/status/set" {
+                if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload) {
+                    return Ok(status);
+                }
+            }
+        }
+
+        Err(anyhow!("presence status was not emitted by WFM"))
+    })
+    .await
+    .context("timed out while waiting for WFM presence state")?
 }
 
 fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
@@ -840,41 +920,11 @@ async fn update_trade_status_inner(
 ) -> Result<TradeSessionState> {
     let session = ensure_authenticated_session(&app)?;
     let desired_status = normalize_status_command(&input.status)?;
-
-    let mut request = WFM_WS_URL
-        .into_client_request()
-        .context("failed to build WFM websocket request")?;
-    let headers = request.headers_mut();
-    headers.append("Sec-WebSocket-Protocol", "wfm".parse().unwrap());
-    headers.append("User-Agent", WFM_USER_AGENT.parse().unwrap());
-
-    let (mut ws_stream, _) = timeout(Duration::from_secs(10), connect_async(request))
-        .await
-        .context("timed out while connecting to WFM websocket")?
-        .context("failed to connect to WFM websocket")?;
-
-    let auth_request_id = uuid::Uuid::new_v4().to_string();
-    let auth_message = WfmWsMessage {
-        route: "@wfm|cmd/auth/signIn".to_string(),
-        payload: Some(json!({
-            "token": session.token,
-            "deviceId": session.device_id,
-        })),
-        id: Some(auth_request_id.clone()),
-        ref_id: None,
-    };
-
-    ws_stream
-        .send(Message::Text(
-            serde_json::to_string(&auth_message)
-                .context("failed to serialize websocket auth message")?
-                .into(),
-        ))
-        .await
-        .context("failed to send websocket auth message")?;
+    let mut ws_stream = connect_wfm_websocket(&session.token, &session.device_id).await?;
 
     let mut authenticated = false;
     let mut status_updated = false;
+    let mut server_status: Option<String> = None;
     let status_request_id = uuid::Uuid::new_v4().to_string();
 
     let websocket_result: Result<()> = timeout(Duration::from_secs(10), async {
@@ -895,7 +945,6 @@ async fn update_trade_status_inner(
 
             if !authenticated {
                 if route == "cmd/auth/signIn:ok"
-                    || payload.ref_id.as_deref() == Some(auth_request_id.as_str())
                 {
                     authenticated = true;
                     let status_message = WfmWsMessage {
@@ -940,6 +989,9 @@ async fn update_trade_status_inner(
             }
 
             if route == "cmd/status/set:ok" || payload.ref_id.as_deref() == Some(status_request_id.as_str()) {
+                if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload) {
+                    server_status = Some(status);
+                }
                 status_updated = true;
                 break;
             }
@@ -954,6 +1006,7 @@ async fn update_trade_status_inner(
                     .and_then(Value::as_str)
                     == Some(desired_status)
             {
+                server_status = payload.payload.as_ref().and_then(parse_status_from_payload);
                 status_updated = true;
                 break;
             }
@@ -970,15 +1023,12 @@ async fn update_trade_status_inner(
         return Err(anyhow!("status update did not complete"));
     }
 
-    // Refresh until the server reports the status we just requested, but fall back
-    // to the server's current view instead of inventing a local optimistic state.
     let mut latest_account = fetch_me_with_token_async(session.token.clone()).await?;
-    for _attempt in 0..5 {
-        if desired_status_matches_account(desired_status, &latest_account.status) {
-            break;
-        }
-        sleep(Duration::from_millis(350)).await;
-        latest_account = fetch_me_with_token_async(session.token.clone()).await?;
+    if let Some(status) = server_status {
+        latest_account.status = status;
+    } else {
+        sleep(Duration::from_millis(250)).await;
+        latest_account.status = fetch_current_trade_status_ws(&session.token, &session.device_id).await?;
     }
 
     let updated_session = StoredTradeSession {
@@ -995,21 +1045,35 @@ async fn update_trade_status_inner(
 
 #[tauri::command]
 pub async fn get_wfm_trade_session_state(app: tauri::AppHandle) -> Result<TradeSessionState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        match ensure_authenticated_session(&app) {
-            Ok(session) => Ok(TradeSessionState {
-                connected: true,
-                account: Some(session.account),
-            }),
-            Err(_) => Ok(TradeSessionState {
-                connected: false,
-                account: None,
-            }),
-        }
+    let maybe_session = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || ensure_authenticated_session(&app)
     })
     .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error: anyhow::Error| error.to_string())
+    .map_err(|error| error.to_string())?;
+
+    match maybe_session {
+        Ok(mut session) => {
+            if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
+                session.account.status = status;
+                let _ = tauri::async_runtime::spawn_blocking({
+                    let app = app.clone();
+                    let session = session.clone();
+                    move || save_session(&app, &session)
+                })
+                .await;
+            }
+
+            Ok(TradeSessionState {
+                connected: true,
+                account: Some(session.account),
+            })
+        }
+        Err(_) => Ok(TradeSessionState {
+            connected: false,
+            account: None,
+        }),
+    }
 }
 
 #[tauri::command]
@@ -1017,17 +1081,34 @@ pub async fn sign_in_wfm_trade_account(
     app: tauri::AppHandle,
     input: TradeSignInInput,
 ) -> Result<TradeSessionState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let session = sign_in_inner(&input)?;
-        save_session(&app, &session)?;
-        Ok(TradeSessionState {
-            connected: true,
-            account: Some(session.account),
-        })
+    let mut session = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || {
+            let session = sign_in_inner(&input)?;
+            save_session(&app, &session)?;
+            Ok::<StoredTradeSession, anyhow::Error>(session)
+        }
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error: anyhow::Error| error.to_string())
+    .map_err(|error: anyhow::Error| error.to_string())?;
+
+    if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
+        session.account.status = status;
+        tauri::async_runtime::spawn_blocking({
+            let app = app.clone();
+            let session = session.clone();
+            move || save_session(&app, &session)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error: anyhow::Error| error.to_string())?;
+    }
+
+    Ok(TradeSessionState {
+        connected: true,
+        account: Some(session.account),
+    })
 }
 
 #[tauri::command]
@@ -1118,7 +1199,8 @@ pub async fn update_wfm_trade_status(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_avatar_url;
+    use super::{normalize_avatar_url, parse_status_from_payload};
+    use serde_json::json;
 
     #[test]
     fn normalizes_relative_avatar_path_to_static_assets_host() {
@@ -1131,6 +1213,22 @@ mod tests {
             Some(
                 "https://warframe.market/static/assets/user/avatar/663d477c0f86de000ab5026a.png?abc123"
             )
+        );
+    }
+
+    #[test]
+    fn parses_presence_status_from_websocket_payload() {
+        assert_eq!(
+            parse_status_from_payload(&json!({ "status": "in_game" })).as_deref(),
+            Some("ingame")
+        );
+        assert_eq!(
+            parse_status_from_payload(&json!({ "status": "online" })).as_deref(),
+            Some("online")
+        );
+        assert_eq!(
+            parse_status_from_payload(&json!({ "status": "invisible" })).as_deref(),
+            Some("offline")
         );
     }
 }
