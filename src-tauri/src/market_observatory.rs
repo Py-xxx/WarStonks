@@ -3706,7 +3706,20 @@ fn load_drop_sources(
             .or_insert(source);
     }
 
-    Ok(deduped.into_values().take(10).collect())
+    let mut deduped_sources = deduped.into_values().collect::<Vec<_>>();
+    deduped_sources.sort_by(|left, right| {
+        let left_chance = left.chance.unwrap_or(-1.0);
+        let right_chance = right.chance.unwrap_or(-1.0);
+
+        right_chance
+            .partial_cmp(&left_chance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.location.cmp(&right.location))
+            .then_with(|| left.rarity.cmp(&right.rarity))
+            .then_with(|| left.source_type.cmp(&right.source_type))
+    });
+
+    Ok(deduped_sources.into_iter().take(12).collect())
 }
 
 fn build_trend_quality_breakdown(points: &[AnalyticsChartPoint]) -> TrendQualityBreakdown {
