@@ -4422,6 +4422,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "time",
+ "tokio",
  "tokio-tungstenite",
  "uuid",
  "webbrowser",
