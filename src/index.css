@@ -3531,6 +3531,79 @@ body {
   min-height: 120px;
 }
 
+.scanner-progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scanner-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scanner-progress-track {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.scanner-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 2px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(74, 158, 255, 0.72), rgba(89, 225, 193, 0.82));
+  box-shadow: 0 0 22px rgba(74, 158, 255, 0.24);
+  transition: width 180ms ease;
+}
+
+.scanner-progress-copy {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.scanner-start-button {
+  align-self: flex-start;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(74, 158, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(74, 158, 255, 0.1);
+  color: var(--accent-blue);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.scanner-start-button:hover {
+  background: rgba(74, 158, 255, 0.16);
+  border-color: rgba(74, 158, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.scanner-start-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
 .scanner-results-list {
   display: flex;
   flex-direction: column;

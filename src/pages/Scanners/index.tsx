@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react';
-import { getArbitrageScanner } from '../../lib/tauriClient';
+import {
+  getArbitrageScannerState,
+  listenToArbitrageScannerProgress,
+  startArbitrageScanner,
+} from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import type {
   ArbitrageScannerComponentEntry,
-  ArbitrageScannerResponse,
+  ArbitrageScannerProgress,
   ArbitrageScannerSetEntry,
+  ArbitrageScannerResponse,
 } from '../../types';
 
 type ScannerTab = 'arbitrage' | 'relic-roi';
@@ -147,7 +152,7 @@ function ArbitrageCard({ entry, index }: { entry: ArbitrageScannerSetEntry; inde
 export function ScannersPage() {
   const [activeTab, setActiveTab] = useState<ScannerTab>('arbitrage');
   const [arbitrage, setArbitrage] = useState<ArbitrageScannerResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -157,46 +162,66 @@ export function ScannersPage() {
 
     let cancelled = false;
 
-    const load = async () => {
-      setLoading(true);
-      setErrorMessage(null);
-
+    const loadState = async () => {
       try {
-        const response = await getArbitrageScanner();
+        const response = await getArbitrageScannerState();
         if (cancelled) {
           return;
         }
-        setArbitrage(response);
+        setArbitrage(response.latestScan);
+        setProgress(response.progress);
+        setErrorMessage(response.progress.status === 'error' ? response.progress.lastError : null);
       } catch (error) {
         if (cancelled) {
           return;
         }
         setErrorMessage(error instanceof Error ? error.message : String(error));
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
       }
     };
 
-    void load();
+    void loadState();
+
+    let unsubscribe: () => void = () => {};
+    void listenToArbitrageScannerProgress((nextProgress) => {
+      if (cancelled) {
+        return;
+      }
+
+      setProgress(nextProgress);
+      if (nextProgress.status === 'error') {
+        setErrorMessage(nextProgress.lastError ?? 'Arbitrage scan failed.');
+      } else {
+        setErrorMessage(null);
+      }
+
+      if (nextProgress.status === 'success' || nextProgress.status === 'error') {
+        void loadState();
+      }
+    }).then((cleanup) => {
+      unsubscribe = cleanup;
+    });
 
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [activeTab]);
 
-  const refreshArbitrage = async () => {
-    setLoading(true);
+  const runArbitrageScan = async () => {
     setErrorMessage(null);
     try {
-      setArbitrage(await getArbitrageScanner());
+      const started = await startArbitrageScanner();
+      if (!started) {
+        setErrorMessage('Arbitrage scan is already running.');
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
     }
   };
+
+  const isRunning = progress?.status === 'running';
+  const hasSavedScan = Boolean(arbitrage);
+  const actionLabel = hasSavedScan ? 'Rescan' : 'Start Scan';
 
   return (
     <>
@@ -226,11 +251,11 @@ export function ScannersPage() {
               className="market-refresh-button"
               type="button"
               onClick={() => {
-                void refreshArbitrage();
+                void runArbitrageScan();
               }}
-              disabled={loading}
+              disabled={isRunning}
             >
-              Refresh
+              {isRunning ? 'Scanning…' : actionLabel}
             </button>
           </div>
         ) : null}
@@ -280,23 +305,44 @@ export function ScannersPage() {
                     achieved-price zones. No live orderbook requests are used in the scan.
                   </p>
                 </div>
-                {arbitrage ? (
+                {progress ? (
                   <div className="market-panel-header-aside">
                     <span className="market-panel-badge tone-neutral">
-                      Updated {new Date(arbitrage.computedAt).toLocaleString()}
+                      {progress.status === 'running'
+                        ? `${progress.stageLabel} · ${Math.round(progress.progressValue)}%`
+                        : progress.lastCompletedAt
+                          ? `Updated ${new Date(progress.lastCompletedAt).toLocaleString()}`
+                          : 'No saved scan'}
                     </span>
                   </div>
                 ) : null}
               </div>
-              {loading ? (
-                <div className="market-panel-overlay">
-                  <div className="market-panel-spinner" />
-                  <div className="market-panel-overlay-copy">
-                    <strong>Running arbitrage scan</strong>
-                    <span>Refreshing cached set maps and statistics, then scoring all sets.</span>
-                  </div>
+              <div className="scanner-progress-block">
+                <div className="scanner-progress-meta">
+                  <span>{progress?.stageLabel ?? 'Ready'}</span>
+                  <span>{Math.round(progress?.progressValue ?? 0)}%</span>
                 </div>
-              ) : null}
+                <div className="scanner-progress-track">
+                  <div
+                    className="scanner-progress-fill"
+                    style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
+                  />
+                </div>
+                <p className="scanner-progress-copy">
+                  {progress?.statusText ?? 'No saved arbitrage scan yet. Start a scan to cache the results.'}
+                </p>
+                {!hasSavedScan && !isRunning ? (
+                  <button
+                    className="scanner-start-button"
+                    type="button"
+                    onClick={() => {
+                      void runArbitrageScan();
+                    }}
+                  >
+                    Start Scan
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             {errorMessage ? (
@@ -315,6 +361,10 @@ export function ScannersPage() {
                 {arbitrage.results.map((entry, index) => (
                   <ArbitrageCard key={entry.slug} entry={entry} index={index} />
                 ))}
+              </div>
+            ) : !isRunning ? (
+              <div className="scanners-empty-state">
+                No cached arbitrage scan yet. Start a scan to build and save the first result set.
               </div>
             ) : null}
           </div>
