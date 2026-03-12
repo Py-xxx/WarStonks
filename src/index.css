@@ -547,6 +547,12 @@ body {
   border-color: rgba(74, 158, 255, 0.3);
   background: rgba(30, 36, 48, 0.92);
 }
+.trade-connected-separator {
+  color: var(--text-muted);
+}
+.trade-connected-status {
+  font-weight: 600;
+}
 .trade-menu-wrap {
   position: relative;
 }
@@ -1401,6 +1407,12 @@ body {
 .badge-purple { background: rgba(139,111,255,0.15);color: var(--accent-purple); }
 .badge-muted  { background: var(--bg-elevated);     color: var(--text-muted); }
 .badge-blue   { background: rgba(74,158,255,0.15);  color: var(--accent-blue); }
+.trade-status-offline { color: var(--text-muted); }
+.badge.trade-status-offline { background: var(--bg-elevated); color: var(--text-muted); }
+.trade-status-online { color: var(--accent-green); }
+.badge.trade-status-online { background: rgba(61,214,140,0.15); color: var(--accent-green); }
+.trade-status-ingame { color: var(--accent-purple); }
+.badge.trade-status-ingame { background: rgba(139,111,255,0.15); color: var(--accent-purple); }
 
 /* ── BUTTONS ── */
 .text-btn {

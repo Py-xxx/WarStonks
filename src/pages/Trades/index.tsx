@@ -8,7 +8,7 @@ import {
   updateWfmSellOrder,
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
-import { formatPlatinumValue, formatTradeStatusLabel } from '../../lib/trades';
+import { formatPlatinumValue, formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
@@ -642,7 +642,7 @@ function SellOrdersTab() {
           <div className="trade-hero-copy">
             <div className="trade-hero-title-row">
               <h2 className="trade-hero-title">{tradeAccount.name}</h2>
-              <span className={`badge ${tradeAccount.status === 'ingame' ? 'badge-green' : tradeAccount.status === 'online' ? 'badge-blue' : 'badge-muted'}`}>
+              <span className={`badge ${getTradeStatusToneClass(tradeAccount.status)}`}>
                 {formatTradeStatusLabel(tradeAccount.status)}
               </span>
             </div>

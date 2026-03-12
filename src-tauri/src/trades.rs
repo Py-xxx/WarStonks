@@ -1023,13 +1023,18 @@ async fn update_trade_status_inner(
         return Err(anyhow!("status update did not complete"));
     }
 
-    let mut latest_account = fetch_me_with_token_async(session.token.clone()).await?;
-    if let Some(status) = server_status {
-        latest_account.status = status;
+    let mut latest_account = session.account.clone();
+    if let Ok(profile_account) = fetch_me_with_token_async(session.token.clone()).await {
+        latest_account = profile_account;
+    }
+
+    latest_account.status = if let Some(status) = server_status {
+        status
     } else {
         sleep(Duration::from_millis(250)).await;
-        latest_account.status = fetch_current_trade_status_ws(&session.token, &session.device_id).await?;
-    }
+        fetch_current_trade_status_ws(&session.token, &session.device_id).await?
+    };
+    latest_account.last_updated_at = format_timestamp(now_utc())?;
 
     let updated_session = StoredTradeSession {
         account: latest_account.clone(),
