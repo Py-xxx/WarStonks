@@ -661,7 +661,7 @@ fn create_sell_order_inner(
     }
 
     let mut payload = json!({
-        "item_id": input.wfm_id,
+        "itemId": input.wfm_id,
         "type": "sell",
         "platinum": input.price,
         "quantity": input.quantity,
