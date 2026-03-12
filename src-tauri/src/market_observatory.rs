@@ -5745,7 +5745,7 @@ fn build_relic_roi_entry(
     catalog_connection: &Connection,
     relic_root: &RelicRootCatalogRecord,
     observatory_connection: &Connection,
-    price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
+    shared_price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
     refreshed_statistics_count: &mut usize,
 ) -> Result<Option<RelicRoiEntry>> {
     let mut drops = load_relic_reward_profiles(catalog_connection, relic_root.item_id)?;
@@ -5755,7 +5755,7 @@ fn build_relic_roi_entry(
 
     let relic_model = get_or_build_scanner_price_model(
         observatory_connection,
-        price_model_cache,
+        shared_price_model_cache,
         relic_root.item_id,
         &relic_root.slug,
         refreshed_statistics_count,
@@ -5769,7 +5769,7 @@ fn build_relic_roi_entry(
         let reward_model = match drop.item_id {
             Some(reward_item_id) => get_or_build_scanner_price_model(
                 observatory_connection,
-                price_model_cache,
+                shared_price_model_cache,
                 reward_item_id,
                 &drop.slug,
                 refreshed_statistics_count,
@@ -5912,7 +5912,8 @@ fn build_arbitrage_scanner_inner(
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
     let mut results = Vec::new();
-    let mut price_model_cache = HashMap::<i64, Option<ScannerPriceModel>>::new();
+    // Shared across Arbitrage and Relic ROI so each prime item price model is derived once per scan run.
+    let mut shared_price_model_cache = HashMap::<i64, Option<ScannerPriceModel>>::new();
     let mut was_stopped = false;
 
     on_progress(ArbitrageScannerProgress {
@@ -5967,7 +5968,7 @@ fn build_arbitrage_scanner_inner(
 
         let set_model = get_or_build_scanner_price_model(
             &observatory_connection,
-            &mut price_model_cache,
+            &mut shared_price_model_cache,
             set_root.item_id,
             &set_root.slug,
             &mut refreshed_statistics_count,
@@ -5978,7 +5979,7 @@ fn build_arbitrage_scanner_inner(
             let model = if let Some(component_item_id) = component.component_item_id {
                 get_or_build_scanner_price_model(
                     &observatory_connection,
-                    &mut price_model_cache,
+                    &mut shared_price_model_cache,
                     component_item_id,
                     &component.component_slug,
                     &mut refreshed_statistics_count,
@@ -6033,7 +6034,7 @@ fn build_arbitrage_scanner_inner(
                 &catalog_connection,
                 relic_root,
                 &observatory_connection,
-                &mut price_model_cache,
+                &mut shared_price_model_cache,
                 &mut refreshed_statistics_count,
             )? {
                 relic_entries.push(entry);
@@ -7647,5 +7648,40 @@ mod tests {
     fn relic_roi_expected_value_uses_percent_chance() {
         let expected_contribution = super::normalized_relic_chance(20.0) * 50.0;
         assert!((expected_contribution - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn scanner_price_model_cache_reuses_existing_prime_item_model() {
+        let connection = Connection::open_in_memory().expect("in-memory connection");
+        let cached_model = Some(super::ScannerPriceModel {
+            entry_low: Some(12.0),
+            entry_high: Some(14.0),
+            recommended_entry_price: Some(13.0),
+            exit_low: Some(18.0),
+            exit_high: Some(20.0),
+            recommended_exit_price: Some(19.0),
+            current_stats_price: Some(12.0),
+            liquidity_score: 61.0,
+            sale_state: "Healthy".to_string(),
+            confidence_summary: super::build_confidence_summary("high", Vec::new()),
+        });
+        let mut shared_price_model_cache = std::collections::HashMap::new();
+        shared_price_model_cache.insert(42_i64, cached_model.clone());
+        let mut refreshed_statistics_count = 0usize;
+
+        let reused = super::get_or_build_scanner_price_model(
+            &connection,
+            &mut shared_price_model_cache,
+            42,
+            "example_prime_part",
+            &mut refreshed_statistics_count,
+        )
+        .expect("cached model should resolve");
+
+        assert_eq!(
+            reused.as_ref().and_then(|entry| entry.recommended_exit_price),
+            cached_model.as_ref().and_then(|entry| entry.recommended_exit_price)
+        );
+        assert_eq!(refreshed_statistics_count, 0);
     }
 }
