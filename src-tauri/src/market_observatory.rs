@@ -767,18 +767,6 @@ struct RelicRootCatalogRecord {
 }
 
 #[derive(Debug, Clone)]
-struct RelicDropSourceRecord {
-    relic_item_id: i64,
-    reward_item_id: Option<i64>,
-    reward_slug: String,
-    reward_name: String,
-    reward_image_path: Option<String>,
-    rarity: Option<String>,
-    refinement_key: String,
-    chance: f64,
-}
-
-#[derive(Debug, Clone)]
 struct ScannerPriceModel {
     entry_low: Option<f64>,
     entry_high: Option<f64>,
@@ -876,6 +864,33 @@ struct WfmStatisticsRowApi {
     order_type: Option<String>,
     #[serde(default)]
     mod_rank: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfstatRelicRewardApi {
+    #[serde(default)]
+    chance: Option<f64>,
+    #[serde(default)]
+    rarity: Option<String>,
+    #[serde(default)]
+    item: Option<WfstatRelicRewardItemApi>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfstatRelicRewardItemApi {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    warframe_market: Option<WfstatRelicRewardMarketApi>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfstatRelicRewardMarketApi {
+    #[serde(default)]
+    url_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -4711,94 +4726,6 @@ fn all_relic_refinement_keys() -> [&'static str; 4] {
     ]
 }
 
-fn parse_relic_location(location: &str) -> Option<(String, &'static str)> {
-    let trimmed = location.trim();
-    if !trimmed.contains("Relic") {
-        return None;
-    }
-
-    let suffixes = [
-        (" (Exceptional)", RELIC_REFINEMENT_EXCEPTIONAL),
-        (" (Flawless)", RELIC_REFINEMENT_FLAWLESS),
-        (" (Radiant)", RELIC_REFINEMENT_RADIANT),
-    ];
-
-    for (suffix, refinement_key) in suffixes {
-        if let Some(base_name) = trimmed.strip_suffix(suffix) {
-            return Some((base_name.trim().to_string(), refinement_key));
-        }
-    }
-
-    Some((trimmed.to_string(), RELIC_REFINEMENT_INTACT))
-}
-
-fn load_relic_drop_sources(
-    connection: &Connection,
-    relic_roots: &[RelicRootCatalogRecord],
-) -> Result<Vec<RelicDropSourceRecord>> {
-    let relic_root_by_name = relic_roots
-        .iter()
-        .map(|entry| (entry.name.clone(), entry.clone()))
-        .collect::<HashMap<_, _>>();
-    let mut statement = connection.prepare(
-        "SELECT DISTINCT
-           reward.item_id,
-           items.wfm_slug,
-           items.preferred_name,
-           COALESCE(items.preferred_image, w.thumb, w.icon) AS image_path,
-           drops.location,
-           drops.chance,
-           drops.rarity
-         FROM wfstat_item_drops drops
-         JOIN wfstat_items reward ON reward.wfstat_unique_name = drops.wfstat_unique_name
-         JOIN items ON items.item_id = reward.item_id
-         LEFT JOIN wfm_items w ON w.item_id = items.item_id
-         WHERE drops.location LIKE '%Relic%'
-           AND items.preferred_name LIKE '%Prime%'
-           AND items.wfm_slug IS NOT NULL
-         ORDER BY drops.location ASC, items.preferred_name ASC",
-    )?;
-
-    let rows = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, Option<i64>>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, Option<f64>>(5)?,
-            row.get::<_, Option<String>>(6)?,
-        ))
-    })?;
-
-    let mut records = Vec::new();
-    for row in rows {
-        let (reward_item_id, reward_slug, reward_name, reward_image_path, location, chance, rarity) = row?;
-        let Some(chance) = chance else {
-            continue;
-        };
-        let Some((relic_name, refinement_key)) = parse_relic_location(&location) else {
-            continue;
-        };
-        let Some(relic_root) = relic_root_by_name.get(&relic_name) else {
-            continue;
-        };
-
-        records.push(RelicDropSourceRecord {
-            relic_item_id: relic_root.item_id,
-            reward_item_id,
-            reward_slug,
-            reward_name,
-            reward_image_path,
-            rarity,
-            refinement_key: refinement_key.to_string(),
-            chance,
-        });
-    }
-
-    Ok(records)
-}
-
 fn load_cached_set_components(
     connection: &Connection,
     set_slug: &str,
@@ -5682,6 +5609,108 @@ fn chance_for_refinement(
     }
 }
 
+fn load_relic_reward_profiles(
+    catalog_connection: &Connection,
+    relic_item_id: i64,
+) -> Result<Vec<RelicRoiDropEntry>> {
+    let mut statement = catalog_connection.prepare(
+        "SELECT variant_value, raw_json
+         FROM wfstat_items
+         WHERE item_id = ?1
+           AND variant_kind = 'relic_refinement'
+         ORDER BY variant_rank ASC, variant_value ASC",
+    )?;
+
+    let rows = statement.query_map(params![relic_item_id], |row| {
+        Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, String>(1)?,
+        ))
+    })?;
+
+    let mut reward_map = BTreeMap::<String, RelicRoiDropEntry>::new();
+    for row in rows {
+        let (variant_value, raw_json) = row?;
+        let refinement_key = match variant_value
+            .as_deref()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("exceptional") => RELIC_REFINEMENT_EXCEPTIONAL,
+            Some("flawless") => RELIC_REFINEMENT_FLAWLESS,
+            Some("radiant") => RELIC_REFINEMENT_RADIANT,
+            _ => RELIC_REFINEMENT_INTACT,
+        };
+
+        let payload = serde_json::from_str::<serde_json::Value>(&raw_json)
+            .context("failed to parse wfstat relic raw json")?;
+        let rewards = payload
+            .get("rewards")
+            .and_then(|value| serde_json::from_value::<Vec<WfstatRelicRewardApi>>(value.clone()).ok())
+            .unwrap_or_default();
+
+        for reward in rewards {
+            let Some(item) = reward.item else {
+                continue;
+            };
+            let reward_name = item.name.unwrap_or_default();
+            let reward_slug = item
+                .warframe_market
+                .as_ref()
+                .and_then(|entry| entry.url_name.clone());
+            let Some(reward_slug) = reward_slug else {
+                continue;
+            };
+
+            let item_id = resolve_item_id_by_slug(catalog_connection, &reward_slug)?;
+            let image_path = item_id
+                .and_then(|resolved_item_id| {
+                    catalog_connection
+                        .query_row(
+                            "SELECT preferred_image
+                             FROM items
+                             WHERE item_id = ?1",
+                            params![resolved_item_id],
+                            |row| row.get::<_, Option<String>>(0),
+                        )
+                        .optional()
+                        .ok()
+                        .flatten()
+                        .flatten()
+                });
+
+            let entry = reward_map
+                .entry(reward_slug.clone())
+                .or_insert_with(|| RelicRoiDropEntry {
+                    item_id,
+                    slug: reward_slug.clone(),
+                    name: reward_name.clone(),
+                    image_path,
+                    rarity: reward.rarity.clone(),
+                    chance_profile: RelicRefinementChanceProfile::default(),
+                    recommended_exit_low: None,
+                    recommended_exit_high: None,
+                    recommended_exit_price: None,
+                    current_stats_price: None,
+                    liquidity_score: 20.0,
+                    confidence_summary: build_confidence_summary("low", vec!["Missing stats".to_string()]),
+                });
+
+            match refinement_key {
+                RELIC_REFINEMENT_EXCEPTIONAL => entry.chance_profile.exceptional = reward.chance,
+                RELIC_REFINEMENT_FLAWLESS => entry.chance_profile.flawless = reward.chance,
+                RELIC_REFINEMENT_RADIANT => entry.chance_profile.radiant = reward.chance,
+                _ => entry.chance_profile.intact = reward.chance,
+            }
+            if entry.rarity.is_none() {
+                entry.rarity = reward.rarity.clone();
+            }
+        }
+    }
+
+    Ok(reward_map.into_values().collect())
+}
+
 fn build_relic_roi_score(
     net_profit: Option<f64>,
     roi_pct: Option<f64>,
@@ -5709,13 +5738,14 @@ fn build_relic_roi_note(
 }
 
 fn build_relic_roi_entry(
+    catalog_connection: &Connection,
     relic_root: &RelicRootCatalogRecord,
-    source_records: &[&RelicDropSourceRecord],
     observatory_connection: &Connection,
     price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
     refreshed_statistics_count: &mut usize,
 ) -> Result<Option<RelicRoiEntry>> {
-    if source_records.is_empty() {
+    let mut drops = load_relic_reward_profiles(catalog_connection, relic_root.item_id)?;
+    if drops.is_empty() {
         return Ok(None);
     }
 
@@ -5730,60 +5760,28 @@ fn build_relic_roi_entry(
         .as_ref()
         .and_then(|entry| entry.current_stats_price.or(entry.recommended_entry_price));
 
-    let mut reward_groups = BTreeMap::<String, Vec<&RelicDropSourceRecord>>::new();
-    for source in source_records {
-        reward_groups
-            .entry(source.reward_slug.clone())
-            .or_default()
-            .push(*source);
-    }
-
-    let mut drops = Vec::new();
     let mut entry_confidence_refs = Vec::new();
-    for records in reward_groups.values() {
-        let Some(first) = records.first() else {
-            continue;
-        };
-        let reward_model = match first.reward_item_id {
+    for drop in &mut drops {
+        let reward_model = match drop.item_id {
             Some(reward_item_id) => get_or_build_scanner_price_model(
                 observatory_connection,
                 price_model_cache,
                 reward_item_id,
-                &first.reward_slug,
+                &drop.slug,
                 refreshed_statistics_count,
             )?,
             None => None,
         };
-
-        let mut chance_profile = RelicRefinementChanceProfile::default();
-        for record in records {
-            match record.refinement_key.as_str() {
-                RELIC_REFINEMENT_EXCEPTIONAL => chance_profile.exceptional = Some(record.chance),
-                RELIC_REFINEMENT_FLAWLESS => chance_profile.flawless = Some(record.chance),
-                RELIC_REFINEMENT_RADIANT => chance_profile.radiant = Some(record.chance),
-                _ => chance_profile.intact = Some(record.chance),
-            }
-        }
-
-        let confidence_summary = reward_model
+        drop.recommended_exit_low = reward_model.as_ref().and_then(|entry| entry.exit_low);
+        drop.recommended_exit_high = reward_model.as_ref().and_then(|entry| entry.exit_high);
+        drop.recommended_exit_price = reward_model.as_ref().and_then(|entry| entry.recommended_exit_price);
+        drop.current_stats_price = reward_model.as_ref().and_then(|entry| entry.current_stats_price);
+        drop.liquidity_score = reward_model.as_ref().map(|entry| entry.liquidity_score).unwrap_or(20.0);
+        drop.confidence_summary = reward_model
             .as_ref()
             .map(|entry| entry.confidence_summary.clone())
             .unwrap_or_else(|| build_confidence_summary("low", vec!["Missing stats".to_string()]));
-        entry_confidence_refs.push(confidence_summary.clone());
-        drops.push(RelicRoiDropEntry {
-            item_id: first.reward_item_id,
-            slug: first.reward_slug.clone(),
-            name: first.reward_name.clone(),
-            image_path: first.reward_image_path.clone(),
-            rarity: first.rarity.clone(),
-            chance_profile,
-            recommended_exit_low: reward_model.as_ref().and_then(|entry| entry.exit_low),
-            recommended_exit_high: reward_model.as_ref().and_then(|entry| entry.exit_high),
-            recommended_exit_price: reward_model.as_ref().and_then(|entry| entry.recommended_exit_price),
-            current_stats_price: reward_model.as_ref().and_then(|entry| entry.current_stats_price),
-            liquidity_score: reward_model.as_ref().map(|entry| entry.liquidity_score).unwrap_or(20.0),
-            confidence_summary,
-        });
+        entry_confidence_refs.push(drop.confidence_summary.clone());
     }
 
     let confidence_refs = entry_confidence_refs.iter().collect::<Vec<_>>();
@@ -5904,7 +5902,6 @@ fn build_arbitrage_scanner_inner(
     let observatory_connection = open_market_observatory_database(&app)?;
     let set_roots = list_set_roots_from_catalog(&catalog_connection)?;
     let relic_roots = list_relic_roots_from_catalog(&catalog_connection)?;
-    let relic_drop_sources = load_relic_drop_sources(&catalog_connection, &relic_roots)?;
     let started_at = format_timestamp(now_utc())?;
     let total_work_items = set_roots.len() + relic_roots.len();
 
@@ -5999,14 +5996,6 @@ fn build_arbitrage_scanner_inner(
     let relic_roi_results = if was_stopped {
         Vec::new()
     } else {
-        let mut grouped_sources = BTreeMap::<i64, Vec<&RelicDropSourceRecord>>::new();
-        for source in &relic_drop_sources {
-            grouped_sources
-                .entry(source.relic_item_id)
-                .or_default()
-                .push(source);
-        }
-
         let mut relic_entries = Vec::new();
         for (index, relic_root) in relic_roots.iter().enumerate() {
             if arbitrage_scanner_stop_requested(&observatory_connection)? {
@@ -6036,12 +6025,9 @@ fn build_arbitrage_scanner_inner(
                 last_completed_at: None,
                 last_error: None,
             });
-            let Some(source_records) = grouped_sources.get(&relic_root.item_id) else {
-                continue;
-            };
             if let Some(entry) = build_relic_roi_entry(
+                &catalog_connection,
                 relic_root,
-                source_records,
                 &observatory_connection,
                 &mut price_model_cache,
                 &mut refreshed_statistics_count,
@@ -6900,7 +6886,7 @@ mod tests {
         build_orderbook_pressure, build_relic_roi_score, build_supply_confidence,
         build_trend_quality_breakdown, chance_for_refinement, compute_pressure_ratio,
         compute_zone_bands, extract_rank_stat_highlights, initialize_market_observatory_schema,
-        insert_statistics_rows_for_domain, normalize_variant_key, parse_relic_location,
+        insert_statistics_rows_for_domain, normalize_variant_key,
         pressure_label, resample_rows, stale_arbitrage_scanner_progress,
         AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey, ArbitrageScannerProgress,
         InternalStatsRow, MarketConfidenceSummary, MarketSnapshot, RelicRefinementChanceProfile,
@@ -7618,19 +7604,6 @@ mod tests {
         assert_eq!(entry.gross_margin, Some(12.0));
         assert_eq!(entry.components[0].quantity_in_set, 2);
         assert!(entry.note.contains("Entry <= Price"));
-    }
-
-    #[test]
-    fn parses_relic_locations_into_base_name_and_refinement() {
-        assert_eq!(
-            parse_relic_location("Axi A1 Relic (Radiant)"),
-            Some(("Axi A1 Relic".to_string(), "radiant")),
-        );
-        assert_eq!(
-            parse_relic_location("Neo N13 Relic"),
-            Some(("Neo N13 Relic".to_string(), "intact")),
-        );
-        assert_eq!(parse_relic_location("Hepit, Void"), None);
     }
 
     #[test]

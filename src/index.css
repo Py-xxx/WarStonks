@@ -3512,6 +3512,29 @@ body {
   min-width: 128px;
 }
 
+.scanner-action-button {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(108, 174, 255, 0.22);
+  background: rgba(12, 19, 33, 0.96);
+  color: #79b8ff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: 140ms ease;
+  flex: 0 0 auto;
+}
+
+.scanner-action-button:hover {
+  border-color: rgba(108, 174, 255, 0.5);
+  background: rgba(17, 28, 46, 0.98);
+  color: #d8ebff;
+  transform: translateY(-1px);
+}
+
 .scanners-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
