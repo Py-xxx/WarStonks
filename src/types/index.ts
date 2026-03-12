@@ -807,13 +807,64 @@ export interface ArbitrageScannerSetEntry {
   components: ArbitrageScannerComponentEntry[];
 }
 
+export interface RelicRefinementChanceProfile {
+  intact: number | null;
+  exceptional: number | null;
+  flawless: number | null;
+  radiant: number | null;
+}
+
+export interface RelicRoiDropEntry {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  rarity: string | null;
+  chanceProfile: RelicRefinementChanceProfile;
+  recommendedExitLow: number | null;
+  recommendedExitHigh: number | null;
+  recommendedExitPrice: number | null;
+  currentStatsPrice: number | null;
+  liquidityScore: number;
+  confidenceSummary: MarketConfidenceSummary;
+}
+
+export interface RelicRoiRefinementSummary {
+  refinementKey: string;
+  refinementLabel: string;
+  relicBuyPrice: number | null;
+  expectedExitValue: number | null;
+  netProfit: number | null;
+  roiPct: number | null;
+  liquidityScore: number;
+  relicRoiScore: number;
+  confidenceSummary: MarketConfidenceSummary;
+  note: string;
+}
+
+export interface RelicRoiEntry {
+  relicItemId: number;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  isUnvaulted: boolean;
+  dropCount: number;
+  confidenceSummary: MarketConfidenceSummary;
+  note: string;
+  refinements: RelicRoiRefinementSummary[];
+  drops: RelicRoiDropEntry[];
+}
+
 export interface ArbitrageScannerResponse {
   computedAt: string;
   scannedSetCount: number;
   opportunityCount: number;
   refreshedSetCount: number;
   refreshedStatisticsCount: number;
+  scannedRelicCount: number;
+  relicOpportunityCount: number;
   results: ArbitrageScannerSetEntry[];
+  relicRoiResults: RelicRoiEntry[];
 }
 
 export interface ArbitrageScannerProgress {

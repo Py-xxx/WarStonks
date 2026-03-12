@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   getArbitrageScannerState,
   listenToArbitrageScannerProgress,
@@ -13,10 +13,21 @@ import type {
   ArbitrageScannerProgress,
   ArbitrageScannerSetEntry,
   ArbitrageScannerResponse,
+  RelicRefinementChanceProfile,
+  RelicRoiDropEntry,
+  RelicRoiEntry,
+  RelicRoiRefinementSummary,
   WfmAutocompleteItem,
 } from '../../types';
 
 type ScannerTab = 'arbitrage' | 'relic-roi';
+type RelicRefinementKey = 'intact' | 'exceptional' | 'flawless' | 'radiant';
+const RELIC_REFINEMENT_OPTIONS: Array<{ key: RelicRefinementKey; label: string }> = [
+  { key: 'intact', label: 'Intact' },
+  { key: 'exceptional', label: 'Exceptional' },
+  { key: 'flawless', label: 'Flawless' },
+  { key: 'radiant', label: 'Radiant' },
+];
 
 function formatPlat(value: number | null): string {
   if (value === null) {
@@ -32,6 +43,21 @@ function formatPercent(value: number | null): string {
   }
 
   return `${Math.round(value)}%`;
+}
+
+function formatChance(value: number | null): string {
+  if (value === null) {
+    return '—';
+  }
+
+  const percent = value * 100;
+  if (percent >= 10) {
+    return `${percent.toFixed(1)}%`;
+  }
+  if (percent >= 1) {
+    return `${percent.toFixed(2)}%`;
+  }
+  return `${percent.toFixed(3)}%`;
 }
 
 function confidenceTone(level: string): 'green' | 'blue' | 'amber' {
@@ -67,6 +93,33 @@ function getDefaultComponentTarget(component: ArbitrageScannerComponentEntry): s
   }
 
   return '';
+}
+
+function chanceForRefinement(
+  chanceProfile: RelicRefinementChanceProfile,
+  refinementKey: RelicRefinementKey,
+): number | null {
+  switch (refinementKey) {
+    case 'exceptional':
+      return chanceProfile.exceptional;
+    case 'flawless':
+      return chanceProfile.flawless;
+    case 'radiant':
+      return chanceProfile.radiant;
+    default:
+      return chanceProfile.intact;
+  }
+}
+
+function getRelicRefinementSummary(
+  entry: RelicRoiEntry,
+  refinementKey: RelicRefinementKey,
+): RelicRoiRefinementSummary | null {
+  return (
+    entry.refinements.find((summary) => summary.refinementKey === refinementKey) ??
+    entry.refinements[0] ??
+    null
+  );
 }
 
 function ArbitrageComponentRow({
@@ -246,13 +299,180 @@ function ArbitrageRow({
   );
 }
 
+function RelicDropRow({
+  drop,
+  refinementKey,
+}: {
+  drop: RelicRoiDropEntry;
+  refinementKey: RelicRefinementKey;
+}) {
+  const imageUrl = resolveWfmAssetUrl(drop.imagePath);
+  const chance = chanceForRefinement(drop.chanceProfile, refinementKey);
+  const expectedContribution =
+    chance !== null && drop.recommendedExitPrice !== null
+      ? Math.round(chance * drop.recommendedExitPrice)
+      : null;
+
+  return (
+    <div className="scanner-component-row">
+      <div className="scanner-component-main">
+        <span className="scanner-component-thumb">
+          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{drop.name.slice(0, 1)}</span>}
+        </span>
+        <div className="scanner-component-copy">
+          <div className="scanner-component-name-row">
+            <span className="scanner-component-name">{drop.name}</span>
+            {drop.rarity ? <span className="market-panel-badge tone-blue">{drop.rarity}</span> : null}
+            <span className={`market-panel-badge tone-${confidenceTone(drop.confidenceSummary.level)}`}>
+              {drop.confidenceSummary.label}
+            </span>
+          </div>
+          <div className="scanner-component-pill-row">
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">Chance</span>
+              <span className="scanner-stat-pill-value">{formatChance(chance)}</span>
+            </span>
+            <span className="scanner-stat-pill scanner-stat-pill-highlight">
+              <span className="scanner-stat-pill-label">Optimal Exit</span>
+              <span className="scanner-stat-pill-value">{formatPlat(drop.recommendedExitPrice)}</span>
+            </span>
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">Current</span>
+              <span className="scanner-stat-pill-value">{formatPlat(drop.currentStatsPrice)}</span>
+            </span>
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">EV</span>
+              <span className="scanner-stat-pill-value">{formatPlat(expectedContribution)}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RelicRoiRow({
+  entry,
+  index,
+  refinementKey,
+  expanded,
+  onToggle,
+}: {
+  entry: RelicRoiEntry;
+  index: number;
+  refinementKey: RelicRefinementKey;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const imageUrl = resolveWfmAssetUrl(entry.imagePath);
+  const summary = getRelicRefinementSummary(entry, refinementKey);
+
+  return (
+    <article className={`scanner-list-row${expanded ? ' is-expanded' : ''}`}>
+      <button className="scanner-list-button" type="button" onClick={onToggle}>
+        <div className="scanner-list-primary">
+          <div className="scanner-result-rank">#{index + 1}</div>
+          <span className="scanner-result-thumb">
+            {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
+          </span>
+          <div className="scanner-list-name">
+            <span className="panel-title-eyebrow">Relic ROI</span>
+            <strong>{entry.name}</strong>
+            <span className="scanner-list-note">{summary?.note ?? entry.note}</span>
+          </div>
+        </div>
+        <div className="scanner-list-metrics">
+          <div className="scanner-list-metric">
+            <span>Buy</span>
+            <strong>{formatPlat(summary?.relicBuyPrice ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric">
+            <span>Run Value</span>
+            <strong>{formatPlat(summary?.expectedExitValue ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric">
+            <span>Net</span>
+            <strong>{formatPlat(summary?.netProfit ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric">
+            <span>ROI</span>
+            <strong>{formatPercent(summary?.roiPct ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric">
+            <span>Liquidity</span>
+            <strong>{Math.round(summary?.liquidityScore ?? 0)}%</strong>
+          </div>
+          <div className="scanner-list-badges">
+            {entry.isUnvaulted ? (
+              <span className="market-panel-badge tone-green">Unvaulted</span>
+            ) : (
+              <span className="market-panel-badge tone-amber">Vaulted</span>
+            )}
+            <span className="market-panel-badge tone-blue">
+              Score {Math.round(summary?.relicRoiScore ?? 0)}
+            </span>
+            <span className={`market-panel-badge tone-${confidenceTone(summary?.confidenceSummary.level ?? 'low')}`}>
+              {summary?.confidenceSummary.label ?? entry.confidenceSummary.label}
+            </span>
+            <span className="scanner-list-chevron">{expanded ? '−' : '+'}</span>
+          </div>
+        </div>
+      </button>
+
+      {expanded ? (
+        <div className="scanner-row-body">
+          <div className="scanner-row-summary-grid">
+            <div className="market-metric-card">
+              <span className="info-card-label">Refinement</span>
+              <strong>{summary?.refinementLabel ?? '—'}</strong>
+            </div>
+            <div className="market-metric-card">
+              <span className="info-card-label">Buy Price</span>
+              <strong>{formatPlat(summary?.relicBuyPrice ?? null)}</strong>
+            </div>
+            <div className="market-metric-card">
+              <span className="info-card-label">Confidence</span>
+              <strong>{summary?.confidenceSummary.label ?? entry.confidenceSummary.label}</strong>
+            </div>
+            <div className="market-metric-card">
+              <span className="info-card-label">Drops</span>
+              <strong>{entry.dropCount}</strong>
+            </div>
+          </div>
+
+          <div className="scanner-components-panel">
+            <div className="scanner-components-header">
+              <span className="card-label">Prime Rewards</span>
+              <span className="scanner-components-meta">
+                {summary?.refinementLabel ?? 'Selected'} rates applied
+              </span>
+            </div>
+            <div className="scanner-components-list">
+              {entry.drops.map((drop) => (
+                <RelicDropRow
+                  key={`${entry.slug}-${refinementKey}-${drop.slug}`}
+                  drop={drop}
+                  refinementKey={refinementKey}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export function ScannersPage() {
   const [activeTab, setActiveTab] = useState<ScannerTab>('arbitrage');
   const [arbitrage, setArbitrage] = useState<ArbitrageScannerResponse | null>(null);
   const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
+  const [expandedRelicSlug, setExpandedRelicSlug] = useState<string | null>(null);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
+  const [relicRefinement, setRelicRefinement] = useState<RelicRefinementKey>('intact');
+  const [showOnlyUnvaulted, setShowOnlyUnvaulted] = useState(false);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
 
   const loadScannerState = useCallback(async (cancelled = false) => {
@@ -273,10 +493,6 @@ export function ScannersPage() {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'arbitrage') {
-      return;
-    }
-
     let cancelled = false;
     void loadScannerState();
 
@@ -309,7 +525,7 @@ export function ScannersPage() {
       window.clearInterval(pollInterval);
       unsubscribe();
     };
-  }, [activeTab, loadScannerState]);
+  }, [loadScannerState]);
 
   const runArbitrageScan = async () => {
     setErrorMessage(null);
@@ -381,6 +597,17 @@ export function ScannersPage() {
   const isRunning = progress?.status === 'running';
   const hasSavedScan = Boolean(arbitrage);
   const actionLabel = hasSavedScan ? 'Rescan' : 'Start Scan';
+  const relicResults = useMemo(() => {
+    const source = arbitrage?.relicRoiResults ?? [];
+    const filtered = showOnlyUnvaulted
+      ? source.filter((entry) => entry.isUnvaulted)
+      : source;
+    return [...filtered].sort((left, right) => {
+      const rightSummary = getRelicRefinementSummary(right, relicRefinement);
+      const leftSummary = getRelicRefinementSummary(left, relicRefinement);
+      return (rightSummary?.relicRoiScore ?? 0) - (leftSummary?.relicRoiScore ?? 0);
+    });
+  }, [arbitrage?.relicRoiResults, relicRefinement, showOnlyUnvaulted]);
 
   useEffect(() => {
     if (!arbitrage?.results.length) {
@@ -394,6 +621,19 @@ export function ScannersPage() {
         : null,
     );
   }, [arbitrage]);
+
+  useEffect(() => {
+    if (!relicResults.length) {
+      setExpandedRelicSlug(null);
+      return;
+    }
+
+    setExpandedRelicSlug((current) =>
+      current && relicResults.some((entry) => entry.slug === current)
+        ? current
+        : null,
+    );
+  }, [relicResults]);
 
   const updateComponentTarget = (
     component: ArbitrageScannerComponentEntry,
@@ -450,8 +690,33 @@ export function ScannersPage() {
             Relic ROI
           </span>
         </div>
-        {activeTab === 'arbitrage' ? (
+        {(activeTab === 'arbitrage' || activeTab === 'relic-roi') ? (
           <div className="subnav-right">
+            {activeTab === 'relic-roi' ? (
+              <>
+                <label className="toggle-wrap" htmlFor="relic-unvaulted-toggle">
+                  <span>Unvaulted Only</span>
+                  <button
+                    id="relic-unvaulted-toggle"
+                    className={`toggle${showOnlyUnvaulted ? ' on' : ''}`}
+                    type="button"
+                    aria-pressed={showOnlyUnvaulted}
+                    onClick={() => setShowOnlyUnvaulted((current) => !current)}
+                  />
+                </label>
+                <select
+                  className="market-variant-select scanner-refinement-select"
+                  value={relicRefinement}
+                  onChange={(event) => setRelicRefinement(event.target.value as RelicRefinementKey)}
+                >
+                  {RELIC_REFINEMENT_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ) : null}
             <button
               className="market-refresh-button"
               type="button"
@@ -470,21 +735,28 @@ export function ScannersPage() {
       </div>
 
       <div className="page-content scanners-page-content">
-        {activeTab === 'relic-roi' ? (
-          <div className="scanners-empty-state">
-            Relic ROI is not implemented yet.
-          </div>
-        ) : (
-          <div className="scanners-shell">
+        <div className="scanners-shell">
             <div className="market-panel scanners-intro-panel">
               <div className="market-panel-header">
                 <div className="market-panel-header-copy">
                   <span className="panel-title-eyebrow">Scanner Logic</span>
-                  <h3>Statistics-only set arbitrage</h3>
-                  <p>
-                    Basket costs use component entry bands with quantity in set. Set exits use conservative
-                    achieved-price zones. No live orderbook requests are used in the scan.
-                  </p>
+                  {activeTab === 'arbitrage' ? (
+                    <>
+                      <h3>Statistics-only set arbitrage</h3>
+                      <p>
+                        Basket costs use component entry bands with quantity in set. Set exits use conservative
+                        achieved-price zones. No live orderbook requests are used in the scan.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <h3>Shared relic ROI scan</h3>
+                      <p>
+                        Uses the same cached statistics scan as Arbitrage. Relic ROI values are refinement-aware,
+                        prime-drop only, and include relic buy cost against expected exit value per run.
+                      </p>
+                    </>
+                  )}
                 </div>
                 {progress ? (
                   <div className="market-panel-header-aside">
@@ -510,18 +782,18 @@ export function ScannersPage() {
                   />
                 </div>
                 <p className="scanner-progress-copy">
-                  {progress?.statusText ?? 'No saved arbitrage scan yet. Start a scan to cache the results.'}
+                  {progress?.statusText ?? 'No saved scanner results yet. Start a scan to cache the results.'}
                 </p>
                 {errorMessage ? (
                   <div className="scanner-inline-error" role="alert">
-                    <strong>Arbitrage scan failed</strong>
+                    <strong>Scanner failed</strong>
                     <span>{errorMessage}</span>
                   </div>
                 ) : null}
               </div>
             </div>
 
-            {arbitrage ? (
+            {activeTab === 'arbitrage' && arbitrage ? (
               <div className="scanner-results-list">
                 {arbitrage.results.map((entry, index) => (
                   <ArbitrageRow
@@ -538,13 +810,35 @@ export function ScannersPage() {
                   />
                 ))}
               </div>
+            ) : activeTab === 'relic-roi' && arbitrage ? (
+              relicResults.length > 0 ? (
+                <div className="scanner-results-list">
+                  {relicResults.map((entry, index) => (
+                    <RelicRoiRow
+                      key={entry.slug}
+                      entry={entry}
+                      index={index}
+                      refinementKey={relicRefinement}
+                      expanded={expandedRelicSlug === entry.slug}
+                      onToggle={() =>
+                        setExpandedRelicSlug((current) => (current === entry.slug ? null : entry.slug))
+                      }
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="scanners-empty-state">
+                  {showOnlyUnvaulted
+                    ? 'No unvaulted relic ROI results are available in the cached scan.'
+                    : 'No relic ROI rows are available in the cached scan yet.'}
+                </div>
+              )
             ) : !isRunning ? (
               <div className="scanners-empty-state">
-                No cached arbitrage scan yet. Start a scan to build and save the first result set.
+                No cached scanner results yet. Start a scan to build and save the first result set.
               </div>
             ) : null}
-          </div>
-        )}
+        </div>
       </div>
     </>
   );

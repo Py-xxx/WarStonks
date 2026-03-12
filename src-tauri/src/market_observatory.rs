@@ -26,6 +26,10 @@ const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
 const ARBITRAGE_SCANNER_KEY: &str = "arbitrage";
 const ARBITRAGE_SCANNER_PROGRESS_EVENT: &str = "arbitrage-scanner-progress";
+const RELIC_REFINEMENT_INTACT: &str = "intact";
+const RELIC_REFINEMENT_EXCEPTIONAL: &str = "exceptional";
+const RELIC_REFINEMENT_FLAWLESS: &str = "flawless";
+const RELIC_REFINEMENT_RADIANT: &str = "radiant";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -568,6 +572,62 @@ pub struct ArbitrageScannerSetEntry {
     pub components: Vec<ArbitrageScannerComponentEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RelicRefinementChanceProfile {
+    pub intact: Option<f64>,
+    pub exceptional: Option<f64>,
+    pub flawless: Option<f64>,
+    pub radiant: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelicRoiDropEntry {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub rarity: Option<String>,
+    pub chance_profile: RelicRefinementChanceProfile,
+    pub recommended_exit_low: Option<f64>,
+    pub recommended_exit_high: Option<f64>,
+    pub recommended_exit_price: Option<f64>,
+    pub current_stats_price: Option<f64>,
+    pub liquidity_score: f64,
+    pub confidence_summary: MarketConfidenceSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelicRoiRefinementSummary {
+    pub refinement_key: String,
+    pub refinement_label: String,
+    pub relic_buy_price: Option<f64>,
+    pub expected_exit_value: Option<f64>,
+    pub net_profit: Option<f64>,
+    pub roi_pct: Option<f64>,
+    pub liquidity_score: f64,
+    pub relic_roi_score: f64,
+    pub confidence_summary: MarketConfidenceSummary,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelicRoiEntry {
+    pub relic_item_id: i64,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub is_unvaulted: bool,
+    pub drop_count: usize,
+    pub confidence_summary: MarketConfidenceSummary,
+    pub note: String,
+    pub refinements: Vec<RelicRoiRefinementSummary>,
+    pub drops: Vec<RelicRoiDropEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArbitrageScannerResponse {
@@ -576,7 +636,13 @@ pub struct ArbitrageScannerResponse {
     pub opportunity_count: usize,
     pub refreshed_set_count: usize,
     pub refreshed_statistics_count: usize,
+    #[serde(default)]
+    pub scanned_relic_count: usize,
+    #[serde(default)]
+    pub relic_opportunity_count: usize,
     pub results: Vec<ArbitrageScannerSetEntry>,
+    #[serde(default)]
+    pub relic_roi_results: Vec<RelicRoiEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -689,6 +755,27 @@ struct CachedSetComponentRecord {
     quantity_in_set: i64,
     sort_order: i64,
     fetched_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct RelicRootCatalogRecord {
+    item_id: i64,
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+    vaulted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RelicDropSourceRecord {
+    relic_item_id: i64,
+    reward_item_id: Option<i64>,
+    reward_slug: String,
+    reward_name: String,
+    reward_image_path: Option<String>,
+    rarity: Option<String>,
+    refinement_key: String,
+    chance: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -4574,6 +4661,144 @@ fn list_set_roots_from_catalog(connection: &Connection) -> Result<Vec<SetRootCat
         .map_err(Into::into)
 }
 
+fn list_relic_roots_from_catalog(connection: &Connection) -> Result<Vec<RelicRootCatalogRecord>> {
+    let mut statement = connection.prepare(
+        "SELECT
+           i.item_id,
+           i.wfm_slug,
+           i.preferred_name,
+           COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path,
+           COALESCE(MAX(wi.vaulted), 0) AS vaulted
+         FROM items i
+         LEFT JOIN wfm_items w ON w.item_id = i.item_id
+         LEFT JOIN wfstat_items wi ON wi.item_id = i.item_id
+         WHERE i.relic_tier IS NOT NULL
+           AND i.relic_code IS NOT NULL
+           AND i.wfm_slug IS NOT NULL
+         GROUP BY i.item_id, i.wfm_slug, i.preferred_name, image_path
+         ORDER BY i.preferred_name ASC",
+    )?;
+
+    let rows = statement.query_map([], |row| {
+        Ok(RelicRootCatalogRecord {
+            item_id: row.get(0)?,
+            slug: row.get(1)?,
+            name: row.get(2)?,
+            image_path: row.get(3)?,
+            vaulted: row.get::<_, i64>(4)? != 0,
+        })
+    })?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn relic_refinement_label(refinement_key: &str) -> &'static str {
+    match refinement_key {
+        RELIC_REFINEMENT_EXCEPTIONAL => "Exceptional",
+        RELIC_REFINEMENT_FLAWLESS => "Flawless",
+        RELIC_REFINEMENT_RADIANT => "Radiant",
+        _ => "Intact",
+    }
+}
+
+fn all_relic_refinement_keys() -> [&'static str; 4] {
+    [
+        RELIC_REFINEMENT_INTACT,
+        RELIC_REFINEMENT_EXCEPTIONAL,
+        RELIC_REFINEMENT_FLAWLESS,
+        RELIC_REFINEMENT_RADIANT,
+    ]
+}
+
+fn parse_relic_location(location: &str) -> Option<(String, &'static str)> {
+    let trimmed = location.trim();
+    if !trimmed.contains("Relic") {
+        return None;
+    }
+
+    let suffixes = [
+        (" (Exceptional)", RELIC_REFINEMENT_EXCEPTIONAL),
+        (" (Flawless)", RELIC_REFINEMENT_FLAWLESS),
+        (" (Radiant)", RELIC_REFINEMENT_RADIANT),
+    ];
+
+    for (suffix, refinement_key) in suffixes {
+        if let Some(base_name) = trimmed.strip_suffix(suffix) {
+            return Some((base_name.trim().to_string(), refinement_key));
+        }
+    }
+
+    Some((trimmed.to_string(), RELIC_REFINEMENT_INTACT))
+}
+
+fn load_relic_drop_sources(
+    connection: &Connection,
+    relic_roots: &[RelicRootCatalogRecord],
+) -> Result<Vec<RelicDropSourceRecord>> {
+    let relic_root_by_name = relic_roots
+        .iter()
+        .map(|entry| (entry.name.clone(), entry.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT
+           reward.item_id,
+           items.wfm_slug,
+           items.preferred_name,
+           COALESCE(items.preferred_image, w.thumb, w.icon) AS image_path,
+           drops.location,
+           drops.chance,
+           drops.rarity
+         FROM wfstat_item_drops drops
+         JOIN wfstat_items reward ON reward.wfstat_unique_name = drops.wfstat_unique_name
+         JOIN items ON items.item_id = reward.item_id
+         LEFT JOIN wfm_items w ON w.item_id = items.item_id
+         WHERE drops.location LIKE '%Relic%'
+           AND items.preferred_name LIKE '%Prime%'
+           AND items.wfm_slug IS NOT NULL
+         ORDER BY drops.location ASC, items.preferred_name ASC",
+    )?;
+
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, Option<i64>>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<f64>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+        ))
+    })?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        let (reward_item_id, reward_slug, reward_name, reward_image_path, location, chance, rarity) = row?;
+        let Some(chance) = chance else {
+            continue;
+        };
+        let Some((relic_name, refinement_key)) = parse_relic_location(&location) else {
+            continue;
+        };
+        let Some(relic_root) = relic_root_by_name.get(&relic_name) else {
+            continue;
+        };
+
+        records.push(RelicDropSourceRecord {
+            relic_item_id: relic_root.item_id,
+            reward_item_id,
+            reward_slug,
+            reward_name,
+            reward_image_path,
+            rarity,
+            refinement_key: refinement_key.to_string(),
+            chance,
+        });
+    }
+
+    Ok(records)
+}
+
 fn load_cached_set_components(
     connection: &Connection,
     set_slug: &str,
@@ -5418,6 +5643,259 @@ fn build_arbitrage_set_entry(
     }
 }
 
+fn get_or_build_scanner_price_model(
+    observatory_connection: &Connection,
+    price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
+    item_id: i64,
+    slug: &str,
+    refreshed_statistics_count: &mut usize,
+) -> Result<Option<ScannerPriceModel>> {
+    if let Some(existing) = price_model_cache.get(&item_id) {
+        return Ok(existing.clone());
+    }
+
+    if ensure_statistics_cached_for_scan(observatory_connection, item_id, slug, "base")? {
+        *refreshed_statistics_count += 1;
+    }
+    let model = build_statistics_price_model(observatory_connection, item_id, "base")?;
+    price_model_cache.insert(item_id, model.clone());
+    Ok(model)
+}
+
+fn confidence_score(level: &str) -> f64 {
+    match level {
+        "high" => 100.0,
+        "medium" => 72.0,
+        _ => 42.0,
+    }
+}
+
+fn chance_for_refinement(
+    chance_profile: &RelicRefinementChanceProfile,
+    refinement_key: &str,
+) -> Option<f64> {
+    match refinement_key {
+        RELIC_REFINEMENT_EXCEPTIONAL => chance_profile.exceptional,
+        RELIC_REFINEMENT_FLAWLESS => chance_profile.flawless,
+        RELIC_REFINEMENT_RADIANT => chance_profile.radiant,
+        _ => chance_profile.intact,
+    }
+}
+
+fn build_relic_roi_score(
+    net_profit: Option<f64>,
+    roi_pct: Option<f64>,
+    weighted_liquidity: f64,
+    confidence_summary: &MarketConfidenceSummary,
+) -> f64 {
+    let profit_component = net_profit.unwrap_or_default().max(0.0).min(50.0) * 1.3;
+    let roi_component = roi_pct.unwrap_or_default().max(0.0).min(300.0) * 0.38;
+    let liquidity_component = weighted_liquidity.clamp(0.0, 100.0) * 0.28;
+    let confidence_component = confidence_score(&confidence_summary.level) * 0.18;
+    (profit_component + roi_component + liquidity_component + confidence_component).clamp(0.0, 100.0)
+}
+
+fn build_relic_roi_note(
+    drop_count: usize,
+    priced_drop_count: usize,
+    refinement_label: &str,
+    confidence_summary: &MarketConfidenceSummary,
+) -> String {
+    let mut parts = vec![format!("{priced_drop_count}/{drop_count} priced prime drops at {refinement_label}")];
+    if confidence_summary.level != "high" && !confidence_summary.reasons.is_empty() {
+        parts.push(confidence_summary.reasons.join(", "));
+    }
+    parts.join(" · ")
+}
+
+fn build_relic_roi_entry(
+    relic_root: &RelicRootCatalogRecord,
+    source_records: &[&RelicDropSourceRecord],
+    observatory_connection: &Connection,
+    price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
+    refreshed_statistics_count: &mut usize,
+) -> Result<Option<RelicRoiEntry>> {
+    if source_records.is_empty() {
+        return Ok(None);
+    }
+
+    let relic_model = get_or_build_scanner_price_model(
+        observatory_connection,
+        price_model_cache,
+        relic_root.item_id,
+        &relic_root.slug,
+        refreshed_statistics_count,
+    )?;
+    let relic_buy_price = relic_model
+        .as_ref()
+        .and_then(|entry| entry.current_stats_price.or(entry.recommended_entry_price));
+
+    let mut reward_groups = BTreeMap::<String, Vec<&RelicDropSourceRecord>>::new();
+    for source in source_records {
+        reward_groups
+            .entry(source.reward_slug.clone())
+            .or_default()
+            .push(*source);
+    }
+
+    let mut drops = Vec::new();
+    let mut entry_confidence_refs = Vec::new();
+    for records in reward_groups.values() {
+        let Some(first) = records.first() else {
+            continue;
+        };
+        let reward_model = match first.reward_item_id {
+            Some(reward_item_id) => get_or_build_scanner_price_model(
+                observatory_connection,
+                price_model_cache,
+                reward_item_id,
+                &first.reward_slug,
+                refreshed_statistics_count,
+            )?,
+            None => None,
+        };
+
+        let mut chance_profile = RelicRefinementChanceProfile::default();
+        for record in records {
+            match record.refinement_key.as_str() {
+                RELIC_REFINEMENT_EXCEPTIONAL => chance_profile.exceptional = Some(record.chance),
+                RELIC_REFINEMENT_FLAWLESS => chance_profile.flawless = Some(record.chance),
+                RELIC_REFINEMENT_RADIANT => chance_profile.radiant = Some(record.chance),
+                _ => chance_profile.intact = Some(record.chance),
+            }
+        }
+
+        let confidence_summary = reward_model
+            .as_ref()
+            .map(|entry| entry.confidence_summary.clone())
+            .unwrap_or_else(|| build_confidence_summary("low", vec!["Missing stats".to_string()]));
+        entry_confidence_refs.push(confidence_summary.clone());
+        drops.push(RelicRoiDropEntry {
+            item_id: first.reward_item_id,
+            slug: first.reward_slug.clone(),
+            name: first.reward_name.clone(),
+            image_path: first.reward_image_path.clone(),
+            rarity: first.rarity.clone(),
+            chance_profile,
+            recommended_exit_low: reward_model.as_ref().and_then(|entry| entry.exit_low),
+            recommended_exit_high: reward_model.as_ref().and_then(|entry| entry.exit_high),
+            recommended_exit_price: reward_model.as_ref().and_then(|entry| entry.recommended_exit_price),
+            current_stats_price: reward_model.as_ref().and_then(|entry| entry.current_stats_price),
+            liquidity_score: reward_model.as_ref().map(|entry| entry.liquidity_score).unwrap_or(20.0),
+            confidence_summary,
+        });
+    }
+
+    let confidence_refs = entry_confidence_refs.iter().collect::<Vec<_>>();
+    let relic_confidence = relic_model
+        .as_ref()
+        .map(|entry| entry.confidence_summary.clone())
+        .unwrap_or_else(|| build_confidence_summary("low", vec!["Missing relic stats".to_string()]));
+    let mut refinement_summaries = Vec::new();
+
+    for refinement_key in all_relic_refinement_keys() {
+        let mut expected_exit_value = 0.0;
+        let mut priced_drop_count = 0usize;
+        let mut weighted_liquidity_numerator = 0.0;
+        let mut weighted_liquidity_denominator = 0.0;
+        let mut extra_reasons = Vec::new();
+
+        for drop in &drops {
+            let Some(chance) = chance_for_refinement(&drop.chance_profile, refinement_key) else {
+                continue;
+            };
+            let Some(exit_price) = drop.recommended_exit_price else {
+                extra_reasons.push(format!("Missing exit for {}", drop.name));
+                continue;
+            };
+
+            let expected_contribution = chance * exit_price;
+            expected_exit_value += expected_contribution;
+            priced_drop_count += 1;
+            weighted_liquidity_numerator += expected_contribution * drop.liquidity_score;
+            weighted_liquidity_denominator += expected_contribution;
+        }
+
+        let expected_exit_value = if priced_drop_count > 0 {
+            Some(round_platinum(expected_exit_value))
+        } else {
+            None
+        };
+        let net_profit = match (expected_exit_value, relic_buy_price) {
+            (Some(expected), Some(buy)) => Some(round_platinum(expected - buy)),
+            _ => None,
+        };
+        let roi_pct = match (net_profit, relic_buy_price) {
+            (Some(net), Some(buy)) if buy > 0.0 => Some(round_platinum((net / buy) * 100.0)),
+            _ => None,
+        };
+        let weighted_liquidity = if weighted_liquidity_denominator > 0.0 {
+            (weighted_liquidity_numerator / weighted_liquidity_denominator).clamp(20.0, 100.0)
+        } else {
+            20.0
+        };
+
+        let mut combined_refs = confidence_refs.clone();
+        combined_refs.push(&relic_confidence);
+        if priced_drop_count < drops.len() {
+            extra_reasons.push(format!("Incomplete priced drops ({priced_drop_count}/{})", drops.len()));
+        }
+        if relic_buy_price.is_none() {
+            extra_reasons.push("Missing relic buy price".to_string());
+        }
+
+        let extra_reason_refs = extra_reasons.iter().map(String::as_str).collect::<Vec<_>>();
+        let confidence_summary = combined_confidence(&combined_refs, &extra_reason_refs);
+        let note = build_relic_roi_note(
+            drops.len(),
+            priced_drop_count,
+            relic_refinement_label(refinement_key),
+            &confidence_summary,
+        );
+        refinement_summaries.push(RelicRoiRefinementSummary {
+            refinement_key: refinement_key.to_string(),
+            refinement_label: relic_refinement_label(refinement_key).to_string(),
+            relic_buy_price: relic_buy_price.map(round_platinum),
+            expected_exit_value,
+            net_profit,
+            roi_pct,
+            liquidity_score: round_platinum(weighted_liquidity),
+            relic_roi_score: build_relic_roi_score(
+                net_profit,
+                roi_pct,
+                weighted_liquidity,
+                &confidence_summary,
+            ),
+            confidence_summary,
+            note,
+        });
+    }
+
+    let default_confidence = refinement_summaries
+        .iter()
+        .find(|entry| entry.refinement_key == RELIC_REFINEMENT_INTACT)
+        .map(|entry| entry.confidence_summary.clone())
+        .unwrap_or_else(|| build_confidence_summary("low", vec!["Missing ROI summary".to_string()]));
+    let default_note = refinement_summaries
+        .iter()
+        .find(|entry| entry.refinement_key == RELIC_REFINEMENT_INTACT)
+        .map(|entry| entry.note.clone())
+        .unwrap_or_else(|| "No intact ROI summary available.".to_string());
+
+    Ok(Some(RelicRoiEntry {
+        relic_item_id: relic_root.item_id,
+        slug: relic_root.slug.clone(),
+        name: relic_root.name.clone(),
+        image_path: relic_root.image_path.clone(),
+        is_unvaulted: !relic_root.vaulted,
+        drop_count: drops.len(),
+        confidence_summary: default_confidence,
+        note: default_note,
+        refinements: refinement_summaries,
+        drops,
+    }))
+}
+
 fn build_arbitrage_scanner_inner(
     app: tauri::AppHandle,
     mut on_progress: impl FnMut(ArbitrageScannerProgress),
@@ -5425,11 +5903,15 @@ fn build_arbitrage_scanner_inner(
     let catalog_connection = open_catalog_database(&app)?;
     let observatory_connection = open_market_observatory_database(&app)?;
     let set_roots = list_set_roots_from_catalog(&catalog_connection)?;
+    let relic_roots = list_relic_roots_from_catalog(&catalog_connection)?;
+    let relic_drop_sources = load_relic_drop_sources(&catalog_connection, &relic_roots)?;
     let started_at = format_timestamp(now_utc())?;
+    let total_work_items = set_roots.len() + relic_roots.len();
 
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
     let mut results = Vec::new();
+    let mut price_model_cache = HashMap::<i64, Option<ScannerPriceModel>>::new();
     let mut was_stopped = false;
 
     on_progress(ArbitrageScannerProgress {
@@ -5437,7 +5919,11 @@ fn build_arbitrage_scanner_inner(
         status: "running".to_string(),
         progress_value: 0.0,
         stage_label: "Preparing".to_string(),
-        status_text: format!("Loaded {} set roots for arbitrage scanning.", set_roots.len()),
+        status_text: format!(
+            "Loaded {} sets and {} relics for scanner analysis.",
+            set_roots.len(),
+            relic_roots.len()
+        ),
         updated_at: format_timestamp(now_utc())?,
         started_at: Some(started_at.clone()),
         last_completed_at: None,
@@ -5450,18 +5936,18 @@ fn build_arbitrage_scanner_inner(
             break;
         }
 
-        let progress_value = if set_roots.is_empty() {
+        let progress_value = if total_work_items == 0 {
             100.0
         } else {
-            ((index as f64 / set_roots.len() as f64) * 100.0).clamp(0.0, 99.0)
+            ((index as f64 / total_work_items as f64) * 100.0).clamp(0.0, 99.0)
         };
         on_progress(ArbitrageScannerProgress {
             scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
             status: "running".to_string(),
             progress_value,
-            stage_label: "Scanning".to_string(),
+            stage_label: "Scanning Sets".to_string(),
             status_text: format!(
-                "Scanning {} ({}/{})",
+                "Scanning set {} ({}/{})",
                 set_root.name,
                 index + 1,
                 set_roots.len()
@@ -5478,28 +5964,24 @@ fn build_arbitrage_scanner_inner(
             refreshed_set_count += 1;
         }
 
-        if ensure_statistics_cached_for_scan(
+        let set_model = get_or_build_scanner_price_model(
             &observatory_connection,
+            &mut price_model_cache,
             set_root.item_id,
             &set_root.slug,
-            "base",
-        )? {
-            refreshed_statistics_count += 1;
-        }
-        let set_model = build_statistics_price_model(&observatory_connection, set_root.item_id, "base")?;
+            &mut refreshed_statistics_count,
+        )?;
 
         let mut component_models = Vec::new();
         for component in &components {
             let model = if let Some(component_item_id) = component.component_item_id {
-                if ensure_statistics_cached_for_scan(
+                get_or_build_scanner_price_model(
                     &observatory_connection,
+                    &mut price_model_cache,
                     component_item_id,
                     &component.component_slug,
-                    "base",
-                )? {
-                    refreshed_statistics_count += 1;
-                }
-                build_statistics_price_model(&observatory_connection, component_item_id, "base")?
+                    &mut refreshed_statistics_count,
+                )?
             } else {
                 None
             };
@@ -5513,6 +5995,84 @@ fn build_arbitrage_scanner_inner(
             &component_models,
         ));
     }
+
+    let relic_roi_results = if was_stopped {
+        Vec::new()
+    } else {
+        let mut grouped_sources = BTreeMap::<i64, Vec<&RelicDropSourceRecord>>::new();
+        for source in &relic_drop_sources {
+            grouped_sources
+                .entry(source.relic_item_id)
+                .or_default()
+                .push(source);
+        }
+
+        let mut relic_entries = Vec::new();
+        for (index, relic_root) in relic_roots.iter().enumerate() {
+            if arbitrage_scanner_stop_requested(&observatory_connection)? {
+                was_stopped = true;
+                break;
+            }
+
+            let progress_value = if total_work_items == 0 {
+                100.0
+            } else {
+                (((set_roots.len() + index) as f64 / total_work_items as f64) * 100.0)
+                    .clamp(0.0, 99.0)
+            };
+            on_progress(ArbitrageScannerProgress {
+                scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+                status: "running".to_string(),
+                progress_value,
+                stage_label: "Scanning Relics".to_string(),
+                status_text: format!(
+                    "Scanning relic {} ({}/{})",
+                    relic_root.name,
+                    index + 1,
+                    relic_roots.len()
+                ),
+                updated_at: format_timestamp(now_utc())?,
+                started_at: Some(started_at.clone()),
+                last_completed_at: None,
+                last_error: None,
+            });
+            let Some(source_records) = grouped_sources.get(&relic_root.item_id) else {
+                continue;
+            };
+            if let Some(entry) = build_relic_roi_entry(
+                relic_root,
+                source_records,
+                &observatory_connection,
+                &mut price_model_cache,
+                &mut refreshed_statistics_count,
+            )? {
+                relic_entries.push(entry);
+            }
+        }
+
+        if was_stopped {
+            Vec::new()
+        } else {
+            relic_entries.sort_by(|left, right| {
+                let right_score = right
+                    .refinements
+                    .iter()
+                    .find(|entry| entry.refinement_key == RELIC_REFINEMENT_INTACT)
+                    .map(|entry| entry.relic_roi_score)
+                    .unwrap_or_default();
+                let left_score = left
+                    .refinements
+                    .iter()
+                    .find(|entry| entry.refinement_key == RELIC_REFINEMENT_INTACT)
+                    .map(|entry| entry.relic_roi_score)
+                    .unwrap_or_default();
+                right_score
+                    .total_cmp(&left_score)
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+            relic_entries
+        }
+    };
 
     results.sort_by(|left, right| {
         right
@@ -5531,17 +6091,32 @@ fn build_arbitrage_scanner_inner(
         .iter()
         .filter(|entry| entry.gross_margin.unwrap_or_default() > 0.0)
         .count();
+    let relic_opportunity_count = relic_roi_results
+        .iter()
+        .filter(|entry| {
+            entry
+                .refinements
+                .iter()
+                .find(|summary| summary.refinement_key == RELIC_REFINEMENT_INTACT)
+                .and_then(|summary| summary.net_profit)
+                .unwrap_or_default()
+                > 0.0
+        })
+        .count();
 
     let computed_at = format_timestamp(now_utc())?;
 
     Ok(ArbitrageScannerRunOutcome {
         response: ArbitrageScannerResponse {
             computed_at,
-        scanned_set_count: set_roots.len(),
-        opportunity_count,
-        refreshed_set_count,
-        refreshed_statistics_count,
+            scanned_set_count: set_roots.len(),
+            opportunity_count,
+            refreshed_set_count,
+            refreshed_statistics_count,
+            scanned_relic_count: relic_roi_results.len(),
+            relic_opportunity_count,
             results,
+            relic_roi_results,
         },
         was_stopped,
     })
@@ -6265,9 +6840,11 @@ pub async fn start_arbitrage_scanner(
                     progress_value: 100.0,
                     stage_label: "Complete".to_string(),
                     status_text: format!(
-                        "Scanned {} sets and found {} positive opportunities.",
+                        "Scanned {} sets and {} relics. {} set opportunities and {} positive relic ROI entries.",
                         response.scanned_set_count,
-                        response.opportunity_count
+                        response.scanned_relic_count,
+                        response.opportunity_count,
+                        response.relic_opportunity_count
                     ),
                     updated_at: response.computed_at.clone(),
                     started_at: Some(started_at.clone()),
@@ -6320,12 +6897,14 @@ mod tests {
     use super::{
         build_action_card, build_confidence_summary, build_entry_exit_zone_overview,
         build_liquidity_confidence, build_manipulation_risk, build_market_snapshot,
-        build_orderbook_pressure, build_supply_confidence, build_trend_quality_breakdown,
-        compute_pressure_ratio, compute_zone_bands, extract_rank_stat_highlights,
-        initialize_market_observatory_schema, insert_statistics_rows_for_domain,
-        normalize_variant_key, pressure_label, resample_rows, stale_arbitrage_scanner_progress,
-        AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey,
-        ArbitrageScannerProgress, InternalStatsRow, MarketSnapshot, WfmDetailedOrder,
+        build_orderbook_pressure, build_relic_roi_score, build_supply_confidence,
+        build_trend_quality_breakdown, chance_for_refinement, compute_pressure_ratio,
+        compute_zone_bands, extract_rank_stat_highlights, initialize_market_observatory_schema,
+        insert_statistics_rows_for_domain, normalize_variant_key, parse_relic_location,
+        pressure_label, resample_rows, stale_arbitrage_scanner_progress,
+        AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey, ArbitrageScannerProgress,
+        InternalStatsRow, MarketConfidenceSummary, MarketSnapshot, RelicRefinementChanceProfile,
+        WfmDetailedOrder,
     };
     use rusqlite::Connection;
     fn sample_order(
@@ -7039,5 +7618,49 @@ mod tests {
         assert_eq!(entry.gross_margin, Some(12.0));
         assert_eq!(entry.components[0].quantity_in_set, 2);
         assert!(entry.note.contains("Entry <= Price"));
+    }
+
+    #[test]
+    fn parses_relic_locations_into_base_name_and_refinement() {
+        assert_eq!(
+            parse_relic_location("Axi A1 Relic (Radiant)"),
+            Some(("Axi A1 Relic".to_string(), "radiant")),
+        );
+        assert_eq!(
+            parse_relic_location("Neo N13 Relic"),
+            Some(("Neo N13 Relic".to_string(), "intact")),
+        );
+        assert_eq!(parse_relic_location("Hepit, Void"), None);
+    }
+
+    #[test]
+    fn relic_refinement_chance_lookup_and_score_behave() {
+        let profile = RelicRefinementChanceProfile {
+            intact: Some(0.2533),
+            exceptional: Some(0.2333),
+            flawless: Some(0.2),
+            radiant: Some(0.1667),
+        };
+        assert_eq!(chance_for_refinement(&profile, "intact"), Some(0.2533));
+        assert_eq!(chance_for_refinement(&profile, "radiant"), Some(0.1667));
+
+        let high_confidence = MarketConfidenceSummary {
+            level: "high".to_string(),
+            label: "High confidence".to_string(),
+            reasons: Vec::new(),
+            is_degraded: false,
+        };
+        let low_confidence = MarketConfidenceSummary {
+            level: "low".to_string(),
+            label: "Low confidence".to_string(),
+            reasons: vec!["Thin history".to_string()],
+            is_degraded: true,
+        };
+
+        let strong_score = build_relic_roi_score(Some(22.0), Some(140.0), 78.0, &high_confidence);
+        let weak_score = build_relic_roi_score(Some(3.0), Some(18.0), 28.0, &low_confidence);
+
+        assert!(strong_score > weak_score);
+        assert!(strong_score > 50.0);
     }
 }
