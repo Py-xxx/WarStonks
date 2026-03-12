@@ -316,7 +316,14 @@ fn normalize_avatar_url(value: Option<String>) -> Option<String> {
             return Some(trimmed.to_string());
         }
 
-        Some(format!("https://warframe.market/{}", trimmed.trim_start_matches('/')))
+        let normalized_path = trimmed.trim_start_matches('/');
+        if normalized_path.starts_with("user/avatar/") {
+            return Some(format!(
+                "https://warframe.market/static/assets/{normalized_path}"
+            ));
+        }
+
+        Some(format!("https://warframe.market/{normalized_path}"))
     })
 }
 
@@ -877,4 +884,23 @@ pub async fn delete_wfm_sell_order(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_avatar_url;
+
+    #[test]
+    fn normalizes_relative_avatar_path_to_static_assets_host() {
+        let normalized = normalize_avatar_url(Some(
+            "user/avatar/663d477c0f86de000ab5026a.png?abc123".to_string(),
+        ));
+
+        assert_eq!(
+            normalized.as_deref(),
+            Some(
+                "https://warframe.market/static/assets/user/avatar/663d477c0f86de000ab5026a.png?abc123"
+            )
+        );
+    }
 }
