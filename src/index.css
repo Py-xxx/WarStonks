@@ -3631,17 +3631,41 @@ body {
 .scanner-results-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
-.scanner-result-card .market-panel-body {
-  gap: 12px;
+.scanner-list-row {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(9, 12, 18, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
-.scanner-result-header {
+.scanner-list-row.is-expanded {
+  border-color: rgba(74, 158, 255, 0.18);
+  background: rgba(11, 14, 21, 0.94);
+}
+
+.scanner-list-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scanner-list-primary {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .scanner-result-rank {
@@ -3658,6 +3682,28 @@ body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   font-weight: 700;
+}
+
+.scanner-list-name {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.scanner-list-name strong {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.scanner-list-note {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .scanner-result-thumb,
@@ -3684,17 +3730,67 @@ body {
   object-fit: cover;
 }
 
-.scanner-result-badges {
-  display: flex;
+.scanner-list-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, auto));
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: 14px;
+  flex-shrink: 0;
 }
 
-.scanner-metric-grid {
+.scanner-list-metric {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scanner-list-metric span {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scanner-list-metric strong {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.scanner-list-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scanner-list-chevron {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.scanner-row-body {
+  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scanner-row-summary-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -3726,8 +3822,8 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
-  padding: 9px 10px;
+  gap: 12px;
+  padding: 11px 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 12px;
   background: rgba(10, 13, 19, 0.56);
@@ -3764,8 +3860,28 @@ body {
   line-height: 1.5;
 }
 
-.scanner-component-aside {
+.scanner-component-statline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.scanner-component-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
+}
+
+.scanner-component-input {
+  width: 92px;
+}
+
+.scanner-component-watch-button {
+  white-space: nowrap;
 }
 
 .scanners-empty-state {
@@ -5132,8 +5248,31 @@ body {
   }
 
   .scanners-summary-grid,
-  .scanner-metric-grid {
+  .scanner-row-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .scanner-list-button,
+  .scanner-component-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .scanner-list-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .scanner-list-badges {
+    justify-content: flex-start;
+  }
+
+  .scanner-component-actions {
+    width: 100%;
+  }
+
+  .scanner-component-input {
+    width: 100%;
   }
 
   .market-panel-header {

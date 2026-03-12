@@ -5,12 +5,14 @@ import {
   startArbitrageScanner,
   stopArbitrageScanner,
 } from '../../lib/tauriClient';
+import { useAppStore } from '../../stores/useAppStore';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerProgress,
   ArbitrageScannerSetEntry,
   ArbitrageScannerResponse,
+  WfmAutocompleteItem,
 } from '../../types';
 
 type ScannerTab = 'arbitrage' | 'relic-roi';
@@ -42,8 +44,43 @@ function confidenceTone(level: string): 'green' | 'blue' | 'amber' {
   }
 }
 
-function ArbitrageComponentRow({ component }: { component: ArbitrageScannerComponentEntry }) {
+function getDefaultComponentTarget(component: ArbitrageScannerComponentEntry): string {
+  if (
+    component.recommendedEntryLow !== null &&
+    component.recommendedEntryHigh !== null
+  ) {
+    return String(
+      Math.max(
+        1,
+        Math.round((component.recommendedEntryLow + component.recommendedEntryHigh) / 2),
+      ),
+    );
+  }
+
+  if (component.recommendedEntryPrice !== null) {
+    return String(Math.max(1, Math.round(component.recommendedEntryPrice)));
+  }
+
+  if (component.currentStatsPrice !== null) {
+    return String(Math.max(1, Math.round(component.currentStatsPrice)));
+  }
+
+  return '';
+}
+
+function ArbitrageComponentRow({
+  component,
+  targetValue,
+  onTargetChange,
+  onAdd,
+}: {
+  component: ArbitrageScannerComponentEntry;
+  targetValue: string;
+  onTargetChange: (value: string) => void;
+  onAdd: () => void;
+}) {
   const imageUrl = resolveWfmAssetUrl(component.imagePath);
+  const isDisabled = !component.itemId || !targetValue.trim();
 
   return (
     <div className="scanner-component-row">
@@ -53,99 +90,151 @@ function ArbitrageComponentRow({ component }: { component: ArbitrageScannerCompo
         </span>
         <div className="scanner-component-copy">
           <div className="scanner-component-name-row">
-            <span className="scanner-component-name">{component.quantityInSet}x {component.name}</span>
+            <span className="scanner-component-name">
+              {component.quantityInSet}x {component.name}
+            </span>
             {component.entryAtOrBelowPrice ? (
               <span className="market-panel-badge tone-green">Entry ≤ Price</span>
             ) : null}
+            <span className={`market-panel-badge tone-${confidenceTone(component.confidenceSummary.level)}`}>
+              {component.confidenceSummary.label}
+            </span>
           </div>
-          <span className="scanner-component-meta">
-            Entry {formatPlat(component.recommendedEntryPrice)}
-            {' · '}
-            Zone {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
-            {' · '}
-            Stats price {formatPlat(component.currentStatsPrice)}
-          </span>
+          <div className="scanner-component-statline">
+            <span>Stats price {formatPlat(component.currentStatsPrice)}</span>
+            <span>Recommended entry {formatPlat(component.recommendedEntryPrice)}</span>
+            <span>
+              Zone {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
+            </span>
+          </div>
         </div>
       </div>
-      <div className="scanner-component-aside">
-        <span className={`market-panel-badge tone-${confidenceTone(component.confidenceSummary.level)}`}>
-          {component.confidenceSummary.label}
-        </span>
+      <div className="scanner-component-actions">
+        <input
+          className="price-input scanner-component-input"
+          type="number"
+          min="0"
+          step="1"
+          value={targetValue}
+          onChange={(event) => onTargetChange(event.target.value)}
+        />
+        <button
+          className="btn-sm scanner-component-watch-button"
+          type="button"
+          disabled={isDisabled}
+          onClick={onAdd}
+        >
+          Add to Watchlist
+        </button>
       </div>
     </div>
   );
 }
 
-function ArbitrageCard({ entry, index }: { entry: ArbitrageScannerSetEntry; index: number }) {
+function ArbitrageRow({
+  entry,
+  index,
+  expanded,
+  onToggle,
+  targetInputs,
+  onTargetChange,
+  onAddToWatchlist,
+}: {
+  entry: ArbitrageScannerSetEntry;
+  index: number;
+  expanded: boolean;
+  onToggle: () => void;
+  targetInputs: Record<string, string>;
+  onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
+  onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
+}) {
   const imageUrl = resolveWfmAssetUrl(entry.imagePath);
 
   return (
-    <article className="market-panel scanner-result-card">
-      <div className="market-panel-header">
-        <div className="market-panel-header-copy scanner-result-header">
+    <article className={`scanner-list-row${expanded ? ' is-expanded' : ''}`}>
+      <button className="scanner-list-button" type="button" onClick={onToggle}>
+        <div className="scanner-list-primary">
           <div className="scanner-result-rank">#{index + 1}</div>
           <span className="scanner-result-thumb">
             {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
           </span>
-          <div>
-            <div className="panel-title-row">
-              <span className="panel-title-eyebrow">Statistics Arbitrage</span>
-            </div>
-            <h3>{entry.name}</h3>
-            <p>{entry.note}</p>
+          <div className="scanner-list-name">
+            <span className="panel-title-eyebrow">Statistics Arbitrage</span>
+            <strong>{entry.name}</strong>
+            <span className="scanner-list-note">{entry.note}</span>
           </div>
         </div>
-        <div className="market-panel-header-aside scanner-result-badges">
-          <span className="market-panel-badge tone-blue">Score {Math.round(entry.arbitrageScore)}</span>
-          <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
-            {entry.confidenceSummary.label}
-          </span>
-        </div>
-      </div>
-
-      <div className="market-panel-body scanner-result-body">
-        <div className="scanner-metric-grid">
-          <div className="market-metric-card">
-            <span className="info-card-label">Basket Entry</span>
+        <div className="scanner-list-metrics">
+          <div className="scanner-list-metric">
+            <span>Entry</span>
             <strong>{formatPlat(entry.basketEntryCost)}</strong>
           </div>
-          <div className="market-metric-card">
-            <span className="info-card-label">Set Exit</span>
-            <strong>{formatPlat(entry.recommendedSetExitPrice)}</strong>
-          </div>
-          <div className="market-metric-card">
-            <span className="info-card-label">Gross Margin</span>
-            <strong>{formatPlat(entry.grossMargin)}</strong>
-          </div>
-          <div className="market-metric-card">
-            <span className="info-card-label">ROI</span>
-            <strong>{formatPercent(entry.roiPct)}</strong>
-          </div>
-          <div className="market-metric-card">
-            <span className="info-card-label">Liquidity</span>
-            <strong>{Math.round(entry.liquidityScore)}%</strong>
-          </div>
-          <div className="market-metric-card">
-            <span className="info-card-label">Set Exit Zone</span>
+          <div className="scanner-list-metric">
+            <span>Exit Zone</span>
             <strong>{formatPlat(entry.setExitLow)} - {formatPlat(entry.setExitHigh)}</strong>
           </div>
+          <div className="scanner-list-metric">
+            <span>Margin</span>
+            <strong>{formatPlat(entry.grossMargin)}</strong>
+          </div>
+          <div className="scanner-list-metric">
+            <span>ROI</span>
+            <strong>{formatPercent(entry.roiPct)}</strong>
+          </div>
+          <div className="scanner-list-metric">
+            <span>Liquidity</span>
+            <strong>{Math.round(entry.liquidityScore)}%</strong>
+          </div>
+          <div className="scanner-list-badges">
+            <span className="market-panel-badge tone-blue">Score {Math.round(entry.arbitrageScore)}</span>
+            <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
+              {entry.confidenceSummary.label}
+            </span>
+            <span className="scanner-list-chevron">{expanded ? '−' : '+'}</span>
+          </div>
         </div>
+      </button>
 
-        <div className="scanner-components-panel">
-          <div className="scanner-components-header">
-            <span className="card-label">Component Basket</span>
-            <span className="scanner-components-meta">{entry.componentCount} components</span>
+      {expanded ? (
+        <div className="scanner-row-body">
+          <div className="scanner-row-summary-grid">
+            <div className="market-metric-card">
+              <span className="info-card-label">Set Exit</span>
+              <strong>{formatPlat(entry.recommendedSetExitPrice)}</strong>
+            </div>
+            <div className="market-metric-card">
+              <span className="info-card-label">Liquidity</span>
+              <strong>{Math.round(entry.liquidityScore)}%</strong>
+            </div>
+            <div className="market-metric-card">
+              <span className="info-card-label">Confidence</span>
+              <strong>{entry.confidenceSummary.label}</strong>
+            </div>
+            <div className="market-metric-card">
+              <span className="info-card-label">Components</span>
+              <strong>{entry.componentCount}</strong>
+            </div>
           </div>
-          <div className="scanner-components-list">
-            {entry.components.map((component) => (
-              <ArbitrageComponentRow
-                key={`${entry.slug}-${component.slug}`}
-                component={component}
-              />
-            ))}
+
+          <div className="scanner-components-panel">
+            <div className="scanner-components-header">
+              <span className="card-label">Component Basket</span>
+              <span className="scanner-components-meta">{entry.componentCount} components</span>
+            </div>
+            <div className="scanner-components-list">
+              {entry.components.map((component) => (
+                <ArbitrageComponentRow
+                  key={`${entry.slug}-${component.slug}`}
+                  component={component}
+                  targetValue={targetInputs[component.slug] ?? getDefaultComponentTarget(component)}
+                  onTargetChange={(value) => onTargetChange(component, value)}
+                  onAdd={() => onAddToWatchlist(component)}
+                />
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </article>
   );
 }
@@ -155,6 +244,9 @@ export function ScannersPage() {
   const [arbitrage, setArbitrage] = useState<ArbitrageScannerResponse | null>(null);
   const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
+  const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
+  const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
 
   const loadScannerState = useCallback(async (cancelled = false) => {
     try {
@@ -283,6 +375,52 @@ export function ScannersPage() {
   const hasSavedScan = Boolean(arbitrage);
   const actionLabel = hasSavedScan ? 'Rescan' : 'Start Scan';
 
+  useEffect(() => {
+    if (!arbitrage?.results.length) {
+      setExpandedSlug(null);
+      return;
+    }
+
+    setExpandedSlug((current) =>
+      current && arbitrage.results.some((entry) => entry.slug === current)
+        ? current
+        : arbitrage.results[0]?.slug ?? null,
+    );
+  }, [arbitrage]);
+
+  const updateComponentTarget = (
+    component: ArbitrageScannerComponentEntry,
+    value: string,
+  ) => {
+    setComponentTargets((current) => ({
+      ...current,
+      [component.slug]: value,
+    }));
+  };
+
+  const addComponentToWatchlist = (component: ArbitrageScannerComponentEntry) => {
+    if (component.itemId === null) {
+      return;
+    }
+
+    const rawTarget = componentTargets[component.slug] ?? getDefaultComponentTarget(component);
+    const targetPrice = Number.parseInt(rawTarget || '0', 10);
+    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+      return;
+    }
+
+    const item: WfmAutocompleteItem = {
+      itemId: component.itemId,
+      name: component.name,
+      slug: component.slug,
+      maxRank: null,
+      itemFamily: null,
+      imagePath: component.imagePath,
+    };
+
+    addExplicitItemToWatchlist(item, 'base', 'Base Market', targetPrice);
+  };
+
   return (
     <>
       <div className="subnav">
@@ -406,7 +544,18 @@ export function ScannersPage() {
             {arbitrage ? (
               <div className="scanner-results-list">
                 {arbitrage.results.map((entry, index) => (
-                  <ArbitrageCard key={entry.slug} entry={entry} index={index} />
+                  <ArbitrageRow
+                    key={entry.slug}
+                    entry={entry}
+                    index={index}
+                    expanded={expandedSlug === entry.slug}
+                    onToggle={() =>
+                      setExpandedSlug((current) => (current === entry.slug ? null : entry.slug))
+                    }
+                    targetInputs={componentTargets}
+                    onTargetChange={updateComponentTarget}
+                    onAddToWatchlist={addComponentToWatchlist}
+                  />
                 ))}
               </div>
             ) : !isRunning ? (
