@@ -3799,28 +3799,13 @@ body {
 }
 
 .scanner-list-header-relic {
-  color: var(--text-secondary);
-  --relic-metrics-width: 410px;
-  --relic-actions-width: 410px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.scanner-list-header-spacer {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.scanner-list-header-metrics {
-  width: var(--relic-metrics-width);
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: 44px 52px minmax(260px, 1fr) 72px 96px 72px 84px 92px 360px;
+  column-gap: 10px;
   align-items: center;
 }
 
-.scanner-list-header-metrics > span {
+.scanner-list-header-relic > span {
   color: var(--text-secondary);
   font-size: 9px;
   font-family: 'JetBrains Mono', monospace;
@@ -3829,9 +3814,8 @@ body {
   text-align: center;
 }
 
-.scanner-list-header-actions {
-  width: var(--relic-actions-width);
-  flex: 0 0 var(--relic-actions-width);
+.scanner-list-header-empty {
+  min-height: 1px;
 }
 
 .scanner-list-badges {
@@ -3843,29 +3827,28 @@ body {
 }
 
 .scanner-list-button-relic {
-  display: flex;
+  display: grid;
+  grid-template-columns: 44px 52px minmax(260px, 1fr) 72px 96px 72px 84px 92px 360px;
   align-items: center;
-  gap: 10px;
-}
-
-.scanner-list-primary-relic {
-  flex: 1 1 auto;
-  min-width: 0;
+  column-gap: 10px;
 }
 
 .scanner-list-metrics-relic {
-  width: var(--relic-metrics-width);
-  flex: 0 0 var(--relic-metrics-width);
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   align-items: center;
 }
 
+.scanner-result-rank-relic,
+.scanner-result-thumb-relic,
+.scanner-list-name-relic {
+  min-width: 0;
+}
+
 .scanner-list-badges-relic {
-  width: var(--relic-actions-width);
-  flex: 0 0 var(--relic-actions-width);
   flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .scanner-list-chevron {
@@ -5435,12 +5418,13 @@ body {
     display: flex;
   }
 
+  .scanner-list-button-relic {
+    gap: 10px;
+  }
+
   .scanner-list-metrics-relic,
-  .scanner-list-header-metrics,
-  .scanner-list-badges-relic,
-  .scanner-list-header-actions {
+  .scanner-list-badges-relic {
     width: auto;
-    flex: 0 1 auto;
   }
 
   .scanner-list-badges {
