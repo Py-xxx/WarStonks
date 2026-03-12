@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   ensureMarketTracking,
   getAppSettings,
+  getItemAnalysis,
   getCurrencyBalances,
   getItemVariantsForMarket,
   getWfmItemOrders,
@@ -71,6 +72,7 @@ import type {
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
   AppSettings,
+  ItemAnalysisResponse,
   MarketVariant,
   WalletSnapshot,
   WfmAutocompleteItem,
@@ -79,6 +81,7 @@ import type {
 import { mockSellOrders } from '../mocks/trades';
 
 let quickViewRequestSequence = 0;
+let marketAnalysisRequestSequence = 0;
 let worldStateEventsRefreshPromise: Promise<void> | null = null;
 let worldStateAlertsRefreshPromise: Promise<void> | null = null;
 let worldStateSortieRefreshPromise: Promise<void> | null = null;
@@ -126,6 +129,10 @@ interface CachedWorldStateSnapshot<T> {
   payload: T;
   fetchedAt: string;
   nextRefreshAt: string | null;
+}
+
+function buildMarketAnalysisCacheKey(itemId: number, variantKey: string): string {
+  return `${itemId}:${variantKey}`;
 }
 
 const WORLDSTATE_SYSTEM_ALERT_ID = 'system:worldstate-offline';
@@ -607,8 +614,13 @@ interface AppStore {
     slug: string;
     variantKey: string;
   } | null;
+  selectedMarketAnalysis: ItemAnalysisResponse | null;
+  selectedMarketAnalysisLoading: boolean;
+  selectedMarketAnalysisError: string | null;
+  marketAnalysisCache: Record<string, ItemAnalysisResponse>;
   loadQuickViewItem: (item: WfmAutocompleteItem) => Promise<void>;
   setSelectedMarketVariantKey: (variantKey: string | null) => Promise<void>;
+  loadSelectedMarketAnalysis: (options?: { force?: boolean }) => Promise<void>;
 
   tradesSubTab: TradesSubTab;
   setTradesSubTab: (tab: TradesSubTab) => void;
@@ -1701,6 +1713,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectedMarketVariantKey: null,
   selectedMarketVariantLabel: null,
   searchTrackingSource: null,
+  selectedMarketAnalysis: null,
+  selectedMarketAnalysisLoading: false,
+  selectedMarketAnalysisError: null,
+  marketAnalysisCache: {},
   loadQuickViewItem: async (item) => {
     const requestId = ++quickViewRequestSequence;
     const previousTrackedSelection = get().searchTrackingSource;
@@ -1718,6 +1734,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       marketVariantsError: null,
       selectedMarketVariantKey: null,
       selectedMarketVariantLabel: null,
+      selectedMarketAnalysis: null,
+      selectedMarketAnalysisLoading: false,
+      selectedMarketAnalysisError: null,
     });
 
     try {
@@ -1767,6 +1786,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         selectedMarketVariantKey: nextSelectedVariantKey,
         selectedMarketVariantLabel: nextSelectedVariantLabel,
         searchTrackingSource: nextTrackedSelection,
+        selectedMarketAnalysis:
+          nextSelectedVariantKey
+            ? get().marketAnalysisCache[buildMarketAnalysisCacheKey(item.itemId, nextSelectedVariantKey)] ?? null
+            : null,
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: null,
       });
     } catch (error) {
       if (requestId !== quickViewRequestSequence) {
@@ -1786,6 +1811,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         marketVariantsError: toErrorMessage(error),
         selectedMarketVariantKey: null,
         selectedMarketVariantLabel: null,
+        selectedMarketAnalysis: null,
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: null,
       });
     }
   },
@@ -1799,6 +1827,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         selectedMarketVariantKey: null,
         selectedMarketVariantLabel: null,
         searchTrackingSource: null,
+        selectedMarketAnalysis: null,
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: null,
       });
       return;
     }
@@ -1807,6 +1838,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
       selectedMarketVariantKey: variantKey,
       selectedMarketVariantLabel:
         state.marketVariants.find((entry) => entry.key === variantKey)?.label ?? null,
+      selectedMarketAnalysis:
+        variantKey
+          ? state.marketAnalysisCache[buildMarketAnalysisCacheKey(selectedItem.itemId, variantKey)] ?? null
+          : null,
+      selectedMarketAnalysisLoading: false,
+      selectedMarketAnalysisError: null,
       quickView: {
         ...state.quickView,
         loading: true,
@@ -1826,6 +1863,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         selectedMarketVariantLabel:
           currentState.marketVariants.find((entry) => entry.key === variantKey)?.label ?? null,
         searchTrackingSource: syncedSelection.nextTrackedSelection,
+        selectedMarketAnalysis:
+          variantKey
+            ? currentState.marketAnalysisCache[buildMarketAnalysisCacheKey(selectedItem.itemId, variantKey)] ?? null
+            : null,
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: null,
         quickView: {
           ...currentState.quickView,
           selectedItem,
@@ -1837,11 +1880,89 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }));
     } catch (error) {
       set((currentState) => ({
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: toErrorMessage(error),
         quickView: {
           ...currentState.quickView,
           loading: false,
           errorMessage: toErrorMessage(error),
         },
+      }));
+    }
+  },
+  loadSelectedMarketAnalysis: async (options) => {
+    const state = get();
+    const selectedItem = state.quickView.selectedItem;
+    const selectedVariantKey = state.selectedMarketVariantKey;
+    const force = options?.force ?? false;
+
+    if (!selectedItem || !selectedVariantKey) {
+      set({
+        selectedMarketAnalysis: null,
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: null,
+      });
+      return;
+    }
+
+    const cacheKey = buildMarketAnalysisCacheKey(selectedItem.itemId, selectedVariantKey);
+    const cached = state.marketAnalysisCache[cacheKey] ?? null;
+
+    if (cached && !force) {
+      set({
+        selectedMarketAnalysis: cached,
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: null,
+      });
+      return;
+    }
+
+    const requestId = ++marketAnalysisRequestSequence;
+    set({
+      selectedMarketAnalysis: cached,
+      selectedMarketAnalysisLoading: true,
+      selectedMarketAnalysisError: null,
+    });
+
+    try {
+      await ensureMarketTracking(
+        selectedItem.itemId,
+        selectedItem.slug,
+        selectedVariantKey,
+        'analytics',
+      );
+      const analysis = await getItemAnalysis(
+        selectedItem.itemId,
+        selectedItem.slug,
+        selectedVariantKey,
+      );
+      if (requestId !== marketAnalysisRequestSequence) {
+        return;
+      }
+      set((currentState) => {
+        const nextCache = {
+          ...currentState.marketAnalysisCache,
+          [cacheKey]: analysis,
+        };
+        return {
+          marketAnalysisCache: nextCache,
+          selectedMarketAnalysis:
+            currentState.quickView.selectedItem?.itemId === selectedItem.itemId
+            && currentState.selectedMarketVariantKey === selectedVariantKey
+              ? analysis
+              : currentState.selectedMarketAnalysis,
+          selectedMarketAnalysisLoading: false,
+          selectedMarketAnalysisError: null,
+        };
+      });
+    } catch (error) {
+      if (requestId !== marketAnalysisRequestSequence) {
+        return;
+      }
+      set((currentState) => ({
+        selectedMarketAnalysis: currentState.marketAnalysisCache[cacheKey] ?? currentState.selectedMarketAnalysis,
+        selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisError: toErrorMessage(error),
       }));
     }
   },

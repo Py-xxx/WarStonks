@@ -2114,6 +2114,110 @@ body {
   line-height: 1.5;
 }
 
+.analysis-preview-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-preview-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(152, 170, 210, 0.16);
+  background: rgba(12, 17, 28, 0.92);
+}
+
+.analysis-preview-hero.tone-green {
+  border-color: rgba(61, 214, 140, 0.18);
+  box-shadow: inset 0 1px 0 rgba(61, 214, 140, 0.12);
+}
+
+.analysis-preview-hero.tone-amber {
+  border-color: rgba(240, 160, 48, 0.18);
+  box-shadow: inset 0 1px 0 rgba(240, 160, 48, 0.12);
+}
+
+.analysis-preview-hero.tone-red {
+  border-color: rgba(240, 79, 88, 0.18);
+  box-shadow: inset 0 1px 0 rgba(240, 79, 88, 0.12);
+}
+
+.analysis-preview-kicker {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.analysis-preview-title {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+.analysis-preview-copy {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.analysis-preview-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.analysis-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.analysis-preview-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(10, 15, 27, 0.88);
+}
+
+.analysis-preview-stat-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.analysis-preview-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+.analysis-preview-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* ── EVENTS ── */
 .world-event-updated-at {
   margin-bottom: 12px;
