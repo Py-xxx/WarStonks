@@ -220,8 +220,29 @@ fn build_wfstat_client() -> Result<Client, String> {
         .map_err(|error| error.to_string())
 }
 
+fn shared_wfstat_client() -> Result<Client, String> {
+    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    match CLIENT.get_or_init(build_wfstat_client) {
+        Ok(client) => Ok(client.clone()),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+fn shared_wfm_client() -> Result<Client, String> {
+    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    match CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(client) => Ok(client.clone()),
+        Err(error) => Err(error.clone()),
+    }
+}
+
 fn fetch_wfstat_array(endpoint: &str, label: &str) -> Result<Vec<serde_json::Value>, String> {
-    let client = build_wfstat_client()?;
+    let client = shared_wfstat_client()?;
     let response = client
         .get(format!("{WFSTAT_API_BASE_URL}{endpoint}"))
         .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
@@ -241,7 +262,7 @@ fn fetch_wfstat_array(endpoint: &str, label: &str) -> Result<Vec<serde_json::Val
 }
 
 fn fetch_wfstat_object(endpoint: &str, label: &str) -> Result<serde_json::Value, String> {
-    let client = build_wfstat_client()?;
+    let client = shared_wfstat_client()?;
     let response = client
         .get(format!("{WFSTAT_API_BASE_URL}{endpoint}"))
         .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
@@ -458,7 +479,7 @@ fn enrich_void_trader_inventory_item(
 }
 
 fn fetch_worldstate_void_trader_inner(app: tauri::AppHandle) -> Result<VoidTraderResponse> {
-    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let client = shared_wfm_client().map_err(anyhow::Error::msg)?;
     let response = client
         .get(format!("{WFSTAT_API_BASE_URL}/pc/voidTrader"))
         .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
@@ -687,7 +708,7 @@ fn fetch_wfm_top_sell_orders_inner(
         return Err(anyhow::anyhow!("item slug cannot be empty"));
     }
 
-    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let client = shared_wfm_client().map_err(anyhow::Error::msg)?;
     let response = client
         .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}"))
         .header("User-Agent", WFM_USER_AGENT)
