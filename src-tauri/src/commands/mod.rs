@@ -92,21 +92,18 @@ pub struct MarketNewsResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WfmTopOrdersApiResponse {
+struct WfmOrdersApiResponse {
     api_version: Option<String>,
-    data: WfmTopOrdersData,
-}
-
-#[derive(Debug, Deserialize)]
-struct WfmTopOrdersData {
     #[serde(default)]
-    sell: Vec<WfmOrderWithUser>,
+    data: Vec<WfmOrderWithUser>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WfmOrderWithUser {
     id: String,
+    #[serde(rename = "type")]
+    order_type: String,
     platinum: i64,
     #[serde(default)]
     quantity: Option<i64>,
@@ -114,6 +111,8 @@ struct WfmOrderWithUser {
     per_trade: Option<i64>,
     #[serde(default)]
     rank: Option<i64>,
+    #[serde(default)]
+    visible: Option<bool>,
     user: WfmOrderUser,
 }
 
@@ -624,12 +623,15 @@ fn order_matches_variant(rank: Option<i64>, variant_key: Option<&str>) -> bool {
 fn normalize_top_sell_orders(
     slug: &str,
     api_version: Option<String>,
-    sell_orders: Vec<WfmOrderWithUser>,
+    orders: Vec<WfmOrderWithUser>,
     variant_key: Option<&str>,
 ) -> WfmTopSellOrdersResponse {
-    let mut normalized = sell_orders
+    let mut normalized = orders
         .into_iter()
         .filter_map(|order| {
+            if order.order_type != "sell" || order.visible == Some(false) {
+                return None;
+            }
             if !order_matches_variant(order.rank, variant_key) {
                 return None;
             }
@@ -668,23 +670,23 @@ fn fetch_wfm_top_sell_orders_inner(
 
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
     let response = client
-        .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}/top"))
+        .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}"))
         .header("User-Agent", WFM_USER_AGENT)
         .header("Language", WFM_LANGUAGE_HEADER)
         .header("Platform", WFM_PLATFORM_HEADER)
         .header("Crossplay", WFM_CROSSPLAY_HEADER)
         .send()
-        .context("failed to request top WFM orders")?
+        .context("failed to request WFM item orders")?
         .error_for_status()
-        .context("WFM top orders request failed")?;
+        .context("WFM item orders request failed")?;
     let payload = response
-        .json::<WfmTopOrdersApiResponse>()
-        .context("failed to parse WFM top orders response JSON")?;
+        .json::<WfmOrdersApiResponse>()
+        .context("failed to parse WFM item orders response JSON")?;
 
     Ok(normalize_top_sell_orders(
         trimmed_slug,
         payload.api_version,
-        payload.data.sell,
+        payload.data,
         variant_key.as_deref(),
     ))
 }
@@ -835,10 +837,12 @@ mod tests {
             vec![
                 WfmOrderWithUser {
                     id: "3".to_string(),
+                    order_type: "sell".to_string(),
                     platinum: 9,
                     quantity: Some(1),
                     per_trade: Some(1),
                     rank: Some(0),
+                    visible: Some(true),
                     user: WfmOrderUser {
                         ingame_name: Some("charlie".to_string()),
                         slug: Some("charlie".to_string()),
@@ -847,10 +851,12 @@ mod tests {
                 },
                 WfmOrderWithUser {
                     id: "1".to_string(),
+                    order_type: "sell".to_string(),
                     platinum: 5,
                     quantity: Some(1),
                     per_trade: Some(1),
                     rank: Some(0),
+                    visible: Some(true),
                     user: WfmOrderUser {
                         ingame_name: Some("alpha".to_string()),
                         slug: Some("alpha".to_string()),
@@ -859,10 +865,12 @@ mod tests {
                 },
                 WfmOrderWithUser {
                     id: "skip".to_string(),
+                    order_type: "sell".to_string(),
                     platinum: 4,
                     quantity: Some(1),
                     per_trade: Some(1),
                     rank: Some(0),
+                    visible: Some(true),
                     user: WfmOrderUser {
                         ingame_name: None,
                         slug: Some("missing".to_string()),
@@ -871,10 +879,12 @@ mod tests {
                 },
                 WfmOrderWithUser {
                     id: "2".to_string(),
+                    order_type: "sell".to_string(),
                     platinum: 7,
                     quantity: Some(1),
                     per_trade: Some(1),
                     rank: Some(0),
+                    visible: Some(true),
                     user: WfmOrderUser {
                         ingame_name: Some("bravo".to_string()),
                         slug: Some("bravo".to_string()),
@@ -883,10 +893,12 @@ mod tests {
                 },
                 WfmOrderWithUser {
                     id: "4".to_string(),
+                    order_type: "sell".to_string(),
                     platinum: 10,
                     quantity: Some(1),
                     per_trade: Some(1),
                     rank: Some(0),
+                    visible: Some(true),
                     user: WfmOrderUser {
                         ingame_name: Some("delta".to_string()),
                         slug: Some("delta".to_string()),
@@ -895,10 +907,12 @@ mod tests {
                 },
                 WfmOrderWithUser {
                     id: "5".to_string(),
+                    order_type: "sell".to_string(),
                     platinum: 11,
                     quantity: Some(1),
                     per_trade: Some(1),
                     rank: Some(0),
+                    visible: Some(true),
                     user: WfmOrderUser {
                         ingame_name: Some("echo".to_string()),
                         slug: Some("echo".to_string()),
@@ -907,10 +921,12 @@ mod tests {
                 },
                 WfmOrderWithUser {
                     id: "6".to_string(),
+                    order_type: "sell".to_string(),
                     platinum: 12,
                     quantity: Some(1),
                     per_trade: Some(1),
                     rank: Some(0),
+                    visible: Some(true),
                     user: WfmOrderUser {
                         ingame_name: Some("foxtrot".to_string()),
                         slug: Some("foxtrot".to_string()),
@@ -925,6 +941,76 @@ mod tests {
         assert_eq!(response.sell_orders.len(), 5);
         assert_eq!(response.sell_orders[0].username, "alpha");
         assert_eq!(response.sell_orders[4].username, "echo");
+    }
+
+    #[test]
+    fn ignores_non_sell_hidden_and_wrong_rank_orders() {
+        let response = normalize_top_sell_orders(
+            "primary_merciless",
+            Some("0.22.7".to_string()),
+            vec![
+                WfmOrderWithUser {
+                    id: "buy".to_string(),
+                    order_type: "buy".to_string(),
+                    platinum: 300,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(5),
+                    visible: Some(true),
+                    user: WfmOrderUser {
+                        ingame_name: Some("buyer".to_string()),
+                        slug: Some("buyer".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "hidden".to_string(),
+                    order_type: "sell".to_string(),
+                    platinum: 20,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(5),
+                    visible: Some(false),
+                    user: WfmOrderUser {
+                        ingame_name: Some("hidden".to_string()),
+                        slug: Some("hidden".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "wrong-rank".to_string(),
+                    order_type: "sell".to_string(),
+                    platinum: 30,
+                    quantity: Some(1),
+                    per_trade: Some(1),
+                    rank: Some(4),
+                    visible: Some(true),
+                    user: WfmOrderUser {
+                        ingame_name: Some("wrong".to_string()),
+                        slug: Some("wrong".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+                WfmOrderWithUser {
+                    id: "match".to_string(),
+                    order_type: "sell".to_string(),
+                    platinum: 40,
+                    quantity: Some(2),
+                    per_trade: Some(1),
+                    rank: Some(5),
+                    visible: Some(true),
+                    user: WfmOrderUser {
+                        ingame_name: Some("seller".to_string()),
+                        slug: Some("seller".to_string()),
+                        status: Some("online".to_string()),
+                    },
+                },
+            ],
+            Some("rank:5"),
+        );
+
+        assert_eq!(response.sell_orders.len(), 1);
+        assert_eq!(response.sell_orders[0].order_id, "match");
     }
 
     #[test]
