@@ -55,6 +55,14 @@ function formatChance(value: number | null): string {
   return `${formatted}%`;
 }
 
+function normalizeRelicChance(value: number | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  return Math.max(0, value) / 100;
+}
+
 function confidenceTone(level: string): 'green' | 'blue' | 'amber' {
   switch (level) {
     case 'high':
@@ -303,9 +311,10 @@ function RelicDropRow({
 }) {
   const imageUrl = resolveWfmAssetUrl(drop.imagePath);
   const chance = chanceForRefinement(drop.chanceProfile, refinementKey);
+  const normalizedChance = normalizeRelicChance(chance);
   const expectedContribution =
-    chance !== null && drop.recommendedExitPrice !== null
-      ? Math.round(chance * drop.recommendedExitPrice)
+    normalizedChance !== null && drop.recommendedExitPrice !== null
+      ? Math.round(normalizedChance * drop.recommendedExitPrice)
       : null;
 
   return (
