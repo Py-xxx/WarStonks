@@ -3860,22 +3860,41 @@ body {
   line-height: 1.5;
 }
 
-.scanner-component-statline {
+.scanner-component-pill-row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.5;
 }
 
-.scanner-component-stat-label {
-  color: var(--text-secondary);
+.scanner-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 24, 38, 0.88);
 }
 
-.scanner-component-stat-value {
+.scanner-stat-pill-highlight {
+  border-color: rgba(74, 158, 255, 0.26);
+  background: rgba(16, 34, 61, 0.9);
+}
+
+.scanner-stat-pill-label {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scanner-stat-pill-value {
   color: var(--text-primary);
   font-weight: 600;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .scanner-component-actions {
