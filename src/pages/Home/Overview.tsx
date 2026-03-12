@@ -5,7 +5,7 @@ import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import type { WfmTopSellOrder } from '../../types';
+import type { ItemAnalysisResponse, WfmTopSellOrder } from '../../types';
 
 const COPY_RESET_DELAY_MS = 1800;
 const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
@@ -93,6 +93,36 @@ function buildDashboardEventDetail(node: string | null, expiry: string | null): 
   }
 
   return detailParts.join(' • ');
+}
+
+function getAnalysisPreviewTone(analysis: ItemAnalysisResponse | null): 'green' | 'amber' | 'red' {
+  const label = analysis?.headline.confidenceSummary.level ?? 'low';
+  if (analysis?.manipulationRisk.riskLevel.toLowerCase().includes('high')) {
+    return 'red';
+  }
+  if (label === 'high' && (analysis?.headline.netMargin ?? 0) > 0) {
+    return 'green';
+  }
+  if (label === 'medium') {
+    return 'amber';
+  }
+  return 'red';
+}
+
+function buildAnalysisPreviewLabel(analysis: ItemAnalysisResponse | null): string {
+  if (!analysis) {
+    return 'Building';
+  }
+  if (analysis.manipulationRisk.riskLevel.toLowerCase().includes('high')) {
+    return 'Caution';
+  }
+  if ((analysis.headline.netMargin ?? 0) > 0 && analysis.headline.confidenceSummary.level === 'high') {
+    return 'Buy Bias';
+  }
+  if ((analysis.headline.netMargin ?? 0) > 0) {
+    return 'Selective';
+  }
+  return 'Wait';
 }
 
 function WatchlistCard() {
@@ -505,18 +535,127 @@ function QuickViewCard() {
 }
 
 function AnalysisCard() {
+  const selectedItem = useAppStore((state) => state.quickView.selectedItem);
+  const quickViewLoading = useAppStore((state) => state.quickView.loading);
+  const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
+  const selectedMarketVariantLabel = useAppStore((state) => state.selectedMarketVariantLabel);
+  const analysis = useAppStore((state) => state.selectedMarketAnalysis);
+  const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
+  const analysisError = useAppStore((state) => state.selectedMarketAnalysisError);
+  const loadSelectedMarketAnalysis = useAppStore((state) => state.loadSelectedMarketAnalysis);
+  const setActivePage = useAppStore((state) => state.setActivePage);
+  const setMarketSubTab = useAppStore((state) => state.setMarketSubTab);
+
+  useEffect(() => {
+    if (!selectedItem || !selectedMarketVariantKey || quickViewLoading) {
+      return;
+    }
+    void loadSelectedMarketAnalysis();
+  }, [selectedItem?.itemId, selectedMarketVariantKey, quickViewLoading, loadSelectedMarketAnalysis]);
+
+  const openMarketAnalysis = () => {
+    setActivePage('market');
+    setMarketSubTab('analysis');
+  };
+
+  const previewTone = getAnalysisPreviewTone(analysis);
+  const previewLabel = buildAnalysisPreviewLabel(analysis);
+
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-label">Analysis Preview</span>
-      </div>
-      <div className="card-body">
-        <div className="analysis-placeholder">
-          <span className="analysis-placeholder-title">Analysis is not live yet</span>
-          <span className="analysis-placeholder-body">
-            Exit price, score, trend, and derived opportunity metrics will be calculated here once the analysis layer is added.
-          </span>
+        {analysis ? <span className={`badge badge-${previewTone}`}>{previewLabel}</span> : null}
+        <div className="card-actions">
+          <button className="text-btn" type="button" onClick={openMarketAnalysis}>
+            Open
+          </button>
         </div>
+      </div>
+      <div className="card-body dashboard-panel-shell">
+        {!selectedItem ? (
+          <div className="empty-state">
+            <span className="empty-primary">Search a WFM item to build analysis</span>
+            <span className="empty-sub">The dashboard preview uses the same full analysis result as the Market page.</span>
+          </div>
+        ) : null}
+
+        {selectedItem && !selectedMarketVariantKey && !quickViewLoading ? (
+          <div className="empty-state">
+            <span className="empty-primary">Select a market variant first</span>
+            <span className="empty-sub">Analysis only starts once the correct market variant is resolved for this item.</span>
+          </div>
+        ) : null}
+
+        {selectedItem && selectedMarketVariantKey && !analysis && analysisError ? (
+          <div className="empty-state">
+            <span className="empty-primary">Analysis preview failed to load</span>
+            <span className="empty-sub">{analysisError}</span>
+          </div>
+        ) : null}
+
+        {selectedItem && analysis ? (
+          <div className="analysis-preview-shell">
+            <div className={`analysis-preview-hero tone-${previewTone}`}>
+              <div>
+                <div className="analysis-preview-kicker">Trade Posture</div>
+                <div className="analysis-preview-title">{previewLabel}</div>
+                <div className="analysis-preview-copy">
+                  {analysis.trend.summary}
+                </div>
+              </div>
+              <div className="analysis-preview-meta">
+                <span>{selectedMarketVariantLabel ?? 'Base Market'}</span>
+                <span>{analysis.headline.confidenceSummary.label}</span>
+              </div>
+            </div>
+
+            <div className="analysis-preview-grid">
+              <div className="analysis-preview-stat">
+                <span className="analysis-preview-stat-label">Entry</span>
+                <span className="analysis-preview-stat-value">
+                  {analysis.headline.entryPrice !== null ? `${Math.round(analysis.headline.entryPrice)} pt` : '—'}
+                </span>
+              </div>
+              <div className="analysis-preview-stat">
+                <span className="analysis-preview-stat-label">Exit</span>
+                <span className="analysis-preview-stat-value">
+                  {analysis.headline.exitPrice !== null ? `${Math.round(analysis.headline.exitPrice)} pt` : '—'}
+                </span>
+              </div>
+              <div className="analysis-preview-stat">
+                <span className="analysis-preview-stat-label">Net Margin</span>
+                <span className="analysis-preview-stat-value">
+                  {analysis.headline.netMargin !== null ? `${Math.round(analysis.headline.netMargin)} pt` : '—'}
+                </span>
+              </div>
+              <div className="analysis-preview-stat">
+                <span className="analysis-preview-stat-label">Liquidity</span>
+                <span className="analysis-preview-stat-value">
+                  {analysis.headline.liquidityScore !== null ? `${Math.round(analysis.headline.liquidityScore)}%` : '—'}
+                </span>
+              </div>
+              <div className="analysis-preview-stat">
+                <span className="analysis-preview-stat-label">Trend</span>
+                <span className="analysis-preview-stat-value">{analysis.trend.direction}</span>
+              </div>
+              <div className="analysis-preview-stat">
+                <span className="analysis-preview-stat-label">Risk</span>
+                <span className="analysis-preview-stat-value">{analysis.manipulationRisk.riskLevel}</span>
+              </div>
+            </div>
+
+            <div className="analysis-preview-foot">
+              <span>{analysis.supplyContext.mode === 'set-components' ? 'Set breakdown ready' : analysis.supplyContext.mode === 'drop-sources' ? 'Drop sources ready' : 'No source context'}</span>
+              <span>{analysis.computedAt ? `Computed ${new Date(analysis.computedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+            </div>
+          </div>
+        ) : null}
+
+        <CardLoadingOverlay
+          visible={Boolean(selectedItem && selectedMarketVariantKey && analysisLoading)}
+          label={`Building analysis for ${selectedItem?.name ?? 'item'}`}
+        />
       </div>
     </div>
   );

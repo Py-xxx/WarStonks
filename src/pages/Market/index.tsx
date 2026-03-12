@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import {
   ensureMarketTracking,
-  getItemAnalysis,
   getItemAnalytics,
   getItemDetailSummary,
   openExternalUrl,
@@ -1801,6 +1800,10 @@ function AnalysisTab() {
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
+  const analysis = useAppStore((state) => state.selectedMarketAnalysis);
+  const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
+  const analysisError = useAppStore((state) => state.selectedMarketAnalysisError);
+  const loadSelectedMarketAnalysis = useAppStore((state) => state.loadSelectedMarketAnalysis);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const worldStateAlerts = useAppStore((state) => state.worldStateAlerts);
   const worldStateEvents = useAppStore((state) => state.worldStateEvents);
@@ -1808,12 +1811,9 @@ function AnalysisTab() {
   const worldStateSyndicateMissions = useAppStore((state) => state.worldStateSyndicateMissions);
   const worldStateVoidTrader = useAppStore((state) => state.worldStateVoidTrader);
   const worldStateFlashSales = useAppStore((state) => state.worldStateFlashSales);
-  const [analysis, setAnalysis] = useState<ItemAnalysisResponse | null>(null);
   const [itemDetails, setItemDetails] = useState<ItemDetailSummary | null>(null);
   const [itemDetailsLoading, setItemDetailsLoading] = useState(false);
   const [itemDetailsError, setItemDetailsError] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [refreshNonce, setRefreshNonce] = useState(0);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
   const [revealedPanels, setRevealedPanels] = useState<Record<AnalysisPanelKey, boolean>>(
     () => ({
@@ -1829,11 +1829,9 @@ function AnalysisTab() {
   useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey) {
       clearRevealTimeouts(revealTimeoutsRef);
-      setAnalysis(null);
       setItemDetails(null);
       setItemDetailsLoading(false);
       setItemDetailsError(null);
-      setErrorMessage(null);
       setComponentTargets({});
       setRevealedPanels({
         ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
@@ -1844,11 +1842,9 @@ function AnalysisTab() {
 
     let isMounted = true;
     clearRevealTimeouts(revealTimeoutsRef);
-    setAnalysis(null);
     setItemDetails(null);
     setItemDetailsLoading(true);
     setItemDetailsError(null);
-    setErrorMessage(null);
     setComponentTargets({});
     setRevealedPanels({
       ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
@@ -1877,19 +1873,15 @@ function AnalysisTab() {
         setItemDetailsError(error instanceof Error ? error.message : String(error));
       });
 
-    void ensureMarketTracking(
-      selectedItem.itemId,
-      selectedItem.slug,
-      selectedMarketVariantKey,
-      'analytics',
-    )
-      .then(() => getItemAnalysis(selectedItem.itemId, selectedItem.slug, selectedMarketVariantKey))
-      .then((response) => {
+    void loadSelectedMarketAnalysis()
+      .then(() => {
         if (!isMounted) {
           return;
         }
-
-        setAnalysis(response);
+        const response = useAppStore.getState().selectedMarketAnalysis;
+        if (!response) {
+          return;
+        }
         if (!itemDetails) {
           setItemDetails(response.itemDetails);
           setItemDetailsLoading(false);
@@ -1907,15 +1899,13 @@ function AnalysisTab() {
             ]),
           ),
         );
-        setErrorMessage(null);
         queuePanelReveal(ANALYSIS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       })
       .catch((error) => {
         if (!isMounted) {
           return;
         }
-        setAnalysis(null);
-        setErrorMessage(error instanceof Error ? error.message : String(error));
+        console.error('Failed to load selected market analysis', error);
         clearRevealTimeouts(revealTimeoutsRef);
       });
 
@@ -1923,7 +1913,7 @@ function AnalysisTab() {
       isMounted = false;
       clearRevealTimeouts(revealTimeoutsRef);
     };
-  }, [selectedItem, selectedMarketVariantKey, refreshNonce]);
+  }, [selectedItem, selectedMarketVariantKey, loadSelectedMarketAnalysis]);
 
   const eventContextEntries = buildEventContextEntries(analysis, {
     alerts: worldStateAlerts,
@@ -2023,7 +2013,10 @@ function AnalysisTab() {
           type="button"
           aria-label="Refresh market analysis"
           title="Refresh market analysis"
-          onClick={() => setRefreshNonce((value) => value + 1)}
+          disabled={analysisLoading}
+          onClick={() => {
+            void loadSelectedMarketAnalysis({ force: true });
+          }}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -2110,8 +2103,8 @@ function AnalysisTab() {
               </div>
             </div>
             <PanelOverlay
-              loading={!revealedPanels.headline && !errorMessage}
-              errorMessage={!revealedPanels.headline ? errorMessage : null}
+              loading={!revealedPanels.headline && !analysisError}
+              errorMessage={!revealedPanels.headline ? analysisError : null}
               label="Building headline metrics"
             />
           </div>
@@ -2119,8 +2112,8 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Flip Analysis"
             eyebrow="Execution Model"
-            loading={!revealedPanels.flip && !errorMessage}
-            errorMessage={!revealedPanels.flip ? errorMessage : null}
+            loading={!revealedPanels.flip && !analysisError}
+            errorMessage={!revealedPanels.flip ? analysisError : null}
             loadingLabel="Calculating flip margins"
             className="market-panel-tone-blue"
             headerAside={
@@ -2162,8 +2155,8 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Liquidity Detail"
             eyebrow="Market Structure"
-            loading={!revealedPanels.liquidity && !errorMessage}
-            errorMessage={!revealedPanels.liquidity ? errorMessage : null}
+            loading={!revealedPanels.liquidity && !analysisError}
+            errorMessage={!revealedPanels.liquidity ? analysisError : null}
             loadingLabel="Profiling live liquidity"
             className="market-panel-tone-blue"
             headerAside={
@@ -2236,8 +2229,8 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Trend"
             eyebrow="Analytics Carryover"
-            loading={!revealedPanels.trend && !errorMessage}
-            errorMessage={!revealedPanels.trend ? errorMessage : null}
+            loading={!revealedPanels.trend && !analysisError}
+            errorMessage={!revealedPanels.trend ? analysisError : null}
             loadingLabel="Summarizing the current trend"
             className={`market-panel-tone-${getTrendTone(analysis?.trend.direction)}`}
             headerAside={
@@ -2309,8 +2302,8 @@ function AnalysisTab() {
                   : 'Drop Sources / Set Components'
             }
             eyebrow="Supply Context"
-            loading={!revealedPanels.supply && !errorMessage}
-            errorMessage={!revealedPanels.supply ? errorMessage : null}
+            loading={!revealedPanels.supply && !analysisError}
+            errorMessage={!revealedPanels.supply ? analysisError : null}
             loadingLabel="Building supply context"
             className="market-panel-tone-amber"
             headerAside={
@@ -2507,8 +2500,8 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Event Context"
             eyebrow="World State"
-            loading={!revealedPanels.eventContext && !errorMessage}
-            errorMessage={!revealedPanels.eventContext ? errorMessage : null}
+            loading={!revealedPanels.eventContext && !analysisError}
+            errorMessage={!revealedPanels.eventContext ? analysisError : null}
             loadingLabel="Matching worldstate context"
             className="market-panel-tone-amber"
             headerAside={
@@ -2541,8 +2534,8 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Manipulation Risk"
             eyebrow="Safety"
-            loading={!revealedPanels.manipulation && !errorMessage}
-            errorMessage={!revealedPanels.manipulation ? errorMessage : null}
+            loading={!revealedPanels.manipulation && !analysisError}
+            errorMessage={!revealedPanels.manipulation ? analysisError : null}
             loadingLabel="Scanning manipulation signals"
             className={`market-panel-tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
             headerAside={
@@ -2599,8 +2592,8 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Time of Day Liquidity"
             eyebrow="Observatory Tape"
-            loading={!revealedPanels.timeOfDay && !errorMessage}
-            errorMessage={!revealedPanels.timeOfDay ? errorMessage : null}
+            loading={!revealedPanels.timeOfDay && !analysisError}
+            errorMessage={!revealedPanels.timeOfDay ? analysisError : null}
             loadingLabel="Aggregating observatory tape"
             className="market-panel-tone-blue"
             headerAside={
