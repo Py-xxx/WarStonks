@@ -3,6 +3,7 @@ import {
   getArbitrageScannerState,
   listenToArbitrageScannerProgress,
   startArbitrageScanner,
+  stopArbitrageScanner,
 } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import type {
@@ -228,6 +229,25 @@ export function ScannersPage() {
     }
   };
 
+  const stopArbitrageScan = async () => {
+    setErrorMessage(null);
+    try {
+      const stopped = await stopArbitrageScanner();
+      if (!stopped) {
+        setProgress((current) =>
+          current
+            ? {
+                ...current,
+                statusText: current.statusText || 'No active arbitrage scan to stop.',
+              }
+            : current,
+        );
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const isRunning = progress?.status === 'running';
   const hasSavedScan = Boolean(arbitrage);
   const actionLabel = hasSavedScan ? 'Rescan' : 'Start Scan';
@@ -260,11 +280,14 @@ export function ScannersPage() {
               className="market-refresh-button"
               type="button"
               onClick={() => {
+                if (isRunning) {
+                  void stopArbitrageScan();
+                  return;
+                }
                 void runArbitrageScan();
               }}
-              disabled={isRunning}
             >
-              {isRunning ? 'Scanning…' : actionLabel}
+              {isRunning ? 'Stop Scan' : actionLabel}
             </button>
           </div>
         ) : null}
@@ -340,17 +363,6 @@ export function ScannersPage() {
                 <p className="scanner-progress-copy">
                   {progress?.statusText ?? 'No saved arbitrage scan yet. Start a scan to cache the results.'}
                 </p>
-                {!hasSavedScan && !isRunning ? (
-                  <button
-                    className="scanner-start-button"
-                    type="button"
-                    onClick={() => {
-                      void runArbitrageScan();
-                    }}
-                  >
-                    Start Scan
-                  </button>
-                ) : null}
                 {errorMessage ? (
                   <div className="scanner-inline-error" role="alert">
                     <strong>Arbitrage scan failed</strong>
