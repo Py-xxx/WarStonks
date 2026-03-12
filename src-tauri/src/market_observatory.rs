@@ -5609,6 +5609,10 @@ fn chance_for_refinement(
     }
 }
 
+fn normalized_relic_chance(chance_percent: f64) -> f64 {
+    (chance_percent / 100.0).clamp(0.0, 1.0)
+}
+
 fn load_relic_reward_profiles(
     catalog_connection: &Connection,
     relic_item_id: i64,
@@ -5807,7 +5811,7 @@ fn build_relic_roi_entry(
                 continue;
             };
 
-            let expected_contribution = chance * exit_price;
+            let expected_contribution = normalized_relic_chance(chance) * exit_price;
             expected_exit_value += expected_contribution;
             priced_drop_count += 1;
             weighted_liquidity_numerator += expected_contribution * drop.liquidity_score;
@@ -7609,13 +7613,15 @@ mod tests {
     #[test]
     fn relic_refinement_chance_lookup_and_score_behave() {
         let profile = RelicRefinementChanceProfile {
-            intact: Some(0.2533),
-            exceptional: Some(0.2333),
-            flawless: Some(0.2),
-            radiant: Some(0.1667),
+            intact: Some(25.33),
+            exceptional: Some(23.33),
+            flawless: Some(20.0),
+            radiant: Some(16.67),
         };
-        assert_eq!(chance_for_refinement(&profile, "intact"), Some(0.2533));
-        assert_eq!(chance_for_refinement(&profile, "radiant"), Some(0.1667));
+        assert_eq!(chance_for_refinement(&profile, "intact"), Some(25.33));
+        assert_eq!(chance_for_refinement(&profile, "radiant"), Some(16.67));
+        assert_eq!(super::normalized_relic_chance(20.0), 0.2);
+        assert_eq!(super::normalized_relic_chance(2.5), 0.025);
 
         let high_confidence = MarketConfidenceSummary {
             level: "high".to_string(),
@@ -7635,5 +7641,11 @@ mod tests {
 
         assert!(strong_score > weak_score);
         assert!(strong_score > 50.0);
+    }
+
+    #[test]
+    fn relic_roi_expected_value_uses_percent_chance() {
+        let expected_contribution = super::normalized_relic_chance(20.0) * 50.0;
+        assert!((expected_contribution - 10.0).abs() < f64::EPSILON);
     }
 }
