@@ -351,21 +351,16 @@ export function ScannersPage() {
                     Start Scan
                   </button>
                 ) : null}
-              </div>
-            </div>
-
-            {errorMessage ? (
-              <div className="market-panel">
-                <div className="market-panel-overlay is-error">
-                  <div className="market-panel-overlay-copy">
+                {errorMessage ? (
+                  <div className="scanner-inline-error" role="alert">
                     <strong>Arbitrage scan failed</strong>
                     <span>{errorMessage}</span>
                   </div>
-                </div>
+                ) : null}
               </div>
-            ) : null}
+            </div>
 
-            {!errorMessage && arbitrage ? (
+            {arbitrage ? (
               <div className="scanner-results-list">
                 {arbitrage.results.map((entry, index) => (
                   <ArbitrageCard key={entry.slug} entry={entry} index={index} />
