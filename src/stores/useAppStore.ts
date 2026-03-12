@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import {
   ensureMarketTracking,
+  getWfmTradeSessionState,
   getAppSettings,
   getItemAnalytics,
   getItemAnalysis,
@@ -9,6 +10,8 @@ import {
   getWfmItemOrders,
   getWfmTopSellOrdersForVariant,
   getWfmTopSellOrders,
+  signInWfmTradeAccount,
+  signOutWfmTradeAccount,
   saveAlecaframeSettings,
   stopMarketTracking,
 } from '../lib/tauriClient';
@@ -53,7 +56,8 @@ import type {
   QuickViewSelection,
   SellerMode,
   SettingsSection,
-  TradeOrder,
+  TradeAccountSummary,
+  TradeSignInInput,
   TradePeriod,
   TradesSubTab,
   WatchlistAlert,
@@ -79,7 +83,6 @@ import type {
   WfmAutocompleteItem,
   WfmTopSellOrder,
 } from '../types';
-import { mockSellOrders } from '../mocks/trades';
 
 let quickViewRequestSequence = 0;
 let marketAnalysisRequestSequence = 0;
@@ -638,18 +641,14 @@ interface AppStore {
   setSelectedMarketVariantKey: (variantKey: string | null) => Promise<void>;
   loadSelectedMarketAnalysis: (options?: { force?: boolean }) => Promise<void>;
 
+  tradeAccount: TradeAccountSummary | null;
+  tradeAccountLoading: boolean;
+  tradeAccountError: string | null;
+  loadTradeAccount: () => Promise<void>;
+  signInTradeAccount: (input: TradeSignInInput) => Promise<void>;
+  signOutTradeAccount: () => Promise<void>;
   tradesSubTab: TradesSubTab;
   setTradesSubTab: (tab: TradesSubTab) => void;
-  sellOrders: TradeOrder[];
-  removeSellOrder: (id: string) => void;
-  newOrderName: string;
-  setNewOrderName: (val: string) => void;
-  newOrderPrice: string;
-  setNewOrderPrice: (val: string) => void;
-  newOrderQty: string;
-  setNewOrderQty: (val: string) => void;
-  newOrderRank: string;
-  setNewOrderRank: (val: string) => void;
 
   tradePeriod: TradePeriod;
   setTradePeriod: (p: TradePeriod) => void;
@@ -2115,19 +2114,67 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
+  tradeAccount: null,
+  tradeAccountLoading: false,
+  tradeAccountError: null,
+  loadTradeAccount: async () => {
+    set({ tradeAccountLoading: true, tradeAccountError: null });
+
+    try {
+      const sessionState = await getWfmTradeSessionState();
+      set({
+        tradeAccount: sessionState.account,
+        tradeAccountLoading: false,
+        tradeAccountError: null,
+      });
+    } catch (error) {
+      set({
+        tradeAccount: null,
+        tradeAccountLoading: false,
+        tradeAccountError: toErrorMessage(error),
+      });
+    }
+  },
+  signInTradeAccount: async (input) => {
+    set({ tradeAccountLoading: true, tradeAccountError: null });
+
+    try {
+      const sessionState = await signInWfmTradeAccount(input);
+      set({
+        tradeAccount: sessionState.account,
+        tradeAccountLoading: false,
+        tradeAccountError: null,
+        activePage: 'trades',
+        tradesSubTab: 'sell-orders',
+      });
+    } catch (error) {
+      set({
+        tradeAccountLoading: false,
+        tradeAccountError: toErrorMessage(error),
+      });
+      throw error;
+    }
+  },
+  signOutTradeAccount: async () => {
+    set({ tradeAccountLoading: true, tradeAccountError: null });
+
+    try {
+      await signOutWfmTradeAccount();
+      set({
+        tradeAccount: null,
+        tradeAccountLoading: false,
+        tradeAccountError: null,
+      });
+    } catch (error) {
+      set({
+        tradeAccountLoading: false,
+        tradeAccountError: toErrorMessage(error),
+      });
+      throw error;
+    }
+  },
   tradesSubTab: 'sell-orders',
   setTradesSubTab: (tab) => set({ tradesSubTab: tab }),
-  sellOrders: mockSellOrders,
-  removeSellOrder: (id) =>
-    set((state) => ({ sellOrders: state.sellOrders.filter((order) => order.id !== id) })),
-  newOrderName: '',
-  setNewOrderName: (val) => set({ newOrderName: val }),
-  newOrderPrice: '10',
-  setNewOrderPrice: (val) => set({ newOrderPrice: val }),
-  newOrderQty: '1',
-  setNewOrderQty: (val) => set({ newOrderQty: val }),
-  newOrderRank: '0',
-  setNewOrderRank: (val) => set({ newOrderRank: val }),
 
   tradePeriod: '30d',
   setTradePeriod: (period) => set({ tradePeriod: period }),

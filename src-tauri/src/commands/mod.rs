@@ -23,6 +23,7 @@ const WFSTAT_LANGUAGE_QUERY: &str = "en";
 #[serde(rename_all = "camelCase")]
 pub struct WfmAutocompleteItem {
     pub item_id: i64,
+    pub wfm_id: String,
     pub name: String,
     pub slug: String,
     pub max_rank: Option<i64>,
@@ -554,6 +555,7 @@ fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAut
     let mut statement = connection.prepare(
         "SELECT
             item_id,
+            wfm_id,
             name_en,
             slug,
             max_rank,
@@ -566,11 +568,12 @@ fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAut
     let rows = statement.query_map([], |row| {
         Ok(WfmAutocompleteItem {
             item_id: row.get(0)?,
-            name: row.get(1)?,
-            slug: row.get(2)?,
-            max_rank: row.get(3)?,
-            item_family: row.get(4)?,
-            image_path: row.get(5)?,
+            wfm_id: row.get(1)?,
+            name: row.get(2)?,
+            slug: row.get(3)?,
+            max_rank: row.get(4)?,
+            item_family: row.get(5)?,
+            image_path: row.get(6)?,
         })
     })?;
 

@@ -659,6 +659,7 @@ export function ScannersPage() {
 
     const item: WfmAutocompleteItem = {
       itemId: component.itemId,
+      wfmId: null,
       name: component.name,
       slug: component.slug,
       maxRank: null,

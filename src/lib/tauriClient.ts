@@ -18,6 +18,11 @@ import type {
   MarketSnapshot,
   MarketTrackingSource,
   MarketVariant,
+  TradeCreateListingInput,
+  TradeOverview,
+  TradeSessionState,
+  TradeSignInInput,
+  TradeUpdateListingInput,
   PersistedWorldStateCacheEntry,
   SellerMode,
   WfmDetailedOrder,
@@ -219,6 +224,59 @@ export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> 
   }
 
   return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items');
+}
+
+export async function getWfmTradeSessionState(): Promise<TradeSessionState> {
+  return invoke<TradeSessionState>('get_wfm_trade_session_state');
+}
+
+export async function signInWfmTradeAccount(
+  input: TradeSignInInput,
+): Promise<TradeSessionState> {
+  return invoke<TradeSessionState>('sign_in_wfm_trade_account', { input });
+}
+
+export async function signOutWfmTradeAccount(): Promise<void> {
+  return invoke<void>('sign_out_wfm_trade_account');
+}
+
+export async function getWfmTradeOverview(
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('get_wfm_trade_overview', { sellerMode });
+}
+
+export async function createWfmSellOrder(
+  input: TradeCreateListingInput,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('create_wfm_sell_order', { input, sellerMode });
+}
+
+export async function updateWfmSellOrder(
+  input: TradeUpdateListingInput,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('update_wfm_sell_order', { input, sellerMode });
+}
+
+export async function closeWfmSellOrder(
+  orderId: string,
+  quantity: number,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('close_wfm_sell_order', {
+    orderId,
+    quantity,
+    sellerMode,
+  });
+}
+
+export async function deleteWfmSellOrder(
+  orderId: string,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('delete_wfm_sell_order', { orderId, sellerMode });
 }
 
 export async function getWfmTopSellOrders(

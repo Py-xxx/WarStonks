@@ -2,6 +2,7 @@ mod commands;
 mod item_catalog;
 mod market_observatory;
 mod settings;
+mod trades;
 mod worldstate_cache;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -27,6 +28,14 @@ pub fn run() {
             market_observatory::get_arbitrage_scanner_state,
             market_observatory::start_arbitrage_scanner,
             market_observatory::stop_arbitrage_scanner,
+            trades::get_wfm_trade_session_state,
+            trades::sign_in_wfm_trade_account,
+            trades::sign_out_wfm_trade_account,
+            trades::get_wfm_trade_overview,
+            trades::create_wfm_sell_order,
+            trades::update_wfm_sell_order,
+            trades::close_wfm_sell_order,
+            trades::delete_wfm_sell_order,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
             commands::get_worldstate_sortie,
