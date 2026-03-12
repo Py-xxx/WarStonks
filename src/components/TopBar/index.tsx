@@ -79,9 +79,13 @@ function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): Wfm
 export function TopBar() {
   const autoProfile = useAppStore((s) => s.autoProfile);
   const alerts = useAppStore((s) => s.alerts);
+  const marketVariants = useAppStore((s) => s.marketVariants);
+  const marketVariantsLoading = useAppStore((s) => s.marketVariantsLoading);
+  const selectedMarketVariantKey = useAppStore((s) => s.selectedMarketVariantKey);
   const systemAlerts = useAppStore((s) => s.systemAlerts);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
+  const setSelectedMarketVariantKey = useAppStore((s) => s.setSelectedMarketVariantKey);
   const walletSnapshot = useAppStore((s) => s.walletSnapshot);
   const walletLoading = useAppStore((s) => s.walletLoading);
   const openSettingsSidebar = useAppStore((s) => s.openSettingsSidebar);
@@ -99,6 +103,10 @@ export function TopBar() {
   const deferredSearchValue = useDeferredValue(searchValue);
   const suggestions = rankAutocompleteItems(autocompleteItems, deferredSearchValue);
   const notificationCount = alerts.length + systemAlerts.length;
+  const showMarketVariantSelect =
+    Boolean(selectedQuickViewItem)
+    && !marketVariantsLoading
+    && marketVariants.length > 1;
 
   useEffect(() => {
     let isMounted = true;
@@ -210,79 +218,101 @@ export function TopBar() {
     <header className="topbar">
       <div className="logo">WarStonks<span>v3</span></div>
 
-      <div
-        ref={searchRef}
-        className={`search-bar${dropdownOpen ? ' open' : ''}`}
-        role="search"
-        aria-label="Search items"
-      >
-        <SearchIcon />
-        <input
-          className="search-input"
-          type="text"
-          value={searchValue}
-          placeholder="Search WFM items, sets, relics…"
-          onFocus={() => setDropdownOpen(suggestions.length > 0)}
-          onChange={(event) => {
-            setSearchValue(event.target.value);
-            setDropdownOpen(event.target.value.trim().length > 0);
-          }}
-          onKeyDown={handleKeyDown}
-          aria-autocomplete="list"
-          aria-expanded={dropdownOpen}
-          aria-controls="global-search-results"
-        />
-        <span className="kbd">⌘K</span>
+      <div className="topbar-search-group">
+        <div
+          ref={searchRef}
+          className={`search-bar${dropdownOpen ? ' open' : ''}`}
+          role="search"
+          aria-label="Search items"
+        >
+          <SearchIcon />
+          <input
+            className="search-input"
+            type="text"
+            value={searchValue}
+            placeholder="Search WFM items, sets, relics…"
+            onFocus={() => setDropdownOpen(suggestions.length > 0)}
+            onChange={(event) => {
+              setSearchValue(event.target.value);
+              setDropdownOpen(event.target.value.trim().length > 0);
+            }}
+            onKeyDown={handleKeyDown}
+            aria-autocomplete="list"
+            aria-expanded={dropdownOpen}
+            aria-controls="global-search-results"
+          />
+          <span className="kbd">⌘K</span>
 
-        {dropdownOpen ? (
-          <div className="search-dropdown" id="global-search-results" role="listbox">
-            {autocompleteState === 'loading' ? (
-              <div className="search-state">Loading local item catalog…</div>
-            ) : null}
+          {dropdownOpen ? (
+            <div className="search-dropdown" id="global-search-results" role="listbox">
+              {autocompleteState === 'loading' ? (
+                <div className="search-state">Loading local item catalog…</div>
+              ) : null}
 
-            {autocompleteState === 'error' ? (
-              <div className="search-state error">
-                {autocompleteError ?? 'Failed to load the local item catalog.'}
-              </div>
-            ) : null}
+              {autocompleteState === 'error' ? (
+                <div className="search-state error">
+                  {autocompleteError ?? 'Failed to load the local item catalog.'}
+                </div>
+              ) : null}
 
-            {autocompleteState === 'ready' && suggestions.length === 0 ? (
-              <div className="search-state">No WFM items match that search.</div>
-            ) : null}
+              {autocompleteState === 'ready' && suggestions.length === 0 ? (
+                <div className="search-state">No WFM items match that search.</div>
+              ) : null}
 
-            {autocompleteState === 'ready'
-              ? suggestions.map((item, index) => (
-                  <button
-                    key={item.slug}
-                    className={`search-suggestion${index === highlightedIndex ? ' active' : ''}`}
-                    type="button"
-                    role="option"
-                    aria-selected={index === highlightedIndex}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => selectItem(item)}
-                  >
-                    <span className="search-suggestion-main">
-                      <span className="search-suggestion-thumb">
-                        {resolveWfmAssetUrl(item.imagePath) ? (
-                          <img
-                            src={resolveWfmAssetUrl(item.imagePath) ?? undefined}
-                            alt=""
-                            loading="lazy"
-                          />
-                        ) : (
-                          <span>{item.name.slice(0, 1)}</span>
-                        )}
-                      </span>
-                      <span className="search-suggestion-copy">
-                        <span className="search-suggestion-name">{item.name}</span>
-                        <span className="search-suggestion-meta">
-                          {item.itemFamily ?? 'item'}
+              {autocompleteState === 'ready'
+                ? suggestions.map((item, index) => (
+                    <button
+                      key={item.slug}
+                      className={`search-suggestion${index === highlightedIndex ? ' active' : ''}`}
+                      type="button"
+                      role="option"
+                      aria-selected={index === highlightedIndex}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectItem(item)}
+                    >
+                      <span className="search-suggestion-main">
+                        <span className="search-suggestion-thumb">
+                          {resolveWfmAssetUrl(item.imagePath) ? (
+                            <img
+                              src={resolveWfmAssetUrl(item.imagePath) ?? undefined}
+                              alt=""
+                              loading="lazy"
+                            />
+                          ) : (
+                            <span>{item.name.slice(0, 1)}</span>
+                          )}
+                        </span>
+                        <span className="search-suggestion-copy">
+                          <span className="search-suggestion-name">{item.name}</span>
+                          <span className="search-suggestion-meta">
+                            {item.itemFamily ?? 'item'}
+                          </span>
                         </span>
                       </span>
-                    </span>
-                  </button>
-                ))
-              : null}
+                    </button>
+                  ))
+                : null}
+            </div>
+          ) : null}
+        </div>
+
+        {showMarketVariantSelect ? (
+          <div className="topbar-market-variant">
+            <span className="topbar-market-variant-label">Rank</span>
+            <select
+              className="topbar-market-variant-select"
+              value={selectedMarketVariantKey ?? ''}
+              onChange={(event) => {
+                void setSelectedMarketVariantKey(event.target.value || null);
+              }}
+              aria-label="Select rank market"
+            >
+              {marketVariants.map((variant) => (
+                <option key={variant.key} value={variant.key}>
+                  {variant.label}
+                </option>
+              ))}
+            </select>
           </div>
         ) : null}
       </div>

@@ -1400,7 +1400,6 @@ function AnalyticsTab() {
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
-  const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1509,24 +1508,8 @@ function AnalyticsTab() {
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
-        <EmptyAnalyticsState body="This item has separate rank markets. Pick the rank variant below before loading analytics so the history and live orders never mix different variants." />
-        <div className="market-variant-card card">
-          <div className="card-body market-variant-grid">
-            {marketVariantsError ? <span className="watchlist-form-error">{marketVariantsError}</span> : null}
-            {marketVariants.map((variant) => (
-              <button
-                key={variant.key}
-                className={`market-variant-pill${variant.key === selectedMarketVariantKey ? ' active' : ''}`}
-                type="button"
-                onClick={() => {
-                  void setSelectedMarketVariantKey(variant.key);
-                }}
-              >
-                {variant.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <EmptyAnalyticsState body="This item has separate rank markets. Pick the rank variant in the top bar so analytics only loads the selected rank." />
+        {marketVariantsError ? <span className="watchlist-form-error">{marketVariantsError}</span> : null}
       </div>
     );
   }
@@ -1534,22 +1517,6 @@ function AnalyticsTab() {
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
       <div className="market-header-actions">
-        {marketVariants.length > 0 ? (
-          <select
-            className="market-variant-select"
-            value={selectedMarketVariantKey ?? ''}
-            onChange={(event) => {
-              void setSelectedMarketVariantKey(event.target.value || null);
-            }}
-            aria-label="Select market variant"
-          >
-            {marketVariants.map((variant) => (
-              <option key={variant.key} value={variant.key}>
-                {variant.label}
-              </option>
-            ))}
-          </select>
-        ) : null}
         <div className="market-item-freshness">
           <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
           <span>Stats {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
@@ -1799,7 +1766,6 @@ function AnalysisTab() {
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
-  const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
   const analysis = useAppStore((state) => state.selectedMarketAnalysis);
   const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
   const analysisError = useAppStore((state) => state.selectedMarketAnalysisError);
@@ -1944,24 +1910,8 @@ function AnalysisTab() {
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
-        <EmptyAnalyticsState body="Pick the correct market variant first so the analysis never mixes rank-specific orders." />
-        <div className="market-variant-card card">
-          <div className="card-body market-variant-grid">
-            {marketVariantsError ? <span className="watchlist-form-error">{marketVariantsError}</span> : null}
-            {marketVariants.map((variant) => (
-              <button
-                key={variant.key}
-                className={`market-variant-pill${variant.key === selectedMarketVariantKey ? ' active' : ''}`}
-                type="button"
-                onClick={() => {
-                  void setSelectedMarketVariantKey(variant.key);
-                }}
-              >
-                {variant.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <EmptyAnalyticsState body="Pick the correct rank in the top bar first so analysis never mixes rank-specific orders." />
+        {marketVariantsError ? <span className="watchlist-form-error">{marketVariantsError}</span> : null}
       </div>
     );
   }
@@ -1987,22 +1937,6 @@ function AnalysisTab() {
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
       <div className="market-header-actions">
-        {marketVariants.length > 0 ? (
-          <select
-            className="market-variant-select"
-            value={selectedMarketVariantKey ?? ''}
-            onChange={(event) => {
-              void setSelectedMarketVariantKey(event.target.value || null);
-            }}
-            aria-label="Select market variant"
-          >
-            {marketVariants.map((variant) => (
-              <option key={variant.key} value={variant.key}>
-                {variant.label}
-              </option>
-            ))}
-          </select>
-        ) : null}
         <div className="market-item-freshness">
           <span>Snapshot {formatRelativeTimestamp(analysis?.sourceSnapshotAt ?? null)}</span>
           <span>Stats {formatRelativeTimestamp(analysis?.sourceStatsFetchedAt ?? null)}</span>
