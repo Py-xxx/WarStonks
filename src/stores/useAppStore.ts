@@ -132,8 +132,12 @@ interface CachedWorldStateSnapshot<T> {
   nextRefreshAt: string | null;
 }
 
-function buildMarketAnalysisCacheKey(itemId: number, variantKey: string): string {
-  return `${itemId}:${variantKey}`;
+function buildMarketAnalysisCacheKey(
+  itemId: number,
+  variantKey: string,
+  sellerMode: SellerMode,
+): string {
+  return `${itemId}:${variantKey}:${sellerMode}`;
 }
 
 function extractQuickViewSparklinePoints(chartPoints: Awaited<ReturnType<typeof getItemAnalytics>>['chartPoints']): number[] {
@@ -422,10 +426,11 @@ async function stopTrackedSelection(
 async function loadQuickViewOrdersForSelection(
   item: WfmAutocompleteItem,
   variantKey: string | null,
+  sellerMode: SellerMode,
 ): Promise<{ sellOrders: WfmTopSellOrder[]; apiVersion: string | null }> {
   const response = variantKey
-    ? await getWfmTopSellOrdersForVariant(item.slug, variantKey)
-    : await getWfmTopSellOrders(item.slug);
+    ? await getWfmTopSellOrdersForVariant(item.slug, variantKey, sellerMode)
+    : await getWfmTopSellOrders(item.slug, sellerMode);
 
   return {
     sellOrders: response.sellOrders,
@@ -437,6 +442,7 @@ async function syncSearchTrackingSelection(
   previousSelection: { itemId: number; slug: string; variantKey: string } | null,
   item: WfmAutocompleteItem,
   variantKey: string | null,
+  sellerMode: SellerMode,
 ): Promise<{
   nextTrackedSelection: { itemId: number; slug: string; variantKey: string } | null;
   selectedVariantLabel: string | null;
@@ -464,7 +470,7 @@ async function syncSearchTrackingSelection(
   }
 
   await stopTrackedSelection(previousSelection);
-  await ensureMarketTracking(item.itemId, item.slug, variantKey, 'search');
+  await ensureMarketTracking(item.itemId, item.slug, variantKey, sellerMode, 'search');
   const nextTrackedSelection = {
     itemId: item.itemId,
     slug: item.slug,
@@ -482,11 +488,13 @@ async function syncSearchTrackingSelection(
 async function persistSearchedItemSelection(
   previousSelection: { itemId: number; slug: string; variantKey: string } | null,
   item: WfmAutocompleteItem,
+  sellerMode: SellerMode,
 ): Promise<{ itemId: number; slug: string; variantKey: string } | null> {
   const syncedSelection = await syncSearchTrackingSelection(
     previousSelection,
     item,
     'base',
+    sellerMode,
   );
 
   return syncedSelection.nextTrackedSelection;
@@ -1416,7 +1424,31 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   sellerMode: 'ingame',
-  setSellerMode: (mode) => set({ sellerMode: mode }),
+  setSellerMode: (mode) => {
+    const state = get();
+    if (state.sellerMode === mode) {
+      return;
+    }
+
+    const selectedItem = state.quickView.selectedItem;
+    const selectedVariantKey = state.selectedMarketVariantKey;
+    set({
+      sellerMode: mode,
+      selectedMarketAnalysis:
+        selectedItem && selectedVariantKey
+          ? state.marketAnalysisCache[
+              buildMarketAnalysisCacheKey(selectedItem.itemId, selectedVariantKey, mode)
+            ] ?? null
+          : null,
+      selectedMarketAnalysisLoading: false,
+      selectedMarketAnalysisError: null,
+    });
+
+    if (selectedItem && selectedVariantKey) {
+      void get().setSelectedMarketVariantKey(selectedVariantKey);
+      void get().loadSelectedMarketAnalysis({ force: true });
+    }
+  },
   autoProfile: false,
   toggleAutoProfile: () => set((s) => ({ autoProfile: !s.autoProfile })),
 
@@ -1475,7 +1507,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ),
     );
 
-    void ensureMarketTracking(selectedItem.itemId, selectedItem.slug, variantKey, 'watchlist').catch(
+    void ensureMarketTracking(
+      selectedItem.itemId,
+      selectedItem.slug,
+      variantKey,
+      state.sellerMode,
+      'watchlist',
+    ).catch(
       (error) => {
         console.error('[watchlist] failed to start tracking item', error);
       },
@@ -1487,7 +1525,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
-    void getWfmTopSellOrdersForVariant(item.slug, variantKey)
+    void getWfmTopSellOrdersForVariant(item.slug, variantKey, get().sellerMode)
       .then((response) => {
         const preferredOrder = selectPreferredWatchlistOrder(response.sellOrders, []);
         set((currentState) =>
@@ -1500,7 +1538,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             preferredOrder,
           ),
         );
-        return ensureMarketTracking(item.itemId, item.slug, variantKey, 'watchlist');
+        return ensureMarketTracking(item.itemId, item.slug, variantKey, get().sellerMode, 'watchlist');
       })
       .catch((error) => {
         console.error('[watchlist] failed to add explicit item', error);
@@ -1630,8 +1668,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
 
     try {
-      const response = await getWfmItemOrders(item.slug, item.variantKey);
       const latestState = get();
+      const response = await getWfmItemOrders(item.slug, item.variantKey, latestState.sellerMode);
       const latestItem = latestState.watchlist.find((entry) => entry.id === id);
       if (!latestItem) {
         return { alertTriggered: false };
@@ -1729,7 +1767,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   marketAnalysisCache: {},
   loadQuickViewItem: async (item) => {
     const requestId = ++quickViewRequestSequence;
-    const previousTrackedSelection = get().searchTrackingSource;
+    const state = get();
+    const previousTrackedSelection = state.searchTrackingSource;
+    const sellerMode = state.sellerMode;
 
     set({
       quickView: {
@@ -1757,12 +1797,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
         variants.find((variant) => variant.isDefault)?.key
         ?? variants[0]?.key
         ?? 'base';
-      const response = await loadQuickViewOrdersForSelection(item, defaultVariantKey);
+      const response = await loadQuickViewOrdersForSelection(item, defaultVariantKey, sellerMode);
       if (requestId !== quickViewRequestSequence) {
         return;
       }
 
-      let nextTrackedSelection = await persistSearchedItemSelection(previousTrackedSelection, item);
+      let nextTrackedSelection = await persistSearchedItemSelection(
+        previousTrackedSelection,
+        item,
+        sellerMode,
+      );
       let nextSelectedVariantKey: string | null = defaultVariantKey;
       let nextSelectedVariantLabel: string | null =
         variants.find((variant) => variant.key === defaultVariantKey)?.label
@@ -1775,6 +1819,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           nextTrackedSelection,
           item,
           nextSelectedVariantKey,
+          sellerMode,
         );
         nextTrackedSelection = syncedSelection.nextTrackedSelection;
         nextSelectedVariantLabel = syncedSelection.selectedVariantLabel;
@@ -1802,7 +1847,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         searchTrackingSource: nextTrackedSelection,
         selectedMarketAnalysis:
           nextSelectedVariantKey
-            ? get().marketAnalysisCache[buildMarketAnalysisCacheKey(item.itemId, nextSelectedVariantKey)] ?? null
+            ? state.marketAnalysisCache[
+                buildMarketAnalysisCacheKey(item.itemId, nextSelectedVariantKey, sellerMode)
+              ] ?? null
             : null,
         selectedMarketAnalysisLoading: false,
         selectedMarketAnalysisError: null,
@@ -1812,6 +1859,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         item.itemId,
         item.slug,
         nextSelectedVariantKey,
+        sellerMode,
         '48h',
         '1h',
       )
@@ -1870,6 +1918,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const state = get();
     const selectedItem = state.quickView.selectedItem;
     const previousTrackedSelection = state.searchTrackingSource;
+    const sellerMode = state.sellerMode;
 
     if (!selectedItem) {
       set({
@@ -1889,7 +1938,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         state.marketVariants.find((entry) => entry.key === variantKey)?.label ?? null,
       selectedMarketAnalysis:
         variantKey
-          ? state.marketAnalysisCache[buildMarketAnalysisCacheKey(selectedItem.itemId, variantKey)] ?? null
+          ? state.marketAnalysisCache[
+              buildMarketAnalysisCacheKey(selectedItem.itemId, variantKey, sellerMode)
+            ] ?? null
           : null,
       selectedMarketAnalysisLoading: false,
       selectedMarketAnalysisError: null,
@@ -1907,8 +1958,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         previousTrackedSelection,
         selectedItem,
         variantKey,
+        sellerMode,
       );
-      const response = await loadQuickViewOrdersForSelection(selectedItem, variantKey);
+      const response = await loadQuickViewOrdersForSelection(selectedItem, variantKey, sellerMode);
       if (requestId !== quickViewRequestSequence) {
         return;
       }
@@ -1919,7 +1971,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         searchTrackingSource: syncedSelection.nextTrackedSelection,
         selectedMarketAnalysis:
           variantKey
-            ? currentState.marketAnalysisCache[buildMarketAnalysisCacheKey(selectedItem.itemId, variantKey)] ?? null
+            ? currentState.marketAnalysisCache[
+                buildMarketAnalysisCacheKey(selectedItem.itemId, variantKey, sellerMode)
+              ] ?? null
             : null,
         selectedMarketAnalysisLoading: false,
         selectedMarketAnalysisError: null,
@@ -1939,6 +1993,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         selectedItem.itemId,
         selectedItem.slug,
         variantKey,
+        sellerMode,
         '48h',
         '1h',
       )
@@ -1984,6 +2039,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const state = get();
     const selectedItem = state.quickView.selectedItem;
     const selectedVariantKey = state.selectedMarketVariantKey;
+    const sellerMode = state.sellerMode;
     const force = options?.force ?? false;
 
     if (!selectedItem || !selectedVariantKey) {
@@ -1995,7 +2051,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
-    const cacheKey = buildMarketAnalysisCacheKey(selectedItem.itemId, selectedVariantKey);
+    const cacheKey = buildMarketAnalysisCacheKey(selectedItem.itemId, selectedVariantKey, sellerMode);
     const cached = state.marketAnalysisCache[cacheKey] ?? null;
 
     if (cached && !force) {
@@ -2019,12 +2075,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
         selectedItem.itemId,
         selectedItem.slug,
         selectedVariantKey,
+        sellerMode,
         'analytics',
       );
       const analysis = await getItemAnalysis(
         selectedItem.itemId,
         selectedItem.slug,
         selectedVariantKey,
+        sellerMode,
       );
       if (requestId !== marketAnalysisRequestSequence) {
         return;

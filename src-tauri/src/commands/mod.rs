@@ -607,6 +607,20 @@ fn compare_sell_orders(left: &WfmTopSellOrder, right: &WfmTopSellOrder) -> Order
     })
 }
 
+fn normalize_seller_mode(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("ingame").trim() {
+        "ingame-online" => "ingame-online",
+        _ => "ingame",
+    }
+}
+
+fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
+    match normalize_seller_mode(Some(seller_mode)) {
+        "ingame-online" => matches!(status, Some("ingame" | "online")),
+        _ => matches!(status, Some("ingame")),
+    }
+}
+
 fn order_matches_variant(rank: Option<i64>, variant_key: Option<&str>) -> bool {
     let normalized_variant = variant_key.unwrap_or("base").trim();
     if normalized_variant.is_empty() || normalized_variant == "base" {
@@ -625,11 +639,15 @@ fn normalize_top_sell_orders(
     api_version: Option<String>,
     orders: Vec<WfmOrderWithUser>,
     variant_key: Option<&str>,
+    seller_mode: &str,
 ) -> WfmTopSellOrdersResponse {
     let mut normalized = orders
         .into_iter()
         .filter_map(|order| {
             if order.order_type != "sell" || order.visible == Some(false) {
+                return None;
+            }
+            if !seller_mode_allows_status(order.user.status.as_deref(), seller_mode) {
                 return None;
             }
             if !order_matches_variant(order.rank, variant_key) {
@@ -662,6 +680,7 @@ fn normalize_top_sell_orders(
 fn fetch_wfm_top_sell_orders_inner(
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
 ) -> Result<WfmTopSellOrdersResponse> {
     let trimmed_slug = slug.trim();
     if trimmed_slug.is_empty() {
@@ -688,6 +707,7 @@ fn fetch_wfm_top_sell_orders_inner(
         payload.api_version,
         payload.data,
         variant_key.as_deref(),
+        normalize_seller_mode(seller_mode.as_deref()),
     ))
 }
 
@@ -780,8 +800,11 @@ pub async fn get_relic_tier_icons(app: tauri::AppHandle) -> Result<Vec<RelicTier
 pub async fn get_wfm_top_sell_orders(
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
 ) -> Result<WfmTopSellOrdersResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || fetch_wfm_top_sell_orders_inner(slug, variant_key))
+    tauri::async_runtime::spawn_blocking(move || {
+        fetch_wfm_top_sell_orders_inner(slug, variant_key, seller_mode)
+    })
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
@@ -791,7 +814,8 @@ pub async fn get_wfm_top_sell_orders(
 mod tests {
     use super::{
         cached_startup_summary, normalize_catalog_lookup_value, normalize_top_sell_orders,
-        validate_external_url, StartupCommandState, WfmOrderUser, WfmOrderWithUser,
+        seller_mode_allows_status, validate_external_url, StartupCommandState, WfmOrderUser,
+        WfmOrderWithUser,
     };
     use crate::item_catalog::{ImportStats, StartupSummary};
 
@@ -935,6 +959,7 @@ mod tests {
                 },
             ],
             Some("rank:0"),
+            "ingame-online",
         );
 
         assert_eq!(response.slug, "arcane_energize");
@@ -1007,10 +1032,21 @@ mod tests {
                 },
             ],
             Some("rank:5"),
+            "ingame-online",
         );
 
         assert_eq!(response.sell_orders.len(), 1);
         assert_eq!(response.sell_orders[0].order_id, "match");
+    }
+
+    #[test]
+    fn seller_mode_filters_statuses() {
+        assert!(seller_mode_allows_status(Some("ingame"), "ingame"));
+        assert!(!seller_mode_allows_status(Some("online"), "ingame"));
+        assert!(!seller_mode_allows_status(Some("offline"), "ingame"));
+        assert!(seller_mode_allows_status(Some("ingame"), "ingame-online"));
+        assert!(seller_mode_allows_status(Some("online"), "ingame-online"));
+        assert!(!seller_mode_allows_status(Some("offline"), "ingame-online"));
     }
 
     #[test]

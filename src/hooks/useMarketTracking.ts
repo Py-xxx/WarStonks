@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { refreshMarketTracking } from '../lib/tauriClient';
+import { useAppStore } from '../stores/useAppStore';
 
 const MARKET_TRACKING_REFRESH_MS = 60_000;
 
 export function useMarketTracking() {
   const requestInFlightRef = useRef(false);
+  const sellerMode = useAppStore((state) => state.sellerMode);
 
   useEffect(() => {
     const runRefresh = () => {
@@ -13,7 +15,7 @@ export function useMarketTracking() {
       }
 
       requestInFlightRef.current = true;
-      void refreshMarketTracking()
+      void refreshMarketTracking(sellerMode)
         .catch((error) => {
           console.error('[market-tracking] refresh failed', error);
         })
@@ -28,5 +30,5 @@ export function useMarketTracking() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [sellerMode]);
 }
