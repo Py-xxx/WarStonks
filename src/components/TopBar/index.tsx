@@ -3,7 +3,7 @@ import type { KeyboardEvent } from 'react';
 import { AlertsPanel } from '../AlertsPanel';
 import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
-import { formatTradeStatusLabel } from '../../lib/trades';
+import { formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
@@ -437,11 +437,17 @@ export function TopBar() {
             }}
           >
             {!tradeAccount ? <ArrowIcon /> : null}
-            {tradeAccount
-              ? `${tradeAccount.name} · ${formatTradeStatusLabel(tradeAccount.status)}`
-              : tradeAccountLoading
-                ? 'Loading…'
-                : 'Connect'}
+            {tradeAccount ? (
+              <>
+                <span>{tradeAccount.name}</span>
+                <span className="trade-connected-separator">·</span>
+                <span className={`trade-connected-status ${getTradeStatusToneClass(tradeAccount.status)}`}>
+                  {formatTradeStatusLabel(tradeAccount.status)}
+                </span>
+              </>
+            ) : tradeAccountLoading
+              ? 'Loading…'
+              : 'Connect'}
             {tradeAccount ? <ChevronDownIcon /> : null}
           </button>
 
@@ -449,7 +455,7 @@ export function TopBar() {
             <div className="trade-menu-dropdown">
               <div className="trade-menu-header">
                 <span className="card-label">Warframe Market</span>
-                <span className="trade-menu-status-copy">
+                <span className={`trade-menu-status-copy ${getTradeStatusToneClass(tradeAccount.status)}`}>
                   Server status: {formatTradeStatusLabel(tradeAccount.status)}
                 </span>
               </div>

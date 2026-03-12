@@ -14,6 +14,20 @@ export function formatTradeStatusLabel(
   }
 }
 
+export function getTradeStatusToneClass(
+  status: TradeAccountSummary['status'] | string | null | undefined,
+): string {
+  switch ((status ?? '').toString().trim().toLowerCase()) {
+    case 'ingame':
+    case 'in_game':
+      return 'trade-status-ingame';
+    case 'online':
+      return 'trade-status-online';
+    default:
+      return 'trade-status-offline';
+  }
+}
+
 export function formatPlatinumValue(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return '—';
