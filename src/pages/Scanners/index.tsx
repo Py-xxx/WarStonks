@@ -50,14 +50,9 @@ function formatChance(value: number | null): string {
     return '—';
   }
 
-  const percent = value * 100;
-  if (percent >= 10) {
-    return `${percent.toFixed(1)}%`;
-  }
-  if (percent >= 1) {
-    return `${percent.toFixed(2)}%`;
-  }
-  return `${percent.toFixed(3)}%`;
+  const decimals = value >= 10 ? 2 : value >= 1 ? 2 : 3;
+  const formatted = value.toFixed(decimals).replace(/\.?0+$/, '');
+  return `${formatted}%`;
 }
 
 function confidenceTone(level: string): 'green' | 'blue' | 'amber' {
