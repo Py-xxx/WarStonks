@@ -1,5 +1,17 @@
 # WarStonks
 
+[![Status](https://img.shields.io/badge/status-active%20development-2563eb?style=for-the-badge)](https://github.com/Py-xxx/WarStonks)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-111827?style=for-the-badge)](https://github.com/Py-xxx/WarStonks)
+[![Tauri](https://img.shields.io/badge/Tauri-2-24c8db?style=for-the-badge&logo=tauri&logoColor=white)](https://tauri.app/)
+[![React](https://img.shields.io/badge/React-18-20232a?style=for-the-badge&logo=react&logoColor=61dafb)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178c6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Rust](https://img.shields.io/badge/Rust-backend-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![SQLite](https://img.shields.io/badge/SQLite-local%20cache-003b57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Vite](https://img.shields.io/badge/Vite-5-646cff?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![warframe.market](https://img.shields.io/badge/Data-warframe.market-f97316?style=for-the-badge)](https://api.warframe.market/)
+[![warframestat.us](https://img.shields.io/badge/Data-warframestat.us-16a34a?style=for-the-badge)](https://api.warframestat.us/)
+[![Last Commit](https://img.shields.io/github/last-commit/Py-xxx/WarStonks?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/commits/main)
+
 WarStonks is a desktop Warframe market assistant built with Tauri, React, TypeScript, and Rust.
 
 The app focuses on:
