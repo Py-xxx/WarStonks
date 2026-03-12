@@ -827,20 +827,21 @@ function formatDropChancePercent(value: number | null | undefined): string {
   }
 
   if (value === 0) {
-    return '<0.0001%';
+    return '<0.01%';
   }
 
-  const absValue = Math.abs(value);
+  const percentValue = Math.abs(value) <= 1 ? value * 100 : value;
+  const absValue = Math.abs(percentValue);
   let digits = 1;
-  if (absValue < 0.001) {
+  if (absValue < 0.01) {
     digits = 4;
-  } else if (absValue < 0.01) {
-    digits = 3;
   } else if (absValue < 0.1) {
+    digits = 3;
+  } else if (absValue < 1) {
     digits = 2;
   }
 
-  return `${formatNumber(value, digits)}%`;
+  return `${formatNumber(percentValue, digits)}%`;
 }
 
 function formatRelativeTimestamp(value: string | null | undefined): string {
