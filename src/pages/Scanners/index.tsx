@@ -5,6 +5,7 @@ import {
   startArbitrageScanner,
   stopArbitrageScanner,
 } from '../../lib/tauriClient';
+import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { useAppStore } from '../../stores/useAppStore';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import type {
@@ -512,7 +513,7 @@ export function ScannersPage() {
                       {progress.status === 'running'
                         ? `${progress.stageLabel} · ${Math.round(progress.progressValue)}%`
                         : progress.lastCompletedAt
-                          ? `Updated ${new Date(progress.lastCompletedAt).toLocaleString()}`
+                          ? `Updated ${formatShortLocalDateTime(progress.lastCompletedAt)}`
                           : 'No saved scan'}
                     </span>
                   </div>
