@@ -3809,17 +3809,30 @@ body {
   color: #f2b2b7;
 }
 
-.market-analysis-grid {
+.market-analysis-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 18px;
   align-items: start;
 }
 
+.market-analysis-column {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.market-analysis-column-main {
+  min-width: 0;
+}
+
+.market-analysis-column-side {
+  min-width: 0;
+}
+
 .market-analysis-item-details {
-  position: sticky;
-  top: 12px;
-  align-self: start;
+  align-self: stretch;
 }
 
 .market-analysis-summary-grid {
@@ -4035,7 +4048,7 @@ body {
 }
 
 @media (max-width: 1200px) {
-  .market-analysis-grid,
+  .market-analysis-layout,
   .market-analysis-summary-grid,
   .market-context-list,
   .market-analysis-signal-list,
@@ -4045,8 +4058,8 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .market-analysis-item-details {
-    position: static;
+  .market-analysis-column {
+    gap: 14px;
   }
 }
 

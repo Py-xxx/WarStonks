@@ -1764,9 +1764,10 @@ function AnalysisTab() {
           <span>Computed {formatRelativeTimestamp(analysis?.computedAt ?? null)}</span>
         </div>
       </div>
-      <div className="market-analysis-grid">
-        <div className="market-summary-grid-shell">
-          <div className="market-analysis-summary-grid">
+      <div className="market-analysis-layout">
+        <div className="market-analysis-column market-analysis-column-main">
+          <div className="market-summary-grid-shell">
+            <div className="market-analysis-summary-grid">
               <div className="market-summary-card">
                 <span className="market-summary-label">Entry Price</span>
                 <span className="market-summary-value">{formatPrice(analysis?.headline.entryPrice)}</span>
@@ -1786,389 +1787,392 @@ function AnalysisTab() {
                 </span>
               </div>
           </div>
-          <PanelOverlay
-            loading={!revealedPanels.headline && !errorMessage}
-            errorMessage={!revealedPanels.headline ? errorMessage : null}
-            label="Building headline metrics"
-          />
+            <PanelOverlay
+              loading={!revealedPanels.headline && !errorMessage}
+              errorMessage={!revealedPanels.headline ? errorMessage : null}
+              label="Building headline metrics"
+            />
+          </div>
+
+          <AnalyticsPanel
+            title="Flip Analysis"
+            eyebrow="Execution Model"
+            loading={!revealedPanels.flip && !errorMessage}
+            errorMessage={!revealedPanels.flip ? errorMessage : null}
+            loadingLabel="Calculating flip margins"
+          >
+            <div className="market-metric-grid">
+              <div className="market-metric-card">
+                <span className="market-metric-label">Entry Price</span>
+                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.entryPrice)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Exit Price</span>
+                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.exitPrice)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Gross Margin</span>
+                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.grossMargin)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Net Margin</span>
+                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.netMargin)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Efficiency Score</span>
+                <span className="market-metric-value">
+                  {formatPercent(analysis?.flipAnalysis.efficiencyScore)} · {analysis?.flipAnalysis.efficiencyLabel ?? '—'}
+                </span>
+              </div>
+            </div>
+          </AnalyticsPanel>
+
+          <AnalyticsPanel
+            title="Liquidity Detail"
+            eyebrow="Market Structure"
+            loading={!revealedPanels.liquidity && !errorMessage}
+            errorMessage={!revealedPanels.liquidity ? errorMessage : null}
+            loadingLabel="Profiling live liquidity"
+          >
+            <div className="market-metric-grid">
+              <div className="market-metric-card">
+                <span className="market-metric-label">Demand Ratio</span>
+                <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.demandRatio, 2)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">State</span>
+                <span className="market-metric-value">{analysis?.liquidityDetail.state ?? '—'}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Sellers Within +2pt</span>
+                <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Undercut Velocity</span>
+                <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.undercutVelocity, 2)} / h</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Qty-Weighted Demand</span>
+                <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Liquidity</span>
+                <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.liquidityScore)}</span>
+              </div>
+            </div>
+          </AnalyticsPanel>
+
+          <AnalyticsPanel
+            title="Trend"
+            eyebrow="Analytics Carryover"
+            loading={!revealedPanels.trend && !errorMessage}
+            errorMessage={!revealedPanels.trend ? errorMessage : null}
+            loadingLabel="Summarizing the current trend"
+          >
+            <div className="market-metric-grid">
+              <div className="market-metric-card">
+                <span className="market-metric-label">Direction</span>
+                <span className="market-metric-value">{analysis?.trend.direction ?? '—'}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Confidence</span>
+                <span className="market-metric-value">{formatPercent(analysis?.trend.confidence)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">1H Slope</span>
+                <span className="market-metric-value">{formatPercent(analysis?.trend.slope1h)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">3H Slope</span>
+                <span className="market-metric-value">{formatPercent(analysis?.trend.slope3h)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">6H Slope</span>
+                <span className="market-metric-value">{formatPercent(analysis?.trend.slope6h)}</span>
+              </div>
+            </div>
+            <div className="market-copy-block">
+              <span className="market-copy-title">Summary</span>
+              <p>{analysis?.trend.summary ?? '—'}</p>
+            </div>
+          </AnalyticsPanel>
+
+          <AnalyticsPanel
+            title={
+              analysis?.supplyContext.mode === 'set-components'
+                ? 'Set Components'
+                : analysis?.supplyContext.mode === 'drop-sources'
+                  ? 'Drop Sources'
+                  : 'Drop Sources / Set Components'
+            }
+            eyebrow="Supply Context"
+            loading={!revealedPanels.supply && !errorMessage}
+            errorMessage={!revealedPanels.supply ? errorMessage : null}
+            loadingLabel="Building supply context"
+          >
+            {analysis?.supplyContext.mode === 'set-components' ? (
+              <div className="market-component-list">
+                {(analysis?.supplyContext.components ?? []).map((component) => {
+                  const imageUrl = resolveWfmAssetUrl(component.imagePath);
+                  const targetValue = componentTargets[component.slug] ?? '';
+                  const watchlistItem: WfmAutocompleteItem | null =
+                    component.itemId !== null
+                      ? {
+                          itemId: component.itemId,
+                          name: component.name,
+                          slug: component.slug,
+                          maxRank: null,
+                          itemFamily: null,
+                          imagePath: component.imagePath,
+                        }
+                      : null;
+
+                  return (
+                    <div key={component.slug} className="market-component-card">
+                      <div className="market-component-main">
+                        {imageUrl ? (
+                          <img
+                            className="market-component-image"
+                            src={imageUrl}
+                            alt={component.name}
+                          />
+                        ) : (
+                          <div className="market-component-image placeholder" />
+                        )}
+                        <div className="market-component-copy">
+                          <span className="market-copy-title">{component.name}</span>
+                          <span>Current lowest: {formatPrice(component.currentLowestPrice)}</span>
+                          <span>Recommended entry: {formatPrice(component.recommendedEntryPrice)}</span>
+                        </div>
+                      </div>
+                      <div className="market-component-actions">
+                        <input
+                          className="price-input"
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={targetValue}
+                          onChange={(event) =>
+                            setComponentTargets((current) => ({
+                              ...current,
+                              [component.slug]: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          className="btn-sm"
+                          type="button"
+                          disabled={!watchlistItem}
+                          onClick={() => {
+                            if (!watchlistItem) {
+                              return;
+                            }
+                            addExplicitItemToWatchlist(
+                              watchlistItem,
+                              component.variantKey,
+                              component.variantLabel,
+                              Number.parseInt(targetValue || '0', 10),
+                            );
+                          }}
+                        >
+                          Add to Watchlist
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : analysis?.supplyContext.mode === 'drop-sources' ? (
+              <div className="market-drop-list">
+                {(analysis?.supplyContext.dropSources ?? []).map((source) => (
+                  <div key={`${source.location}-${source.sourceType ?? 'none'}`} className="market-drop-card">
+                    <span className="market-copy-title">{source.location}</span>
+                    <span>Chance: {formatPercent(source.chance)}</span>
+                    <span>Rarity: {source.rarity ?? '—'}</span>
+                    <span>Type: {source.sourceType ?? '—'}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="market-copy-block">
+                <span className="market-copy-title">No supply context</span>
+                <p>This item does not currently have set-component or catalog drop-source data available.</p>
+              </div>
+            )}
+          </AnalyticsPanel>
         </div>
 
-        <div className="market-analysis-item-details">
-            <AnalyticsPanel
-              title="Item Details"
-              eyebrow="Reference"
-              loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
-              errorMessage={itemDetailsError}
-              loadingLabel="Loading item details from the local catalog"
-            >
-              <div className="market-item-detail-card">
-                {itemImageUrl ? (
-                  <img
-                    className="market-item-detail-image"
-                    src={itemImageUrl}
-                    alt={effectiveItemDetails?.name ?? selectedItem.name}
-                  />
-                ) : (
-                  <div className="market-item-detail-image placeholder" />
-                )}
-                <div className="market-item-detail-copy">
-                  <span className="market-item-detail-name">{effectiveItemDetails?.name ?? selectedItem.name}</span>
-                  <span className="market-item-detail-slug">{effectiveItemDetails?.slug ?? selectedItem.slug}</span>
-                  {effectiveItemDetails?.wikiLink ? (
-                    <button
-                      type="button"
-                      className="market-item-detail-link"
-                      onClick={() => {
-                        void handleOpenExternalLink(effectiveItemDetails.wikiLink);
-                      }}
-                    >
-                      Open Wiki
-                  </button>
-                  ) : null}
-                </div>
-              </div>
-              {effectiveItemDetails?.description ? (
-                <div className="market-copy-block">
-                  <span className="market-copy-title">Description</span>
-                  <p>{effectiveItemDetails.description}</p>
-                </div>
-              ) : null}
-              {(effectiveItemDetails?.statHighlights.length ?? 0) > 0 ? (
-                <div className="market-copy-block">
-                  <span className="market-copy-title">
-                    {effectiveItemDetails?.rankScaleLabel ?? 'Rank Scaling'}
-                  </span>
-                  <div className="market-detail-highlight-list">
-                    {(effectiveItemDetails?.statHighlights ?? []).map((line) => (
-                      <div key={line} className="market-detail-highlight">
-                        {normalizeStatHighlightText(line).map((segment, segmentIndex) => (
-                          <div key={`${line}-${segmentIndex}`} className="market-detail-highlight-line">
-                            {renderStatHighlightLine(segment)}
-                          </div>
-                        ))}
-                      </div>
-                    ))}
+        <div className="market-analysis-column market-analysis-column-side">
+          <div className="market-analysis-item-details">
+              <AnalyticsPanel
+                title="Item Details"
+                eyebrow="Reference"
+                loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
+                errorMessage={itemDetailsError}
+                loadingLabel="Loading item details from the local catalog"
+              >
+                <div className="market-item-detail-card">
+                  {itemImageUrl ? (
+                    <img
+                      className="market-item-detail-image"
+                      src={itemImageUrl}
+                      alt={effectiveItemDetails?.name ?? selectedItem.name}
+                    />
+                  ) : (
+                    <div className="market-item-detail-image placeholder" />
+                  )}
+                  <div className="market-item-detail-copy">
+                    <span className="market-item-detail-name">{effectiveItemDetails?.name ?? selectedItem.name}</span>
+                    <span className="market-item-detail-slug">{effectiveItemDetails?.slug ?? selectedItem.slug}</span>
+                    {effectiveItemDetails?.wikiLink ? (
+                      <button
+                        type="button"
+                        className="market-item-detail-link"
+                        onClick={() => {
+                          void handleOpenExternalLink(effectiveItemDetails.wikiLink);
+                        }}
+                      >
+                        Open Wiki
+                    </button>
+                    ) : null}
                   </div>
                 </div>
-              ) : null}
-              <div className="market-detail-section-list">
-                {itemDetailSections.map((section) => (
-                  <div key={section.title} className="market-detail-section">
-                    <span className="market-copy-title">{section.title}</span>
-                    <div className="market-detail-grid">
-                      {section.fields.map((field) => (
-                        <div key={`${section.title}-${field.label}-${field.value}`}>
-                          <span className="market-copy-title">{field.label}</span>
-                          <span>{field.value}</span>
+                {effectiveItemDetails?.description ? (
+                  <div className="market-copy-block">
+                    <span className="market-copy-title">Description</span>
+                    <p>{effectiveItemDetails.description}</p>
+                  </div>
+                ) : null}
+                {(effectiveItemDetails?.statHighlights.length ?? 0) > 0 ? (
+                  <div className="market-copy-block">
+                    <span className="market-copy-title">
+                      {effectiveItemDetails?.rankScaleLabel ?? 'Rank Scaling'}
+                    </span>
+                    <div className="market-detail-highlight-list">
+                      {(effectiveItemDetails?.statHighlights ?? []).map((line) => (
+                        <div key={line} className="market-detail-highlight">
+                          {normalizeStatHighlightText(line).map((segment, segmentIndex) => (
+                            <div key={`${line}-${segmentIndex}`} className="market-detail-highlight-line">
+                              {renderStatHighlightLine(segment)}
+                            </div>
+                          ))}
                         </div>
                       ))}
                     </div>
                   </div>
-                ))}
-              </div>
-            </AnalyticsPanel>
-        </div>
-
-        <AnalyticsPanel
-          title="Flip Analysis"
-          eyebrow="Execution Model"
-          loading={!revealedPanels.flip && !errorMessage}
-          errorMessage={!revealedPanels.flip ? errorMessage : null}
-          loadingLabel="Calculating flip margins"
-        >
-          <div className="market-metric-grid">
-            <div className="market-metric-card">
-              <span className="market-metric-label">Entry Price</span>
-              <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.entryPrice)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Exit Price</span>
-              <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.exitPrice)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Gross Margin</span>
-              <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.grossMargin)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Net Margin</span>
-              <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.netMargin)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Efficiency Score</span>
-              <span className="market-metric-value">
-                {formatPercent(analysis?.flipAnalysis.efficiencyScore)} · {analysis?.flipAnalysis.efficiencyLabel ?? '—'}
-              </span>
-            </div>
-          </div>
-        </AnalyticsPanel>
-
-        <AnalyticsPanel
-          title="Liquidity Detail"
-          eyebrow="Market Structure"
-          loading={!revealedPanels.liquidity && !errorMessage}
-          errorMessage={!revealedPanels.liquidity ? errorMessage : null}
-          loadingLabel="Profiling live liquidity"
-        >
-          <div className="market-metric-grid">
-            <div className="market-metric-card">
-              <span className="market-metric-label">Demand Ratio</span>
-              <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.demandRatio, 2)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">State</span>
-              <span className="market-metric-value">{analysis?.liquidityDetail.state ?? '—'}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Sellers Within +2pt</span>
-              <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Undercut Velocity</span>
-              <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.undercutVelocity, 2)} / h</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Qty-Weighted Demand</span>
-              <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Liquidity</span>
-              <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.liquidityScore)}</span>
-            </div>
-          </div>
-        </AnalyticsPanel>
-
-        <AnalyticsPanel
-          title="Trend"
-          eyebrow="Analytics Carryover"
-          loading={!revealedPanels.trend && !errorMessage}
-          errorMessage={!revealedPanels.trend ? errorMessage : null}
-          loadingLabel="Summarizing the current trend"
-        >
-          <div className="market-metric-grid">
-            <div className="market-metric-card">
-              <span className="market-metric-label">Direction</span>
-              <span className="market-metric-value">{analysis?.trend.direction ?? '—'}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Confidence</span>
-              <span className="market-metric-value">{formatPercent(analysis?.trend.confidence)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">1H Slope</span>
-              <span className="market-metric-value">{formatPercent(analysis?.trend.slope1h)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">3H Slope</span>
-              <span className="market-metric-value">{formatPercent(analysis?.trend.slope3h)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">6H Slope</span>
-              <span className="market-metric-value">{formatPercent(analysis?.trend.slope6h)}</span>
-            </div>
-          </div>
-          <div className="market-copy-block">
-            <span className="market-copy-title">Summary</span>
-            <p>{analysis?.trend.summary ?? '—'}</p>
-          </div>
-        </AnalyticsPanel>
-
-        <AnalyticsPanel
-          title="Event Context"
-          eyebrow="World State"
-          loading={!revealedPanels.eventContext && !errorMessage}
-          errorMessage={!revealedPanels.eventContext ? errorMessage : null}
-          loadingLabel="Matching worldstate context"
-        >
-          {eventContextEntries.length > 0 ? (
-            <div className="market-context-list">
-              {eventContextEntries.map((entry) => (
-                <div key={`${entry.label}-${entry.impact}`} className="market-context-card">
-                  <span className="market-copy-title">{entry.label}</span>
-                  <p>{entry.impact}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="market-copy-block">
-              <span className="market-copy-title">No active context</span>
-              <p>No current worldstate rewards or live event hooks are matching this item right now.</p>
-            </div>
-          )}
-        </AnalyticsPanel>
-
-        <AnalyticsPanel
-          title="Manipulation Risk"
-          eyebrow="Safety"
-          loading={!revealedPanels.manipulation && !errorMessage}
-          errorMessage={!revealedPanels.manipulation ? errorMessage : null}
-          loadingLabel="Scanning manipulation signals"
-        >
-          <div className="market-metric-grid">
-            <div className="market-metric-card">
-              <span className="market-metric-label">Risk Level</span>
-              <span className="market-metric-value">{analysis?.manipulationRisk.riskLevel ?? '—'}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Active Signals</span>
-              <span className="market-metric-value">{formatNumber(analysis?.manipulationRisk.activeSignals, 0)}</span>
-            </div>
-            <div className="market-metric-card">
-              <span className="market-metric-label">Efficiency Penalty</span>
-              <span className="market-metric-value">{formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)}</span>
-            </div>
-          </div>
-          <div className="market-analysis-signal-list">
-            {(analysis?.manipulationRisk.signals ?? []).map((signal) => (
-              <div
-                key={signal.key}
-                className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
-              >
-                <span className="market-copy-title">{signal.label}</span>
-                <span className="market-analysis-signal-state">
-                  {signal.active ? 'Active' : 'Clear'}
-                </span>
-                <p>{signal.detail}</p>
-              </div>
-            ))}
-          </div>
-        </AnalyticsPanel>
-
-        <AnalyticsPanel
-          title="Time of Day Liquidity"
-          eyebrow="Observatory Tape"
-          loading={!revealedPanels.timeOfDay && !errorMessage}
-          errorMessage={!revealedPanels.timeOfDay ? errorMessage : null}
-          loadingLabel="Aggregating observatory tape"
-        >
-          <div className="market-pressure-row">
-            <div>
-              <span className="market-copy-title">Current Hour</span>
-              <span>{analysis?.timeOfDayLiquidity.currentHourLabel ?? '—'}</span>
-            </div>
-            <div>
-              <span className="market-copy-title">Strongest Window</span>
-              <span>{analysis?.timeOfDayLiquidity.strongestWindowLabel ?? '—'}</span>
-            </div>
-            <div>
-              <span className="market-copy-title">Weakest Window</span>
-              <span>{analysis?.timeOfDayLiquidity.weakestWindowLabel ?? '—'}</span>
-            </div>
-          </div>
-          <div className="market-time-grid">
-            {(analysis?.timeOfDayLiquidity.buckets ?? []).map((bucket) => (
-              <div key={bucket.hour} className="market-time-card">
-                <span className="market-copy-title">{bucket.label}</span>
-                <span>{formatNumber(bucket.avgVisibleQuantity, 0)} visible qty</span>
-                <span>{formatNumber(bucket.avgSellOrders, 1)} avg sell orders</span>
-                <span>Spread {formatPercent(bucket.avgSpreadPct)}</span>
-              </div>
-            ))}
-          </div>
-        </AnalyticsPanel>
-
-        <AnalyticsPanel
-          title={
-            analysis?.supplyContext.mode === 'set-components'
-              ? 'Set Components'
-              : analysis?.supplyContext.mode === 'drop-sources'
-                ? 'Drop Sources'
-                : 'Drop Sources / Set Components'
-          }
-          eyebrow="Supply Context"
-          loading={!revealedPanels.supply && !errorMessage}
-          errorMessage={!revealedPanels.supply ? errorMessage : null}
-          loadingLabel="Building supply context"
-        >
-          {analysis?.supplyContext.mode === 'set-components' ? (
-            <div className="market-component-list">
-              {(analysis?.supplyContext.components ?? []).map((component) => {
-                const imageUrl = resolveWfmAssetUrl(component.imagePath);
-                const targetValue = componentTargets[component.slug] ?? '';
-                const watchlistItem: WfmAutocompleteItem | null =
-                  component.itemId !== null
-                    ? {
-                        itemId: component.itemId,
-                        name: component.name,
-                        slug: component.slug,
-                        maxRank: null,
-                        itemFamily: null,
-                        imagePath: component.imagePath,
-                      }
-                    : null;
-
-                return (
-                  <div key={component.slug} className="market-component-card">
-                    <div className="market-component-main">
-                      {imageUrl ? (
-                        <img
-                          className="market-component-image"
-                          src={imageUrl}
-                          alt={component.name}
-                        />
-                      ) : (
-                        <div className="market-component-image placeholder" />
-                      )}
-                      <div className="market-component-copy">
-                        <span className="market-copy-title">{component.name}</span>
-                        <span>Current lowest: {formatPrice(component.currentLowestPrice)}</span>
-                        <span>Recommended entry: {formatPrice(component.recommendedEntryPrice)}</span>
+                ) : null}
+                <div className="market-detail-section-list">
+                  {itemDetailSections.map((section) => (
+                    <div key={section.title} className="market-detail-section">
+                      <span className="market-copy-title">{section.title}</span>
+                      <div className="market-detail-grid">
+                        {section.fields.map((field) => (
+                          <div key={`${section.title}-${field.label}-${field.value}`}>
+                            <span className="market-copy-title">{field.label}</span>
+                            <span>{field.value}</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                    <div className="market-component-actions">
-                      <input
-                        className="price-input"
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={targetValue}
-                        onChange={(event) =>
-                          setComponentTargets((current) => ({
-                            ...current,
-                            [component.slug]: event.target.value,
-                          }))
-                        }
-                      />
-                      <button
-                        className="btn-sm"
-                        type="button"
-                        disabled={!watchlistItem}
-                        onClick={() => {
-                          if (!watchlistItem) {
-                            return;
-                          }
-                          addExplicitItemToWatchlist(
-                            watchlistItem,
-                            component.variantKey,
-                            component.variantLabel,
-                            Number.parseInt(targetValue || '0', 10),
-                          );
-                        }}
-                      >
-                        Add to Watchlist
-                      </button>
-                    </div>
+                  ))}
+                </div>
+              </AnalyticsPanel>
+          </div>
+
+          <AnalyticsPanel
+            title="Event Context"
+            eyebrow="World State"
+            loading={!revealedPanels.eventContext && !errorMessage}
+            errorMessage={!revealedPanels.eventContext ? errorMessage : null}
+            loadingLabel="Matching worldstate context"
+          >
+            {eventContextEntries.length > 0 ? (
+              <div className="market-context-list">
+                {eventContextEntries.map((entry) => (
+                  <div key={`${entry.label}-${entry.impact}`} className="market-context-card">
+                    <span className="market-copy-title">{entry.label}</span>
+                    <p>{entry.impact}</p>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+            ) : (
+              <div className="market-copy-block">
+                <span className="market-copy-title">No active context</span>
+                <p>No current worldstate rewards or live event hooks are matching this item right now.</p>
+              </div>
+            )}
+          </AnalyticsPanel>
+
+          <AnalyticsPanel
+            title="Manipulation Risk"
+            eyebrow="Safety"
+            loading={!revealedPanels.manipulation && !errorMessage}
+            errorMessage={!revealedPanels.manipulation ? errorMessage : null}
+            loadingLabel="Scanning manipulation signals"
+          >
+            <div className="market-metric-grid">
+              <div className="market-metric-card">
+                <span className="market-metric-label">Risk Level</span>
+                <span className="market-metric-value">{analysis?.manipulationRisk.riskLevel ?? '—'}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Active Signals</span>
+                <span className="market-metric-value">{formatNumber(analysis?.manipulationRisk.activeSignals, 0)}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Efficiency Penalty</span>
+                <span className="market-metric-value">{formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)}</span>
+              </div>
             </div>
-          ) : analysis?.supplyContext.mode === 'drop-sources' ? (
-            <div className="market-drop-list">
-              {(analysis?.supplyContext.dropSources ?? []).map((source) => (
-                <div key={`${source.location}-${source.sourceType ?? 'none'}`} className="market-drop-card">
-                  <span className="market-copy-title">{source.location}</span>
-                  <span>Chance: {formatPercent(source.chance)}</span>
-                  <span>Rarity: {source.rarity ?? '—'}</span>
-                  <span>Type: {source.sourceType ?? '—'}</span>
+            <div className="market-analysis-signal-list">
+              {(analysis?.manipulationRisk.signals ?? []).map((signal) => (
+                <div
+                  key={signal.key}
+                  className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
+                >
+                  <span className="market-copy-title">{signal.label}</span>
+                  <span className="market-analysis-signal-state">
+                    {signal.active ? 'Active' : 'Clear'}
+                  </span>
+                  <p>{signal.detail}</p>
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="market-copy-block">
-              <span className="market-copy-title">No supply context</span>
-              <p>This item does not currently have set-component or catalog drop-source data available.</p>
+          </AnalyticsPanel>
+
+          <AnalyticsPanel
+            title="Time of Day Liquidity"
+            eyebrow="Observatory Tape"
+            loading={!revealedPanels.timeOfDay && !errorMessage}
+            errorMessage={!revealedPanels.timeOfDay ? errorMessage : null}
+            loadingLabel="Aggregating observatory tape"
+          >
+            <div className="market-pressure-row">
+              <div>
+                <span className="market-copy-title">Current Hour</span>
+                <span>{analysis?.timeOfDayLiquidity.currentHourLabel ?? '—'}</span>
+              </div>
+              <div>
+                <span className="market-copy-title">Strongest Window</span>
+                <span>{analysis?.timeOfDayLiquidity.strongestWindowLabel ?? '—'}</span>
+              </div>
+              <div>
+                <span className="market-copy-title">Weakest Window</span>
+                <span>{analysis?.timeOfDayLiquidity.weakestWindowLabel ?? '—'}</span>
+              </div>
             </div>
-          )}
-        </AnalyticsPanel>
+            <div className="market-time-grid">
+              {(analysis?.timeOfDayLiquidity.buckets ?? []).map((bucket) => (
+                <div key={bucket.hour} className="market-time-card">
+                  <span className="market-copy-title">{bucket.label}</span>
+                  <span>{formatNumber(bucket.avgVisibleQuantity, 0)} visible qty</span>
+                  <span>{formatNumber(bucket.avgSellOrders, 1)} avg sell orders</span>
+                  <span>Spread {formatPercent(bucket.avgSpreadPct)}</span>
+                </div>
+              ))}
+            </div>
+          </AnalyticsPanel>
+        </div>
       </div>
     </div>
   );
