@@ -22,6 +22,7 @@ import type {
   TradeOverview,
   TradeSessionState,
   TradeSignInInput,
+  TradeStatusInput,
   TradeUpdateListingInput,
   PersistedWorldStateCacheEntry,
   SellerMode,
@@ -238,6 +239,12 @@ export async function signInWfmTradeAccount(
 
 export async function signOutWfmTradeAccount(): Promise<void> {
   return invoke<void>('sign_out_wfm_trade_account');
+}
+
+export async function updateWfmTradeStatus(
+  input: TradeStatusInput,
+): Promise<TradeSessionState> {
+  return invoke<TradeSessionState>('update_wfm_trade_status', { input });
 }
 
 export async function getWfmTradeOverview(

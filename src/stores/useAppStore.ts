@@ -10,6 +10,7 @@ import {
   getWfmItemOrders,
   getWfmTopSellOrdersForVariant,
   getWfmTopSellOrders,
+  updateWfmTradeStatus,
   signInWfmTradeAccount,
   signOutWfmTradeAccount,
   saveAlecaframeSettings,
@@ -58,6 +59,7 @@ import type {
   SettingsSection,
   TradeAccountSummary,
   TradeSignInInput,
+  TradeStatusInput,
   TradePeriod,
   TradesSubTab,
   WatchlistAlert,
@@ -647,6 +649,7 @@ interface AppStore {
   loadTradeAccount: () => Promise<void>;
   signInTradeAccount: (input: TradeSignInInput) => Promise<void>;
   signOutTradeAccount: () => Promise<void>;
+  updateTradeAccountStatus: (input: TradeStatusInput) => Promise<void>;
   tradesSubTab: TradesSubTab;
   setTradesSubTab: (tab: TradesSubTab) => void;
 
@@ -2162,6 +2165,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await signOutWfmTradeAccount();
       set({
         tradeAccount: null,
+        tradeAccountLoading: false,
+        tradeAccountError: null,
+      });
+    } catch (error) {
+      set({
+        tradeAccountLoading: false,
+        tradeAccountError: toErrorMessage(error),
+      });
+      throw error;
+    }
+  },
+  updateTradeAccountStatus: async (input) => {
+    set({ tradeAccountLoading: true, tradeAccountError: null });
+
+    try {
+      const sessionState = await updateWfmTradeStatus(input);
+      set({
+        tradeAccount: sessionState.account,
         tradeAccountLoading: false,
         tradeAccountError: null,
       });

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use reqwest::blocking::Client;
 use reqwest::Method;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
@@ -13,12 +14,16 @@ use std::time::Duration;
 use tauri::Manager;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message;
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
+const WFM_WS_URL: &str = "wss://warframe.market/socket-v2";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
@@ -101,12 +106,30 @@ pub struct TradeUpdateListingInput {
     pub visible: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeStatusInput {
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredTradeSession {
     token: String,
     device_id: String,
     account: TradeAccountSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmWsMessage {
+    route: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(rename = "refId", skip_serializing_if = "Option::is_none")]
+    ref_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -185,7 +208,17 @@ fn normalize_status_label(value: &str) -> String {
     match value.trim().to_lowercase().as_str() {
         "in_game" | "ingame" => "ingame".to_string(),
         "online" => "online".to_string(),
+        "invisible" => "offline".to_string(),
         _ => "offline".to_string(),
+    }
+}
+
+fn normalize_status_command(value: &str) -> Result<&'static str> {
+    match value.trim().to_lowercase().as_str() {
+        "invisible" | "offline" => Ok("invisible"),
+        "online" => Ok("online"),
+        "in game" | "in_game" | "ingame" => Ok("in_game"),
+        _ => Err(anyhow!("Unsupported status. Use Invisible, Online, or In game.")),
     }
 }
 
@@ -773,6 +806,125 @@ fn delete_sell_order_inner(
     build_trade_overview_inner(app, seller_mode)
 }
 
+async fn update_trade_status_inner(
+    app: tauri::AppHandle,
+    input: TradeStatusInput,
+) -> Result<TradeSessionState> {
+    let session = ensure_authenticated_session(&app)?;
+    let desired_status = normalize_status_command(&input.status)?;
+
+    let mut request = WFM_WS_URL
+        .into_client_request()
+        .context("failed to build WFM websocket request")?;
+    let headers = request.headers_mut();
+    headers.append("Sec-WebSocket-Protocol", "wfm".parse().unwrap());
+    headers.append("User-Agent", WFM_USER_AGENT.parse().unwrap());
+
+    let (mut ws_stream, _) = connect_async(request)
+        .await
+        .context("failed to connect to WFM websocket")?;
+
+    let auth_request_id = uuid::Uuid::new_v4().to_string();
+    let auth_message = WfmWsMessage {
+        route: "@wfm|cmd/auth/signIn".to_string(),
+        payload: Some(json!({
+            "token": session.token,
+            "deviceId": session.device_id,
+        })),
+        id: Some(auth_request_id.clone()),
+        ref_id: None,
+    };
+
+    ws_stream
+        .send(Message::Text(
+            serde_json::to_string(&auth_message)
+                .context("failed to serialize websocket auth message")?
+                .into(),
+        ))
+        .await
+        .context("failed to send websocket auth message")?;
+
+    let mut authenticated = false;
+    let mut status_updated = false;
+    let status_request_id = uuid::Uuid::new_v4().to_string();
+
+    while let Some(message) = ws_stream.next().await {
+        let message = message.context("failed to read WFM websocket message")?;
+        let Message::Text(text) = message else {
+            continue;
+        };
+
+        let payload = serde_json::from_str::<WfmWsMessage>(&text)
+            .context("failed to parse WFM websocket payload")?;
+        let route = payload.route
+            .split('|')
+            .nth(1)
+            .unwrap_or(payload.route.as_str())
+            .to_string();
+
+        if !authenticated {
+            if route == "cmd/auth/signIn:ok" || payload.ref_id.as_deref() == Some(auth_request_id.as_str()) {
+                authenticated = true;
+                let status_message = WfmWsMessage {
+                    route: "@wfm|cmd/status/set".to_string(),
+                    payload: Some(json!({ "status": desired_status })),
+                    id: Some(status_request_id.clone()),
+                    ref_id: None,
+                };
+
+                ws_stream
+                    .send(Message::Text(
+                        serde_json::to_string(&status_message)
+                            .context("failed to serialize websocket status message")?
+                            .into(),
+                    ))
+                    .await
+                    .context("failed to send websocket status message")?;
+            } else if route == "cmd/auth/signIn:error" {
+                let reason = payload
+                    .payload
+                    .as_ref()
+                    .and_then(|value| value.get("reason"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("websocket authentication failed");
+                return Err(anyhow!(reason.to_string()));
+            }
+            continue;
+        }
+
+        if route == "cmd/status/set:ok" || payload.ref_id.as_deref() == Some(status_request_id.as_str()) {
+            status_updated = true;
+            break;
+        }
+
+        if route == "cmd/status/set:error" {
+            let reason = payload
+                .payload
+                .as_ref()
+                .and_then(|value| value.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("status update failed");
+            return Err(anyhow!(reason.to_string()));
+        }
+    }
+
+    if !status_updated {
+        return Err(anyhow!("status update did not complete"));
+    }
+
+    let account = fetch_me_with_token(&shared_wfm_client()?, &session.token)?;
+    let updated_session = StoredTradeSession {
+        account: account.clone(),
+        ..session
+    };
+    save_session(&app, &updated_session)?;
+
+    Ok(TradeSessionState {
+        connected: true,
+        account: Some(account),
+    })
+}
+
 #[tauri::command]
 pub async fn get_wfm_trade_session_state(app: tauri::AppHandle) -> Result<TradeSessionState, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -884,6 +1036,16 @@ pub async fn delete_wfm_sell_order(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_wfm_trade_status(
+    app: tauri::AppHandle,
+    input: TradeStatusInput,
+) -> Result<TradeSessionState, String> {
+    update_trade_status_inner(app, input)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

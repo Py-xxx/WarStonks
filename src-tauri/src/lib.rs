@@ -31,6 +31,7 @@ pub fn run() {
             trades::get_wfm_trade_session_state,
             trades::sign_in_wfm_trade_account,
             trades::sign_out_wfm_trade_account,
+            trades::update_wfm_trade_status,
             trades::get_wfm_trade_overview,
             trades::create_wfm_sell_order,
             trades::update_wfm_sell_order,

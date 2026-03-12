@@ -128,6 +128,10 @@ export interface TradeSignInInput {
   password: string;
 }
 
+export interface TradeStatusInput {
+  status: 'invisible' | 'online' | 'in_game';
+}
+
 export interface TradeCreateListingInput {
   wfmId: string;
   price: number;
