@@ -3671,7 +3671,7 @@ body {
 .portfolio-log-header,
 .portfolio-log-row {
   display: grid;
-  grid-template-columns: minmax(280px, 1.8fr) 88px 88px 64px 64px 150px;
+  grid-template-columns: minmax(280px, 1.8fr) 78px 78px 56px 56px 78px 78px 124px 150px 110px;
   align-items: center;
   gap: 12px;
 }
@@ -3745,6 +3745,18 @@ body {
 }
 .portfolio-log-date {
   text-align: right;
+}
+.portfolio-log-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.portfolio-keep-btn {
+  min-width: 88px;
+  justify-content: center;
+}
+.portfolio-keep-btn.active {
+  border-color: rgba(240, 160, 48, 0.4);
+  color: var(--accent-amber);
 }
 .chart-header {
   padding: 10px 14px;
@@ -3959,7 +3971,7 @@ body {
 
   .portfolio-log-header,
   .portfolio-log-row {
-    grid-template-columns: minmax(220px, 1.8fr) 76px 76px 52px 52px 124px;
+    grid-template-columns: minmax(220px, 1.6fr) 72px 72px 48px 48px 72px 72px 110px 120px 96px;
     gap: 10px;
   }
 
@@ -4013,6 +4025,10 @@ body {
 
   .portfolio-log-date {
     text-align: left;
+  }
+
+  .portfolio-log-actions {
+    justify-content: flex-start;
   }
 
   .portfolio-log-toolbar {

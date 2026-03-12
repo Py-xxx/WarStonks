@@ -20,9 +20,11 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
+const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
+const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://warframe.market/socket-v2";
@@ -121,6 +123,10 @@ pub struct PortfolioTradeLogEntry {
     pub rank: Option<i64>,
     pub closed_at: String,
     pub updated_at: String,
+    pub profit: Option<i64>,
+    pub margin: Option<f64>,
+    pub status: Option<String>,
+    pub keep_item: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,6 +248,55 @@ struct WfmProfileClosedOrderItemName {
     item_name: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmTradeSetApiResponse {
+    data: WfmTradeSetData,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WfmTradeSetData {
+    items: Vec<WfmTradeSetItemRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmTradeSetItemRecord {
+    slug: String,
+    #[serde(default)]
+    set_root: Option<bool>,
+    #[serde(default)]
+    quantity_in_set: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredTradeLogRecord {
+    id: String,
+    item_name: String,
+    slug: String,
+    image_path: Option<String>,
+    order_type: String,
+    platinum: i64,
+    quantity: i64,
+    rank: Option<i64>,
+    closed_at: String,
+    updated_at: String,
+    keep_item: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TradeSetComponentRecord {
+    component_slug: String,
+    quantity_in_set: i64,
+    fetched_at: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BuyConsumptionState {
+    flipped_quantity: i64,
+    sold_as_set_quantity: i64,
+}
+
 #[derive(Debug, Clone)]
 struct CatalogTradeItemMeta {
     item_id: Option<i64>,
@@ -307,6 +362,14 @@ fn build_item_catalog_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     Ok(app_data_dir.join(ITEM_CATALOG_DATABASE_FILE))
 }
 
+fn build_market_observatory_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve app data directory")?;
+    Ok(app_data_dir.join(MARKET_OBSERVATORY_DATABASE_FILE))
+}
+
 fn build_trades_cache_database_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     let app_data_dir = app
         .path()
@@ -362,6 +425,19 @@ fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
     .context("failed to open item catalog")
 }
 
+fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
+    let db_path = build_market_observatory_path(app)?;
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .context("failed to open market observatory")?;
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .context("failed to set market observatory busy timeout")?;
+    Ok(connection)
+}
+
 fn open_trades_cache_database(app: &tauri::AppHandle) -> Result<Connection> {
     let db_path = build_trades_cache_database_path(app)?;
     if let Some(parent) = db_path.parent() {
@@ -400,14 +476,54 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
               PRIMARY KEY (username, order_id)
             );
 
+            CREATE TABLE IF NOT EXISTS portfolio_trade_log_overrides (
+              username TEXT NOT NULL,
+              order_id TEXT NOT NULL,
+              keep_item INTEGER NOT NULL DEFAULT 0,
+              PRIMARY KEY (username, order_id)
+            );
+
             CREATE TABLE IF NOT EXISTS portfolio_trade_log_cache_meta (
               username TEXT PRIMARY KEY,
               last_updated_at TEXT NOT NULL,
               entry_count INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS trade_set_component_cache (
+              set_slug TEXT NOT NULL,
+              component_slug TEXT NOT NULL,
+              quantity_in_set INTEGER NOT NULL,
+              sort_order INTEGER NOT NULL,
+              fetched_at TEXT NOT NULL,
+              PRIMARY KEY (set_slug, component_slug)
+            );
             ",
         )
-        .context("failed to initialize trades cache schema")
+        .context("failed to initialize trades cache schema")?;
+
+    migrate_trades_cache_schema(connection)
+}
+
+fn migrate_trades_cache_schema(connection: &Connection) -> Result<()> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(portfolio_trade_log_cache)")
+        .context("failed to inspect trade log cache schema")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("failed to query trade log cache columns")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect trade log cache columns")?;
+
+    if !columns.iter().any(|column| column == "keep_item") {
+        connection
+            .execute(
+                "ALTER TABLE portfolio_trade_log_cache ADD COLUMN keep_item INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("failed to add keep_item column to trade log cache")?;
+    }
+
+    Ok(())
 }
 
 fn generate_device_id() -> String {
@@ -420,6 +536,10 @@ fn generate_device_id() -> String {
     );
     let digest = sha2::Sha256::digest(seed.as_bytes());
     hex::encode(&digest[..16])
+}
+
+fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(value, &Rfc3339).ok()
 }
 
 fn extract_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -584,6 +704,10 @@ fn build_trade_log_entries_from_statistics(
             rank: order.mod_rank,
             closed_at: order.closed_date,
             updated_at: order.updated_at,
+            profit: None,
+            margin: None,
+            status: None,
+            keep_item: false,
         })
         .collect::<Vec<_>>();
 
@@ -618,10 +742,10 @@ fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLog
     Ok(build_trade_log_entries_from_statistics(payload.payload))
 }
 
-fn load_cached_trade_log_state_inner(
+fn load_stored_trade_log_records_inner(
     connection: &Connection,
     username: &str,
-) -> Result<PortfolioTradeLogState> {
+) -> Result<Vec<StoredTradeLogRecord>> {
     let trimmed_username = username.trim();
     if trimmed_username.is_empty() {
         return Err(anyhow!("Username is required to load the trade log."));
@@ -631,26 +755,30 @@ fn load_cached_trade_log_state_inner(
         .prepare(
             "
             SELECT
-              order_id,
-              item_name,
-              slug,
-              image_path,
-              order_type,
-              platinum,
-              quantity,
-              rank,
-              closed_at,
-              updated_at
-            FROM portfolio_trade_log_cache
-            WHERE username = ?1
-            ORDER BY closed_at DESC, updated_at DESC
+              cache.order_id,
+              cache.item_name,
+              cache.slug,
+              cache.image_path,
+              cache.order_type,
+              cache.platinum,
+              cache.quantity,
+              cache.rank,
+              cache.closed_at,
+              cache.updated_at,
+              COALESCE(overrides.keep_item, cache.keep_item, 0)
+            FROM portfolio_trade_log_cache AS cache
+            LEFT JOIN portfolio_trade_log_overrides AS overrides
+              ON overrides.username = cache.username
+             AND overrides.order_id = cache.order_id
+            WHERE cache.username = ?1
+            ORDER BY cache.closed_at ASC, cache.updated_at ASC, cache.order_id ASC
             ",
         )
-        .context("failed to prepare cached trade log query")?;
+        .context("failed to prepare stored trade log query")?;
 
-    let entries = statement
+    let rows = statement
         .query_map(params![trimmed_username], |row| {
-            Ok(PortfolioTradeLogEntry {
+            Ok(StoredTradeLogRecord {
                 id: row.get(0)?,
                 item_name: row.get(1)?,
                 slug: row.get(2)?,
@@ -661,36 +789,205 @@ fn load_cached_trade_log_state_inner(
                 rank: row.get(7)?,
                 closed_at: row.get(8)?,
                 updated_at: row.get(9)?,
+                keep_item: row.get::<_, i64>(10)? != 0,
             })
         })
-        .context("failed to read cached trade log rows")?
+        .context("failed to read stored trade log rows")?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .context("failed to collect cached trade log rows")?;
+        .context("failed to collect stored trade log rows")?;
 
-    let last_updated_at = connection
+    Ok(rows)
+}
+
+fn load_trade_log_last_updated_at(
+    connection: &Connection,
+    username: &str,
+) -> Result<Option<String>> {
+    connection
         .query_row(
             "
             SELECT last_updated_at
             FROM portfolio_trade_log_cache_meta
             WHERE username = ?1
             ",
-            params![trimmed_username],
+            params![username.trim()],
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .context("failed to read cached trade log metadata")?;
-
-    Ok(PortfolioTradeLogState {
-        entries,
-        last_updated_at,
-    })
+        .context("failed to read cached trade log metadata")
 }
 
-fn save_trade_log_state_inner(
+fn fetch_cached_trade_set_components(
+    connection: &Connection,
+    set_slug: &str,
+) -> Result<Vec<TradeSetComponentRecord>> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT component_slug, quantity_in_set, fetched_at
+            FROM trade_set_component_cache
+            WHERE set_slug = ?1
+            ORDER BY sort_order ASC, component_slug ASC
+            ",
+        )
+        .context("failed to prepare trades set component cache query")?;
+
+    let rows = statement
+        .query_map(params![set_slug], |row| {
+            Ok(TradeSetComponentRecord {
+                component_slug: row.get(0)?,
+                quantity_in_set: row.get::<_, i64>(1)?.max(1),
+                fetched_at: row.get(2)?,
+            })
+        })
+        .context("failed to query trades set component cache")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect trades set component cache rows")?;
+
+    Ok(rows)
+}
+
+fn trade_set_component_cache_is_fresh(entries: &[TradeSetComponentRecord]) -> bool {
+    let Some(fetched_at) = entries
+        .first()
+        .and_then(|entry| parse_timestamp(&entry.fetched_at))
+    else {
+        return false;
+    };
+
+    (now_utc() - fetched_at) < time::Duration::days(TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS)
+}
+
+fn persist_trade_set_component_cache(
+    connection: &Connection,
+    set_slug: &str,
+    components: &[TradeSetComponentRecord],
+) -> Result<()> {
+    connection
+        .execute(
+            "DELETE FROM trade_set_component_cache WHERE set_slug = ?1",
+            params![set_slug],
+        )
+        .context("failed to clear trade set component cache")?;
+
+    let mut statement = connection
+        .prepare(
+            "
+            INSERT INTO trade_set_component_cache (
+              set_slug,
+              component_slug,
+              quantity_in_set,
+              sort_order,
+              fetched_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)
+            ",
+        )
+        .context("failed to prepare trade set component cache insert")?;
+
+    for (index, component) in components.iter().enumerate() {
+        statement
+            .execute(params![
+                set_slug,
+                component.component_slug,
+                component.quantity_in_set,
+                index as i64,
+                component.fetched_at,
+            ])
+            .context("failed to insert trade set component cache row")?;
+    }
+
+    Ok(())
+}
+
+fn fetch_wfm_trade_set_components(set_slug: &str) -> Result<Vec<TradeSetComponentRecord>> {
+    let client = shared_wfm_client()?;
+    let response = execute_wfm_request(
+        client
+            .get(format!("{WFM_API_BASE_URL_V2}/item/{set_slug}/set"))
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Language", WFM_LANGUAGE_HEADER)
+            .header("Platform", WFM_PLATFORM_HEADER)
+            .header("Accept", "application/json"),
+        "request WFM set components",
+    )?;
+    let fetched_at = format_timestamp(now_utc())?;
+
+    Ok(response
+        .json::<WfmTradeSetApiResponse>()
+        .context("failed to parse WFM trade set response")?
+        .data
+        .items
+        .into_iter()
+        .filter(|item| item.set_root != Some(true) && item.slug != set_slug)
+        .map(|item| TradeSetComponentRecord {
+            component_slug: item.slug,
+            quantity_in_set: item.quantity_in_set.unwrap_or(1).max(1),
+            fetched_at: fetched_at.clone(),
+        })
+        .collect())
+}
+
+fn load_observatory_trade_set_components(
+    app: &tauri::AppHandle,
+    set_slug: &str,
+) -> Result<Vec<TradeSetComponentRecord>> {
+    let observatory_connection = open_market_observatory_database(app)?;
+    let mut statement = observatory_connection
+        .prepare(
+            "
+            SELECT component_slug, quantity_in_set, fetched_at
+            FROM set_component_cache
+            WHERE set_slug = ?1
+            ORDER BY sort_order ASC, component_slug ASC
+            ",
+        )
+        .context("failed to prepare observatory set component cache query")?;
+
+    let rows = statement
+        .query_map(params![set_slug], |row| {
+            Ok(TradeSetComponentRecord {
+                component_slug: row.get(0)?,
+                quantity_in_set: row.get::<_, i64>(1)?.max(1),
+                fetched_at: row.get(2)?,
+            })
+        })
+        .context("failed to query observatory set component cache")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect observatory set component cache rows")?;
+
+    Ok(rows)
+}
+
+fn load_trade_set_components_for_slug(
+    app: &tauri::AppHandle,
+    set_slug: &str,
+) -> Result<Vec<TradeSetComponentRecord>> {
+    let cache_connection = open_trades_cache_database(app)?;
+    let cached = fetch_cached_trade_set_components(&cache_connection, set_slug)?;
+    if !cached.is_empty() && trade_set_component_cache_is_fresh(&cached) {
+        return Ok(cached);
+    }
+
+    if let Ok(observatory_rows) = load_observatory_trade_set_components(app, set_slug) {
+        if !observatory_rows.is_empty() {
+            persist_trade_set_component_cache(&cache_connection, set_slug, &observatory_rows)?;
+            return Ok(observatory_rows);
+        }
+    }
+
+    let fetched = fetch_wfm_trade_set_components(set_slug)?;
+    if !fetched.is_empty() {
+        persist_trade_set_component_cache(&cache_connection, set_slug, &fetched)?;
+    }
+
+    Ok(fetched)
+}
+
+fn save_trade_log_rows_inner(
     connection: &mut Connection,
     username: &str,
     entries: &[PortfolioTradeLogEntry],
-) -> Result<PortfolioTradeLogState> {
+) -> Result<String> {
     let trimmed_username = username.trim();
     if trimmed_username.is_empty() {
         return Err(anyhow!("Username is required to cache the trade log."));
@@ -700,13 +997,6 @@ fn save_trade_log_state_inner(
     let transaction = connection
         .transaction()
         .context("failed to start trade log cache transaction")?;
-
-    transaction
-        .execute(
-            "DELETE FROM portfolio_trade_log_cache WHERE username = ?1",
-            params![trimmed_username],
-        )
-        .context("failed to clear cached trade log rows")?;
 
     {
         let mut insert_statement = transaction
@@ -723,11 +1013,27 @@ fn save_trade_log_state_inner(
                   quantity,
                   rank,
                   closed_at,
-                  updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                  updated_at,
+                  keep_item
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, COALESCE(
+                  (SELECT keep_item
+                   FROM portfolio_trade_log_overrides
+                   WHERE username = ?1 AND order_id = ?2),
+                  0
+                ))
+                ON CONFLICT(username, order_id) DO UPDATE SET
+                  item_name = excluded.item_name,
+                  slug = excluded.slug,
+                  image_path = excluded.image_path,
+                  order_type = excluded.order_type,
+                  platinum = excluded.platinum,
+                  quantity = excluded.quantity,
+                  rank = excluded.rank,
+                  closed_at = excluded.closed_at,
+                  updated_at = excluded.updated_at
                 ",
             )
-            .context("failed to prepare trade log cache insert")?;
+            .context("failed to prepare trade log cache upsert")?;
 
         for entry in entries {
             insert_statement
@@ -744,7 +1050,7 @@ fn save_trade_log_state_inner(
                     entry.closed_at,
                     entry.updated_at,
                 ])
-                .context("failed to insert cached trade log row")?;
+                .context("failed to upsert cached trade log row")?;
         }
     }
 
@@ -768,10 +1074,273 @@ fn save_trade_log_state_inner(
         .commit()
         .context("failed to commit trade log cache transaction")?;
 
+    Ok(last_updated_at)
+}
+
+fn consume_matching_buy_lots(
+    records: &[StoredTradeLogRecord],
+    consumption: &mut HashMap<String, BuyConsumptionState>,
+    slug: &str,
+    rank: Option<i64>,
+    required_quantity: i64,
+    sell_closed_at: &str,
+    as_set: bool,
+) -> (i64, i64) {
+    let mut matched_quantity = 0_i64;
+    let mut matched_cost = 0_i64;
+    let normalized_slug = slug.trim();
+
+    for record in records {
+        if matched_quantity >= required_quantity {
+            break;
+        }
+        if record.order_type != "buy"
+            || record.keep_item
+            || record.slug != normalized_slug
+            || record.rank != rank
+            || record.closed_at.as_str() > sell_closed_at
+        {
+            continue;
+        }
+
+        let entry = consumption.entry(record.id.clone()).or_default();
+        let used_quantity = entry.flipped_quantity + entry.sold_as_set_quantity;
+        let available_quantity = (record.quantity - used_quantity).max(0);
+        if available_quantity <= 0 {
+            continue;
+        }
+
+        let quantity_to_consume = (required_quantity - matched_quantity).min(available_quantity);
+        if quantity_to_consume <= 0 {
+            continue;
+        }
+
+        matched_quantity += quantity_to_consume;
+        matched_cost += quantity_to_consume * record.platinum;
+
+        if as_set {
+            entry.sold_as_set_quantity += quantity_to_consume;
+        } else {
+            entry.flipped_quantity += quantity_to_consume;
+        }
+    }
+
+    (matched_quantity, matched_cost)
+}
+
+fn consume_set_component_buy_lots(
+    records: &[StoredTradeLogRecord],
+    consumption: &mut HashMap<String, BuyConsumptionState>,
+    components: &[TradeSetComponentRecord],
+    sell_quantity: i64,
+    sell_closed_at: &str,
+) -> (i64, i64) {
+    if components.is_empty() || sell_quantity <= 0 {
+        return (0, 0);
+    }
+
+    let mut max_sets_supported = sell_quantity;
+    for component in components {
+        let available_quantity = records
+            .iter()
+            .filter(|record| {
+                record.order_type == "buy"
+                    && !record.keep_item
+                    && record.slug == component.component_slug
+                    && record.closed_at.as_str() <= sell_closed_at
+            })
+            .map(|record| {
+                let used = consumption
+                    .get(&record.id)
+                    .map(|entry| entry.flipped_quantity + entry.sold_as_set_quantity)
+                    .unwrap_or(0);
+                (record.quantity - used).max(0)
+            })
+            .sum::<i64>();
+
+        max_sets_supported = max_sets_supported.min(available_quantity / component.quantity_in_set);
+    }
+
+    if max_sets_supported <= 0 {
+        return (0, 0);
+    }
+
+    let mut total_cost = 0_i64;
+    for component in components {
+        let (_, component_cost) = consume_matching_buy_lots(
+            records,
+            consumption,
+            &component.component_slug,
+            None,
+            component.quantity_in_set * max_sets_supported,
+            sell_closed_at,
+            true,
+        );
+        total_cost += component_cost;
+    }
+
+    (max_sets_supported, total_cost)
+}
+
+fn derive_trade_log_entries(
+    app: &tauri::AppHandle,
+    records: &[StoredTradeLogRecord],
+) -> Vec<PortfolioTradeLogEntry> {
+    let mut consumption = HashMap::<String, BuyConsumptionState>::new();
+    let mut derived = Vec::with_capacity(records.len());
+
+    for record in records {
+        if record.order_type == "buy" {
+            continue;
+        }
+
+        let mut remaining_quantity = record.quantity;
+        let mut matched_quantity = 0_i64;
+        let mut matched_cost = 0_i64;
+
+        if record.slug.ends_with("_set") {
+            if let Ok(components) = load_trade_set_components_for_slug(app, &record.slug) {
+                let (set_quantity, set_cost) = consume_set_component_buy_lots(
+                    records,
+                    &mut consumption,
+                    &components,
+                    remaining_quantity,
+                    &record.closed_at,
+                );
+                matched_quantity += set_quantity;
+                matched_cost += set_cost;
+                remaining_quantity -= set_quantity;
+            }
+        }
+
+        if remaining_quantity > 0 {
+            let (flip_quantity, flip_cost) = consume_matching_buy_lots(
+                records,
+                &mut consumption,
+                &record.slug,
+                record.rank,
+                remaining_quantity,
+                &record.closed_at,
+                false,
+            );
+            matched_quantity += flip_quantity;
+            matched_cost += flip_cost;
+        }
+
+        let revenue = record.platinum * record.quantity;
+        let profit = revenue - matched_cost;
+        let margin = if matched_cost > 0 && matched_quantity == record.quantity {
+            Some(((profit as f64) / (matched_cost as f64)) * 100.0)
+        } else {
+            None
+        };
+
+        derived.push(PortfolioTradeLogEntry {
+            id: record.id.clone(),
+            item_name: record.item_name.clone(),
+            slug: record.slug.clone(),
+            image_path: record.image_path.clone(),
+            order_type: "sell".to_string(),
+            platinum: record.platinum,
+            quantity: record.quantity,
+            rank: record.rank,
+            closed_at: record.closed_at.clone(),
+            updated_at: record.updated_at.clone(),
+            profit: Some(profit),
+            margin,
+            status: None,
+            keep_item: false,
+        });
+    }
+
+    for record in records {
+        if record.order_type != "buy" {
+            continue;
+        }
+
+        let buy_state = consumption.get(&record.id).cloned().unwrap_or_default();
+        let status = if record.keep_item {
+            Some("Kept".to_string())
+        } else if buy_state.sold_as_set_quantity >= record.quantity {
+            Some("Sold As Set".to_string())
+        } else if buy_state.flipped_quantity >= record.quantity {
+            Some("Flip".to_string())
+        } else {
+            Some("Open".to_string())
+        };
+
+        derived.push(PortfolioTradeLogEntry {
+            id: record.id.clone(),
+            item_name: record.item_name.clone(),
+            slug: record.slug.clone(),
+            image_path: record.image_path.clone(),
+            order_type: "buy".to_string(),
+            platinum: record.platinum,
+            quantity: record.quantity,
+            rank: record.rank,
+            closed_at: record.closed_at.clone(),
+            updated_at: record.updated_at.clone(),
+            profit: None,
+            margin: None,
+            status,
+            keep_item: record.keep_item,
+        });
+    }
+
+    derived.sort_by(|left, right| {
+        right
+            .closed_at
+            .cmp(&left.closed_at)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| right.id.cmp(&left.id))
+    });
+
+    derived
+}
+
+fn load_cached_trade_log_state_inner(
+    app: &tauri::AppHandle,
+    connection: &Connection,
+    username: &str,
+) -> Result<PortfolioTradeLogState> {
+    let records = load_stored_trade_log_records_inner(connection, username)?;
+    let last_updated_at = load_trade_log_last_updated_at(connection, username)?;
+
     Ok(PortfolioTradeLogState {
-        entries: entries.to_vec(),
-        last_updated_at: Some(last_updated_at),
+        entries: derive_trade_log_entries(app, &records),
+        last_updated_at,
     })
+}
+
+fn set_trade_log_keep_item_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+    order_id: &str,
+    keep_item: bool,
+) -> Result<PortfolioTradeLogState> {
+    let trimmed_username = username.trim();
+    let trimmed_order_id = order_id.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to update trade log state."));
+    }
+    if trimmed_order_id.is_empty() {
+        return Err(anyhow!("Order id is required to update trade log state."));
+    }
+
+    let connection = open_trades_cache_database(app)?;
+    connection
+        .execute(
+            "
+            INSERT INTO portfolio_trade_log_overrides (username, order_id, keep_item)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(username, order_id) DO UPDATE SET
+              keep_item = excluded.keep_item
+            ",
+            params![trimmed_username, trimmed_order_id, if keep_item { 1 } else { 0 }],
+        )
+        .context("failed to update trade log keep override")?;
+
+    load_cached_trade_log_state_inner(app, &connection, trimmed_username)
 }
 
 fn load_cached_trade_log_state_for_app(
@@ -779,7 +1348,7 @@ fn load_cached_trade_log_state_for_app(
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
     let connection = open_trades_cache_database(app)?;
-    load_cached_trade_log_state_inner(&connection, username)
+    load_cached_trade_log_state_inner(app, &connection, username)
 }
 
 fn refresh_trade_log_state_for_app(
@@ -788,7 +1357,8 @@ fn refresh_trade_log_state_for_app(
 ) -> Result<PortfolioTradeLogState> {
     let entries = fetch_profile_trade_log_inner(username)?;
     let mut connection = open_trades_cache_database(app)?;
-    save_trade_log_state_inner(&mut connection, username, &entries)
+    save_trade_log_rows_inner(&mut connection, username, &entries)?;
+    load_cached_trade_log_state_inner(app, &connection, username)
 }
 
 fn parse_status_from_payload(payload: &Value) -> Option<String> {
@@ -1375,6 +1945,21 @@ pub async fn get_wfm_profile_trade_log(
 }
 
 #[tauri::command]
+pub async fn set_wfm_trade_log_keep_item(
+    app: tauri::AppHandle,
+    username: String,
+    order_id: String,
+    keep_item: bool,
+) -> Result<PortfolioTradeLogState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        set_trade_log_keep_item_inner(&app, username.trim(), order_id.trim(), keep_item)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn create_wfm_sell_order(
     app: tauri::AppHandle,
     input: TradeCreateListingInput,
@@ -1435,8 +2020,9 @@ pub async fn delete_wfm_sell_order(
 mod tests {
     use super::{
         build_trade_log_entries_from_statistics, initialize_trades_cache_schema,
-        load_cached_trade_log_state_inner, normalize_avatar_url, parse_status_from_payload,
-        save_trade_log_state_inner, PortfolioTradeLogEntry, WfmProfileClosedOrder,
+        load_stored_trade_log_records_inner, load_trade_log_last_updated_at, normalize_avatar_url,
+        parse_status_from_payload, save_trade_log_rows_inner, PortfolioTradeLogEntry,
+        WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
     };
     use rusqlite::Connection;
@@ -1558,6 +2144,10 @@ mod tests {
                 rank: None,
                 closed_at: "2026-03-09T10:00:00.000+00:00".to_string(),
                 updated_at: "2026-03-09T10:00:00.000+00:00".to_string(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
             },
             PortfolioTradeLogEntry {
                 id: "buy-1".to_string(),
@@ -1570,18 +2160,23 @@ mod tests {
                 rank: Some(2),
                 closed_at: "2026-03-10T10:00:00.000+00:00".to_string(),
                 updated_at: "2026-03-10T10:00:00.000+00:00".to_string(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
             },
         ];
 
-        let saved_state = save_trade_log_state_inner(&mut connection, "qtpyth", &entries)
-            .expect("save cached trade log");
-        let loaded_state = load_cached_trade_log_state_inner(&connection, "qtpyth")
-            .expect("load cached trade log");
+        let saved_updated_at =
+            save_trade_log_rows_inner(&mut connection, "qtpyth", &entries).expect("save cached trade log");
+        let loaded_records =
+            load_stored_trade_log_records_inner(&connection, "qtpyth").expect("load cached trade log");
+        let loaded_updated_at =
+            load_trade_log_last_updated_at(&connection, "qtpyth").expect("load cached metadata");
 
-        assert!(saved_state.last_updated_at.is_some());
-        assert_eq!(loaded_state.entries.len(), 2);
-        assert_eq!(loaded_state.entries[0].id, "buy-1");
-        assert_eq!(loaded_state.entries[1].id, "sell-1");
-        assert_eq!(loaded_state.last_updated_at, saved_state.last_updated_at);
+        assert_eq!(loaded_records.len(), 2);
+        assert_eq!(loaded_records[0].id, "sell-1");
+        assert_eq!(loaded_records[1].id, "buy-1");
+        assert_eq!(loaded_updated_at, Some(saved_updated_at));
     }
 }

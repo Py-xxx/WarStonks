@@ -20,7 +20,6 @@ import type {
   MarketVariant,
   TradeCreateListingInput,
   TradeOverview,
-  PortfolioTradeLogEntry,
   PortfolioTradeLogState,
   TradeSessionState,
   TradeSignInInput,
@@ -258,6 +257,18 @@ export async function getCachedWfmProfileTradeLog(
   username: string,
 ): Promise<PortfolioTradeLogState> {
   return invoke<PortfolioTradeLogState>('get_cached_wfm_profile_trade_log', { username });
+}
+
+export async function setWfmTradeLogKeepItem(
+  username: string,
+  orderId: string,
+  keepItem: boolean,
+): Promise<PortfolioTradeLogState> {
+  return invoke<PortfolioTradeLogState>('set_wfm_trade_log_keep_item', {
+    username,
+    orderId,
+    keepItem,
+  });
 }
 
 export async function createWfmSellOrder(

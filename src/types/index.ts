@@ -166,6 +166,10 @@ export interface PortfolioTradeLogEntry {
   rank: number | null;
   closedAt: string;
   updatedAt: string;
+  profit: number | null;
+  margin: number | null;
+  status: string | null;
+  keepItem: boolean;
 }
 
 export interface PortfolioTradeLogState {
