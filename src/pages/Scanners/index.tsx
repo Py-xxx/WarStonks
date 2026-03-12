@@ -718,7 +718,7 @@ export function ScannersPage() {
               </>
             ) : null}
             <button
-              className="market-refresh-button"
+              className="scanner-action-button"
               type="button"
               onClick={() => {
                 if (isRunning) {
