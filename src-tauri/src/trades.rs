@@ -21,7 +21,6 @@ const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
-const WFM_CROSSPLAY_HEADER: &str = "true";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,7 +357,6 @@ fn send_wfm_request(
         .header("User-Agent", WFM_USER_AGENT)
         .header("Language", WFM_LANGUAGE_HEADER)
         .header("Platform", WFM_PLATFORM_HEADER)
-        .header("Crossplay", WFM_CROSSPLAY_HEADER)
         .header("Accept", "application/json");
 
     if let Some(token) = token {
@@ -368,17 +366,38 @@ fn send_wfm_request(
     }
 }
 
+fn execute_wfm_request(
+    builder: reqwest::blocking::RequestBuilder,
+    action_label: &str,
+) -> Result<reqwest::blocking::Response> {
+    let response = builder
+        .send()
+        .with_context(|| format!("failed to {action_label}"))?;
+
+    if response.status().is_success() {
+        return Ok(response);
+    }
+
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    let trimmed_body = body.trim();
+    if trimmed_body.is_empty() {
+        return Err(anyhow!("{action_label} failed with status {status}"));
+    }
+
+    Err(anyhow!("{action_label} failed with status {status}: {trimmed_body}"))
+}
+
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
-    let response = send_wfm_request(
-        client,
-        Method::GET,
-        format!("{WFM_API_BASE_URL_V2}/me"),
-        Some(token),
-    )
-    .send()
-    .context("failed to request WFM profile")?
-    .error_for_status()
-    .context("WFM profile request failed")?;
+    let response = execute_wfm_request(
+        send_wfm_request(
+            client,
+            Method::GET,
+            format!("{WFM_API_BASE_URL_V2}/me"),
+            Some(token),
+        ),
+        "request WFM profile",
+    )?;
 
     let payload = response
         .json::<Value>()
@@ -516,16 +535,15 @@ fn fetch_market_low_for_listing(
     seller_mode: &str,
     own_username: &str,
 ) -> Result<Option<i64>> {
-    let payload = send_wfm_request(
-        client,
-        Method::GET,
-        format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"),
-        None,
-    )
-    .send()
-    .context("failed to request market low")?
-    .error_for_status()
-    .context("market low request failed")?
+    let payload = execute_wfm_request(
+        send_wfm_request(
+            client,
+            Method::GET,
+            format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"),
+            None,
+        ),
+        "request market low",
+    )?
     .json::<WfmOrdersItemResponse>()
     .context("failed to parse market low response")?;
 
@@ -546,16 +564,15 @@ fn fetch_market_low_for_listing(
 }
 
 fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
-    let response = send_wfm_request(
-        client,
-        Method::GET,
-        format!("{WFM_API_BASE_URL_V2}/orders/my"),
-        Some(token),
-    )
-    .send()
-    .context("failed to request own orders")?
-    .error_for_status()
-    .context("failed to load own orders")?;
+    let response = execute_wfm_request(
+        send_wfm_request(
+            client,
+            Method::GET,
+            format!("{WFM_API_BASE_URL_V2}/orders/my"),
+            Some(token),
+        ),
+        "load own orders",
+    )?;
 
     let payload = response
         .json::<WfmMyOrdersResponse>()
@@ -654,12 +671,16 @@ fn create_sell_order_inner(
         payload["rank"] = json!(rank);
     }
 
-    send_wfm_request(&client, Method::POST, format!("{WFM_API_BASE_URL_V2}/order"), Some(&session.token))
-        .json(&payload)
-        .send()
-        .context("failed to create sell order")?
-        .error_for_status()
-        .context("sell order creation failed")?;
+    execute_wfm_request(
+        send_wfm_request(
+            &client,
+            Method::POST,
+            format!("{WFM_API_BASE_URL_V2}/order"),
+            Some(&session.token),
+        )
+        .json(&payload),
+        "create sell order",
+    )?;
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -684,17 +705,16 @@ fn update_sell_order_inner(
         payload["rank"] = json!(rank);
     }
 
-    send_wfm_request(
-        &client,
-        Method::PATCH,
-        format!("{WFM_API_BASE_URL_V2}/order/{}", input.order_id),
-        Some(&session.token),
-    )
-    .json(&payload)
-    .send()
-    .context("failed to update sell order")?
-    .error_for_status()
-    .context("sell order update failed")?;
+    execute_wfm_request(
+        send_wfm_request(
+            &client,
+            Method::PATCH,
+            format!("{WFM_API_BASE_URL_V2}/order/{}", input.order_id),
+            Some(&session.token),
+        )
+        .json(&payload),
+        "update sell order",
+    )?;
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -711,17 +731,16 @@ fn close_sell_order_inner(
         return Err(anyhow!("Quantity to close must be greater than zero."));
     }
 
-    send_wfm_request(
-        &client,
-        Method::POST,
-        format!("{WFM_API_BASE_URL_V2}/order/{order_id}/close"),
-        Some(&session.token),
-    )
-    .json(&json!({ "quantity": quantity }))
-    .send()
-    .context("failed to close sell order")?
-    .error_for_status()
-    .context("sell order close failed")?;
+    execute_wfm_request(
+        send_wfm_request(
+            &client,
+            Method::POST,
+            format!("{WFM_API_BASE_URL_V2}/order/{order_id}/close"),
+            Some(&session.token),
+        )
+        .json(&json!({ "quantity": quantity })),
+        "close sell order",
+    )?;
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -734,16 +753,15 @@ fn delete_sell_order_inner(
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
 
-    send_wfm_request(
-        &client,
-        Method::DELETE,
-        format!("{WFM_API_BASE_URL_V2}/order/{order_id}"),
-        Some(&session.token),
-    )
-    .send()
-    .context("failed to delete sell order")?
-    .error_for_status()
-    .context("sell order deletion failed")?;
+    execute_wfm_request(
+        send_wfm_request(
+            &client,
+            Method::DELETE,
+            format!("{WFM_API_BASE_URL_V2}/order/{order_id}"),
+            Some(&session.token),
+        ),
+        "delete sell order",
+    )?;
 
     build_trade_overview_inner(app, seller_mode)
 }
