@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
+import type { CSSProperties, Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import {
   ensureMarketTracking,
   getItemAnalysis,
@@ -33,6 +33,8 @@ type AnalysisPanelKey =
   | 'manipulation'
   | 'timeOfDay'
   | 'supply';
+
+type PanelTone = 'neutral' | 'blue' | 'green' | 'amber' | 'red';
 
 const PANEL_REVEAL_STEP_MS = 85;
 const ANALYTICS_PANEL_SEQUENCE: AnalyticsPanelKey[] = [
@@ -198,6 +200,106 @@ function renderStatHighlightLine(line: string): ReactNode {
       {suffix ? <span className="market-detail-highlight-copy">{suffix}</span> : null}
     </>
   );
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function toUnitInterval(value: number | null | undefined, fallback = 0): number {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return fallback;
+  }
+  return clampNumber(value, 0, 1);
+}
+
+function ratioToUnitInterval(value: number | null | undefined): number {
+  if (value === null || value === undefined || Number.isNaN(value) || value <= 0) {
+    return 0;
+  }
+  return clampNumber(value / (value + 1), 0, 1);
+}
+
+function slopeToUnitInterval(value: number | null | undefined): number {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return 0.5;
+  }
+  return clampNumber(0.5 + value * 4, 0, 1);
+}
+
+function getRiskTone(riskLevel: string | null | undefined): PanelTone {
+  const normalized = riskLevel?.toLowerCase() ?? '';
+  if (normalized.includes('high') || normalized.includes('critical')) {
+    return 'red';
+  }
+  if (normalized.includes('medium') || normalized.includes('elevated')) {
+    return 'amber';
+  }
+  if (normalized.includes('low')) {
+    return 'green';
+  }
+  return 'neutral';
+}
+
+function getTrendTone(direction: string | null | undefined): PanelTone {
+  const normalized = direction?.toLowerCase() ?? '';
+  if (normalized.includes('up') || normalized.includes('bull')) {
+    return 'green';
+  }
+  if (normalized.includes('down') || normalized.includes('bear')) {
+    return 'red';
+  }
+  if (normalized.includes('flat') || normalized.includes('side')) {
+    return 'amber';
+  }
+  return 'blue';
+}
+
+function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null) {
+  const netMargin = analysis?.headline.netMargin ?? null;
+  const liquidityScore = analysis?.headline.liquidityScore ?? null;
+  const riskLevel = analysis?.manipulationRisk.riskLevel ?? null;
+  const riskTone = getRiskTone(riskLevel);
+  const trendTone = getTrendTone(analysis?.trend.direction);
+  const confidence = analysis?.trend.confidence ?? null;
+
+  if (netMargin === null || liquidityScore === null) {
+    return {
+      label: 'Building Readout',
+      tone: 'blue' as PanelTone,
+      note: 'The market posture will settle as live orders, observatory tape, and catalog context finish loading.',
+    };
+  }
+
+  if (riskTone === 'red') {
+    return {
+      label: 'High Caution',
+      tone: 'red' as PanelTone,
+      note: `Risk is currently elevated, so any margin on the board should be discounted until the signal stack clears.`,
+    };
+  }
+
+  if (netMargin > 0 && liquidityScore >= 0.6 && trendTone === 'green') {
+    return {
+      label: 'Buy Bias',
+      tone: 'green' as PanelTone,
+      note: `Current spread supports an entry bias, with ${Math.round(liquidityScore * 100)}% liquidity and ${Math.round((confidence ?? 0) * 100)}% trend confidence backing the setup.`,
+    };
+  }
+
+  if (netMargin > 0 && liquidityScore >= 0.42) {
+    return {
+      label: 'Selective',
+      tone: 'blue' as PanelTone,
+      note: `There is usable edge here, but execution quality matters more than aggression because the market is not fully aligned yet.`,
+    };
+  }
+
+  return {
+    label: 'Wait',
+    tone: 'amber' as PanelTone,
+    note: 'The current structure is not clean enough to justify forcing a trade. Let price or liquidity improve first.',
+  };
 }
 
 async function handleOpenExternalLink(url: string | null | undefined) {
@@ -1149,6 +1251,8 @@ function AnalyticsPanel({
   loading = false,
   errorMessage = null,
   loadingLabel = 'Loading panel',
+  className = '',
+  headerAside = null,
 }: {
   title: string;
   eyebrow: string;
@@ -1156,13 +1260,18 @@ function AnalyticsPanel({
   loading?: boolean;
   errorMessage?: string | null;
   loadingLabel?: string;
+  className?: string;
+  headerAside?: ReactNode;
 }) {
   return (
-    <div className="card market-panel">
+    <div className={`card market-panel ${className}`.trim()}>
       <div className="card-header">
         <div className="market-panel-header">
-          <span className="panel-title-eyebrow">{eyebrow}</span>
-          <span className="card-label">{title}</span>
+          <div className="market-panel-header-copy">
+            <span className="panel-title-eyebrow">{eyebrow}</span>
+            <span className="card-label">{title}</span>
+          </div>
+          {headerAside ? <div className="market-panel-header-aside">{headerAside}</div> : null}
         </div>
       </div>
       <div className="card-body market-panel-body">
@@ -1735,6 +1844,20 @@ function AnalysisTab() {
   const effectiveItemDetails = itemDetails ?? analysis?.itemDetails ?? null;
   const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath);
   const itemDetailSections = buildItemDetailSections(effectiveItemDetails);
+  const heroState = buildAnalysisHeroState(analysis);
+  const liquidityMeterValue = toUnitInterval(analysis?.headline.liquidityScore);
+  const trendConfidenceValue = toUnitInterval(analysis?.trend.confidence);
+  const riskMeterValue = getRiskTone(analysis?.manipulationRisk.riskLevel) === 'red'
+    ? 0.92
+    : getRiskTone(analysis?.manipulationRisk.riskLevel) === 'amber'
+      ? 0.58
+      : getRiskTone(analysis?.manipulationRisk.riskLevel) === 'green'
+        ? 0.18
+        : 0.35;
+  const maxTimeOfDayQuantity = Math.max(
+    ...(analysis?.timeOfDayLiquidity.buckets ?? []).map((bucket) => bucket.avgVisibleQuantity ?? 0),
+    1,
+  );
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
@@ -1766,7 +1889,53 @@ function AnalysisTab() {
       </div>
       <div className="market-analysis-layout">
         <div className="market-analysis-column market-analysis-column-main">
-          <div className="market-summary-grid-shell">
+          <div className={`market-summary-grid-shell market-hero-shell tone-${heroState.tone}`}>
+            <div className="market-hero-strip">
+              <div className="market-hero-copy">
+                <div className="market-hero-title-row">
+                  <span className="market-hero-kicker">Trade Posture</span>
+                  <span className={`market-panel-badge tone-${heroState.tone}`}>{heroState.label}</span>
+                </div>
+                <span className="market-hero-item-name">{selectedItem.name}</span>
+                <p className="market-hero-note">{heroState.note}</p>
+              </div>
+              <div className="market-hero-meter-grid">
+                <div className="market-meter-card">
+                  <span className="market-copy-title">Liquidity</span>
+                  <div className="market-meter-track">
+                    <div
+                      className="market-meter-fill tone-blue"
+                      style={{ '--meter-fill': `${Math.round(liquidityMeterValue * 100)}%` } as CSSProperties}
+                    />
+                  </div>
+                  <span className="market-meter-value">
+                    {formatPercent(analysis?.headline.liquidityScore)} · {analysis?.headline.liquidityLabel ?? '—'}
+                  </span>
+                </div>
+                <div className="market-meter-card">
+                  <span className="market-copy-title">Trend Confidence</span>
+                  <div className="market-meter-track">
+                    <div
+                      className="market-meter-fill tone-green"
+                      style={{ '--meter-fill': `${Math.round(trendConfidenceValue * 100)}%` } as CSSProperties}
+                    />
+                  </div>
+                  <span className="market-meter-value">
+                    {formatPercent(analysis?.trend.confidence)} · {analysis?.trend.direction ?? '—'}
+                  </span>
+                </div>
+                <div className="market-meter-card">
+                  <span className="market-copy-title">Risk Posture</span>
+                  <div className="market-meter-track">
+                    <div
+                      className={`market-meter-fill tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
+                      style={{ '--meter-fill': `${Math.round(riskMeterValue * 100)}%` } as CSSProperties}
+                    />
+                  </div>
+                  <span className="market-meter-value">{analysis?.manipulationRisk.riskLevel ?? '—'}</span>
+                </div>
+              </div>
+            </div>
             <div className="market-analysis-summary-grid">
               <div className="market-summary-card">
                 <span className="market-summary-label">Entry Price</span>
@@ -1786,7 +1955,7 @@ function AnalysisTab() {
                   {formatPercent(analysis?.headline.liquidityScore)} · {analysis?.headline.liquidityLabel ?? '—'}
                 </span>
               </div>
-          </div>
+            </div>
             <PanelOverlay
               loading={!revealedPanels.headline && !errorMessage}
               errorMessage={!revealedPanels.headline ? errorMessage : null}
@@ -1800,6 +1969,12 @@ function AnalysisTab() {
             loading={!revealedPanels.flip && !errorMessage}
             errorMessage={!revealedPanels.flip ? errorMessage : null}
             loadingLabel="Calculating flip margins"
+            className="market-panel-tone-blue"
+            headerAside={
+              <span className="market-panel-badge tone-blue">
+                {analysis?.flipAnalysis.efficiencyLabel ?? 'Building'}
+              </span>
+            }
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
@@ -1833,6 +2008,12 @@ function AnalysisTab() {
             loading={!revealedPanels.liquidity && !errorMessage}
             errorMessage={!revealedPanels.liquidity ? errorMessage : null}
             loadingLabel="Profiling live liquidity"
+            className="market-panel-tone-blue"
+            headerAside={
+              <span className="market-panel-badge tone-blue">
+                {analysis?.liquidityDetail.state ?? 'Profiling'}
+              </span>
+            }
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
@@ -1860,6 +2041,35 @@ function AnalysisTab() {
                 <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.liquidityScore)}</span>
               </div>
             </div>
+            <div className="market-signal-board">
+              <div className="market-signal-row">
+                <span className="market-signal-label">Demand Ratio</span>
+                <div className="market-signal-track">
+                  <div
+                    className="market-signal-fill tone-blue"
+                    style={{ '--signal-fill': `${Math.round(ratioToUnitInterval(analysis?.liquidityDetail.demandRatio) * 100)}%` } as CSSProperties}
+                  />
+                </div>
+              </div>
+              <div className="market-signal-row">
+                <span className="market-signal-label">Qty-Weighted Demand</span>
+                <div className="market-signal-track">
+                  <div
+                    className="market-signal-fill tone-green"
+                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.quantityWeightedDemand) * 100)}%` } as CSSProperties}
+                  />
+                </div>
+              </div>
+              <div className="market-signal-row">
+                <span className="market-signal-label">Liquidity Score</span>
+                <div className="market-signal-track">
+                  <div
+                    className="market-signal-fill tone-cyan"
+                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.liquidityScore) * 100)}%` } as CSSProperties}
+                  />
+                </div>
+              </div>
+            </div>
           </AnalyticsPanel>
 
           <AnalyticsPanel
@@ -1868,6 +2078,12 @@ function AnalysisTab() {
             loading={!revealedPanels.trend && !errorMessage}
             errorMessage={!revealedPanels.trend ? errorMessage : null}
             loadingLabel="Summarizing the current trend"
+            className={`market-panel-tone-${getTrendTone(analysis?.trend.direction)}`}
+            headerAside={
+              <span className={`market-panel-badge tone-${getTrendTone(analysis?.trend.direction)}`}>
+                {analysis?.trend.direction ?? 'Building'}
+              </span>
+            }
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
@@ -1891,6 +2107,28 @@ function AnalysisTab() {
                 <span className="market-metric-value">{formatPercent(analysis?.trend.slope6h)}</span>
               </div>
             </div>
+            <div className="market-slope-grid">
+              {[
+                { label: '1H', value: analysis?.trend.slope1h ?? null },
+                { label: '3H', value: analysis?.trend.slope3h ?? null },
+                { label: '6H', value: analysis?.trend.slope6h ?? null },
+              ].map((slope) => (
+                <div key={slope.label} className="market-slope-card">
+                  <div className="market-slope-head">
+                    <span className="market-copy-title">{slope.label} Slope</span>
+                    <span className={`market-slope-value${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}>
+                      {formatPercent(slope.value)}
+                    </span>
+                  </div>
+                  <div className="market-slope-track">
+                    <div
+                      className={`market-slope-fill${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}
+                      style={{ '--slope-fill': `${Math.round(slopeToUnitInterval(slope.value) * 100)}%` } as CSSProperties}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
             <div className="market-copy-block">
               <span className="market-copy-title">Summary</span>
               <p>{analysis?.trend.summary ?? '—'}</p>
@@ -1909,6 +2147,16 @@ function AnalysisTab() {
             loading={!revealedPanels.supply && !errorMessage}
             errorMessage={!revealedPanels.supply ? errorMessage : null}
             loadingLabel="Building supply context"
+            className="market-panel-tone-amber"
+            headerAside={
+              <span className="market-panel-badge tone-amber">
+                {analysis?.supplyContext.mode === 'set-components'
+                  ? 'Set Breakdown'
+                  : analysis?.supplyContext.mode === 'drop-sources'
+                    ? 'Drop Intel'
+                    : 'No Source'}
+              </span>
+            }
           >
             {analysis?.supplyContext.mode === 'set-components' ? (
               <div className="market-component-list">
@@ -2010,6 +2258,12 @@ function AnalysisTab() {
                 loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
                 errorMessage={itemDetailsError}
                 loadingLabel="Loading item details from the local catalog"
+                className="market-panel-tone-neutral market-item-details-panel"
+                headerAside={
+                  effectiveItemDetails?.category ? (
+                    <span className="market-panel-badge tone-neutral">{effectiveItemDetails.category}</span>
+                  ) : null
+                }
               >
                 <div className="market-item-detail-card">
                   {itemImageUrl ? (
@@ -2085,9 +2339,15 @@ function AnalysisTab() {
             loading={!revealedPanels.eventContext && !errorMessage}
             errorMessage={!revealedPanels.eventContext ? errorMessage : null}
             loadingLabel="Matching worldstate context"
+            className="market-panel-tone-amber"
+            headerAside={
+              <span className="market-panel-badge tone-amber">
+                {eventContextEntries.length} {eventContextEntries.length === 1 ? 'match' : 'matches'}
+              </span>
+            }
           >
             {eventContextEntries.length > 0 ? (
-              <div className="market-context-list">
+              <div className="market-context-list market-context-list-timeline">
                 {eventContextEntries.map((entry) => (
                   <div key={`${entry.label}-${entry.impact}`} className="market-context-card">
                     <span className="market-copy-title">{entry.label}</span>
@@ -2109,6 +2369,12 @@ function AnalysisTab() {
             loading={!revealedPanels.manipulation && !errorMessage}
             errorMessage={!revealedPanels.manipulation ? errorMessage : null}
             loadingLabel="Scanning manipulation signals"
+            className={`market-panel-tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
+            headerAside={
+              <span className={`market-panel-badge tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}>
+                {analysis?.manipulationRisk.riskLevel ?? 'Building'}
+              </span>
+            }
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
@@ -2122,6 +2388,17 @@ function AnalysisTab() {
               <div className="market-metric-card">
                 <span className="market-metric-label">Efficiency Penalty</span>
                 <span className="market-metric-value">{formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)}</span>
+              </div>
+            </div>
+            <div className="market-signal-board">
+              <div className="market-signal-row">
+                <span className="market-signal-label">Penalty Applied</span>
+                <div className="market-signal-track danger">
+                  <div
+                    className="market-signal-fill tone-red"
+                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.manipulationRisk.efficiencyPenaltyPct) * 100)}%` } as CSSProperties}
+                  />
+                </div>
               </div>
             </div>
             <div className="market-analysis-signal-list">
@@ -2146,6 +2423,12 @@ function AnalysisTab() {
             loading={!revealedPanels.timeOfDay && !errorMessage}
             errorMessage={!revealedPanels.timeOfDay ? errorMessage : null}
             loadingLabel="Aggregating observatory tape"
+            className="market-panel-tone-blue"
+            headerAside={
+              <span className="market-panel-badge tone-blue">
+                {analysis?.timeOfDayLiquidity.strongestWindowLabel ?? 'Building'}
+              </span>
+            }
           >
             <div className="market-pressure-row">
               <div>
@@ -2161,9 +2444,13 @@ function AnalysisTab() {
                 <span>{analysis?.timeOfDayLiquidity.weakestWindowLabel ?? '—'}</span>
               </div>
             </div>
-            <div className="market-time-grid">
+            <div className="market-time-grid market-time-heat-grid">
               {(analysis?.timeOfDayLiquidity.buckets ?? []).map((bucket) => (
-                <div key={bucket.hour} className="market-time-card">
+                <div
+                  key={bucket.hour}
+                  className="market-time-card market-time-card-heat"
+                  style={{ '--heat-strength': `${Math.round(((bucket.avgVisibleQuantity ?? 0) / maxTimeOfDayQuantity) * 100)}%` } as CSSProperties}
+                >
                   <span className="market-copy-title">{bucket.label}</span>
                   <span>{formatNumber(bucket.avgVisibleQuantity, 0)} visible qty</span>
                   <span>{formatNumber(bucket.avgSellOrders, 1)} avg sell orders</span>
