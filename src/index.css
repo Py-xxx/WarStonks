@@ -4340,6 +4340,14 @@ body {
   flex: 0 0 auto;
 }
 
+.market-badge-stack {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .market-panel-badge {
   display: inline-flex;
   align-items: center;
@@ -4425,6 +4433,13 @@ body {
   font-size: 13px;
   line-height: 1.45;
   max-width: 320px;
+}
+
+.market-confidence-note {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .market-panel-spinner {

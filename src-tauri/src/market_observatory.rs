@@ -20,7 +20,7 @@ const WFM_CROSSPLAY_HEADER: &str = "true";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
-const ANALYTICS_CACHE_VERSION: i64 = 4;
+const ANALYTICS_CACHE_VERSION: i64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -219,6 +219,15 @@ pub struct AnalyticsChartPoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MarketConfidenceSummary {
+    pub level: String,
+    pub label: String,
+    pub reasons: Vec<String>,
+    pub is_degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntryExitZoneOverview {
     pub current_lowest_price: Option<f64>,
     pub current_median_lowest_price: Option<f64>,
@@ -231,6 +240,7 @@ pub struct EntryExitZoneOverview {
     pub zone_quality: String,
     pub entry_rationale: String,
     pub exit_rationale: String,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +254,7 @@ pub struct OrderbookPressureSummary {
     pub exit_depth: f64,
     pub pressure_ratio: Option<f64>,
     pub pressure_label: String,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +277,7 @@ pub struct TrendQualityBreakdown {
     pub stability: f64,
     pub volatility: f64,
     pub noise: f64,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -280,6 +292,7 @@ pub struct AnalyticsActionCard {
     pub pressure_label: String,
     pub aligned_signals: Vec<String>,
     pub rationale: String,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,6 +324,7 @@ pub struct AnalysisHeadline {
     pub net_margin: Option<f64>,
     pub liquidity_score: Option<f64>,
     pub liquidity_label: String,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -322,6 +336,7 @@ pub struct FlipAnalysisSummary {
     pub net_margin: Option<f64>,
     pub efficiency_score: Option<f64>,
     pub efficiency_label: String,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,6 +348,7 @@ pub struct LiquidityDetailSummary {
     pub undercut_velocity: Option<f64>,
     pub quantity_weighted_demand: Option<f64>,
     pub liquidity_score: Option<f64>,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,6 +360,7 @@ pub struct TrendSummary {
     pub slope_1h: Option<f64>,
     pub slope_3h: Option<f64>,
     pub slope_6h: Option<f64>,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,6 +379,7 @@ pub struct ManipulationRiskSummary {
     pub active_signals: usize,
     pub efficiency_penalty_pct: i64,
     pub signals: Vec<ManipulationSignalState>,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,6 +399,7 @@ pub struct TimeOfDayLiquiditySummary {
     pub strongest_window_label: Option<String>,
     pub weakest_window_label: Option<String>,
     pub buckets: Vec<TimeOfDayLiquidityBucket>,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -482,6 +501,7 @@ pub struct ItemSupplyContext {
     pub mode: String,
     pub components: Vec<SetComponentAnalysisEntry>,
     pub drop_sources: Vec<DropSourceEntry>,
+    pub confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2493,8 +2513,9 @@ fn compute_stability(points: &[AnalyticsChartPoint]) -> (f64, f64, f64) {
 
 fn build_entry_exit_zone_overview(
     snapshot: Option<&MarketSnapshot>,
-    latest_point: Option<&AnalyticsChartPoint>,
+    points: &[AnalyticsChartPoint],
 ) -> EntryExitZoneOverview {
+    let latest_point = points.last();
     let fair_value_low = latest_point.and_then(|point| point.fair_value_low);
     let fair_value_high = latest_point.and_then(|point| point.fair_value_high);
     let fair_center = latest_point.and_then(|point| {
@@ -2515,7 +2536,7 @@ fn build_entry_exit_zone_overview(
 
     let current_lowest_price = snapshot.and_then(|entry| entry.lowest_sell);
     let current_median_lowest_price = snapshot.and_then(|entry| entry.median_sell);
-    let zone_quality = match (current_lowest_price, entry_zone_low, entry_zone_high, exit_zone_low) {
+    let base_zone_quality = match (current_lowest_price, entry_zone_low, entry_zone_high, exit_zone_low) {
         (Some(current), Some(low), Some(high), _) if current >= low && current <= high => {
             "Excellent".to_string()
         }
@@ -2526,7 +2547,9 @@ fn build_entry_exit_zone_overview(
         (Some(_), Some(_), Some(_), _) => "Watch".to_string(),
         _ => "Thin data".to_string(),
     };
-    let entry_rationale = match (current_lowest_price, entry_zone_low, entry_zone_high) {
+    let confidence_summary = build_zone_confidence(points, fair_value_low, fair_value_high);
+    let zone_quality = clamp_zone_quality(&base_zone_quality, &confidence_summary);
+    let mut entry_rationale = match (current_lowest_price, entry_zone_low, entry_zone_high) {
         (Some(current), Some(low), Some(high)) if current >= low && current <= high => {
             "Current floor is inside the calculated entry band, which supports buying into the market without chasing extremes.".to_string()
         }
@@ -2535,7 +2558,7 @@ fn build_entry_exit_zone_overview(
         }
         _ => "Current floor is still above the calculated entry band, so patience is likely better than forcing an entry.".to_string(),
     };
-    let exit_rationale = match (current_median_lowest_price, exit_zone_low, exit_zone_high) {
+    let mut exit_rationale = match (current_median_lowest_price, exit_zone_low, exit_zone_high) {
         (Some(current), Some(low), Some(high)) if current >= low && current <= high => {
             "Recent median market price is inside the calculated exit band, which supports taking profit into strength.".to_string()
         }
@@ -2544,6 +2567,10 @@ fn build_entry_exit_zone_overview(
         }
         _ => "Recent median market price is still below the calculated exit band, so there is more room before a preferred take-profit area.".to_string(),
     };
+    if confidence_summary.level != "high" {
+        entry_rationale.push_str(&confidence_suffix(&confidence_summary));
+        exit_rationale.push_str(&confidence_suffix(&confidence_summary));
+    }
 
     EntryExitZoneOverview {
         current_lowest_price,
@@ -2557,10 +2584,12 @@ fn build_entry_exit_zone_overview(
         zone_quality,
         entry_rationale,
         exit_rationale,
+        confidence_summary,
     }
 }
 
 fn build_orderbook_pressure(snapshot: Option<&MarketSnapshot>) -> OrderbookPressureSummary {
+    let confidence_summary = build_pressure_confidence(snapshot);
     match snapshot {
         Some(snapshot) => OrderbookPressureSummary {
             cheapest_sell: snapshot.lowest_sell,
@@ -2571,6 +2600,7 @@ fn build_orderbook_pressure(snapshot: Option<&MarketSnapshot>) -> OrderbookPress
             exit_depth: snapshot.exit_depth,
             pressure_ratio: snapshot.pressure_ratio,
             pressure_label: pressure_label(snapshot.pressure_ratio),
+            confidence_summary,
         },
         None => OrderbookPressureSummary {
             cheapest_sell: None,
@@ -2581,6 +2611,7 @@ fn build_orderbook_pressure(snapshot: Option<&MarketSnapshot>) -> OrderbookPress
             exit_depth: 0.0,
             pressure_ratio: None,
             pressure_label: "Balanced".to_string(),
+            confidence_summary,
         },
     }
 }
@@ -2589,6 +2620,8 @@ fn build_action_card(
     zone_overview: &EntryExitZoneOverview,
     orderbook_pressure: &OrderbookPressureSummary,
     trend_breakdown: &TrendQualityBreakdown,
+    liquidity_confidence: &MarketConfidenceSummary,
+    manipulation_confidence: &MarketConfidenceSummary,
     snapshot: Option<&MarketSnapshot>,
 ) -> AnalyticsActionCard {
     let mut aligned_signals = Vec::new();
@@ -2611,7 +2644,7 @@ fn build_action_card(
         aligned_signals.push("Spread is still tradable".to_string());
     }
 
-    let action = if zone_overview.zone_quality == "Excellent"
+    let base_action = if zone_overview.zone_quality == "Excellent"
         && orderbook_pressure.pressure_label != "Exit Pressure"
     {
         "Buy"
@@ -2621,6 +2654,22 @@ fn build_action_card(
         "Caution"
     } else {
         "Wait"
+    };
+    let confidence_summary = combined_confidence(
+        &[
+            &zone_overview.confidence_summary,
+            &orderbook_pressure.confidence_summary,
+            &trend_breakdown.confidence_summary,
+            liquidity_confidence,
+            manipulation_confidence,
+        ],
+        &[],
+    );
+    let action = match (base_action, confidence_summary.level.as_str()) {
+        ("Buy", "low") => "Wait",
+        ("Buy", "medium") => "Hold",
+        ("Hold", "low") => "Wait",
+        (value, _) => value,
     };
 
     let tone = match action {
@@ -2634,12 +2683,15 @@ fn build_action_card(
         (Some(exit), Some(entry)) => Some(exit - entry),
         _ => None,
     };
-    let rationale = match action {
+    let mut rationale = match action {
         "Buy" => "Current floor is inside a favorable entry zone and the live book is not leaning against the trade.".to_string(),
         "Hold" => "History and live depth are broadly supportive, but the edge is narrower than a clean entry setup.".to_string(),
         "Caution" => "Live book pressure is leaning toward exits or the spread is too hostile for a clean entry.".to_string(),
         _ => "The item needs either a deeper discount, stronger buy support, or a cleaner spread before acting.".to_string(),
     };
+    if confidence_summary.level != "high" {
+        rationale.push_str(&confidence_suffix(&confidence_summary));
+    }
 
     AnalyticsActionCard {
         suggested_action: action.to_string(),
@@ -2651,6 +2703,7 @@ fn build_action_card(
         pressure_label: orderbook_pressure.pressure_label.clone(),
         aligned_signals,
         rationale,
+        confidence_summary,
     }
 }
 
@@ -2660,6 +2713,315 @@ fn bool_from_i64(value: Option<i64>) -> Option<bool> {
 
 fn round_price_option(value: Option<f64>) -> Option<f64> {
     value.map(round_platinum)
+}
+
+fn build_confidence_summary(
+    level: &str,
+    mut reasons: Vec<String>,
+) -> MarketConfidenceSummary {
+    let normalized_level = match level {
+        "high" | "medium" | "low" => level,
+        _ => "medium",
+    };
+    reasons.retain(|reason| !reason.trim().is_empty());
+    reasons.truncate(3);
+
+    MarketConfidenceSummary {
+        level: normalized_level.to_string(),
+        label: match normalized_level {
+            "high" => "High confidence".to_string(),
+            "medium" => "Medium confidence".to_string(),
+            _ => "Low confidence".to_string(),
+        },
+        is_degraded: normalized_level != "high" || !reasons.is_empty(),
+        reasons,
+    }
+}
+
+fn confidence_rank(confidence: &MarketConfidenceSummary) -> i32 {
+    match confidence.level.as_str() {
+        "high" => 2,
+        "medium" => 1,
+        _ => 0,
+    }
+}
+
+fn combined_confidence(
+    confidences: &[&MarketConfidenceSummary],
+    extra_reasons: &[&str],
+) -> MarketConfidenceSummary {
+    let lowest_rank = confidences
+        .iter()
+        .map(|confidence| confidence_rank(confidence))
+        .min()
+        .unwrap_or(1);
+    let level = match lowest_rank {
+        2 => "high",
+        1 => "medium",
+        _ => "low",
+    };
+
+    let mut seen = HashSet::new();
+    let mut reasons = Vec::new();
+    for confidence in confidences {
+        for reason in &confidence.reasons {
+            if seen.insert(reason.clone()) {
+                reasons.push(reason.clone());
+            }
+        }
+    }
+    for reason in extra_reasons {
+        if seen.insert((*reason).to_string()) {
+            reasons.push((*reason).to_string());
+        }
+    }
+
+    build_confidence_summary(level, reasons)
+}
+
+fn confidence_suffix(confidence: &MarketConfidenceSummary) -> String {
+    if confidence.reasons.is_empty() {
+        String::new()
+    } else {
+        format!(" Confidence is reduced because {}.", confidence.reasons.join(", ").to_lowercase())
+    }
+}
+
+fn latest_point_age_hours(points: &[AnalyticsChartPoint]) -> Option<i64> {
+    let latest_bucket = points.last()?;
+    let timestamp = parse_timestamp(&latest_bucket.bucket_at)?;
+    Some((now_utc() - timestamp).whole_hours())
+}
+
+fn build_zone_confidence(
+    points: &[AnalyticsChartPoint],
+    fair_value_low: Option<f64>,
+    fair_value_high: Option<f64>,
+) -> MarketConfidenceSummary {
+    let usable_anchor_points = points
+        .iter()
+        .filter(|point| {
+            point.lowest_sell.is_some()
+                || point.median_sell.is_some()
+                || point.weighted_avg.is_some()
+                || (point.fair_value_low.is_some() && point.fair_value_high.is_some())
+        })
+        .count();
+    let age_hours = latest_point_age_hours(points);
+    let band_width = match (fair_value_low, fair_value_high) {
+        (Some(low), Some(high)) => Some((high - low).abs()),
+        _ => None,
+    };
+
+    let mut reasons = Vec::new();
+    let mut level = "high";
+
+    if usable_anchor_points < 6 {
+        reasons.push("Thin history".to_string());
+        level = "low";
+    } else if usable_anchor_points < 12 {
+        reasons.push("Sparse anchors".to_string());
+        level = "medium";
+    }
+
+    if age_hours.unwrap_or(999) > 72 {
+        reasons.push("Stale stats".to_string());
+        level = "low";
+    } else if age_hours.unwrap_or(999) > 24 && level == "high" {
+        reasons.push("Aging stats".to_string());
+        level = "medium";
+    }
+
+    if band_width.unwrap_or_default() < 4.0 && level == "high" {
+        reasons.push("Compressed range".to_string());
+        level = "medium";
+    }
+
+    build_confidence_summary(level, reasons)
+}
+
+fn clamp_zone_quality(base_quality: &str, confidence: &MarketConfidenceSummary) -> String {
+    match (base_quality, confidence.level.as_str()) {
+        ("Excellent", "high") => "Excellent".to_string(),
+        ("Excellent", "medium") => "Good".to_string(),
+        ("Excellent", _) => "Watch".to_string(),
+        ("Good", "low") => "Watch".to_string(),
+        (quality, _) => quality.to_string(),
+    }
+}
+
+fn build_pressure_confidence(snapshot: Option<&MarketSnapshot>) -> MarketConfidenceSummary {
+    match snapshot {
+        Some(snapshot) => {
+            let mut reasons = Vec::new();
+            let mut level = "high";
+            if snapshot.sell_order_count < 6 || snapshot.buy_order_count < 3 {
+                reasons.push("Thin live book".to_string());
+                level = "medium";
+            }
+            if snapshot.highest_buy.is_none() || snapshot.lowest_sell.is_none() {
+                reasons.push("Missing side depth".to_string());
+                level = "low";
+            }
+            build_confidence_summary(level, reasons)
+        }
+        None => build_confidence_summary("low", vec!["No live orderbook".to_string()]),
+    }
+}
+
+fn build_liquidity_confidence(
+    snapshot: &MarketSnapshot,
+    recent_snapshots: &[MarketSnapshot],
+) -> MarketConfidenceSummary {
+    let mut reasons = Vec::new();
+    let mut level = "high";
+
+    if recent_snapshots.len() < 4 {
+        reasons.push("Sparse tape".to_string());
+        level = "low";
+    } else if recent_snapshots.len() < 8 {
+        reasons.push("Shallow tape".to_string());
+        level = "medium";
+    }
+
+    let latest_snapshot_age = recent_snapshots
+        .last()
+        .and_then(|entry| parse_timestamp(&entry.captured_at))
+        .map(|timestamp| (now_utc() - timestamp).whole_hours())
+        .unwrap_or(999);
+    if latest_snapshot_age > 24 {
+        reasons.push("Stale tape".to_string());
+        level = "low";
+    } else if latest_snapshot_age > 6 && level == "high" {
+        reasons.push("Aging tape".to_string());
+        level = "medium";
+    }
+
+    if snapshot.sell_order_count < 6 || snapshot.buy_order_count < 3 {
+        reasons.push("Thin live depth".to_string());
+        if level == "high" {
+            level = "medium";
+        }
+    }
+
+    build_confidence_summary(level, reasons)
+}
+
+fn build_trend_confidence(
+    points: &[AnalyticsChartPoint],
+    selected_metric: Option<&TrendMetricSet>,
+) -> MarketConfidenceSummary {
+    let usable_points = points
+        .iter()
+        .filter(|point| point.lowest_sell.is_some() || point.median_sell.is_some() || point.weighted_avg.is_some())
+        .count();
+    let latest_age = latest_point_age_hours(points).unwrap_or(999);
+    let confidence_pct = selected_metric.map(|entry| entry.confidence).unwrap_or(0.0);
+    let flat_signal = selected_metric
+        .map(|entry| {
+            entry.slope_1h.unwrap_or_default().abs() < 0.05
+                && entry.slope_3h.unwrap_or_default().abs() < 0.08
+                && entry.slope_6h.unwrap_or_default().abs() < 0.10
+        })
+        .unwrap_or(true);
+
+    let mut reasons = Vec::new();
+    let mut level = "high";
+    if usable_points < 8 {
+        reasons.push("Thin history".to_string());
+        level = "low";
+    } else if usable_points < 16 {
+        reasons.push("Sparse hourly points".to_string());
+        level = "medium";
+    }
+
+    if latest_age > 12 {
+        reasons.push("Stale hourly data".to_string());
+        level = "low";
+    }
+
+    if flat_signal && confidence_pct < 60.0 && level == "high" {
+        reasons.push("Flat tape".to_string());
+        level = "medium";
+    }
+
+    build_confidence_summary(level, reasons)
+}
+
+fn build_manipulation_confidence(recent_snapshots: &[MarketSnapshot]) -> MarketConfidenceSummary {
+    let mut reasons = Vec::new();
+    let mut level = "high";
+
+    if recent_snapshots.len() < 4 {
+        reasons.push("Sparse tape".to_string());
+        level = "low";
+    } else if recent_snapshots.len() < 8 {
+        reasons.push("Limited tape".to_string());
+        level = "medium";
+    }
+
+    let latest_snapshot_age = recent_snapshots
+        .last()
+        .and_then(|entry| parse_timestamp(&entry.captured_at))
+        .map(|timestamp| (now_utc() - timestamp).whole_hours())
+        .unwrap_or(999);
+    if latest_snapshot_age > 24 {
+        reasons.push("Stale tape".to_string());
+        level = "low";
+    }
+
+    build_confidence_summary(level, reasons)
+}
+
+fn build_time_of_day_confidence(
+    bucket_count: usize,
+    sample_count: usize,
+) -> MarketConfidenceSummary {
+    let mut reasons = Vec::new();
+    let mut level = "high";
+    if sample_count < 8 || bucket_count < 4 {
+        reasons.push("Sparse tape".to_string());
+        level = "low";
+    } else if sample_count < 16 || bucket_count < 8 {
+        reasons.push("Partial tape".to_string());
+        level = "medium";
+    }
+
+    build_confidence_summary(level, reasons)
+}
+
+fn build_supply_confidence(
+    mode: &str,
+    components: &[SetComponentAnalysisEntry],
+    drop_sources: &[DropSourceEntry],
+) -> MarketConfidenceSummary {
+    match mode {
+        "set-components" => {
+            let mut reasons = Vec::new();
+            let level = if components.len() >= 2 {
+                "high"
+            } else {
+                reasons.push("Partial set data".to_string());
+                "medium"
+            };
+            build_confidence_summary(level, reasons)
+        }
+        "drop-sources" => {
+            if drop_sources.is_empty() {
+                return build_confidence_summary("low", vec!["No drop data".to_string()]);
+            }
+            let has_exact_chance = drop_sources.iter().any(|entry| entry.chance.unwrap_or(0.0) > 0.0);
+            build_confidence_summary(
+                if has_exact_chance { "high" } else { "medium" },
+                if has_exact_chance {
+                    Vec::new()
+                } else {
+                    vec!["Weak drop data".to_string()]
+                },
+            )
+        }
+        _ => build_confidence_summary("low", vec!["No source data".to_string()]),
+    }
 }
 
 fn liquidity_score_percent(snapshot: &MarketSnapshot) -> f64 {
@@ -2945,6 +3307,8 @@ fn build_manipulation_risk(
     snapshot: &MarketSnapshot,
     recent_snapshots: &[MarketSnapshot],
 ) -> ManipulationRiskSummary {
+    let confidence_summary = build_manipulation_confidence(recent_snapshots);
+    let allow_pattern_signals = confidence_summary.level != "low" && recent_snapshots.len() >= 6;
     let price_wall_active = snapshot
         .depth_levels
         .iter()
@@ -2954,7 +3318,7 @@ fn build_manipulation_risk(
         .unwrap_or(0.0)
         >= 0.40;
 
-    let liquidity_withdrawal_active = if recent_snapshots.len() >= 6 {
+    let liquidity_withdrawal_active = if allow_pattern_signals {
         let split_index = recent_snapshots.len() / 2;
         let previous_avg = recent_snapshots[..split_index]
             .iter()
@@ -2973,7 +3337,7 @@ fn build_manipulation_risk(
         false
     };
 
-    let volatile_undercut_active = if recent_snapshots.len() >= 4 {
+    let volatile_undercut_active = if allow_pattern_signals {
         let mut direction_changes = 0;
         let mut previous_direction = 0_i8;
         for window in recent_snapshots.windows(2) {
@@ -2998,14 +3362,18 @@ fn build_manipulation_risk(
         false
     };
 
-    let unstable_buy_pressure_active = snapshot_std_dev(
-        &recent_snapshots
-            .iter()
-            .filter_map(|entry| entry.pressure_ratio)
-            .collect::<Vec<_>>(),
-    )
-    .unwrap_or(0.0)
-        >= 0.35;
+    let unstable_buy_pressure_active = if allow_pattern_signals {
+        snapshot_std_dev(
+            &recent_snapshots
+                .iter()
+                .filter_map(|entry| entry.pressure_ratio)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or(0.0)
+            >= 0.35
+    } else {
+        false
+    };
 
     let thin_market_active =
         snapshot.sell_order_count < 6 || snapshot.unique_sell_users < 4 || snapshot.buy_order_count < 3;
@@ -3082,6 +3450,7 @@ fn build_manipulation_risk(
         active_signals,
         efficiency_penalty_pct,
         signals,
+        confidence_summary,
     }
 }
 
@@ -3120,6 +3489,7 @@ fn build_time_of_day_liquidity(
             .push((visible_quantity as f64, sell_orders as f64, spread_pct));
     }
 
+    let sample_count = per_hour.values().map(|entries| entries.len()).sum::<usize>();
     let buckets = per_hour
         .into_iter()
         .map(|(hour, entries)| {
@@ -3155,12 +3525,14 @@ fn build_time_of_day_liquidity(
         .min_by(|left, right| left.avg_visible_quantity.total_cmp(&right.avg_visible_quantity))
         .map(|bucket| bucket.label.clone());
     let current_hour_label = format!("{:02}:00", now_utc().hour());
+    let confidence_summary = build_time_of_day_confidence(buckets.len(), sample_count);
 
     Ok(TimeOfDayLiquiditySummary {
         current_hour_label,
         strongest_window_label,
         weakest_window_label,
         buckets,
+        confidence_summary,
     })
 }
 
@@ -3737,6 +4109,7 @@ fn build_trend_quality_breakdown(points: &[AnalyticsChartPoint]) -> TrendQuality
         build_trend_metric_set(points, "weightedAvg"),
     );
     let (stability, volatility, noise) = compute_stability(points);
+    let confidence_summary = build_trend_confidence(points, tabs.get("lowestSell"));
 
     TrendQualityBreakdown {
         selected_tab: "lowestSell".to_string(),
@@ -3744,6 +4117,7 @@ fn build_trend_quality_breakdown(points: &[AnalyticsChartPoint]) -> TrendQuality
         stability,
         volatility,
         noise,
+        confidence_summary,
     }
 }
 
@@ -3759,11 +4133,14 @@ fn build_trend_summary(breakdown: &TrendQualityBreakdown) -> TrendSummary {
         _ => "Flat",
     };
 
-    let summary = match direction {
+    let mut summary = match direction {
         "Rising" => "Short-term momentum is positive and the live structure is leaning upward.".to_string(),
         "Falling" => "Recent slope structure is still pointing down, so patience matters more than chase entries.".to_string(),
         _ => "Recent price structure is mixed, with neither buyers nor sellers holding a clean short-term trend.".to_string(),
     };
+    if breakdown.confidence_summary.level != "high" {
+        summary.push_str(&confidence_suffix(&breakdown.confidence_summary));
+    }
 
     TrendSummary {
         direction: direction.to_string(),
@@ -3772,6 +4149,7 @@ fn build_trend_summary(breakdown: &TrendQualityBreakdown) -> TrendSummary {
         slope_1h,
         slope_3h,
         slope_6h,
+        confidence_summary: breakdown.confidence_summary.clone(),
     }
 }
 
@@ -3858,23 +4236,28 @@ fn build_supply_context(
                 variant_label: "Base Market".to_string(),
             });
         }
+        let confidence_summary = build_supply_confidence("set-components", &components, &[]);
 
         return Ok(ItemSupplyContext {
             mode: "set-components".to_string(),
             components,
             drop_sources: Vec::new(),
+            confidence_summary,
         });
     }
 
     let drop_sources = load_drop_sources(app, item_id)?;
+    let mode = if drop_sources.is_empty() {
+        "none".to_string()
+    } else {
+        "drop-sources".to_string()
+    };
+    let confidence_summary = build_supply_confidence(&mode, &[], &drop_sources);
     Ok(ItemSupplyContext {
-        mode: if drop_sources.is_empty() {
-            "none".to_string()
-        } else {
-            "drop-sources".to_string()
-        },
+        mode: mode.clone(),
         components: Vec::new(),
         drop_sources,
+        confidence_summary,
     })
 }
 
@@ -3916,6 +4299,7 @@ fn build_item_analysis_inner(
 
     let manipulation_risk = build_manipulation_risk(&current_snapshot, &recent_snapshots);
     let liquidity_score = liquidity_score_percent(&current_snapshot);
+    let liquidity_confidence = build_liquidity_confidence(&current_snapshot, &recent_snapshots);
     let entry_price = round_price_option(current_snapshot.lowest_sell);
     let exit_price = round_price_option(recommended_exit_price(
         entry_price,
@@ -3965,6 +4349,24 @@ fn build_item_analysis_inner(
     let trend = build_trend_summary(&analytics.trend_quality_breakdown);
     let item_details = load_item_detail_summary(&app, item_id, &slug)?;
     let supply_context = build_supply_context(&app, item_id, &slug, &item_details)?;
+    let headline_confidence = combined_confidence(
+        &[
+            &analytics.entry_exit_zone_overview.confidence_summary,
+            &liquidity_confidence,
+            &trend.confidence_summary,
+            &manipulation_risk.confidence_summary,
+            &supply_context.confidence_summary,
+        ],
+        &[],
+    );
+    let flip_confidence = combined_confidence(
+        &[
+            &analytics.action_card.confidence_summary,
+            &liquidity_confidence,
+            &manipulation_risk.confidence_summary,
+        ],
+        &[],
+    );
 
     Ok(ItemAnalysisResponse {
         item_id,
@@ -3981,6 +4383,7 @@ fn build_item_analysis_inner(
             net_margin,
             liquidity_score: Some(liquidity_score),
             liquidity_label: liquidity_label(liquidity_score),
+            confidence_summary: headline_confidence,
         },
         flip_analysis: FlipAnalysisSummary {
             entry_price,
@@ -3989,6 +4392,7 @@ fn build_item_analysis_inner(
             net_margin,
             efficiency_score,
             efficiency_label: efficiency_label(efficiency_score),
+            confidence_summary: flip_confidence,
         },
         liquidity_detail: LiquidityDetailSummary {
             demand_ratio,
@@ -3997,6 +4401,7 @@ fn build_item_analysis_inner(
             undercut_velocity: undercut_velocity_per_hour(&recent_snapshots),
             quantity_weighted_demand,
             liquidity_score: Some(liquidity_score),
+            confidence_summary: liquidity_confidence,
         },
         trend,
         manipulation_risk,
@@ -4173,14 +4578,18 @@ fn build_item_analytics_inner(
         return Ok(cached);
     }
 
-    let latest_point = trend_points.last();
-    let zone_overview = build_entry_exit_zone_overview(Some(&snapshot), latest_point);
+    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, 12)?;
+    let liquidity_confidence = build_liquidity_confidence(&snapshot, &recent_snapshots);
+    let manipulation_confidence = build_manipulation_confidence(&recent_snapshots);
+    let zone_overview = build_entry_exit_zone_overview(Some(&snapshot), &trend_points);
     let orderbook_pressure = build_orderbook_pressure(Some(&snapshot));
     let trend_quality_breakdown = build_trend_quality_breakdown(&trend_points);
     let action_card = build_action_card(
         &zone_overview,
         &orderbook_pressure,
         &trend_quality_breakdown,
+        &liquidity_confidence,
+        &manipulation_confidence,
         Some(&snapshot),
     );
     let response = ItemAnalyticsResponse {
@@ -4404,9 +4813,10 @@ pub async fn get_item_analysis(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_action_card, build_entry_exit_zone_overview, build_market_snapshot,
-        build_orderbook_pressure, build_trend_quality_breakdown, compute_pressure_ratio,
-        compute_zone_bands, extract_rank_stat_highlights,
+        build_action_card, build_confidence_summary, build_entry_exit_zone_overview,
+        build_liquidity_confidence, build_manipulation_risk, build_market_snapshot,
+        build_orderbook_pressure, build_supply_confidence, build_trend_quality_breakdown,
+        compute_pressure_ratio, compute_zone_bands, extract_rank_stat_highlights,
         initialize_market_observatory_schema, insert_statistics_rows_for_domain,
         normalize_variant_key, pressure_label, resample_rows, AnalyticsBucketSizeKey,
         AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow, MarketSnapshot,
@@ -4430,6 +4840,29 @@ mod tests {
             user_slug: Some(username.to_string()),
             status: Some("online".to_string()),
             updated_at: None,
+        }
+    }
+
+    fn sample_snapshot(captured_at: &str) -> MarketSnapshot {
+        MarketSnapshot {
+            captured_at: captured_at.to_string(),
+            lowest_sell: Some(58.0),
+            median_sell: Some(63.0),
+            highest_buy: Some(56.0),
+            spread: Some(2.0),
+            spread_pct: Some(3.4),
+            sell_order_count: 8,
+            sell_quantity: 24,
+            buy_order_count: 5,
+            buy_quantity: 18,
+            near_floor_seller_count: 3,
+            near_floor_quantity: 8,
+            unique_sell_users: 6,
+            unique_buy_users: 4,
+            pressure_ratio: Some(1.08),
+            entry_depth: 18.0,
+            exit_depth: 12.0,
+            depth_levels: vec![],
         }
     }
 
@@ -4668,10 +5101,17 @@ mod tests {
             },
         ];
 
-        let zone = build_entry_exit_zone_overview(Some(&snapshot), points.last());
+        let zone = build_entry_exit_zone_overview(Some(&snapshot), &points);
         let pressure = build_orderbook_pressure(Some(&snapshot));
         let trend = build_trend_quality_breakdown(&points);
-        let action = build_action_card(&zone, &pressure, &trend, Some(&snapshot));
+        let action = build_action_card(
+            &zone,
+            &pressure,
+            &trend,
+            &build_confidence_summary("high", Vec::new()),
+            &build_confidence_summary("high", Vec::new()),
+            Some(&snapshot),
+        );
 
         assert_eq!(pressure.pressure_label, "Entry Pressure");
         assert!(!action.suggested_action.is_empty());
@@ -4698,6 +5138,156 @@ mod tests {
         assert_eq!(zone.entry_high, 60.0);
         assert_eq!(zone.exit_low, 67.0);
         assert_eq!(zone.exit_high, 70.0);
+    }
+
+    #[test]
+    fn downgrades_zone_quality_when_history_is_sparse() {
+        let snapshot = sample_snapshot("2026-03-11T00:00:00Z");
+        let points = vec![AnalyticsChartPoint {
+            bucket_at: "2026-03-11T00:00:00Z".to_string(),
+            open_price: Some(58.0),
+            closed_price: Some(59.0),
+            low_price: Some(58.0),
+            high_price: Some(63.0),
+            lowest_sell: Some(58.0),
+            median_sell: Some(60.0),
+            moving_avg: Some(59.0),
+            weighted_avg: Some(60.0),
+            average_price: Some(59.5),
+            highest_buy: Some(56.0),
+            fair_value_low: Some(57.0),
+            fair_value_high: Some(61.0),
+            entry_zone: Some(58.0),
+            exit_zone: Some(60.0),
+            volume: 6.0,
+        }];
+
+        let zone = build_entry_exit_zone_overview(Some(&snapshot), &points);
+
+        assert_eq!(zone.zone_quality, "Watch");
+        assert_eq!(zone.confidence_summary.level, "low");
+    }
+
+    #[test]
+    fn downgrades_trend_confidence_when_hourly_history_is_sparse() {
+        let points = vec![
+            AnalyticsChartPoint {
+                bucket_at: "2026-03-11T00:00:00Z".to_string(),
+                open_price: Some(60.0),
+                closed_price: Some(60.0),
+                low_price: Some(60.0),
+                high_price: Some(61.0),
+                lowest_sell: Some(60.0),
+                median_sell: Some(61.0),
+                moving_avg: Some(60.5),
+                weighted_avg: Some(60.7),
+                average_price: Some(60.6),
+                highest_buy: Some(58.0),
+                fair_value_low: Some(59.0),
+                fair_value_high: Some(62.0),
+                entry_zone: Some(59.0),
+                exit_zone: Some(61.0),
+                volume: 4.0,
+            },
+            AnalyticsChartPoint {
+                bucket_at: "2026-03-11T01:00:00Z".to_string(),
+                open_price: Some(60.0),
+                closed_price: Some(60.1),
+                low_price: Some(60.0),
+                high_price: Some(61.1),
+                lowest_sell: Some(60.0),
+                median_sell: Some(61.0),
+                moving_avg: Some(60.5),
+                weighted_avg: Some(60.7),
+                average_price: Some(60.6),
+                highest_buy: Some(58.0),
+                fair_value_low: Some(59.0),
+                fair_value_high: Some(62.0),
+                entry_zone: Some(59.0),
+                exit_zone: Some(61.0),
+                volume: 4.0,
+            },
+        ];
+
+        let breakdown = build_trend_quality_breakdown(&points);
+
+        assert_eq!(breakdown.confidence_summary.level, "low");
+    }
+
+    #[test]
+    fn liquidity_confidence_respects_tape_depth() {
+        let base_time = super::now_utc() - time::Duration::hours(7);
+        let snapshot = sample_snapshot(
+            &super::format_timestamp(base_time + time::Duration::hours(7)).expect("timestamp"),
+        );
+        let sparse_confidence = build_liquidity_confidence(&snapshot, &[snapshot.clone()]);
+        let dense_history = vec![
+            sample_snapshot(&super::format_timestamp(base_time).expect("timestamp")),
+            sample_snapshot(
+                &super::format_timestamp(base_time + time::Duration::hours(1)).expect("timestamp"),
+            ),
+            sample_snapshot(
+                &super::format_timestamp(base_time + time::Duration::hours(2)).expect("timestamp"),
+            ),
+            sample_snapshot(
+                &super::format_timestamp(base_time + time::Duration::hours(3)).expect("timestamp"),
+            ),
+            sample_snapshot(
+                &super::format_timestamp(base_time + time::Duration::hours(4)).expect("timestamp"),
+            ),
+            sample_snapshot(
+                &super::format_timestamp(base_time + time::Duration::hours(5)).expect("timestamp"),
+            ),
+            sample_snapshot(
+                &super::format_timestamp(base_time + time::Duration::hours(6)).expect("timestamp"),
+            ),
+            sample_snapshot(
+                &super::format_timestamp(base_time + time::Duration::hours(7)).expect("timestamp"),
+            ),
+        ];
+        let dense_confidence = build_liquidity_confidence(&snapshot, &dense_history);
+
+        assert_eq!(sparse_confidence.level, "low");
+        assert_eq!(dense_confidence.level, "high");
+    }
+
+    #[test]
+    fn manipulation_risk_degrades_when_tape_is_sparse() {
+        let snapshot = sample_snapshot("2026-03-11T00:00:00Z");
+        let sparse_recent = vec![
+            sample_snapshot("2026-03-10T23:00:00Z"),
+            sample_snapshot("2026-03-11T00:00:00Z"),
+        ];
+
+        let risk = build_manipulation_risk(&snapshot, &sparse_recent);
+
+        assert_eq!(risk.confidence_summary.level, "low");
+        assert!(
+            risk.signals
+                .iter()
+                .find(|signal| signal.key == "liquidity_withdrawal")
+                .map(|signal| signal.active)
+                .unwrap_or(false)
+                == false
+        );
+    }
+
+    #[test]
+    fn supply_confidence_stays_variant_agnostic_for_drop_sources() {
+        let low_confidence = build_supply_confidence("drop-sources", &[], &[]);
+        let high_confidence = build_supply_confidence(
+            "drop-sources",
+            &[],
+            &[super::DropSourceEntry {
+                location: "Void Capture".to_string(),
+                chance: Some(0.02),
+                rarity: Some("Rare".to_string()),
+                source_type: Some("Mission Reward".to_string()),
+            }],
+        );
+
+        assert_eq!(low_confidence.level, "low");
+        assert_eq!(high_confidence.level, "high");
     }
 
     #[test]

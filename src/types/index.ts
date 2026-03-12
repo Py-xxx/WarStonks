@@ -483,6 +483,13 @@ export interface WfmDetailedOrder {
   updatedAt: string | null;
 }
 
+export interface MarketConfidenceSummary {
+  level: 'high' | 'medium' | 'low';
+  label: string;
+  reasons: string[];
+  isDegraded: boolean;
+}
+
 export interface EntryExitZoneOverview {
   currentLowestPrice: number | null;
   currentMedianLowestPrice: number | null;
@@ -495,6 +502,7 @@ export interface EntryExitZoneOverview {
   zoneQuality: string;
   entryRationale: string;
   exitRationale: string;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface OrderbookPressureSummary {
@@ -506,6 +514,7 @@ export interface OrderbookPressureSummary {
   exitDepth: number;
   pressureRatio: number | null;
   pressureLabel: string;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface TrendMetricSet {
@@ -524,6 +533,7 @@ export interface TrendQualityBreakdown {
   stability: number;
   volatility: number;
   noise: number;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface AnalyticsActionCard {
@@ -536,6 +546,7 @@ export interface AnalyticsActionCard {
   pressureLabel: string;
   alignedSignals: string[];
   rationale: string;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export type AnalyticsDomainKey = '48h' | '7d' | '30d' | '90d';
@@ -585,6 +596,7 @@ export interface AnalysisHeadline {
   netMargin: number | null;
   liquidityScore: number | null;
   liquidityLabel: string;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface FlipAnalysisSummary {
@@ -594,6 +606,7 @@ export interface FlipAnalysisSummary {
   netMargin: number | null;
   efficiencyScore: number | null;
   efficiencyLabel: string;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface LiquidityDetailSummary {
@@ -603,6 +616,7 @@ export interface LiquidityDetailSummary {
   undercutVelocity: number | null;
   quantityWeightedDemand: number | null;
   liquidityScore: number | null;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface TrendSummary {
@@ -612,6 +626,7 @@ export interface TrendSummary {
   slope1h: number | null;
   slope3h: number | null;
   slope6h: number | null;
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface ManipulationSignalState {
@@ -626,6 +641,7 @@ export interface ManipulationRiskSummary {
   activeSignals: number;
   efficiencyPenaltyPct: number;
   signals: ManipulationSignalState[];
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface TimeOfDayLiquidityBucket {
@@ -641,6 +657,7 @@ export interface TimeOfDayLiquiditySummary {
   strongestWindowLabel: string | null;
   weakestWindowLabel: string | null;
   buckets: TimeOfDayLiquidityBucket[];
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface ItemDetailSummary {
@@ -734,6 +751,7 @@ export interface ItemSupplyContext {
   mode: 'set-components' | 'drop-sources' | 'none';
   components: SetComponentAnalysisEntry[];
   dropSources: DropSourceEntry[];
+  confidenceSummary: MarketConfidenceSummary;
 }
 
 export interface ItemAnalysisResponse {
