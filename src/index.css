@@ -3821,6 +3821,13 @@ body {
   gap: 6px;
 }
 
+.scanner-inline-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
 .scanner-components-panel {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   padding-top: 8px;
@@ -3854,6 +3861,25 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   background: rgba(10, 13, 19, 0.56);
+}
+
+.scanner-component-row-inline {
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.scanner-component-row-inline .scanner-component-main {
+  width: 100%;
+  align-items: center;
+}
+
+.scanner-component-row-inline .scanner-component-copy {
+  flex: 1;
+  gap: 4px;
+}
+
+.scanner-component-row-inline .scanner-component-pill-row {
+  align-items: center;
 }
 
 .scanner-component-main {
