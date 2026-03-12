@@ -98,20 +98,18 @@ function ArbitrageComponentRow({
               {component.confidenceSummary.label}
             </span>
           </div>
-          <div className="scanner-component-statline">
-            <span>
-              <span className="scanner-component-stat-label">Stats price </span>
-              <span className="scanner-component-stat-value">{formatPlat(component.currentStatsPrice)}</span>
+          <div className="scanner-component-pill-row">
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">Stats price</span>
+              <span className="scanner-stat-pill-value">{formatPlat(component.currentStatsPrice)}</span>
             </span>
-            <span>
-              <span className="scanner-component-stat-label">Recommended entry </span>
-              <span className="market-detail-highlight-change">
-                {formatPlat(component.recommendedEntryPrice)}
-              </span>
+            <span className="scanner-stat-pill scanner-stat-pill-highlight">
+              <span className="scanner-stat-pill-label">Entry</span>
+              <span className="scanner-stat-pill-value">{formatPlat(component.recommendedEntryPrice)}</span>
             </span>
-            <span>
-              <span className="scanner-component-stat-label">Zone </span>
-              <span className="market-detail-highlight-change">
+            <span className="scanner-stat-pill scanner-stat-pill-highlight">
+              <span className="scanner-stat-pill-label">Zone</span>
+              <span className="scanner-stat-pill-value">
                 {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
               </span>
             </span>
@@ -478,33 +476,6 @@ export function ScannersPage() {
           </div>
         ) : (
           <div className="scanners-shell">
-            <div className="scanners-summary-grid">
-              <div className="market-panel">
-                <div className="market-panel-body">
-                  <span className="info-card-label">Scanned Sets</span>
-                  <strong>{arbitrage?.scannedSetCount ?? '—'}</strong>
-                </div>
-              </div>
-              <div className="market-panel">
-                <div className="market-panel-body">
-                  <span className="info-card-label">Positive Opportunities</span>
-                  <strong>{arbitrage?.opportunityCount ?? '—'}</strong>
-                </div>
-              </div>
-              <div className="market-panel">
-                <div className="market-panel-body">
-                  <span className="info-card-label">Set Maps Refreshed</span>
-                  <strong>{arbitrage?.refreshedSetCount ?? '—'}</strong>
-                </div>
-              </div>
-              <div className="market-panel">
-                <div className="market-panel-body">
-                  <span className="info-card-label">Statistics Refreshed</span>
-                  <strong>{arbitrage?.refreshedStatisticsCount ?? '—'}</strong>
-                </div>
-              </div>
-            </div>
-
             <div className="market-panel scanners-intro-panel">
               <div className="market-panel-header">
                 <div className="market-panel-header-copy">
