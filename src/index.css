@@ -3785,6 +3785,49 @@ body {
   line-height: 1.2;
 }
 
+.scanner-list-metric-inline {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.scanner-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 14px 6px;
+}
+
+.scanner-list-header-relic {
+  color: var(--text-secondary);
+}
+
+.scanner-list-header-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.scanner-list-header-columns {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(62px, auto));
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.scanner-list-header-columns span {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scanner-list-header-actions {
+  width: 180px;
+  flex-shrink: 0;
+}
+
 .scanner-list-badges {
   display: flex;
   align-items: center;
@@ -5350,6 +5393,10 @@ body {
   .scanner-list-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
+  }
+
+  .scanner-list-header {
+    display: none;
   }
 
   .scanner-list-badges {
