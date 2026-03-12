@@ -94,18 +94,26 @@ function ArbitrageComponentRow({
             <span className="scanner-component-name">
               {component.quantityInSet}x {component.name}
             </span>
-            {component.entryAtOrBelowPrice ? (
-              <span className="market-panel-badge tone-green">Entry ≤ Price</span>
-            ) : null}
             <span className={`market-panel-badge tone-${confidenceTone(component.confidenceSummary.level)}`}>
               {component.confidenceSummary.label}
             </span>
           </div>
           <div className="scanner-component-statline">
-            <span>Stats price {formatPlat(component.currentStatsPrice)}</span>
-            <span>Recommended entry {formatPlat(component.recommendedEntryPrice)}</span>
             <span>
-              Zone {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
+              <span className="scanner-component-stat-label">Stats price </span>
+              <span className="scanner-component-stat-value">{formatPlat(component.currentStatsPrice)}</span>
+            </span>
+            <span>
+              <span className="scanner-component-stat-label">Recommended entry </span>
+              <span className="market-detail-highlight-change">
+                {formatPlat(component.recommendedEntryPrice)}
+              </span>
+            </span>
+            <span>
+              <span className="scanner-component-stat-label">Zone </span>
+              <span className="market-detail-highlight-change">
+                {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
+              </span>
             </span>
           </div>
         </div>

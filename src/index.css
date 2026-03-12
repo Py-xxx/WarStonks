@@ -3869,6 +3869,15 @@ body {
   line-height: 1.5;
 }
 
+.scanner-component-stat-label {
+  color: var(--text-secondary);
+}
+
+.scanner-component-stat-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .scanner-component-actions {
   display: flex;
   align-items: center;
