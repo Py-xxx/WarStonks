@@ -3811,15 +3811,15 @@ body {
 
 .market-analysis-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 18px;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 14px;
   align-items: start;
 }
 
 .market-analysis-column {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   min-width: 0;
 }
 
@@ -3861,14 +3861,14 @@ body {
 .market-hero-strip {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.9fr);
-  gap: 18px;
-  padding: 18px 18px 0;
+  gap: 14px;
+  padding: 14px 14px 0;
 }
 
 .market-hero-copy {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -3888,7 +3888,7 @@ body {
 
 .market-hero-item-name {
   color: var(--text-primary);
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.05;
 }
@@ -3896,24 +3896,24 @@ body {
 .market-hero-note {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.55;
   max-width: 60ch;
 }
 
 .market-hero-meter-grid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .market-meter-card {
   border: 1px solid rgba(152, 170, 210, 0.12);
   border-radius: 12px;
   background: rgba(12, 19, 31, 0.9);
-  padding: 10px 12px;
+  padding: 9px 10px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 
 .market-meter-track,
@@ -3962,24 +3962,24 @@ body {
 
 .market-meter-value {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .market-analysis-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .market-summary-card {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: rgba(11, 17, 29, 0.98);
-  padding: 14px 16px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .market-summary-label {
@@ -3990,7 +3990,7 @@ body {
 }
 
 .market-summary-value {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -4001,7 +4001,7 @@ body {
 .market-time-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .market-context-card,
@@ -4012,7 +4012,7 @@ body {
   border: 1px solid rgba(121, 184, 255, 0.12);
   border-radius: 12px;
   background: rgba(9, 14, 24, 0.96);
-  padding: 12px;
+  padding: 10px;
 }
 
 .market-context-list-timeline .market-context-card {
@@ -4071,20 +4071,20 @@ body {
 
 .market-component-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .market-component-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
 }
 
 .market-component-main {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -4114,20 +4114,20 @@ body {
 .market-component-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .market-item-detail-card {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 14px;
-  padding-bottom: 14px;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
   border-bottom: 1px solid rgba(152, 170, 210, 0.12);
 }
 
 .market-item-detail-name {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -4153,7 +4153,7 @@ body {
 .market-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .market-detail-grid > div {
@@ -4166,14 +4166,14 @@ body {
 .market-detail-section-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .market-detail-section {
   border: 1px solid rgba(121, 184, 255, 0.12);
   border-radius: 12px;
   background: rgba(9, 14, 24, 0.96);
-  padding: 12px;
+  padding: 10px;
 }
 
 .market-item-details-panel .market-detail-section {
@@ -4183,14 +4183,14 @@ body {
 .market-detail-highlight-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .market-detail-highlight {
   border: 1px solid rgba(121, 184, 255, 0.12);
   border-radius: 10px;
   background: rgba(9, 14, 24, 0.96);
-  padding: 10px 12px;
+  padding: 9px 10px;
   color: var(--text-secondary);
   line-height: 1.5;
 }
