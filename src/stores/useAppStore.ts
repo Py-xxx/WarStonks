@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   ensureMarketTracking,
   getAppSettings,
+  getItemAnalytics,
   getItemAnalysis,
   getCurrencyBalances,
   getItemVariantsForMarket,
@@ -133,6 +134,13 @@ interface CachedWorldStateSnapshot<T> {
 
 function buildMarketAnalysisCacheKey(itemId: number, variantKey: string): string {
   return `${itemId}:${variantKey}`;
+}
+
+function extractQuickViewSparklinePoints(chartPoints: Awaited<ReturnType<typeof getItemAnalytics>>['chartPoints']): number[] {
+  return chartPoints
+    .slice(-24)
+    .map((point) => point.lowestSell)
+    .filter((value): value is number => value !== null && value !== undefined && !Number.isNaN(value));
 }
 
 const WORLDSTATE_SYSTEM_ALERT_ID = 'system:worldstate-offline';
@@ -1703,6 +1711,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   quickView: {
     selectedItem: null,
     sellOrders: [],
+    sparklinePoints: [],
+    sparklineLoading: false,
     apiVersion: null,
     loading: false,
     errorMessage: null,
@@ -1725,6 +1735,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       quickView: {
         selectedItem: item,
         sellOrders: [],
+        sparklinePoints: [],
+        sparklineLoading: false,
         apiVersion: null,
         loading: true,
         errorMessage: null,
@@ -1776,6 +1788,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         quickView: {
           selectedItem: item,
           sellOrders: response.sellOrders,
+          sparklinePoints: [],
+          sparklineLoading: true,
           apiVersion: response.apiVersion,
           loading: false,
           errorMessage: null,
@@ -1793,6 +1807,38 @@ export const useAppStore = create<AppStore>((set, get) => ({
         selectedMarketAnalysisLoading: false,
         selectedMarketAnalysisError: null,
       });
+
+      void getItemAnalytics(
+        item.itemId,
+        item.slug,
+        nextSelectedVariantKey,
+        '48h',
+        '1h',
+      )
+        .then((analytics) => {
+          if (requestId !== quickViewRequestSequence) {
+            return;
+          }
+          set((currentState) => ({
+            quickView: {
+              ...currentState.quickView,
+              sparklinePoints: extractQuickViewSparklinePoints(analytics.chartPoints),
+              sparklineLoading: false,
+            },
+          }));
+        })
+        .catch(() => {
+          if (requestId !== quickViewRequestSequence) {
+            return;
+          }
+          set((currentState) => ({
+            quickView: {
+              ...currentState.quickView,
+              sparklinePoints: [],
+              sparklineLoading: false,
+            },
+          }));
+        });
     } catch (error) {
       if (requestId !== quickViewRequestSequence) {
         return;
@@ -1802,6 +1848,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         quickView: {
           selectedItem: item,
           sellOrders: [],
+          sparklinePoints: [],
+          sparklineLoading: false,
           apiVersion: null,
           loading: false,
           errorMessage: toErrorMessage(error),
@@ -1818,6 +1866,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   setSelectedMarketVariantKey: async (variantKey) => {
+    const requestId = ++quickViewRequestSequence;
     const state = get();
     const selectedItem = state.quickView.selectedItem;
     const previousTrackedSelection = state.searchTrackingSource;
@@ -1846,6 +1895,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       selectedMarketAnalysisError: null,
       quickView: {
         ...state.quickView,
+        sparklinePoints: [],
+        sparklineLoading: false,
         loading: true,
         errorMessage: null,
       },
@@ -1858,6 +1909,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         variantKey,
       );
       const response = await loadQuickViewOrdersForSelection(selectedItem, variantKey);
+      if (requestId !== quickViewRequestSequence) {
+        return;
+      }
       set((currentState) => ({
         selectedMarketVariantKey: variantKey,
         selectedMarketVariantLabel:
@@ -1873,17 +1927,53 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ...currentState.quickView,
           selectedItem,
           sellOrders: response.sellOrders,
+          sparklinePoints: [],
+          sparklineLoading: true,
           apiVersion: response.apiVersion,
           loading: false,
           errorMessage: null,
         },
       }));
+
+      void getItemAnalytics(
+        selectedItem.itemId,
+        selectedItem.slug,
+        variantKey,
+        '48h',
+        '1h',
+      )
+        .then((analytics) => {
+          if (requestId !== quickViewRequestSequence) {
+            return;
+          }
+          set((currentState) => ({
+            quickView: {
+              ...currentState.quickView,
+              sparklinePoints: extractQuickViewSparklinePoints(analytics.chartPoints),
+              sparklineLoading: false,
+            },
+          }));
+        })
+        .catch(() => {
+          if (requestId !== quickViewRequestSequence) {
+            return;
+          }
+          set((currentState) => ({
+            quickView: {
+              ...currentState.quickView,
+              sparklinePoints: [],
+              sparklineLoading: false,
+            },
+          }));
+        });
     } catch (error) {
       set((currentState) => ({
         selectedMarketAnalysisLoading: false,
         selectedMarketAnalysisError: toErrorMessage(error),
         quickView: {
           ...currentState.quickView,
+          sparklinePoints: [],
+          sparklineLoading: false,
           loading: false,
           errorMessage: toErrorMessage(error),
         },
