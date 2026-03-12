@@ -212,7 +212,16 @@ export function ScannersPage() {
     try {
       const started = await startArbitrageScanner();
       if (!started) {
-        setErrorMessage('Arbitrage scan is already running.');
+        setProgress((current) =>
+          current
+            ? {
+                ...current,
+                statusText: current.status === 'running'
+                  ? current.statusText
+                  : 'Arbitrage scan is already running.',
+              }
+            : current,
+        );
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error));

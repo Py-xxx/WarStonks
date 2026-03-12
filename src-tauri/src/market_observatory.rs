@@ -22,6 +22,7 @@ const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
 const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
+const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
 const ARBITRAGE_SCANNER_KEY: &str = "arbitrage";
 const ARBITRAGE_SCANNER_PROGRESS_EVENT: &str = "arbitrage-scanner-progress";
@@ -856,6 +857,9 @@ fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection
     }
 
     let connection = Connection::open(db_path).context("failed to open market observatory db")?;
+    connection
+        .busy_timeout(Duration::from_secs(30))
+        .context("failed to configure market observatory busy timeout")?;
     initialize_market_observatory_schema(&connection)?;
     Ok(connection)
 }
@@ -4730,6 +4734,34 @@ fn default_arbitrage_scanner_progress() -> Result<ArbitrageScannerProgress> {
     })
 }
 
+fn stale_arbitrage_scanner_progress(
+    progress: &ArbitrageScannerProgress,
+) -> Result<Option<ArbitrageScannerProgress>> {
+    if progress.status != "running" {
+        return Ok(None);
+    }
+
+    let Some(updated_at) = parse_timestamp(&progress.updated_at) else {
+        return Ok(None);
+    };
+
+    if (now_utc() - updated_at) < TimeDuration::minutes(ARBITRAGE_SCANNER_STALE_MINUTES) {
+        return Ok(None);
+    }
+
+    Ok(Some(ArbitrageScannerProgress {
+        scanner_key: progress.scanner_key.clone(),
+        status: "error".to_string(),
+        progress_value: progress.progress_value,
+        stage_label: "Interrupted".to_string(),
+        status_text: "The previous arbitrage scan stopped updating and was reset.".to_string(),
+        updated_at: format_timestamp(now_utc())?,
+        started_at: progress.started_at.clone(),
+        last_completed_at: progress.last_completed_at.clone(),
+        last_error: Some("Previous background scan became stale.".to_string()),
+    }))
+}
+
 fn persist_arbitrage_scanner_progress(
     connection: &Connection,
     progress: &ArbitrageScannerProgress,
@@ -4805,7 +4837,14 @@ fn load_arbitrage_scanner_progress(connection: &Connection) -> Result<ArbitrageS
         .optional()?;
 
     match progress {
-        Some(progress) => Ok(progress),
+        Some(progress) => {
+            if let Some(stale_progress) = stale_arbitrage_scanner_progress(&progress)? {
+                persist_arbitrage_scanner_progress(connection, &stale_progress)?;
+                Ok(stale_progress)
+            } else {
+                Ok(progress)
+            }
+        }
         None => {
             let progress = default_arbitrage_scanner_progress()?;
             persist_arbitrage_scanner_progress(connection, &progress)?;
@@ -6180,9 +6219,9 @@ mod tests {
         build_orderbook_pressure, build_supply_confidence, build_trend_quality_breakdown,
         compute_pressure_ratio, compute_zone_bands, extract_rank_stat_highlights,
         initialize_market_observatory_schema, insert_statistics_rows_for_domain,
-        normalize_variant_key, pressure_label, resample_rows, AnalyticsBucketSizeKey,
-        AnalyticsChartPoint, AnalyticsDomainKey, InternalStatsRow, MarketSnapshot,
-        WfmDetailedOrder,
+        normalize_variant_key, pressure_label, resample_rows, stale_arbitrage_scanner_progress,
+        AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey,
+        ArbitrageScannerProgress, InternalStatsRow, MarketSnapshot, WfmDetailedOrder,
     };
     use rusqlite::Connection;
     fn sample_order(
@@ -6203,6 +6242,33 @@ mod tests {
             status: Some("online".to_string()),
             updated_at: None,
         }
+    }
+
+    #[test]
+    fn marks_stale_arbitrage_scan_as_error() {
+        let stale_progress = ArbitrageScannerProgress {
+            scanner_key: "arbitrage".to_string(),
+            status: "running".to_string(),
+            progress_value: 42.0,
+            stage_label: "Scanning".to_string(),
+            status_text: "Scanning stalled".to_string(),
+            updated_at: super::format_timestamp(super::now_utc() - super::TimeDuration::minutes(3))
+                .unwrap(),
+            started_at: None,
+            last_completed_at: None,
+            last_error: None,
+        };
+
+        let normalized = stale_arbitrage_scanner_progress(&stale_progress)
+            .expect("stale progress check should succeed")
+            .expect("stale running scan should be reset");
+
+        assert_eq!(normalized.status, "error");
+        assert_eq!(normalized.stage_label, "Interrupted");
+        assert_eq!(
+            normalized.last_error.as_deref(),
+            Some("Previous background scan became stale.")
+        );
     }
 
     fn sample_snapshot(captured_at: &str) -> MarketSnapshot {
