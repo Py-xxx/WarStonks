@@ -61,6 +61,8 @@ function runCommand(command, args, extraEnv = {}) {
     const child = spawn(command, args, {
       cwd: projectRoot,
       stdio: 'inherit',
+      shell: process.platform === 'win32',
+      windowsHide: process.platform === 'win32',
       env: {
         ...process.env,
         ...extraEnv,
