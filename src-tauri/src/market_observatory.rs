@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
@@ -1170,11 +1171,17 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn build_wfm_client() -> Result<Client> {
-    Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("failed to build WFM client")
+fn shared_wfm_client() -> Result<Client> {
+    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    match CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|error| format!("failed to build WFM client: {error}"))
+    }) {
+        Ok(client) => Ok(client.clone()),
+        Err(error) => Err(anyhow!(error.clone())),
+    }
 }
 
 fn normalize_variant_key(value: Option<&str>) -> String {
@@ -1366,7 +1373,7 @@ fn fetch_and_cache_statistics(
     slug: &str,
     variant_key: &str,
 ) -> Result<()> {
-    let client = build_wfm_client()?;
+    let client = shared_wfm_client()?;
     let response = client
         .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/statistics"))
         .header("User-Agent", WFM_USER_AGENT)
@@ -2206,7 +2213,7 @@ fn fetch_filtered_orders(
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<(Option<String>, Vec<WfmDetailedOrder>, Vec<WfmDetailedOrder>, MarketSnapshot)> {
-    let client = build_wfm_client()?;
+    let client = shared_wfm_client()?;
     let response = client
         .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
         .header("User-Agent", WFM_USER_AGENT)
@@ -4777,7 +4784,7 @@ fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
 }
 
 fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
-    let client = build_wfm_client()?;
+    let client = shared_wfm_client()?;
     let response = client
         .get(format!("{WFM_API_BASE_URL_V2}/item/{slug}/set"))
         .header("User-Agent", WFM_USER_AGENT)
