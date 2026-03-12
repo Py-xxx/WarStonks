@@ -26,6 +26,7 @@ pub fn run() {
             market_observatory::get_arbitrage_scanner,
             market_observatory::get_arbitrage_scanner_state,
             market_observatory::start_arbitrage_scanner,
+            market_observatory::stop_arbitrage_scanner,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
             commands::get_worldstate_sortie,

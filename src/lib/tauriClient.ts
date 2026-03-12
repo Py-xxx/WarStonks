@@ -352,6 +352,10 @@ export async function startArbitrageScanner(): Promise<boolean> {
   return invoke<boolean>('start_arbitrage_scanner');
 }
 
+export async function stopArbitrageScanner(): Promise<boolean> {
+  return invoke<boolean>('stop_arbitrage_scanner');
+}
+
 export async function initializeAppCatalog(): Promise<StartupSummary> {
   return invoke<StartupSummary>('initialize_app_catalog');
 }

@@ -600,6 +600,11 @@ pub struct ArbitrageScannerState {
     pub progress: ArbitrageScannerProgress,
 }
 
+struct ArbitrageScannerRunOutcome {
+    response: ArbitrageScannerResponse,
+    was_stopped: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WfmDetailedOrder {
@@ -983,7 +988,8 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           updated_at TEXT NOT NULL,
           started_at TEXT,
           last_completed_at TEXT,
-          last_error TEXT
+          last_error TEXT,
+          stop_requested INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS analytics_cache (
@@ -1022,15 +1028,32 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         )?;
     }
 
-    for (table_name, column_sql) in [
-        ("tracked_items", "ALTER TABLE tracked_items ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'"),
-        ("orderbook_snapshots", "ALTER TABLE orderbook_snapshots ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'"),
-        ("analytics_cache", "ALTER TABLE analytics_cache ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'"),
+    for (table_name, column_name, column_sql) in [
+        (
+            "tracked_items",
+            "seller_mode",
+            "ALTER TABLE tracked_items ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'",
+        ),
+        (
+            "orderbook_snapshots",
+            "seller_mode",
+            "ALTER TABLE orderbook_snapshots ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'",
+        ),
+        (
+            "analytics_cache",
+            "seller_mode",
+            "ALTER TABLE analytics_cache ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'",
+        ),
+        (
+            "scanner_progress",
+            "stop_requested",
+            "ALTER TABLE scanner_progress ADD COLUMN stop_requested INTEGER NOT NULL DEFAULT 0",
+        ),
     ] {
         let has_column = connection
             .query_row(
                 &format!(
-                    "SELECT 1 FROM pragma_table_info('{table_name}') WHERE name = 'seller_mode' LIMIT 1"
+                    "SELECT 1 FROM pragma_table_info('{table_name}') WHERE name = '{column_name}' LIMIT 1"
                 ),
                 [],
                 |row| row.get::<_, i64>(0),
@@ -4786,7 +4809,8 @@ fn persist_arbitrage_scanner_progress(
            updated_at = excluded.updated_at,
            started_at = excluded.started_at,
            last_completed_at = excluded.last_completed_at,
-           last_error = excluded.last_error",
+           last_error = excluded.last_error,
+           stop_requested = 0",
         params![
             progress.scanner_key,
             progress.status,
@@ -4801,6 +4825,38 @@ fn persist_arbitrage_scanner_progress(
     )?;
 
     Ok(())
+}
+
+fn arbitrage_scanner_stop_requested(connection: &Connection) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT stop_requested
+             FROM scanner_progress
+             WHERE scanner_key = ?1
+             LIMIT 1",
+            params![ARBITRAGE_SCANNER_KEY],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0)
+        != 0)
+}
+
+fn request_arbitrage_scanner_stop(connection: &Connection) -> Result<bool> {
+    let updated_at = format_timestamp(now_utc())?;
+    let changed = connection.execute(
+        "UPDATE scanner_progress
+         SET stop_requested = 1,
+             status = CASE WHEN status = 'running' THEN 'running' ELSE status END,
+             stage_label = CASE WHEN status = 'running' THEN 'Stopping' ELSE stage_label END,
+             status_text = CASE WHEN status = 'running' THEN 'Stopping arbitrage scan…' ELSE status_text END,
+             updated_at = ?2
+         WHERE scanner_key = ?1
+           AND status = 'running'",
+        params![ARBITRAGE_SCANNER_KEY, updated_at],
+    )?;
+
+    Ok(changed > 0)
 }
 
 fn load_arbitrage_scanner_progress(connection: &Connection) -> Result<ArbitrageScannerProgress> {
@@ -5365,7 +5421,7 @@ fn build_arbitrage_set_entry(
 fn build_arbitrage_scanner_inner(
     app: tauri::AppHandle,
     mut on_progress: impl FnMut(ArbitrageScannerProgress),
-) -> Result<ArbitrageScannerResponse> {
+) -> Result<ArbitrageScannerRunOutcome> {
     let catalog_connection = open_catalog_database(&app)?;
     let observatory_connection = open_market_observatory_database(&app)?;
     let set_roots = list_set_roots_from_catalog(&catalog_connection)?;
@@ -5374,6 +5430,7 @@ fn build_arbitrage_scanner_inner(
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
     let mut results = Vec::new();
+    let mut was_stopped = false;
 
     on_progress(ArbitrageScannerProgress {
         scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
@@ -5388,6 +5445,11 @@ fn build_arbitrage_scanner_inner(
     });
 
     for (index, set_root) in set_roots.iter().enumerate() {
+        if arbitrage_scanner_stop_requested(&observatory_connection)? {
+            was_stopped = true;
+            break;
+        }
+
         let progress_value = if set_roots.is_empty() {
             100.0
         } else {
@@ -5470,13 +5532,18 @@ fn build_arbitrage_scanner_inner(
         .filter(|entry| entry.gross_margin.unwrap_or_default() > 0.0)
         .count();
 
-    Ok(ArbitrageScannerResponse {
-        computed_at: format_timestamp(now_utc())?,
+    let computed_at = format_timestamp(now_utc())?;
+
+    Ok(ArbitrageScannerRunOutcome {
+        response: ArbitrageScannerResponse {
+            computed_at,
         scanned_set_count: set_roots.len(),
         opportunity_count,
         refreshed_set_count,
         refreshed_statistics_count,
             results,
+        },
+        was_stopped,
     })
 }
 
@@ -6110,7 +6177,9 @@ pub async fn get_item_analysis(
 pub async fn get_arbitrage_scanner(
     app: tauri::AppHandle,
 ) -> Result<ArbitrageScannerResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || build_arbitrage_scanner_inner(app, |_| {}))
+    tauri::async_runtime::spawn_blocking(move || {
+        build_arbitrage_scanner_inner(app, |_| {}).map(|outcome| outcome.response)
+    })
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
@@ -6171,7 +6240,24 @@ pub async fn start_arbitrage_scanner(
         });
 
         match run_result {
-            Ok(response) => {
+            Ok(outcome) => {
+                if outcome.was_stopped {
+                    let progress = ArbitrageScannerProgress {
+                        scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+                        status: "idle".to_string(),
+                        progress_value: 0.0,
+                        stage_label: "Stopped".to_string(),
+                        status_text: "Arbitrage scan stopped.".to_string(),
+                        updated_at: outcome.response.computed_at.clone(),
+                        started_at: Some(started_at.clone()),
+                        last_completed_at: current_state.progress.last_completed_at.clone(),
+                        last_error: None,
+                    };
+                    emit_progress(progress, &progress_connection, &worker_app);
+                    return;
+                }
+
+                let response = outcome.response;
                 let _ = persist_arbitrage_scanner_cache(&progress_connection, &response);
                 let progress = ArbitrageScannerProgress {
                     scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
@@ -6209,6 +6295,24 @@ pub async fn start_arbitrage_scanner(
     });
 
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn stop_arbitrage_scanner(
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)?;
+        let stopped = request_arbitrage_scanner_stop(&connection)?;
+        if stopped {
+            let progress = load_arbitrage_scanner_progress(&connection)?;
+            emit_arbitrage_scanner_progress(&app, &progress);
+        }
+        Ok::<_, anyhow::Error>(stopped)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
