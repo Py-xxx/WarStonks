@@ -168,6 +168,11 @@ export interface PortfolioTradeLogEntry {
   updatedAt: string;
 }
 
+export interface PortfolioTradeLogState {
+  entries: PortfolioTradeLogEntry[];
+  lastUpdatedAt: string | null;
+}
+
 export interface WfstatEventRewardCountedItem {
   count: number;
   type: string;

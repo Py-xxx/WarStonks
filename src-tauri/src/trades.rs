@@ -22,6 +22,7 @@ use tokio_tungstenite::tungstenite::Message;
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
+const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://warframe.market/socket-v2";
@@ -120,6 +121,13 @@ pub struct PortfolioTradeLogEntry {
     pub rank: Option<i64>,
     pub closed_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioTradeLogState {
+    pub entries: Vec<PortfolioTradeLogEntry>,
+    pub last_updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,9 +257,7 @@ fn now_utc() -> OffsetDateTime {
 }
 
 fn format_timestamp(value: OffsetDateTime) -> Result<String> {
-    value
-        .format(&Rfc3339)
-        .context("failed to format timestamp")
+    value.format(&Rfc3339).context("failed to format timestamp")
 }
 
 fn normalize_status_label(value: &str) -> String {
@@ -288,7 +294,9 @@ fn build_trades_session_path(app: &tauri::AppHandle) -> Result<PathBuf> {
         .path()
         .app_data_dir()
         .context("failed to resolve app data directory")?;
-    Ok(app_data_dir.join(TRADES_DIR_NAME).join(TRADES_SESSION_FILE_NAME))
+    Ok(app_data_dir
+        .join(TRADES_DIR_NAME)
+        .join(TRADES_SESSION_FILE_NAME))
 }
 
 fn build_item_catalog_path(app: &tauri::AppHandle) -> Result<PathBuf> {
@@ -297,6 +305,16 @@ fn build_item_catalog_path(app: &tauri::AppHandle) -> Result<PathBuf> {
         .app_data_dir()
         .context("failed to resolve app data directory")?;
     Ok(app_data_dir.join(ITEM_CATALOG_DATABASE_FILE))
+}
+
+fn build_trades_cache_database_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve app data directory")?;
+    Ok(app_data_dir
+        .join(TRADES_DIR_NAME)
+        .join(TRADES_CACHE_DATABASE_FILE))
 }
 
 fn load_session_from_path(path: &Path) -> Result<Option<StoredTradeSession>> {
@@ -342,6 +360,54 @@ fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .context("failed to open item catalog")
+}
+
+fn open_trades_cache_database(app: &tauri::AppHandle) -> Result<Connection> {
+    let db_path = build_trades_cache_database_path(app)?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create trades cache directory {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let connection = Connection::open(db_path).context("failed to open trades cache database")?;
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .context("failed to set trades cache busy timeout")?;
+    initialize_trades_cache_schema(&connection)?;
+    Ok(connection)
+}
+
+fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS portfolio_trade_log_cache (
+              username TEXT NOT NULL,
+              order_id TEXT NOT NULL,
+              item_name TEXT NOT NULL,
+              slug TEXT NOT NULL,
+              image_path TEXT,
+              order_type TEXT NOT NULL,
+              platinum INTEGER NOT NULL,
+              quantity INTEGER NOT NULL,
+              rank INTEGER,
+              closed_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (username, order_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS portfolio_trade_log_cache_meta (
+              username TEXT PRIMARY KEY,
+              last_updated_at TEXT NOT NULL,
+              entry_count INTEGER NOT NULL
+            );
+            ",
+        )
+        .context("failed to initialize trades cache schema")
 }
 
 fn generate_device_id() -> String {
@@ -417,7 +483,13 @@ fn parse_account_summary(data: &Value, fetched_at: &str) -> Result<TradeAccountS
         reputation: extract_i64(data, &["reputation"]),
         avatar_url: normalize_avatar_url(extract_string(
             data,
-            &["avatar", "avatar_url", "avatarUrl", "profile_image", "profileImage"],
+            &[
+                "avatar",
+                "avatar_url",
+                "avatarUrl",
+                "profile_image",
+                "profileImage",
+            ],
         )),
         last_updated_at: fetched_at.to_string(),
     })
@@ -466,7 +538,9 @@ fn execute_wfm_request(
         return Err(anyhow!("{action_label} failed with status {status}"));
     }
 
-    Err(anyhow!("{action_label} failed with status {status}: {trimmed_body}"))
+    Err(anyhow!(
+        "{action_label} failed with status {status}: {trimmed_body}"
+    ))
 }
 
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
@@ -544,6 +618,179 @@ fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLog
     Ok(build_trade_log_entries_from_statistics(payload.payload))
 }
 
+fn load_cached_trade_log_state_inner(
+    connection: &Connection,
+    username: &str,
+) -> Result<PortfolioTradeLogState> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to load the trade log."));
+    }
+
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              order_id,
+              item_name,
+              slug,
+              image_path,
+              order_type,
+              platinum,
+              quantity,
+              rank,
+              closed_at,
+              updated_at
+            FROM portfolio_trade_log_cache
+            WHERE username = ?1
+            ORDER BY closed_at DESC, updated_at DESC
+            ",
+        )
+        .context("failed to prepare cached trade log query")?;
+
+    let entries = statement
+        .query_map(params![trimmed_username], |row| {
+            Ok(PortfolioTradeLogEntry {
+                id: row.get(0)?,
+                item_name: row.get(1)?,
+                slug: row.get(2)?,
+                image_path: row.get(3)?,
+                order_type: row.get(4)?,
+                platinum: row.get(5)?,
+                quantity: row.get(6)?,
+                rank: row.get(7)?,
+                closed_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })
+        .context("failed to read cached trade log rows")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect cached trade log rows")?;
+
+    let last_updated_at = connection
+        .query_row(
+            "
+            SELECT last_updated_at
+            FROM portfolio_trade_log_cache_meta
+            WHERE username = ?1
+            ",
+            params![trimmed_username],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to read cached trade log metadata")?;
+
+    Ok(PortfolioTradeLogState {
+        entries,
+        last_updated_at,
+    })
+}
+
+fn save_trade_log_state_inner(
+    connection: &mut Connection,
+    username: &str,
+    entries: &[PortfolioTradeLogEntry],
+) -> Result<PortfolioTradeLogState> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to cache the trade log."));
+    }
+
+    let last_updated_at = format_timestamp(now_utc())?;
+    let transaction = connection
+        .transaction()
+        .context("failed to start trade log cache transaction")?;
+
+    transaction
+        .execute(
+            "DELETE FROM portfolio_trade_log_cache WHERE username = ?1",
+            params![trimmed_username],
+        )
+        .context("failed to clear cached trade log rows")?;
+
+    {
+        let mut insert_statement = transaction
+            .prepare(
+                "
+                INSERT INTO portfolio_trade_log_cache (
+                  username,
+                  order_id,
+                  item_name,
+                  slug,
+                  image_path,
+                  order_type,
+                  platinum,
+                  quantity,
+                  rank,
+                  closed_at,
+                  updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                ",
+            )
+            .context("failed to prepare trade log cache insert")?;
+
+        for entry in entries {
+            insert_statement
+                .execute(params![
+                    trimmed_username,
+                    entry.id,
+                    entry.item_name,
+                    entry.slug,
+                    entry.image_path,
+                    entry.order_type,
+                    entry.platinum,
+                    entry.quantity,
+                    entry.rank,
+                    entry.closed_at,
+                    entry.updated_at,
+                ])
+                .context("failed to insert cached trade log row")?;
+        }
+    }
+
+    transaction
+        .execute(
+            "
+            INSERT INTO portfolio_trade_log_cache_meta (
+              username,
+              last_updated_at,
+              entry_count
+            ) VALUES (?1, ?2, ?3)
+            ON CONFLICT(username) DO UPDATE SET
+              last_updated_at = excluded.last_updated_at,
+              entry_count = excluded.entry_count
+            ",
+            params![trimmed_username, last_updated_at, entries.len() as i64],
+        )
+        .context("failed to upsert cached trade log metadata")?;
+
+    transaction
+        .commit()
+        .context("failed to commit trade log cache transaction")?;
+
+    Ok(PortfolioTradeLogState {
+        entries: entries.to_vec(),
+        last_updated_at: Some(last_updated_at),
+    })
+}
+
+fn load_cached_trade_log_state_for_app(
+    app: &tauri::AppHandle,
+    username: &str,
+) -> Result<PortfolioTradeLogState> {
+    let connection = open_trades_cache_database(app)?;
+    load_cached_trade_log_state_inner(&connection, username)
+}
+
+fn refresh_trade_log_state_for_app(
+    app: &tauri::AppHandle,
+    username: &str,
+) -> Result<PortfolioTradeLogState> {
+    let entries = fetch_profile_trade_log_inner(username)?;
+    let mut connection = open_trades_cache_database(app)?;
+    save_trade_log_state_inner(&mut connection, username, &entries)
+}
+
 fn parse_status_from_payload(payload: &Value) -> Option<String> {
     payload
         .get("status")
@@ -554,7 +801,9 @@ fn parse_status_from_payload(payload: &Value) -> Option<String> {
 async fn connect_wfm_websocket(
     token: &str,
     device_id: &str,
-) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
     let mut request = WFM_WS_URL
         .into_client_request()
         .context("failed to build WFM websocket request")?;
@@ -647,7 +896,9 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     let trimmed_email = input.email.trim();
     let trimmed_password = input.password.trim();
     if trimmed_email.is_empty() || trimmed_password.is_empty() {
-        return Err(anyhow!("Enter both your Warframe Market email and password."));
+        return Err(anyhow!(
+            "Enter both your Warframe Market email and password."
+        ));
     }
 
     let device_id = generate_device_id();
@@ -821,7 +1072,10 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
     let mut market_low_cache = HashMap::<(String, Option<i64>), Option<i64>>::new();
     let mut sell_orders = Vec::new();
 
-    for order in orders.into_iter().filter(|entry| entry.order_type == "sell") {
+    for order in orders
+        .into_iter()
+        .filter(|entry| entry.order_type == "sell")
+    {
         let Some(meta) = resolve_catalog_trade_item_meta(&connection, &order.item_id)? else {
             continue;
         };
@@ -888,7 +1142,9 @@ fn create_sell_order_inner(
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
     if input.price <= 0 || input.quantity <= 0 {
-        return Err(anyhow!("Price and quantity must both be greater than zero."));
+        return Err(anyhow!(
+            "Price and quantity must both be greater than zero."
+        ));
     }
 
     let mut payload = json!({
@@ -924,7 +1180,9 @@ fn update_sell_order_inner(
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
     if input.price <= 0 || input.quantity <= 0 {
-        return Err(anyhow!("Price and quantity must both be greater than zero."));
+        return Err(anyhow!(
+            "Price and quantity must both be greater than zero."
+        ));
     }
 
     let mut payload = json!({
@@ -998,7 +1256,9 @@ fn delete_sell_order_inner(
 }
 
 #[tauri::command]
-pub async fn get_wfm_trade_session_state(app: tauri::AppHandle) -> Result<TradeSessionState, String> {
+pub async fn get_wfm_trade_session_state(
+    app: tauri::AppHandle,
+) -> Result<TradeSessionState, String> {
     let maybe_session = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         move || ensure_authenticated_session(&app)
@@ -1008,7 +1268,9 @@ pub async fn get_wfm_trade_session_state(app: tauri::AppHandle) -> Result<TradeS
 
     match maybe_session {
         Ok(mut session) => {
-            if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
+            if let Ok(status) =
+                fetch_current_trade_status_ws(&session.token, &session.device_id).await
+            {
                 session.account.status = status;
                 let _ = tauri::async_runtime::spawn_blocking({
                     let app = app.clone();
@@ -1078,18 +1340,38 @@ pub async fn get_wfm_trade_overview(
     app: tauri::AppHandle,
     seller_mode: String,
 ) -> Result<TradeOverview, String> {
-    tauri::async_runtime::spawn_blocking(move || build_trade_overview_inner(&app, seller_mode.trim()))
-        .await
+    tauri::async_runtime::spawn_blocking(move || {
+        build_trade_overview_inner(&app, seller_mode.trim())
+    })
+    .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn get_wfm_profile_trade_log(username: String) -> Result<Vec<PortfolioTradeLogEntry>, String> {
-    tauri::async_runtime::spawn_blocking(move || fetch_profile_trade_log_inner(username.trim()))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+pub async fn get_cached_wfm_profile_trade_log(
+    app: tauri::AppHandle,
+    username: String,
+) -> Result<PortfolioTradeLogState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        load_cached_trade_log_state_for_app(&app, username.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_wfm_profile_trade_log(
+    app: tauri::AppHandle,
+    username: String,
+) -> Result<PortfolioTradeLogState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        refresh_trade_log_state_for_app(&app, username.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1152,10 +1434,12 @@ pub async fn delete_wfm_sell_order(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trade_log_entries_from_statistics, normalize_avatar_url, parse_status_from_payload,
-        WfmProfileClosedOrder, WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName,
-        WfmProfileStatisticsPayload,
+        build_trade_log_entries_from_statistics, initialize_trades_cache_schema,
+        load_cached_trade_log_state_inner, normalize_avatar_url, parse_status_from_payload,
+        save_trade_log_state_inner, PortfolioTradeLogEntry, WfmProfileClosedOrder,
+        WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
     };
+    use rusqlite::Connection;
     use serde_json::json;
 
     #[test]
@@ -1251,6 +1535,53 @@ mod tests {
         assert_eq!(entries[0].order_type, "buy");
         assert_eq!(entries[0].rank, Some(2));
         assert_eq!(entries[1].id, "sell-1");
-        assert_eq!(entries[1].image_path.as_deref(), Some("items/images/en/test.png"));
+        assert_eq!(
+            entries[1].image_path.as_deref(),
+            Some("items/images/en/test.png")
+        );
+    }
+
+    #[test]
+    fn persists_trade_log_cache_state() {
+        let mut connection = Connection::open_in_memory().expect("in-memory trades cache");
+        initialize_trades_cache_schema(&connection).expect("schema");
+
+        let entries = vec![
+            PortfolioTradeLogEntry {
+                id: "sell-1".to_string(),
+                item_name: "Test Item".to_string(),
+                slug: "test_item".to_string(),
+                image_path: Some("items/images/en/test.png".to_string()),
+                order_type: "sell".to_string(),
+                platinum: 25,
+                quantity: 2,
+                rank: None,
+                closed_at: "2026-03-09T10:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-09T10:00:00.000+00:00".to_string(),
+            },
+            PortfolioTradeLogEntry {
+                id: "buy-1".to_string(),
+                item_name: "Test Item".to_string(),
+                slug: "test_item".to_string(),
+                image_path: Some("items/images/en/test.png".to_string()),
+                order_type: "buy".to_string(),
+                platinum: 15,
+                quantity: 1,
+                rank: Some(2),
+                closed_at: "2026-03-10T10:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T10:00:00.000+00:00".to_string(),
+            },
+        ];
+
+        let saved_state = save_trade_log_state_inner(&mut connection, "qtpyth", &entries)
+            .expect("save cached trade log");
+        let loaded_state = load_cached_trade_log_state_inner(&connection, "qtpyth")
+            .expect("load cached trade log");
+
+        assert!(saved_state.last_updated_at.is_some());
+        assert_eq!(loaded_state.entries.len(), 2);
+        assert_eq!(loaded_state.entries[0].id, "buy-1");
+        assert_eq!(loaded_state.entries[1].id, "sell-1");
+        assert_eq!(loaded_state.last_updated_at, saved_state.last_updated_at);
     }
 }
