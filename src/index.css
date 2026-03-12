@@ -3766,7 +3766,7 @@ body {
 }
 
 .scanner-list-button:not(.scanner-list-button-relic) .scanner-list-metrics {
-  gap: 16px;
+  gap: 32px;
 }
 
 .scanner-list-metric {
