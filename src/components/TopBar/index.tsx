@@ -76,6 +76,14 @@ function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): Wfm
   return [...prefixMatches, ...substringMatches].slice(0, 8);
 }
 
+function formatTopBarVariantLabel(variantKey: string, fallbackLabel: string): string {
+  if (variantKey.startsWith('rank:')) {
+    return variantKey.slice(5);
+  }
+
+  return fallbackLabel;
+}
+
 export function TopBar() {
   const autoProfile = useAppStore((s) => s.autoProfile);
   const alerts = useAppStore((s) => s.alerts);
@@ -309,7 +317,7 @@ export function TopBar() {
             >
               {marketVariants.map((variant) => (
                 <option key={variant.key} value={variant.key}>
-                  {variant.label}
+                  {formatTopBarVariantLabel(variant.key, variant.label)}
                 </option>
               ))}
             </select>
