@@ -1227,18 +1227,6 @@ body {
   color: var(--text-primary);
 }
 
-.topbar-seller-group {
-  height: 30px;
-  padding: 2px;
-  border-radius: 5px;
-}
-
-.topbar-seller-group .seller-option {
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-}
-
 .toggle-wrap {
   display: flex;
   align-items: center;

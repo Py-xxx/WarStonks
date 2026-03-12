@@ -3,21 +3,19 @@ import type { HomeSubTab } from '../../types';
 import { Overview } from './Overview';
 import { WatchlistTab } from './WatchlistTab';
 import { AlertsTab } from './AlertsTab';
-import { EventsTab } from './EventsTab';
 
 export function HomePage() {
   const homeSubTab = useAppStore((s) => s.homeSubTab);
   const setHomeSubTab = useAppStore((s) => s.setHomeSubTab);
+  const autoProfile = useAppStore((s) => s.autoProfile);
   const sellerMode = useAppStore((s) => s.sellerMode);
   const setSellerMode = useAppStore((s) => s.setSellerMode);
-  const autoProfile = useAppStore((s) => s.autoProfile);
   const toggleAutoProfile = useAppStore((s) => s.toggleAutoProfile);
 
   const tabs: { id: HomeSubTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'watchlist', label: 'Watchlist' },
     { id: 'alerts', label: 'Alerts' },
-    { id: 'events-tab', label: 'Events' },
   ];
 
   return (
@@ -41,18 +39,20 @@ export function HomePage() {
         </div>
         <div className="subnav-right">
           <div className="seller-group" role="group" aria-label="Seller filter">
-            <div
+            <button
               className={`seller-option${sellerMode === 'ingame' ? ' active' : ''}`}
+              type="button"
               onClick={() => setSellerMode('ingame')}
             >
               Ingame
-            </div>
-            <div
+            </button>
+            <button
               className={`seller-option${sellerMode === 'ingame-online' ? ' active' : ''}`}
+              type="button"
               onClick={() => setSellerMode('ingame-online')}
             >
               Ingame + Online
-            </div>
+            </button>
           </div>
           <div className="toggle-wrap">
             <span>Auto Profile</span>
@@ -71,7 +71,6 @@ export function HomePage() {
       {homeSubTab === 'overview'    && <Overview />}
       {homeSubTab === 'watchlist'   && <WatchlistTab />}
       {homeSubTab === 'alerts'      && <AlertsTab />}
-      {homeSubTab === 'events-tab'  && <EventsTab />}
     </>
   );
 }

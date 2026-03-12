@@ -81,12 +81,10 @@ export function TopBar() {
   const alerts = useAppStore((s) => s.alerts);
   const marketVariants = useAppStore((s) => s.marketVariants);
   const marketVariantsLoading = useAppStore((s) => s.marketVariantsLoading);
-  const sellerMode = useAppStore((s) => s.sellerMode);
   const selectedMarketVariantKey = useAppStore((s) => s.selectedMarketVariantKey);
   const systemAlerts = useAppStore((s) => s.systemAlerts);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
-  const setSellerMode = useAppStore((s) => s.setSellerMode);
   const setSelectedMarketVariantKey = useAppStore((s) => s.setSelectedMarketVariantKey);
   const walletSnapshot = useAppStore((s) => s.walletSnapshot);
   const walletLoading = useAppStore((s) => s.walletLoading);
@@ -317,23 +315,6 @@ export function TopBar() {
             </select>
           </div>
         ) : null}
-
-        <div className="seller-group topbar-seller-group" role="group" aria-label="Seller filter">
-          <button
-            className={`seller-option${sellerMode === 'ingame' ? ' active' : ''}`}
-            type="button"
-            onClick={() => setSellerMode('ingame')}
-          >
-            Ingame
-          </button>
-          <button
-            className={`seller-option${sellerMode === 'ingame-online' ? ' active' : ''}`}
-            type="button"
-            onClick={() => setSellerMode('ingame-online')}
-          >
-            Ingame + Online
-          </button>
-        </div>
       </div>
 
       <div className="currency-strip" role="status" aria-label="Currency balances">
