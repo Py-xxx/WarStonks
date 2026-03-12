@@ -34,6 +34,7 @@ pub fn run() {
             trades::get_wfm_trade_overview,
             trades::get_cached_wfm_profile_trade_log,
             trades::get_wfm_profile_trade_log,
+            trades::set_wfm_trade_log_keep_item,
             trades::create_wfm_sell_order,
             trades::update_wfm_sell_order,
             trades::close_wfm_sell_order,

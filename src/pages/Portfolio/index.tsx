@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getCachedWfmProfileTradeLog, getWfmProfileTradeLog } from '../../lib/tauriClient';
+import { getCachedWfmProfileTradeLog, getWfmProfileTradeLog, setWfmTradeLogKeepItem } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -65,9 +65,35 @@ function buildTradeTypeClassName(orderType: PortfolioTradeLogEntry['orderType'])
   return orderType === 'buy' ? 'badge-blue' : 'badge-green';
 }
 
+function buildTradeStatusClassName(status: string | null): string {
+  switch (status) {
+    case 'Flip':
+      return 'badge-green';
+    case 'Sold As Set':
+      return 'badge-purple';
+    case 'Kept':
+      return 'badge-amber';
+    case 'Open':
+      return 'badge-blue';
+    default:
+      return 'badge';
+  }
+}
+
+function formatMarginValue(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) {
+    return '—';
+  }
+
+  const rounded = Math.round(value * 10) / 10;
+  const normalized = Number.isInteger(rounded) ? String(Math.trunc(rounded)) : rounded.toFixed(1);
+  return `${normalized}%`;
+}
+
 function TradeLogTab({ username }: { username: string | null }) {
   const [entries, setEntries] = useState<PortfolioTradeLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
 
@@ -88,6 +114,25 @@ function TradeLogTab({ username }: { username: string | null }) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleKeepItem = async (entry: PortfolioTradeLogEntry) => {
+    if (!username || entry.orderType !== 'buy') {
+      return;
+    }
+
+    setUpdatingOrderId(entry.id);
+    setErrorMessage(null);
+
+    try {
+      const nextState = await setWfmTradeLogKeepItem(username, entry.id, !entry.keepItem);
+      setEntries(nextState.entries);
+      setLastUpdatedAt(nextState.lastUpdatedAt);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUpdatingOrderId(null);
     }
   };
 
@@ -190,7 +235,11 @@ function TradeLogTab({ username }: { username: string | null }) {
             <span>Price</span>
             <span>Qty</span>
             <span>Rank</span>
+            <span>Profit</span>
+            <span>Margin</span>
+            <span>Status</span>
             <span>Closed</span>
+            <span>Action</span>
           </div>
 
           <div className="portfolio-log-list">
@@ -199,7 +248,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                 <div className="portfolio-log-item">
                   <span className="portfolio-log-thumb">
                     {entry.imagePath ? (
-                      <img src={resolveWfmAssetUrl(entry.imagePath)} alt="" />
+                      <img src={resolveWfmAssetUrl(entry.imagePath) ?? undefined} alt="" />
                     ) : (
                       <span className="portfolio-log-thumb-fallback">{entry.itemName.charAt(0)}</span>
                     )}
@@ -216,7 +265,36 @@ function TradeLogTab({ username }: { username: string | null }) {
                 <span className="portfolio-log-value">{formatPlatinumValue(entry.platinum)}</span>
                 <span className="portfolio-log-value">{entry.quantity}</span>
                 <span className="portfolio-log-value">{entry.rank ?? '—'}</span>
+                <span className="portfolio-log-value">
+                  {entry.profit == null ? '—' : formatPlatinumValue(entry.profit)}
+                </span>
+                <span className="portfolio-log-value">{formatMarginValue(entry.margin)}</span>
+                <span>
+                  {entry.status ? (
+                    <span className={`badge ${buildTradeStatusClassName(entry.status)}`}>{entry.status}</span>
+                  ) : (
+                    <span className="portfolio-log-value">—</span>
+                  )}
+                </span>
                 <span className="portfolio-log-date">{formatShortLocalDateTime(entry.closedAt)}</span>
+                <span className="portfolio-log-actions">
+                  {entry.orderType === 'buy' ? (
+                    <button
+                      className={`act-btn portfolio-keep-btn${entry.keepItem ? ' active' : ''}`}
+                      type="button"
+                      onClick={() => void handleToggleKeepItem(entry)}
+                      disabled={updatingOrderId === entry.id}
+                    >
+                      {updatingOrderId === entry.id
+                        ? 'Saving…'
+                        : entry.keepItem
+                          ? 'Unkeep'
+                          : 'Keep Item'}
+                    </button>
+                  ) : (
+                    <span className="portfolio-log-value">—</span>
+                  )}
+                </span>
               </div>
             ))}
           </div>
