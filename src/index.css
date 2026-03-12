@@ -538,6 +538,94 @@ body {
   gap: 6px;
 }
 .btn-connect:hover { background: rgba(74,158,255,0.08); }
+.btn-connect.trade-connected {
+  border-color: var(--border);
+  color: var(--text-primary);
+  background: rgba(20, 24, 32, 0.88);
+}
+.btn-connect.trade-connected:hover {
+  border-color: rgba(74, 158, 255, 0.3);
+  background: rgba(30, 36, 48, 0.92);
+}
+.trade-menu-wrap {
+  position: relative;
+}
+.trade-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 268px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(12, 16, 22, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
+  z-index: 180;
+}
+.trade-menu-header,
+.trade-menu-section {
+  display: grid;
+  gap: 6px;
+}
+.trade-menu-status-copy {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.trade-menu-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+.trade-menu-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-blue);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.trade-menu-section-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.trade-menu-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.trade-menu-status-btn {
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.trade-menu-status-btn:hover {
+  border-color: rgba(74, 158, 255, 0.32);
+  background: rgba(74, 158, 255, 0.08);
+}
+.trade-menu-status-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.trade-menu-error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 79, 88, 0.24);
+  background: rgba(240, 79, 88, 0.08);
+  color: #ffb2b7;
+  font-size: 12px;
+  line-height: 1.5;
+}
 
 /* ── CURRENCY STRIP ── */
 .currency-strip {
