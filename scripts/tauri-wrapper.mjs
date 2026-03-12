@@ -58,16 +58,24 @@ async function selectAvailablePort(ports, host) {
 
 function runCommand(command, args, extraEnv = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-      windowsHide: process.platform === 'win32',
-      env: {
-        ...process.env,
-        ...extraEnv,
-      },
-    });
+    const env = {
+      ...process.env,
+      ...extraEnv,
+    };
+
+    const child =
+      process.platform === 'win32'
+        ? spawn('cmd.exe', ['/d', '/s', '/c', command, ...args], {
+            cwd: projectRoot,
+            stdio: 'inherit',
+            windowsHide: true,
+            env,
+          })
+        : spawn(command, args, {
+            cwd: projectRoot,
+            stdio: 'inherit',
+            env,
+          });
 
     child.on('error', reject);
     child.on('exit', (code, signal) => {
