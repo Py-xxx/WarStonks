@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   getArbitrageScannerState,
   listenToArbitrageScannerProgress,
@@ -156,31 +156,30 @@ export function ScannersPage() {
   const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const loadScannerState = useCallback(async (cancelled = false) => {
+    try {
+      const response = await getArbitrageScannerState();
+      if (cancelled) {
+        return;
+      }
+      setArbitrage(response.latestScan);
+      setProgress(response.progress);
+      setErrorMessage(response.progress.status === 'error' ? response.progress.lastError : null);
+    } catch (error) {
+      if (cancelled) {
+        return;
+      }
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab !== 'arbitrage') {
       return;
     }
 
     let cancelled = false;
-
-    const loadState = async () => {
-      try {
-        const response = await getArbitrageScannerState();
-        if (cancelled) {
-          return;
-        }
-        setArbitrage(response.latestScan);
-        setProgress(response.progress);
-        setErrorMessage(response.progress.status === 'error' ? response.progress.lastError : null);
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-      }
-    };
-
-    void loadState();
+    void loadScannerState();
 
     let unsubscribe: () => void = () => {};
     void listenToArbitrageScannerProgress((nextProgress) => {
@@ -196,23 +195,41 @@ export function ScannersPage() {
       }
 
       if (nextProgress.status === 'success' || nextProgress.status === 'error') {
-        void loadState();
+        void loadScannerState();
       }
     }).then((cleanup) => {
       unsubscribe = cleanup;
     });
 
+    const pollInterval = window.setInterval(() => {
+      void loadScannerState(cancelled);
+    }, 1250);
+
     return () => {
       cancelled = true;
+      window.clearInterval(pollInterval);
       unsubscribe();
     };
-  }, [activeTab]);
+  }, [activeTab, loadScannerState]);
 
   const runArbitrageScan = async () => {
     setErrorMessage(null);
     try {
       const started = await startArbitrageScanner();
-      if (!started) {
+      if (started) {
+        setProgress((current) => ({
+          scannerKey: current?.scannerKey ?? 'arbitrage',
+          status: 'running',
+          progressValue: 0,
+          stageLabel: 'Queued',
+          statusText: 'Arbitrage scan queued.',
+          updatedAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          lastCompletedAt: current?.lastCompletedAt ?? null,
+          lastError: null,
+        }));
+        void loadScannerState();
+      } else {
         setProgress((current) =>
           current
             ? {
@@ -233,6 +250,20 @@ export function ScannersPage() {
     setErrorMessage(null);
     try {
       const stopped = await stopArbitrageScanner();
+      if (stopped) {
+        setProgress((current) =>
+          current
+            ? {
+                ...current,
+                status: 'running',
+                stageLabel: 'Stopping',
+                statusText: 'Stopping arbitrage scan…',
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        void loadScannerState();
+      }
       if (!stopped) {
         setProgress((current) =>
           current
