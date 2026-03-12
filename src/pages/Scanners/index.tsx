@@ -385,20 +385,22 @@ function RelicRoiRow({
             <span className="scanner-list-note">{summary?.note ?? entry.note}</span>
           </div>
         </div>
-        <div className="scanner-list-metric scanner-list-metric-inline">
-          <strong>{formatPlat(summary?.relicBuyPrice ?? null)}</strong>
-        </div>
-        <div className="scanner-list-metric scanner-list-metric-inline">
-          <strong>{formatPlat(summary?.expectedExitValue ?? null)}</strong>
-        </div>
-        <div className="scanner-list-metric scanner-list-metric-inline">
-          <strong>{formatPlat(summary?.netProfit ?? null)}</strong>
-        </div>
-        <div className="scanner-list-metric scanner-list-metric-inline">
-          <strong>{formatPercent(summary?.roiPct ?? null)}</strong>
-        </div>
-        <div className="scanner-list-metric scanner-list-metric-inline">
-          <strong>{Math.round(summary?.liquidityScore ?? 0)}%</strong>
+        <div className="scanner-list-metrics-relic">
+          <div className="scanner-list-metric scanner-list-metric-inline">
+            <strong>{formatPlat(summary?.relicBuyPrice ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric scanner-list-metric-inline">
+            <strong>{formatPlat(summary?.expectedExitValue ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric scanner-list-metric-inline">
+            <strong>{formatPlat(summary?.netProfit ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric scanner-list-metric-inline">
+            <strong>{formatPercent(summary?.roiPct ?? null)}</strong>
+          </div>
+          <div className="scanner-list-metric scanner-list-metric-inline">
+            <strong>{Math.round(summary?.liquidityScore ?? 0)}%</strong>
+          </div>
         </div>
         <div className="scanner-list-badges scanner-list-badges-relic">
           {entry.isUnvaulted ? (
@@ -814,11 +816,13 @@ export function ScannersPage() {
                 <div className="scanner-results-list">
                   <div className="scanner-list-header scanner-list-header-relic">
                     <div className="scanner-list-header-spacer" />
-                    <span>Buy</span>
-                    <span>Run Value</span>
-                    <span>Net</span>
-                    <span>ROI</span>
-                    <span>Liquidity</span>
+                    <div className="scanner-list-header-metrics">
+                      <span>Buy</span>
+                      <span>Run Value</span>
+                      <span>Net</span>
+                      <span>ROI</span>
+                      <span>Liquidity</span>
+                    </div>
                     <div className="scanner-list-header-actions" />
                   </div>
                   {relicResults.map((entry, index) => (
