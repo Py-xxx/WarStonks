@@ -796,6 +796,28 @@ function formatPercent(value: number | null | undefined): string {
   return rendered === '—' ? rendered : `${rendered}%`;
 }
 
+function formatDropChancePercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  if (value === 0) {
+    return '<0.0001%';
+  }
+
+  const absValue = Math.abs(value);
+  let digits = 1;
+  if (absValue < 0.001) {
+    digits = 4;
+  } else if (absValue < 0.01) {
+    digits = 3;
+  } else if (absValue < 0.1) {
+    digits = 2;
+  }
+
+  return `${formatNumber(value, digits)}%`;
+}
+
 function formatRelativeTimestamp(value: string | null | undefined): string {
   if (!value) {
     return '—';
@@ -2265,7 +2287,7 @@ function AnalysisTab() {
                 {(analysis?.supplyContext.dropSources ?? []).map((source) => (
                   <div key={`${source.location}-${source.sourceType ?? 'none'}`} className="market-drop-card">
                     <span className="market-copy-title">{source.location}</span>
-                    <span>Chance: {formatPercent(source.chance)}</span>
+                    <span>Chance: {formatDropChancePercent(source.chance)}</span>
                     <span>Rarity: {source.rarity ?? '—'}</span>
                     <span>Type: {source.sourceType ?? '—'}</span>
                   </div>
