@@ -539,6 +539,16 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
               entry_count INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS portfolio_trade_log_derived (
+              username TEXT NOT NULL,
+              order_id TEXT NOT NULL,
+              profit INTEGER,
+              margin REAL,
+              status TEXT,
+              derived_at TEXT NOT NULL,
+              PRIMARY KEY (username, order_id)
+            );
+
             CREATE TABLE IF NOT EXISTS trade_set_component_cache (
               set_slug TEXT NOT NULL,
               component_slug TEXT NOT NULL,
@@ -865,6 +875,39 @@ fn load_trade_log_last_updated_at(
         )
         .optional()
         .context("failed to read cached trade log metadata")
+}
+
+fn has_complete_derived_trade_log_state(connection: &Connection, username: &str) -> Result<bool> {
+    let trimmed_username = username.trim();
+    let cached_count = connection
+        .query_row(
+            "
+            SELECT COUNT(*)
+            FROM portfolio_trade_log_cache
+            WHERE username = ?1
+            ",
+            params![trimmed_username],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("failed to count cached trade log rows")?;
+
+    if cached_count == 0 {
+        return Ok(true);
+    }
+
+    let derived_count = connection
+        .query_row(
+            "
+            SELECT COUNT(*)
+            FROM portfolio_trade_log_derived
+            WHERE username = ?1
+            ",
+            params![trimmed_username],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("failed to count derived trade log rows")?;
+
+    Ok(cached_count == derived_count)
 }
 
 fn fetch_cached_trade_set_components(
@@ -1278,6 +1321,65 @@ fn save_trade_log_rows_inner(
     Ok(last_updated_at)
 }
 
+fn persist_derived_trade_log_entries_inner(
+    connection: &mut Connection,
+    username: &str,
+    entries: &[PortfolioTradeLogEntry],
+) -> Result<()> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to persist the derived trade log."));
+    }
+
+    let derived_at = format_timestamp(now_utc())?;
+    let transaction = connection
+        .transaction()
+        .context("failed to start derived trade log transaction")?;
+
+    transaction
+        .execute(
+            "DELETE FROM portfolio_trade_log_derived WHERE username = ?1",
+            params![trimmed_username],
+        )
+        .context("failed to clear derived trade log rows")?;
+
+    {
+        let mut insert_statement = transaction
+            .prepare(
+                "
+                INSERT INTO portfolio_trade_log_derived (
+                  username,
+                  order_id,
+                  profit,
+                  margin,
+                  status,
+                  derived_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ",
+            )
+            .context("failed to prepare derived trade log insert")?;
+
+        for entry in entries {
+            insert_statement
+                .execute(params![
+                    trimmed_username,
+                    entry.id,
+                    entry.profit,
+                    entry.margin,
+                    entry.status,
+                    derived_at,
+                ])
+                .context("failed to insert derived trade log row")?;
+        }
+    }
+
+    transaction
+        .commit()
+        .context("failed to commit derived trade log transaction")?;
+
+    Ok(())
+}
+
 fn consume_matching_buy_lots(
     records: &[StoredTradeLogRecord],
     consumption: &mut HashMap<String, BuyConsumptionState>,
@@ -1513,17 +1615,92 @@ fn derive_trade_log_entries(
 }
 
 fn load_cached_trade_log_state_inner(
-    app: &tauri::AppHandle,
     connection: &Connection,
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
-    let records = load_stored_trade_log_records_inner(connection, username)?;
+    let trimmed_username = username.trim();
     let last_updated_at = load_trade_log_last_updated_at(connection, username)?;
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              cache.order_id,
+              cache.item_name,
+              cache.slug,
+              cache.image_path,
+              cache.order_type,
+              cache.platinum,
+              cache.quantity,
+              cache.rank,
+              cache.closed_at,
+              cache.updated_at,
+              derived.profit,
+              derived.margin,
+              derived.status,
+              COALESCE(overrides.keep_item, cache.keep_item, 0)
+            FROM portfolio_trade_log_cache AS cache
+            LEFT JOIN portfolio_trade_log_overrides AS overrides
+              ON overrides.username = cache.username
+             AND overrides.order_id = cache.order_id
+            LEFT JOIN portfolio_trade_log_derived AS derived
+              ON derived.username = cache.username
+             AND derived.order_id = cache.order_id
+            WHERE cache.username = ?1
+            ORDER BY cache.closed_at DESC, cache.updated_at DESC, cache.order_id DESC
+            ",
+        )
+        .context("failed to prepare cached derived trade log query")?;
+
+    let entries = statement
+        .query_map(params![trimmed_username], |row| {
+            Ok(PortfolioTradeLogEntry {
+                id: row.get(0)?,
+                item_name: row.get(1)?,
+                slug: row.get(2)?,
+                image_path: row.get(3)?,
+                order_type: row.get(4)?,
+                platinum: row.get(5)?,
+                quantity: row.get(6)?,
+                rank: row.get(7)?,
+                closed_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                profit: row.get(10)?,
+                margin: row.get(11)?,
+                status: row.get(12)?,
+                keep_item: row.get::<_, i64>(13)? != 0,
+            })
+        })
+        .context("failed to read cached derived trade log rows")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect cached derived trade log rows")?;
 
     Ok(PortfolioTradeLogState {
-        entries: derive_trade_log_entries(app, &records),
+        entries,
         last_updated_at,
     })
+}
+
+fn reconcile_trade_log_state_inner(
+    app: &tauri::AppHandle,
+    connection: &mut Connection,
+    username: &str,
+) -> Result<PortfolioTradeLogState> {
+    let records = load_stored_trade_log_records_inner(connection, username)?;
+    let entries = derive_trade_log_entries(app, &records);
+    persist_derived_trade_log_entries_inner(connection, username, &entries)?;
+    load_cached_trade_log_state_inner(connection, username)
+}
+
+fn ensure_trade_log_state_inner(
+    app: &tauri::AppHandle,
+    connection: &mut Connection,
+    username: &str,
+) -> Result<PortfolioTradeLogState> {
+    if has_complete_derived_trade_log_state(connection, username)? {
+        return load_cached_trade_log_state_inner(connection, username);
+    }
+
+    reconcile_trade_log_state_inner(app, connection, username)
 }
 
 fn set_trade_log_keep_item_inner(
@@ -1541,7 +1718,7 @@ fn set_trade_log_keep_item_inner(
         return Err(anyhow!("Order id is required to update trade log state."));
     }
 
-    let connection = open_trades_cache_database(app)?;
+    let mut connection = open_trades_cache_database(app)?;
     connection
         .execute(
             "
@@ -1554,15 +1731,15 @@ fn set_trade_log_keep_item_inner(
         )
         .context("failed to update trade log keep override")?;
 
-    load_cached_trade_log_state_inner(app, &connection, trimmed_username)
+    reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
 }
 
 fn load_cached_trade_log_state_for_app(
     app: &tauri::AppHandle,
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
-    let connection = open_trades_cache_database(app)?;
-    load_cached_trade_log_state_inner(app, &connection, username)
+    let mut connection = open_trades_cache_database(app)?;
+    ensure_trade_log_state_inner(app, &mut connection, username)
 }
 
 fn refresh_trade_log_state_for_app(
@@ -1572,7 +1749,7 @@ fn refresh_trade_log_state_for_app(
     let entries = fetch_profile_trade_log_inner(username)?;
     let mut connection = open_trades_cache_database(app)?;
     save_trade_log_rows_inner(&mut connection, username, &entries)?;
-    load_cached_trade_log_state_inner(app, &connection, username)
+    reconcile_trade_log_state_inner(app, &mut connection, username)
 }
 
 fn parse_status_from_payload(payload: &Value) -> Option<String> {
