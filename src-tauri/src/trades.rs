@@ -14,6 +14,7 @@ use std::time::Duration;
 use tauri::Manager;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use tokio::time::{sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -219,6 +220,24 @@ fn normalize_status_command(value: &str) -> Result<&'static str> {
         "online" => Ok("online"),
         "in game" | "in_game" | "ingame" => Ok("in_game"),
         _ => Err(anyhow!("Unsupported status. Use Invisible, Online, or In game.")),
+    }
+}
+
+fn normalize_server_status(value: &str) -> &'static str {
+    match value.trim().to_lowercase().as_str() {
+        "in_game" | "ingame" => "ingame",
+        "online" => "online",
+        "invisible" | "offline" => "offline",
+        _ => "offline",
+    }
+}
+
+fn desired_status_matches_account(desired_status: &str, account_status: &str) -> bool {
+    match desired_status {
+        "invisible" => normalize_server_status(account_status) == "offline",
+        "online" => normalize_server_status(account_status) == "online",
+        "in_game" => normalize_server_status(account_status) == "ingame",
+        _ => false,
     }
 }
 
@@ -449,6 +468,15 @@ fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSumma
             .ok_or_else(|| anyhow!("missing WFM profile data"))?,
         &fetched_at,
     )
+}
+
+async fn fetch_me_with_token_async(token: String) -> Result<TradeAccountSummary> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = shared_wfm_client()?;
+        fetch_me_with_token(&client, &token)
+    })
+    .await
+    .map_err(|error| anyhow!("failed to join WFM profile refresh task: {error}"))?
 }
 
 fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
@@ -820,8 +848,9 @@ async fn update_trade_status_inner(
     headers.append("Sec-WebSocket-Protocol", "wfm".parse().unwrap());
     headers.append("User-Agent", WFM_USER_AGENT.parse().unwrap());
 
-    let (mut ws_stream, _) = connect_async(request)
+    let (mut ws_stream, _) = timeout(Duration::from_secs(10), connect_async(request))
         .await
+        .context("timed out while connecting to WFM websocket")?
         .context("failed to connect to WFM websocket")?;
 
     let auth_request_id = uuid::Uuid::new_v4().to_string();
@@ -848,80 +877,119 @@ async fn update_trade_status_inner(
     let mut status_updated = false;
     let status_request_id = uuid::Uuid::new_v4().to_string();
 
-    while let Some(message) = ws_stream.next().await {
-        let message = message.context("failed to read WFM websocket message")?;
-        let Message::Text(text) = message else {
-            continue;
-        };
+    let websocket_result: Result<()> = timeout(Duration::from_secs(10), async {
+        while let Some(message) = ws_stream.next().await {
+            let message = message.context("failed to read WFM websocket message")?;
+            let Message::Text(text) = message else {
+                continue;
+            };
 
-        let payload = serde_json::from_str::<WfmWsMessage>(&text)
-            .context("failed to parse WFM websocket payload")?;
-        let route = payload.route
-            .split('|')
-            .nth(1)
-            .unwrap_or(payload.route.as_str())
-            .to_string();
+            let payload = serde_json::from_str::<WfmWsMessage>(&text)
+                .context("failed to parse WFM websocket payload")?;
+            let route = payload
+                .route
+                .split('|')
+                .nth(1)
+                .unwrap_or(payload.route.as_str())
+                .to_string();
 
-        if !authenticated {
-            if route == "cmd/auth/signIn:ok" || payload.ref_id.as_deref() == Some(auth_request_id.as_str()) {
-                authenticated = true;
-                let status_message = WfmWsMessage {
-                    route: "@wfm|cmd/status/set".to_string(),
-                    payload: Some(json!({ "status": desired_status })),
-                    id: Some(status_request_id.clone()),
-                    ref_id: None,
-                };
+            if !authenticated {
+                if route == "cmd/auth/signIn:ok"
+                    || payload.ref_id.as_deref() == Some(auth_request_id.as_str())
+                {
+                    authenticated = true;
+                    let status_message = WfmWsMessage {
+                        route: "@wfm|cmd/status/set".to_string(),
+                        payload: Some(json!({ "status": desired_status })),
+                        id: Some(status_request_id.clone()),
+                        ref_id: None,
+                    };
 
-                ws_stream
-                    .send(Message::Text(
-                        serde_json::to_string(&status_message)
-                            .context("failed to serialize websocket status message")?
-                            .into(),
-                    ))
-                    .await
-                    .context("failed to send websocket status message")?;
-            } else if route == "cmd/auth/signIn:error" {
+                    ws_stream
+                        .send(Message::Text(
+                            serde_json::to_string(&status_message)
+                                .context("failed to serialize websocket status message")?
+                                .into(),
+                        ))
+                        .await
+                        .context("failed to send websocket status message")?;
+                    continue;
+                }
+
+                if route == "cmd/auth/signIn:error" {
+                    let reason = payload
+                        .payload
+                        .as_ref()
+                        .and_then(|value| value.get("reason"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("websocket authentication failed");
+                    return Err(anyhow!(reason.to_string()));
+                }
+
+                continue;
+            }
+
+            if route == "cmd/status/set:error" {
                 let reason = payload
                     .payload
                     .as_ref()
                     .and_then(|value| value.get("reason"))
                     .and_then(Value::as_str)
-                    .unwrap_or("websocket authentication failed");
+                    .unwrap_or("status update failed");
                 return Err(anyhow!(reason.to_string()));
             }
-            continue;
+
+            if route == "cmd/status/set:ok" || payload.ref_id.as_deref() == Some(status_request_id.as_str()) {
+                status_updated = true;
+                break;
+            }
+
+            // WFM also emits the current presence as an event. Accept that as success
+            // when it confirms the requested state, instead of waiting indefinitely.
+            if route == "event/status/set"
+                && payload
+                    .payload
+                    .as_ref()
+                    .and_then(|value| value.get("status"))
+                    .and_then(Value::as_str)
+                    == Some(desired_status)
+            {
+                status_updated = true;
+                break;
+            }
         }
 
-        if route == "cmd/status/set:ok" || payload.ref_id.as_deref() == Some(status_request_id.as_str()) {
-            status_updated = true;
-            break;
-        }
+        Ok(())
+    })
+    .await
+    .context("timed out while waiting for WFM status update")?;
 
-        if route == "cmd/status/set:error" {
-            let reason = payload
-                .payload
-                .as_ref()
-                .and_then(|value| value.get("reason"))
-                .and_then(Value::as_str)
-                .unwrap_or("status update failed");
-            return Err(anyhow!(reason.to_string()));
-        }
-    }
+    websocket_result?;
 
     if !status_updated {
         return Err(anyhow!("status update did not complete"));
     }
 
-    let account = fetch_me_with_token(&shared_wfm_client()?, &session.token)?;
+    // Refresh until the server reports the status we just requested, but fall back
+    // to the server's current view instead of inventing a local optimistic state.
+    let mut latest_account = fetch_me_with_token_async(session.token.clone()).await?;
+    for _attempt in 0..5 {
+        if desired_status_matches_account(desired_status, &latest_account.status) {
+            break;
+        }
+        sleep(Duration::from_millis(350)).await;
+        latest_account = fetch_me_with_token_async(session.token.clone()).await?;
+    }
+
     let updated_session = StoredTradeSession {
-        account: account.clone(),
+        account: latest_account.clone(),
         ..session
     };
     save_session(&app, &updated_session)?;
 
     Ok(TradeSessionState {
         connected: true,
-        account: Some(account),
+        account: Some(latest_account),
     })
 }
 
