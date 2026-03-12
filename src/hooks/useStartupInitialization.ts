@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  ensureTradeSetMap,
   initializeAppCatalogOnce,
   isTauriRuntime,
   listenToStartupProgress,
@@ -144,6 +145,25 @@ export function useStartupInitialization(): StartupState {
         }
 
         setSummary(nextSummary);
+
+        const setMapProgress: StartupProgress = {
+          stageKey: 'trade-set-map',
+          stageLabel: 'Preparing set map',
+          statusText: 'Building the cached set component map for trade reconciliation.',
+          progressValue: 0.88,
+        };
+
+        setProgress((current) => ({
+          ...current,
+          ...setMapProgress,
+          progressValue: Math.max(current.progressValue, setMapProgress.progressValue),
+        }));
+
+        await ensureTradeSetMap(nextSummary.currentWfmApiVersion);
+        if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+          return;
+        }
+
         const startupWorldStateTasks = [
           {
             stageKey: 'worldstate-events',

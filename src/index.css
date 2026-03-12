@@ -3750,13 +3750,22 @@ body {
   display: flex;
   justify-content: flex-end;
 }
-.portfolio-keep-btn {
-  min-width: 88px;
-  justify-content: center;
+.portfolio-keep-toggle-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
-.portfolio-keep-btn.active {
-  border-color: rgba(240, 160, 48, 0.4);
-  color: var(--accent-amber);
+.portfolio-keep-toggle {
+  flex: 0 0 auto;
+}
+.portfolio-keep-toggle.on {
+  background: rgba(240, 160, 48, 0.95);
+  border-color: rgba(240, 160, 48, 0.95);
+}
+.portfolio-keep-toggle.on::after {
+  background: #fff;
 }
 .chart-header {
   padding: 10px 14px;

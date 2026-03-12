@@ -177,6 +177,14 @@ export interface PortfolioTradeLogState {
   lastUpdatedAt: string | null;
 }
 
+export interface TradeSetMapSummary {
+  ready: boolean;
+  refreshed: boolean;
+  apiVersion: string | null;
+  setCount: number;
+  filePath: string;
+}
+
 export interface WfstatEventRewardCountedItem {
   count: number;
   type: string;

@@ -24,6 +24,7 @@ const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
+const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
@@ -291,6 +292,47 @@ struct TradeSetComponentRecord {
     fetched_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TradeSetMapFile {
+    api_version: Option<String>,
+    generated_at: String,
+    sets: Vec<TradeSetMapSetRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TradeSetMapSetRecord {
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+    components: Vec<TradeSetMapComponentRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TradeSetMapComponentRecord {
+    slug: String,
+    quantity_in_set: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeSetMapSummary {
+    pub ready: bool,
+    pub refreshed: bool,
+    pub api_version: Option<String>,
+    pub set_count: i64,
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct TradeSetRootRecord {
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct BuyConsumptionState {
     flipped_quantity: i64,
@@ -378,6 +420,14 @@ fn build_trades_cache_database_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     Ok(app_data_dir
         .join(TRADES_DIR_NAME)
         .join(TRADES_CACHE_DATABASE_FILE))
+}
+
+fn build_trade_set_map_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve app data directory")?;
+    Ok(app_data_dir.join("data").join(TRADE_SET_MAP_FILE_NAME))
 }
 
 fn load_session_from_path(path: &Path) -> Result<Option<StoredTradeSession>> {
@@ -927,6 +977,157 @@ fn fetch_wfm_trade_set_components(set_slug: &str) -> Result<Vec<TradeSetComponen
         .collect())
 }
 
+fn list_trade_set_roots_from_catalog(connection: &Connection) -> Result<Vec<TradeSetRootRecord>> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              COALESCE(items.wfm_slug, wfm_items.slug) AS slug,
+              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name) AS name,
+              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon) AS image_path
+            FROM items
+            JOIN wfm_items
+              ON wfm_items.wfm_id = items.wfm_id
+            WHERE EXISTS (
+              SELECT 1
+              FROM wfm_item_tags
+              WHERE wfm_item_tags.wfm_id = wfm_items.wfm_id
+                AND wfm_item_tags.tag = 'set'
+            )
+            ORDER BY LOWER(COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name)) ASC
+            ",
+        )
+        .context("failed to prepare trade set root catalog query")?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(TradeSetRootRecord {
+                slug: row.get(0)?,
+                name: row.get(1)?,
+                image_path: row.get(2)?,
+            })
+        })
+        .context("failed to query trade set roots from catalog")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect trade set roots from catalog")?;
+
+    Ok(rows)
+}
+
+fn load_trade_set_map_file(path: &Path) -> Result<Option<TradeSetMapFile>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read trade set map at {}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let file = serde_json::from_str::<TradeSetMapFile>(&raw)
+        .with_context(|| format!("failed to parse trade set map at {}", path.display()))?;
+    Ok(Some(file))
+}
+
+fn save_trade_set_map_file(path: &Path, file: &TradeSetMapFile) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create trade set map directory {}", parent.display()))?;
+    }
+
+    let raw = serde_json::to_string_pretty(file).context("failed to serialize trade set map")?;
+    fs::write(path, raw)
+        .with_context(|| format!("failed to write trade set map at {}", path.display()))
+}
+
+fn persist_trade_set_map_into_cache(
+    connection: &Connection,
+    set_map: &TradeSetMapFile,
+) -> Result<()> {
+    for set_record in &set_map.sets {
+        let components = set_record
+            .components
+            .iter()
+            .map(|component| TradeSetComponentRecord {
+                component_slug: component.slug.clone(),
+                quantity_in_set: component.quantity_in_set.max(1),
+                fetched_at: set_map.generated_at.clone(),
+            })
+            .collect::<Vec<_>>();
+        persist_trade_set_component_cache(connection, &set_record.slug, &components)?;
+    }
+
+    Ok(())
+}
+
+fn build_trade_set_map_inner(
+    app: &tauri::AppHandle,
+    api_version: Option<&str>,
+) -> Result<TradeSetMapSummary> {
+    let map_path = build_trade_set_map_path(app)?;
+    let version_key = api_version.map(|value| value.trim()).filter(|value| !value.is_empty());
+
+    if let Some(existing) = load_trade_set_map_file(&map_path)? {
+        let existing_version = existing
+            .api_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if existing_version == version_key {
+            let cache_connection = open_trades_cache_database(app)?;
+            persist_trade_set_map_into_cache(&cache_connection, &existing)?;
+            return Ok(TradeSetMapSummary {
+                ready: true,
+                refreshed: false,
+                api_version: existing.api_version,
+                set_count: existing.sets.len() as i64,
+                file_path: map_path.display().to_string(),
+            });
+        }
+    }
+
+    let catalog_connection = open_catalog_database(app)?;
+    let set_roots = list_trade_set_roots_from_catalog(&catalog_connection)?;
+    let generated_at = format_timestamp(now_utc())?;
+    let mut sets = Vec::with_capacity(set_roots.len());
+
+    for set_root in &set_roots {
+        let components = fetch_wfm_trade_set_components(&set_root.slug)?
+            .into_iter()
+            .map(|component| TradeSetMapComponentRecord {
+                slug: component.component_slug,
+                quantity_in_set: component.quantity_in_set.max(1),
+            })
+            .collect::<Vec<_>>();
+
+        sets.push(TradeSetMapSetRecord {
+            slug: set_root.slug.clone(),
+            name: set_root.name.clone(),
+            image_path: set_root.image_path.clone(),
+            components,
+        });
+    }
+
+    let set_map = TradeSetMapFile {
+        api_version: version_key.map(str::to_string),
+        generated_at: generated_at.clone(),
+        sets,
+    };
+
+    save_trade_set_map_file(&map_path, &set_map)?;
+    let cache_connection = open_trades_cache_database(app)?;
+    persist_trade_set_map_into_cache(&cache_connection, &set_map)?;
+
+    Ok(TradeSetMapSummary {
+        ready: true,
+        refreshed: true,
+        api_version: set_map.api_version,
+        set_count: set_map.sets.len() as i64,
+        file_path: map_path.display().to_string(),
+    })
+}
+
 fn load_observatory_trade_set_components(
     app: &tauri::AppHandle,
     set_slug: &str,
@@ -1182,10 +1383,13 @@ fn consume_set_component_buy_lots(
     (max_sets_supported, total_cost)
 }
 
-fn derive_trade_log_entries(
-    app: &tauri::AppHandle,
+fn derive_trade_log_entries_with_components<F>(
     records: &[StoredTradeLogRecord],
-) -> Vec<PortfolioTradeLogEntry> {
+    mut load_components: F,
+) -> Vec<PortfolioTradeLogEntry>
+where
+    F: FnMut(&str) -> Vec<TradeSetComponentRecord>,
+{
     let mut consumption = HashMap::<String, BuyConsumptionState>::new();
     let mut derived = Vec::with_capacity(records.len());
 
@@ -1199,7 +1403,8 @@ fn derive_trade_log_entries(
         let mut matched_cost = 0_i64;
 
         if record.slug.ends_with("_set") {
-            if let Ok(components) = load_trade_set_components_for_slug(app, &record.slug) {
+            let components = load_components(&record.slug);
+            if !components.is_empty() {
                 let (set_quantity, set_cost) = consume_set_component_buy_lots(
                     records,
                     &mut consumption,
@@ -1296,6 +1501,15 @@ fn derive_trade_log_entries(
     });
 
     derived
+}
+
+fn derive_trade_log_entries(
+    app: &tauri::AppHandle,
+    records: &[StoredTradeLogRecord],
+) -> Vec<PortfolioTradeLogEntry> {
+    derive_trade_log_entries_with_components(records, |set_slug| {
+        load_trade_set_components_for_slug(app, set_slug).unwrap_or_default()
+    })
 }
 
 fn load_cached_trade_log_state_inner(
@@ -1960,6 +2174,19 @@ pub async fn set_wfm_trade_log_keep_item(
 }
 
 #[tauri::command]
+pub async fn ensure_trade_set_map(
+    app: tauri::AppHandle,
+    api_version: Option<String>,
+) -> Result<TradeSetMapSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        build_trade_set_map_inner(&app, api_version.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn create_wfm_sell_order(
     app: tauri::AppHandle,
     input: TradeCreateListingInput,
@@ -2019,10 +2246,11 @@ pub async fn delete_wfm_sell_order(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trade_log_entries_from_statistics, initialize_trades_cache_schema,
-        load_stored_trade_log_records_inner, load_trade_log_last_updated_at, normalize_avatar_url,
-        parse_status_from_payload, save_trade_log_rows_inner, PortfolioTradeLogEntry,
-        WfmProfileClosedOrder,
+        build_trade_log_entries_from_statistics, derive_trade_log_entries_with_components,
+        initialize_trades_cache_schema, load_stored_trade_log_records_inner,
+        load_trade_log_last_updated_at, normalize_avatar_url, parse_status_from_payload,
+        save_trade_log_rows_inner, PortfolioTradeLogEntry, StoredTradeLogRecord,
+        TradeSetComponentRecord, WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
     };
     use rusqlite::Connection;
@@ -2178,5 +2406,96 @@ mod tests {
         assert_eq!(loaded_records[0].id, "sell-1");
         assert_eq!(loaded_records[1].id, "buy-1");
         assert_eq!(loaded_updated_at, Some(saved_updated_at));
+    }
+
+    #[test]
+    fn marks_component_buys_as_sold_as_set_when_set_sells_later() {
+        let records = vec![
+            StoredTradeLogRecord {
+                id: "buy-chassis".to_string(),
+                item_name: "Wisp Prime Chassis".to_string(),
+                slug: "wisp_prime_chassis".to_string(),
+                image_path: None,
+                order_type: "buy".to_string(),
+                platinum: 20,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T08:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T08:00:00.000+00:00".to_string(),
+                keep_item: false,
+            },
+            StoredTradeLogRecord {
+                id: "buy-neuro".to_string(),
+                item_name: "Wisp Prime Neuroptics".to_string(),
+                slug: "wisp_prime_neuroptics".to_string(),
+                image_path: None,
+                order_type: "buy".to_string(),
+                platinum: 18,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T08:05:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T08:05:00.000+00:00".to_string(),
+                keep_item: false,
+            },
+            StoredTradeLogRecord {
+                id: "buy-systems".to_string(),
+                item_name: "Wisp Prime Systems".to_string(),
+                slug: "wisp_prime_systems".to_string(),
+                image_path: None,
+                order_type: "buy".to_string(),
+                platinum: 22,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T08:10:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T08:10:00.000+00:00".to_string(),
+                keep_item: false,
+            },
+            StoredTradeLogRecord {
+                id: "sell-set".to_string(),
+                item_name: "Wisp Prime Set".to_string(),
+                slug: "wisp_prime_set".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                platinum: 95,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                keep_item: false,
+            },
+        ];
+
+        let derived = derive_trade_log_entries_with_components(&records, |slug| {
+            if slug == "wisp_prime_set" {
+                vec![
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_chassis".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_neuroptics".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_systems".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                ]
+            } else {
+                Vec::new()
+            }
+        });
+
+        let sell_entry = derived.iter().find(|entry| entry.id == "sell-set").expect("sell entry");
+        assert_eq!(sell_entry.profit, Some(35));
+        assert_eq!(sell_entry.margin, Some(58.333333333333336));
+
+        for buy_id in ["buy-chassis", "buy-neuro", "buy-systems"] {
+            let buy_entry = derived.iter().find(|entry| entry.id == buy_id).expect("buy entry");
+            assert_eq!(buy_entry.status.as_deref(), Some("Sold As Set"));
+        }
     }
 }
