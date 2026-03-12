@@ -3811,7 +3811,7 @@ body {
 
 .market-analysis-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 18px;
   align-items: start;
 }
@@ -3825,6 +3825,7 @@ body {
 .market-analysis-sidebar {
   position: sticky;
   top: 12px;
+  align-self: start;
 }
 
 .market-analysis-summary-grid {
@@ -3989,6 +3990,20 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+.market-detail-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.market-detail-section {
+  border: 1px solid rgba(121, 184, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(9, 14, 24, 0.96);
+  padding: 12px;
 }
 
 .market-detail-highlight-list {
