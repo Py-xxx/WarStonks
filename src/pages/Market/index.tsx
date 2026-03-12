@@ -744,6 +744,267 @@ function formatNullableBoolean(value: boolean | null | undefined): string {
   return value ? 'Yes' : 'No';
 }
 
+function formatStatPercent(value: number | null | undefined, digits = 1): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  return `${formatNumber(value, digits)}%`;
+}
+
+function formatMultiplier(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  return `${formatNumber(value, 1)}x`;
+}
+
+function formatDurationSeconds(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  if (value < 60) {
+    return `${formatNumber(value, 0)}s`;
+  }
+
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+}
+
+interface ItemDetailField {
+  label: string;
+  value: string;
+}
+
+interface ItemDetailSection {
+  title: string;
+  fields: ItemDetailField[];
+}
+
+type ItemDetailKind =
+  | 'mod'
+  | 'arcane'
+  | 'weapon'
+  | 'warframe'
+  | 'relic'
+  | 'set'
+  | 'component'
+  | 'resource'
+  | 'generic';
+
+function hasMeaningfulDetail(value: string | null | undefined): value is string {
+  return Boolean(value && value !== '—');
+}
+
+function pushDetailField(fields: ItemDetailField[], label: string, value: string) {
+  if (hasMeaningfulDetail(value)) {
+    fields.push({ label, value });
+  }
+}
+
+function classifyItemDetail(detail: ItemDetailSummary | null): ItemDetailKind {
+  if (!detail) {
+    return 'generic';
+  }
+
+  const tags = new Set(detail.tags.map((tag) => tag.toLowerCase()));
+  const family = detail.itemFamily?.toLowerCase() ?? '';
+  const category = detail.category?.toLowerCase() ?? '';
+  const type = detail.itemType?.toLowerCase() ?? '';
+  const productCategory = detail.productCategory?.toLowerCase() ?? '';
+
+  if (tags.has('arcane') || family.includes('arcane') || category.includes('arcane') || type.includes('arcane')) {
+    return 'arcane';
+  }
+  if (tags.has('mod') || family.includes('mod') || category.includes('mod') || type.includes('mod')) {
+    return 'mod';
+  }
+  if (family.includes('relic') || type.includes('relic') || category.includes('relic') || detail.relicTier || detail.relicCode) {
+    return 'relic';
+  }
+  if (tags.has('set') || family.includes('set') || detail.name.endsWith(' Set')) {
+    return 'set';
+  }
+  if (family.includes('warframe') || category.includes('warframe') || tags.has('warframe')) {
+    return 'warframe';
+  }
+  if (
+    family.includes('weapon')
+    || category.includes('weapon')
+    || productCategory.includes('weapon')
+    || detail.totalDamage !== null
+    || detail.criticalChance !== null
+  ) {
+    return tags.has('component') ? 'component' : 'weapon';
+  }
+  if (tags.has('component') || family.includes('component') || productCategory.includes('component')) {
+    return 'component';
+  }
+  if (family.includes('resource') || category.includes('resource') || productCategory.includes('resource')) {
+    return 'resource';
+  }
+
+  return 'generic';
+}
+
+function buildItemDetailSections(detail: ItemDetailSummary | null): ItemDetailSection[] {
+  if (!detail) {
+    return [];
+  }
+
+  const detailKind = classifyItemDetail(detail);
+  const sections: ItemDetailSection[] = [];
+  const overviewFields: ItemDetailField[] = [];
+
+  pushDetailField(overviewFields, 'Family', detail.itemFamily ?? '—');
+  pushDetailField(overviewFields, 'Category', detail.category ?? '—');
+  pushDetailField(overviewFields, 'Type', detail.itemType ?? '—');
+  pushDetailField(overviewFields, 'Rarity', detail.rarity ?? '—');
+  pushDetailField(overviewFields, 'Tradable', formatNullableBoolean(detail.tradable));
+  pushDetailField(overviewFields, 'Prime', formatNullableBoolean(detail.prime));
+  pushDetailField(overviewFields, 'Vaulted', formatNullableBoolean(detail.vaulted));
+  if (overviewFields.length > 0) {
+    sections.push({ title: 'Overview', fields: overviewFields });
+  }
+
+  if (detailKind === 'mod' || detailKind === 'arcane') {
+    const upgradeFields: ItemDetailField[] = [];
+    pushDetailField(upgradeFields, 'Compatibility', detail.compatName ?? '—');
+    pushDetailField(upgradeFields, 'Polarity', detail.polarity ?? '—');
+    pushDetailField(upgradeFields, 'Stance Polarity', detail.stancePolarity ?? '—');
+    pushDetailField(upgradeFields, 'Mod Set', detail.modSet ?? '—');
+    pushDetailField(upgradeFields, 'Base Drain', formatNumber(detail.baseDrain, 0));
+    pushDetailField(upgradeFields, 'Fusion Limit', formatNumber(detail.fusionLimit, 0));
+    pushDetailField(upgradeFields, 'Max Rank', formatNumber(detail.maxRank, 0));
+    pushDetailField(upgradeFields, 'Mastery', formatNumber(detail.masteryReq, 0));
+    if (upgradeFields.length > 0) {
+      sections.push({ title: detailKind === 'arcane' ? 'Arcane Profile' : 'Mod Profile', fields: upgradeFields });
+    }
+  }
+
+  if (detailKind === 'weapon' || detailKind === 'component') {
+    const combatFields: ItemDetailField[] = [];
+    pushDetailField(combatFields, 'Total Damage', formatNumber(detail.totalDamage, 1));
+    pushDetailField(combatFields, 'Crit Chance', formatStatPercent(detail.criticalChance));
+    pushDetailField(combatFields, 'Crit Mult', formatMultiplier(detail.criticalMultiplier));
+    pushDetailField(combatFields, 'Status Chance', formatStatPercent(detail.statusChance));
+    pushDetailField(combatFields, 'Fire Rate', formatNumber(detail.fireRate, 2));
+    pushDetailField(combatFields, 'Reload', detail.reloadTime !== null ? `${formatNumber(detail.reloadTime, 2)}s` : '—');
+    pushDetailField(combatFields, 'Magazine', formatNumber(detail.magazineSize, 0));
+    pushDetailField(combatFields, 'Multishot', formatNumber(detail.multishot, 0));
+    pushDetailField(combatFields, 'Disposition', formatNumber(detail.disposition, 0));
+    pushDetailField(combatFields, 'Range', formatNumber(detail.range, 1));
+    if (combatFields.length > 0) {
+      sections.push({ title: detailKind === 'component' ? 'Component Combat' : 'Combat Stats', fields: combatFields });
+    }
+
+    const handlingFields: ItemDetailField[] = [];
+    pushDetailField(handlingFields, 'Trigger', detail.trigger ?? '—');
+    pushDetailField(handlingFields, 'Noise', detail.noise ?? '—');
+    pushDetailField(handlingFields, 'Follow Through', formatNumber(detail.followThrough, 2));
+    pushDetailField(handlingFields, 'Blocking Angle', formatNumber(detail.blockingAngle, 0));
+    pushDetailField(handlingFields, 'Combo Duration', formatNumber(detail.comboDuration, 1));
+    pushDetailField(handlingFields, 'Heavy Attack', formatNumber(detail.heavyAttackDamage, 0));
+    pushDetailField(handlingFields, 'Slam Attack', formatNumber(detail.slamAttack, 0));
+    pushDetailField(handlingFields, 'Heavy Slam', formatNumber(detail.heavySlamAttack, 0));
+    pushDetailField(handlingFields, 'Wind Up', detail.windUp !== null ? `${formatNumber(detail.windUp, 2)}s` : '—');
+    if (handlingFields.length > 0) {
+      sections.push({ title: 'Handling', fields: handlingFields });
+    }
+  }
+
+  if (detailKind === 'warframe') {
+    const baseStatFields: ItemDetailField[] = [];
+    pushDetailField(baseStatFields, 'Health', formatNumber(detail.health, 0));
+    pushDetailField(baseStatFields, 'Shield', formatNumber(detail.shield, 0));
+    pushDetailField(baseStatFields, 'Armor', formatNumber(detail.armor, 0));
+    pushDetailField(baseStatFields, 'Sprint Speed', formatNumber(detail.sprintSpeed, 2));
+    pushDetailField(baseStatFields, 'Power', formatNumber(detail.power, 0));
+    pushDetailField(baseStatFields, 'Stamina', formatNumber(detail.stamina, 0));
+    pushDetailField(baseStatFields, 'Mastery', formatNumber(detail.masteryReq, 0));
+    if (baseStatFields.length > 0) {
+      sections.push({ title: 'Base Stats', fields: baseStatFields });
+    }
+
+    const kitFields: ItemDetailField[] = [];
+    pushDetailField(kitFields, 'Abilities', detail.abilityNames.length > 0 ? detail.abilityNames.join(', ') : '—');
+    pushDetailField(kitFields, 'Polarities', detail.polarities.length > 0 ? detail.polarities.join(', ') : '—');
+    if (kitFields.length > 0) {
+      sections.push({ title: 'Kit', fields: kitFields });
+    }
+  }
+
+  if (detailKind === 'relic') {
+    const relicFields: ItemDetailField[] = [];
+    pushDetailField(relicFields, 'Tier', detail.relicTier ?? '—');
+    pushDetailField(relicFields, 'Code', detail.relicCode ?? '—');
+    pushDetailField(relicFields, 'Release', formatDateCompact(detail.releaseDate));
+    pushDetailField(relicFields, 'Est. Vault', formatDateCompact(detail.estimatedVaultDate));
+    pushDetailField(relicFields, 'Vault Date', formatDateCompact(detail.vaultDate));
+    pushDetailField(relicFields, 'Item Count', formatNumber(detail.itemCount, 0));
+    if (relicFields.length > 0) {
+      sections.push({ title: 'Relic Profile', fields: relicFields });
+    }
+  }
+
+  if (detailKind === 'set') {
+    const setFields: ItemDetailField[] = [];
+    pushDetailField(setFields, 'Item Count', formatNumber(detail.itemCount, 0));
+    pushDetailField(setFields, 'Release', formatDateCompact(detail.releaseDate));
+    pushDetailField(setFields, 'Est. Vault', formatDateCompact(detail.estimatedVaultDate));
+    pushDetailField(setFields, 'Vault Date', formatDateCompact(detail.vaultDate));
+    pushDetailField(setFields, 'Ducats', formatNumber(detail.ducats, 0));
+    if (setFields.length > 0) {
+      sections.push({ title: 'Set Profile', fields: setFields });
+    }
+  }
+
+  if (detailKind === 'component' || detailKind === 'resource' || detailKind === 'generic') {
+    const profileFields: ItemDetailField[] = [];
+    pushDetailField(profileFields, 'Product Category', detail.productCategory ?? '—');
+    pushDetailField(profileFields, 'Parents', detail.parentNames.length > 0 ? detail.parentNames.join(', ') : '—');
+    pushDetailField(profileFields, 'Build Price', formatNumber(detail.buildPrice, 0));
+    pushDetailField(profileFields, 'Build Qty', formatNumber(detail.buildQuantity, 0));
+    pushDetailField(profileFields, 'Build Time', formatDurationSeconds(detail.buildTime));
+    pushDetailField(profileFields, 'Skip Build', formatNumber(detail.skipBuildTimePrice, 0));
+    pushDetailField(profileFields, 'Market Cost', formatNumber(detail.marketCost, 0));
+    pushDetailField(profileFields, 'Ducats', formatNumber(detail.ducats, 0));
+    if (profileFields.length > 0) {
+      sections.push({ title: detailKind === 'component' ? 'Component Profile' : 'Item Profile', fields: profileFields });
+    }
+  }
+
+  if (detail.attackNames.length > 0 && (detailKind === 'weapon' || detailKind === 'component')) {
+    sections.push({
+      title: 'Attack Modes',
+      fields: detail.attackNames.map((name, index) => ({
+        label: `${index + 1}`,
+        value: name,
+      })),
+    });
+  }
+
+  if (detail.tags.length > 0) {
+    sections.push({
+      title: 'Tags',
+      fields: detail.tags.map((tag, index) => ({
+        label: `${index + 1}`,
+        value: tag,
+      })),
+    });
+  }
+
+  return sections;
+}
+
 function normalizeMatchValue(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -1486,6 +1747,7 @@ function AnalysisTab() {
 
   const effectiveItemDetails = itemDetails ?? analysis?.itemDetails ?? null;
   const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath);
+  const itemDetailSections = buildItemDetailSections(effectiveItemDetails);
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
@@ -1907,27 +2169,21 @@ function AnalysisTab() {
                   </div>
                 </div>
               ) : null}
-              <div className="market-detail-grid">
-                <div><span className="market-copy-title">Family</span><span>{effectiveItemDetails?.itemFamily ?? '—'}</span></div>
-                <div><span className="market-copy-title">Category</span><span>{effectiveItemDetails?.category ?? '—'}</span></div>
-                <div><span className="market-copy-title">Type</span><span>{effectiveItemDetails?.itemType ?? '—'}</span></div>
-                <div><span className="market-copy-title">Rarity</span><span>{effectiveItemDetails?.rarity ?? '—'}</span></div>
-                <div><span className="market-copy-title">Mastery</span><span>{formatNumber(effectiveItemDetails?.masteryReq, 0)}</span></div>
-                <div><span className="market-copy-title">Max Rank</span><span>{formatNumber(effectiveItemDetails?.maxRank, 0)}</span></div>
-                <div><span className="market-copy-title">Tradable</span><span>{formatNullableBoolean(effectiveItemDetails?.tradable)}</span></div>
-                <div><span className="market-copy-title">Prime</span><span>{formatNullableBoolean(effectiveItemDetails?.prime)}</span></div>
-                <div><span className="market-copy-title">Vaulted</span><span>{formatNullableBoolean(effectiveItemDetails?.vaulted)}</span></div>
-                <div><span className="market-copy-title">Ducats</span><span>{formatNumber(effectiveItemDetails?.ducats, 0)}</span></div>
-                <div><span className="market-copy-title">Release</span><span>{formatDateCompact(effectiveItemDetails?.releaseDate)}</span></div>
-                <div><span className="market-copy-title">Est. Vault</span><span>{formatDateCompact(effectiveItemDetails?.estimatedVaultDate)}</span></div>
+              <div className="market-detail-section-list">
+                {itemDetailSections.map((section) => (
+                  <div key={section.title} className="market-detail-section">
+                    <span className="market-copy-title">{section.title}</span>
+                    <div className="market-detail-grid">
+                      {section.fields.map((field) => (
+                        <div key={`${section.title}-${field.label}-${field.value}`}>
+                          <span className="market-copy-title">{field.label}</span>
+                          <span>{field.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
-              {(effectiveItemDetails?.tags.length ?? 0) > 0 ? (
-                <div className="market-signal-list">
-                  {(effectiveItemDetails?.tags ?? []).map((tag) => (
-                    <span key={tag} className="market-signal-pill">{tag}</span>
-                  ))}
-                </div>
-              ) : null}
             </AnalyticsPanel>
           </aside>
         </div>
