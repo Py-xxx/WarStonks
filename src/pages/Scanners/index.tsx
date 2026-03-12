@@ -386,24 +386,19 @@ function RelicRoiRow({
           </div>
         </div>
         <div className="scanner-list-metrics">
-          <div className="scanner-list-metric">
-            <span>Buy</span>
+          <div className="scanner-list-metric scanner-list-metric-inline">
             <strong>{formatPlat(summary?.relicBuyPrice ?? null)}</strong>
           </div>
-          <div className="scanner-list-metric">
-            <span>Run Value</span>
+          <div className="scanner-list-metric scanner-list-metric-inline">
             <strong>{formatPlat(summary?.expectedExitValue ?? null)}</strong>
           </div>
-          <div className="scanner-list-metric">
-            <span>Net</span>
+          <div className="scanner-list-metric scanner-list-metric-inline">
             <strong>{formatPlat(summary?.netProfit ?? null)}</strong>
           </div>
-          <div className="scanner-list-metric">
-            <span>ROI</span>
+          <div className="scanner-list-metric scanner-list-metric-inline">
             <strong>{formatPercent(summary?.roiPct ?? null)}</strong>
           </div>
-          <div className="scanner-list-metric">
-            <span>Liquidity</span>
+          <div className="scanner-list-metric scanner-list-metric-inline">
             <strong>{Math.round(summary?.liquidityScore ?? 0)}%</strong>
           </div>
           <div className="scanner-list-badges">
@@ -819,6 +814,17 @@ export function ScannersPage() {
             ) : activeTab === 'relic-roi' && arbitrage ? (
               relicResults.length > 0 ? (
                 <div className="scanner-results-list">
+                  <div className="scanner-list-header scanner-list-header-relic">
+                    <div className="scanner-list-header-spacer" />
+                    <div className="scanner-list-header-columns">
+                      <span>Buy</span>
+                      <span>Run Value</span>
+                      <span>Net</span>
+                      <span>ROI</span>
+                      <span>Liquidity</span>
+                    </div>
+                    <div className="scanner-list-header-actions" />
+                  </div>
                   {relicResults.map((entry, index) => (
                     <RelicRoiRow
                       key={entry.slug}
