@@ -1399,6 +1399,7 @@ function AnalyticsTab() {
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
+  const sellerMode = useAppStore((state) => state.sellerMode);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1443,6 +1444,7 @@ function AnalyticsTab() {
       selectedItem.itemId,
       selectedItem.slug,
       selectedMarketVariantKey,
+      sellerMode,
       'analytics',
     )
       .then(() =>
@@ -1450,6 +1452,7 @@ function AnalyticsTab() {
           selectedItem.itemId,
           selectedItem.slug,
           selectedMarketVariantKey,
+          sellerMode,
           chartDomain,
           chartBucket,
         ),
@@ -1483,7 +1486,7 @@ function AnalyticsTab() {
         'analytics',
       ).catch(() => undefined);
     };
-  }, [selectedItem, selectedMarketVariantKey, refreshNonce, chartDomain, chartBucket]);
+  }, [selectedItem, selectedMarketVariantKey, refreshNonce, chartDomain, chartBucket, sellerMode]);
 
   const trendMetrics =
     analytics?.trendQualityBreakdown.tabs[trendTab] ??

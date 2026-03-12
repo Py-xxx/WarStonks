@@ -693,6 +693,7 @@ struct TrackingTarget {
     item_id: i64,
     slug: String,
     variant_key: String,
+    seller_mode: String,
 }
 
 fn now_utc() -> OffsetDateTime {
@@ -755,6 +756,7 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           item_id INTEGER NOT NULL,
           slug TEXT NOT NULL,
           variant_key TEXT NOT NULL,
+          seller_mode TEXT NOT NULL DEFAULT 'ingame',
           variant_label TEXT NOT NULL,
           tracking_sources TEXT NOT NULL,
           first_tracked_at TEXT NOT NULL,
@@ -770,6 +772,7 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           item_id INTEGER NOT NULL,
           slug TEXT NOT NULL,
           variant_key TEXT NOT NULL,
+          seller_mode TEXT NOT NULL DEFAULT 'ingame',
           captured_at TEXT NOT NULL,
           lowest_sell REAL,
           median_sell REAL,
@@ -790,7 +793,7 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_orderbook_snapshots_lookup
-          ON orderbook_snapshots (item_id, variant_key, captured_at DESC);
+          ON orderbook_snapshots (item_id, variant_key, seller_mode, captured_at DESC);
 
         CREATE TABLE IF NOT EXISTS orderbook_snapshot_levels (
           snapshot_id INTEGER NOT NULL,
@@ -833,6 +836,7 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           item_id INTEGER NOT NULL,
           slug TEXT NOT NULL,
           variant_key TEXT NOT NULL,
+          seller_mode TEXT NOT NULL DEFAULT 'ingame',
           domain_key TEXT NOT NULL,
           bucket_size_key TEXT NOT NULL,
           cache_version INTEGER NOT NULL DEFAULT 1,
@@ -864,6 +868,26 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         )?;
     }
 
+    for (table_name, column_sql) in [
+        ("tracked_items", "ALTER TABLE tracked_items ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'"),
+        ("orderbook_snapshots", "ALTER TABLE orderbook_snapshots ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'"),
+        ("analytics_cache", "ALTER TABLE analytics_cache ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'"),
+    ] {
+        let has_column = connection
+            .query_row(
+                &format!(
+                    "SELECT 1 FROM pragma_table_info('{table_name}') WHERE name = 'seller_mode' LIMIT 1"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if !has_column {
+            connection.execute(column_sql, [])?;
+        }
+    }
+
     Ok(())
 }
 
@@ -880,6 +904,20 @@ fn normalize_variant_key(value: Option<&str>) -> String {
         "base".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+fn normalize_seller_mode(value: Option<&str>) -> String {
+    match value.unwrap_or("ingame").trim() {
+        "ingame-online" => "ingame-online".to_string(),
+        _ => "ingame".to_string(),
+    }
+}
+
+fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
+    match seller_mode {
+        "ingame-online" => matches!(status, Some("ingame" | "online")),
+        _ => matches!(status, Some("ingame")),
     }
 }
 
@@ -1332,6 +1370,7 @@ fn load_snapshot_chart_points(
     connection: &Connection,
     item_id: i64,
     variant_key: &str,
+    seller_mode: &str,
     domain_key: AnalyticsDomainKey,
     bucket_size_key: AnalyticsBucketSizeKey,
 ) -> Result<Vec<AnalyticsChartPoint>> {
@@ -1341,11 +1380,12 @@ fn load_snapshot_chart_points(
          FROM orderbook_snapshots
          WHERE item_id = ?1
            AND variant_key = ?2
-           AND captured_at >= ?3
+           AND seller_mode = ?3
+           AND captured_at >= ?4
          ORDER BY captured_at ASC",
     )?;
 
-    let rows = statement.query_map(params![item_id, variant_key, cutoff], |row| {
+    let rows = statement.query_map(params![item_id, variant_key, seller_mode, cutoff], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<f64>>(1)?,
@@ -1474,15 +1514,12 @@ fn merge_snapshot_chart_points(
     point_by_bucket.into_values().collect()
 }
 
-fn filter_supported_order(order: &WfmOrderRecord, variant_key: &str) -> bool {
+fn filter_supported_order(order: &WfmOrderRecord, variant_key: &str, seller_mode: &str) -> bool {
     if order.visible != Some(true) {
         return false;
     }
 
-    let Some(status) = order.user.status.as_deref() else {
-        return false;
-    };
-    if status != "online" && status != "ingame" {
+    if !seller_mode_allows_status(order.user.status.as_deref(), seller_mode) {
         return false;
     }
 
@@ -1676,7 +1713,11 @@ fn build_market_snapshot(captured_at: &str, sell_orders: &[WfmDetailedOrder], bu
     }
 }
 
-fn fetch_filtered_orders(slug: &str, variant_key: &str) -> Result<(Option<String>, Vec<WfmDetailedOrder>, Vec<WfmDetailedOrder>, MarketSnapshot)> {
+fn fetch_filtered_orders(
+    slug: &str,
+    variant_key: &str,
+    seller_mode: &str,
+) -> Result<(Option<String>, Vec<WfmDetailedOrder>, Vec<WfmDetailedOrder>, MarketSnapshot)> {
     let client = build_wfm_client()?;
     let response = client
         .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
@@ -1696,7 +1737,7 @@ fn fetch_filtered_orders(slug: &str, variant_key: &str) -> Result<(Option<String
     let mut buy_orders = Vec::new();
 
     for order in payload.data {
-        if !filter_supported_order(&order, variant_key) {
+        if !filter_supported_order(&order, variant_key, seller_mode) {
             continue;
         }
         let Some(normalized) = normalize_order(order) else {
@@ -1732,6 +1773,7 @@ fn persist_snapshot(
     item_id: i64,
     slug: &str,
     variant_key: &str,
+    seller_mode: &str,
     snapshot: &MarketSnapshot,
 ) -> Result<()> {
     connection.execute(
@@ -1739,6 +1781,7 @@ fn persist_snapshot(
            item_id,
            slug,
            variant_key,
+           seller_mode,
            captured_at,
            lowest_sell,
            median_sell,
@@ -1756,11 +1799,12 @@ fn persist_snapshot(
            pressure_ratio,
            entry_depth,
            exit_depth
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
             item_id,
             slug,
             variant_key,
+            seller_mode,
             snapshot.captured_at,
             snapshot.lowest_sell,
             snapshot.median_sell,
@@ -1835,6 +1879,7 @@ fn update_tracking_row(
     item_id: i64,
     slug: &str,
     variant_key: &str,
+    seller_mode: &str,
     variant_label: &str,
     sources: &BTreeSet<MarketTrackingSource>,
     force_due_now: bool,
@@ -1856,6 +1901,7 @@ fn update_tracking_row(
            item_id,
            slug,
            variant_key,
+           seller_mode,
            variant_label,
            tracking_sources,
            first_tracked_at,
@@ -1863,8 +1909,9 @@ fn update_tracking_row(
            last_snapshot_at,
            next_snapshot_at,
            is_active
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, ?10)
          ON CONFLICT(item_id, slug, variant_key) DO UPDATE SET
+           seller_mode = excluded.seller_mode,
            variant_label = excluded.variant_label,
            tracking_sources = excluded.tracking_sources,
            last_tracked_at = excluded.last_tracked_at,
@@ -1875,6 +1922,7 @@ fn update_tracking_row(
             item_id,
             slug,
             variant_key,
+            seller_mode,
             variant_label,
             write_tracking_sources(sources)?,
             now,
@@ -1911,20 +1959,43 @@ fn get_existing_sources(
         .unwrap_or_default())
 }
 
+fn get_tracking_seller_mode(
+    connection: &Connection,
+    item_id: i64,
+    slug: &str,
+    variant_key: &str,
+) -> Result<String> {
+    Ok(connection
+        .query_row(
+            "SELECT seller_mode
+             FROM tracked_items
+             WHERE item_id = ?1
+               AND slug = ?2
+               AND variant_key = ?3",
+            params![item_id, slug, variant_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "ingame".to_string()))
+}
+
 fn capture_tracking_snapshot(
     connection: &Connection,
     item_id: i64,
     slug: &str,
     variant_key: &str,
+    seller_mode: &str,
 ) -> Result<MarketSnapshot> {
-    let (_, sell_orders, buy_orders, snapshot) = fetch_filtered_orders(slug, variant_key)?;
-    persist_snapshot(connection, item_id, slug, variant_key, &snapshot)?;
+    let (_, sell_orders, buy_orders, snapshot) =
+        fetch_filtered_orders(slug, variant_key, seller_mode)?;
+    persist_snapshot(connection, item_id, slug, variant_key, seller_mode, &snapshot)?;
     prune_old_rows(connection)?;
     update_tracking_row(
         connection,
         item_id,
         slug,
         variant_key,
+        seller_mode,
         &derive_variant_label(variant_key),
         &get_existing_sources(connection, item_id, slug, variant_key)?,
         false,
@@ -1973,6 +2044,7 @@ fn latest_snapshot_for_item(
     connection: &Connection,
     item_id: i64,
     variant_key: &str,
+    seller_mode: &str,
 ) -> Result<Option<MarketSnapshot>> {
     let snapshot_row = connection
         .query_row(
@@ -1998,9 +2070,10 @@ fn latest_snapshot_for_item(
              FROM orderbook_snapshots
              WHERE item_id = ?1
                AND variant_key = ?2
+               AND seller_mode = ?3
              ORDER BY captured_at DESC
              LIMIT 1",
-            params![item_id, variant_key],
+            params![item_id, variant_key, seller_mode],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -2061,8 +2134,9 @@ fn maybe_capture_fresh_snapshot(
     item_id: i64,
     slug: &str,
     variant_key: &str,
+    seller_mode: &str,
 ) -> Result<MarketSnapshot> {
-    if let Some(snapshot) = latest_snapshot_for_item(connection, item_id, variant_key)? {
+    if let Some(snapshot) = latest_snapshot_for_item(connection, item_id, variant_key, seller_mode)? {
         if let Some(captured_at) = parse_timestamp(&snapshot.captured_at) {
             if now_utc() - captured_at < TimeDuration::minutes(TRACKING_SNAPSHOT_INTERVAL_MINUTES) {
                 return Ok(snapshot);
@@ -2070,7 +2144,7 @@ fn maybe_capture_fresh_snapshot(
         }
     }
 
-    capture_tracking_snapshot(connection, item_id, slug, variant_key)
+    capture_tracking_snapshot(connection, item_id, slug, variant_key, seller_mode)
 }
 
 fn aggregate_weighted(values: impl Iterator<Item = (Option<f64>, f64)>) -> Option<f64> {
@@ -3303,6 +3377,7 @@ fn recent_snapshots(
     connection: &Connection,
     item_id: i64,
     variant_key: &str,
+    seller_mode: &str,
     limit: i64,
 ) -> Result<Vec<MarketSnapshot>> {
     let mut statement = connection.prepare(
@@ -3327,11 +3402,12 @@ fn recent_snapshots(
          FROM orderbook_snapshots
          WHERE item_id = ?1
            AND variant_key = ?2
+           AND seller_mode = ?3
          ORDER BY captured_at DESC
-         LIMIT ?3",
+         LIMIT ?4",
     )?;
 
-    let rows = statement.query_map(params![item_id, variant_key, limit], |row| {
+    let rows = statement.query_map(params![item_id, variant_key, seller_mode, limit], |row| {
         Ok(MarketSnapshot {
             captured_at: row.get(0)?,
             lowest_sell: row.get(1)?,
@@ -3550,6 +3626,7 @@ fn build_time_of_day_liquidity(
     connection: &Connection,
     item_id: i64,
     variant_key: &str,
+    seller_mode: &str,
 ) -> Result<TimeOfDayLiquiditySummary> {
     let cutoff = format_timestamp(now_utc() - TimeDuration::days(30))?;
     let mut statement = connection.prepare(
@@ -3557,10 +3634,11 @@ fn build_time_of_day_liquidity(
          FROM orderbook_snapshots
          WHERE item_id = ?1
            AND variant_key = ?2
-           AND captured_at >= ?3
+           AND seller_mode = ?3
+           AND captured_at >= ?4
          ORDER BY captured_at ASC",
     )?;
-    let rows = statement.query_map(params![item_id, variant_key, cutoff], |row| {
+    let rows = statement.query_map(params![item_id, variant_key, seller_mode, cutoff], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, i64>(1)?,
@@ -4250,6 +4328,7 @@ fn build_supply_context(
     item_id: i64,
     slug: &str,
     item_details: &ItemDetailSummary,
+    seller_mode: &str,
 ) -> Result<ItemSupplyContext> {
     let looks_like_set = item_details.tags.iter().any(|tag| tag == "set")
         || item_details.name.ends_with(" Set");
@@ -4279,6 +4358,7 @@ fn build_supply_context(
                     component_item_id,
                     component.slug.clone(),
                     Some("base".to_string()),
+                    Some(seller_mode.to_string()),
                     Some("48h".to_string()),
                     Some("1h".to_string()),
                 ) {
@@ -4301,7 +4381,8 @@ fn build_supply_context(
                             }),
                     ),
                     Err(_) => {
-                        let (_, _, _, snapshot) = fetch_filtered_orders(&component.slug, "base")?;
+                        let (_, _, _, snapshot) =
+                            fetch_filtered_orders(&component.slug, "base", seller_mode)?;
                         (
                             snapshot.lowest_sell.map(round_platinum),
                             snapshot.lowest_sell.map(round_platinum),
@@ -4309,7 +4390,8 @@ fn build_supply_context(
                     }
                 },
                 None => {
-                    let (_, _, _, snapshot) = fetch_filtered_orders(&component.slug, "base")?;
+                    let (_, _, _, snapshot) =
+                        fetch_filtered_orders(&component.slug, "base", seller_mode)?;
                     (
                         snapshot.lowest_sell.map(round_platinum),
                         snapshot.lowest_sell.map(round_platinum),
@@ -4358,18 +4440,21 @@ fn build_item_analysis_inner(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
 ) -> Result<ItemAnalysisResponse> {
     let variant_key = normalize_variant_key(variant_key.as_deref());
+    let seller_mode = normalize_seller_mode(seller_mode.as_deref());
     let analytics = build_item_analytics_inner(
         app.clone(),
         item_id,
         slug.clone(),
         Some(variant_key.clone()),
+        Some(seller_mode.clone()),
         Some("48h".to_string()),
         Some("1h".to_string()),
     )?;
 
-    let live_orders = fetch_filtered_orders(&slug, &variant_key).ok();
+    let live_orders = fetch_filtered_orders(&slug, &variant_key, &seller_mode).ok();
     let current_snapshot = live_orders
         .as_ref()
         .map(|entry| entry.3.clone())
@@ -4381,7 +4466,7 @@ fn build_item_analysis_inner(
         .unwrap_or_default();
 
     let connection = open_market_observatory_database(&app)?;
-    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, 12)?;
+    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, &seller_mode, 12)?;
     let (stats_rows, _, _) = load_chart_statistics_rows(
         &connection,
         item_id,
@@ -4440,7 +4525,7 @@ fn build_item_analysis_inner(
     };
     let trend = build_trend_summary(&analytics.trend_quality_breakdown);
     let item_details = load_item_detail_summary(&app, item_id, &slug)?;
-    let supply_context = build_supply_context(&app, item_id, &slug, &item_details)?;
+    let supply_context = build_supply_context(&app, item_id, &slug, &item_details, &seller_mode)?;
     let headline_confidence = combined_confidence(
         &[
             &analytics.entry_exit_zone_overview.confidence_summary,
@@ -4497,7 +4582,7 @@ fn build_item_analysis_inner(
         },
         trend,
         manipulation_risk,
-        time_of_day_liquidity: build_time_of_day_liquidity(&connection, item_id, &variant_key)?,
+        time_of_day_liquidity: build_time_of_day_liquidity(&connection, item_id, &variant_key, &seller_mode)?,
         item_details,
         supply_context,
     })
@@ -4507,6 +4592,7 @@ fn load_cached_analytics(
     connection: &Connection,
     item_id: i64,
     variant_key: &str,
+    seller_mode: &str,
     domain_key: AnalyticsDomainKey,
     bucket_size_key: AnalyticsBucketSizeKey,
     source_snapshot_at: Option<&str>,
@@ -4518,11 +4604,13 @@ fn load_cached_analytics(
              FROM analytics_cache
              WHERE item_id = ?1
                AND variant_key = ?2
-               AND domain_key = ?3
-               AND bucket_size_key = ?4",
+               AND seller_mode = ?3
+               AND domain_key = ?4
+               AND bucket_size_key = ?5",
             params![
                 item_id,
                 variant_key,
+                seller_mode,
                 domain_key.as_str(),
                 bucket_size_key.as_str()
             ],
@@ -4557,6 +4645,7 @@ fn load_cached_analytics(
 fn persist_analytics_cache(
     connection: &Connection,
     response: &ItemAnalyticsResponse,
+    seller_mode: &str,
     domain_key: AnalyticsDomainKey,
     bucket_size_key: AnalyticsBucketSizeKey,
 ) -> Result<()> {
@@ -4565,6 +4654,7 @@ fn persist_analytics_cache(
            item_id,
            slug,
            variant_key,
+           seller_mode,
            domain_key,
            bucket_size_key,
            cache_version,
@@ -4572,9 +4662,10 @@ fn persist_analytics_cache(
            payload_json,
            source_snapshot_at,
            source_stats_fetched_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(item_id, variant_key, domain_key, bucket_size_key) DO UPDATE SET
            slug = excluded.slug,
+           seller_mode = excluded.seller_mode,
            cache_version = excluded.cache_version,
            computed_at = excluded.computed_at,
            payload_json = excluded.payload_json,
@@ -4584,6 +4675,7 @@ fn persist_analytics_cache(
             response.item_id,
             response.slug,
             response.variant_key,
+            seller_mode,
             domain_key.as_str(),
             bucket_size_key.as_str(),
             ANALYTICS_CACHE_VERSION,
@@ -4602,6 +4694,7 @@ fn build_item_analytics_inner(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
     domain_key: Option<String>,
     bucket_size_key: Option<String>,
 ) -> Result<ItemAnalyticsResponse> {
@@ -4616,6 +4709,7 @@ fn build_item_analytics_inner(
         .transpose()?
         .unwrap_or(AnalyticsBucketSizeKey::OneHour);
     let variant_key = normalize_variant_key(variant_key.as_deref());
+    let seller_mode = normalize_seller_mode(seller_mode.as_deref());
     let variant_label = derive_variant_label(&variant_key);
     let connection = open_market_observatory_database(&app)?;
 
@@ -4630,7 +4724,8 @@ fn build_item_analytics_inner(
         }
     }
 
-    let snapshot = maybe_capture_fresh_snapshot(&connection, item_id, &slug, &variant_key)?;
+    let snapshot =
+        maybe_capture_fresh_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode)?;
     let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
         load_statistics_rows_for_domain(&connection, item_id, &variant_key, "48hours")?;
     let trend_points = resample_rows(
@@ -4665,6 +4760,7 @@ fn build_item_analytics_inner(
             &connection,
             item_id,
             &variant_key,
+            &seller_mode,
             analytics_domain_key,
             analytics_bucket_size_key,
         )?,
@@ -4681,6 +4777,7 @@ fn build_item_analytics_inner(
         &connection,
         item_id,
         &variant_key,
+        &seller_mode,
         analytics_domain_key,
         analytics_bucket_size_key,
         source_snapshot_at.as_deref(),
@@ -4689,7 +4786,7 @@ fn build_item_analytics_inner(
         return Ok(cached);
     }
 
-    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, 12)?;
+    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, &seller_mode, 12)?;
     let liquidity_confidence = build_liquidity_confidence(&snapshot, &recent_snapshots);
     let manipulation_confidence = build_manipulation_confidence(&recent_snapshots);
     let zone_overview = build_entry_exit_zone_overview(
@@ -4728,6 +4825,7 @@ fn build_item_analytics_inner(
     persist_analytics_cache(
         &connection,
         &response,
+        &seller_mode,
         analytics_domain_key,
         analytics_bucket_size_key,
     )?;
@@ -4750,11 +4848,13 @@ pub async fn get_item_variants_for_market(
 pub async fn get_wfm_item_orders(
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
 ) -> Result<WfmItemOrdersResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let variant_key = normalize_variant_key(variant_key.as_deref());
+        let seller_mode = normalize_seller_mode(seller_mode.as_deref());
         let (api_version, sell_orders, buy_orders, snapshot) =
-            fetch_filtered_orders(&slug, &variant_key)?;
+            fetch_filtered_orders(&slug, &variant_key, &seller_mode)?;
         Ok::<_, anyhow::Error>(WfmItemOrdersResponse {
             api_version,
             slug,
@@ -4775,10 +4875,12 @@ pub async fn ensure_market_tracking(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
     source: MarketTrackingSource,
 ) -> Result<MarketSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let variant_key = normalize_variant_key(variant_key.as_deref());
+        let seller_mode = normalize_seller_mode(seller_mode.as_deref());
         let variant_label = derive_variant_label(&variant_key);
         let connection = open_market_observatory_database(&app)?;
         let mut sources = get_existing_sources(&connection, item_id, &slug, &variant_key)?;
@@ -4788,12 +4890,13 @@ pub async fn ensure_market_tracking(
             item_id,
             &slug,
             &variant_key,
+            &seller_mode,
             &variant_label,
             &sources,
             true,
             None,
         )?;
-        let snapshot = capture_tracking_snapshot(&connection, item_id, &slug, &variant_key)?;
+        let snapshot = capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode)?;
         Ok::<_, anyhow::Error>(snapshot)
     })
     .await
@@ -4813,23 +4916,27 @@ pub async fn stop_market_tracking(
         let variant_key = normalize_variant_key(variant_key.as_deref());
         let variant_label = derive_variant_label(&variant_key);
         let connection = open_market_observatory_database(&app)?;
+        let seller_mode = get_tracking_seller_mode(&connection, item_id, &slug, &variant_key)?;
         let mut sources = get_existing_sources(&connection, item_id, &slug, &variant_key)?;
         if sources.is_empty() {
             return Ok::<_, anyhow::Error>(());
         }
         sources.remove(&source);
-        if !sources.is_empty() || latest_snapshot_for_item(&connection, item_id, &variant_key)?.is_some() {
-            let _ = capture_tracking_snapshot(&connection, item_id, &slug, &variant_key);
+        if !sources.is_empty()
+            || latest_snapshot_for_item(&connection, item_id, &variant_key, &seller_mode)?.is_some()
+        {
+            let _ = capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode);
         }
         update_tracking_row(
             &connection,
             item_id,
             &slug,
             &variant_key,
+            &seller_mode,
             &variant_label,
             &sources,
             false,
-            latest_snapshot_for_item(&connection, item_id, &variant_key)?
+            latest_snapshot_for_item(&connection, item_id, &variant_key, &seller_mode)?
                 .as_ref()
                 .map(|entry| entry.captured_at.as_str()),
         )?;
@@ -4841,11 +4948,22 @@ pub async fn stop_market_tracking(
 }
 
 #[tauri::command]
-pub async fn refresh_market_tracking(app: tauri::AppHandle) -> Result<TrackingRefreshSummary, String> {
+pub async fn refresh_market_tracking(
+    app: tauri::AppHandle,
+    seller_mode: Option<String>,
+) -> Result<TrackingRefreshSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let connection = open_market_observatory_database(&app)?;
+        let seller_mode = normalize_seller_mode(seller_mode.as_deref());
+        connection.execute(
+            "UPDATE tracked_items
+             SET seller_mode = ?1
+             WHERE is_active = 1
+               AND seller_mode <> ?1",
+            params![seller_mode],
+        )?;
         let mut statement = connection.prepare(
-            "SELECT item_id, slug, variant_key
+            "SELECT item_id, slug, variant_key, seller_mode
              FROM tracked_items
              WHERE is_active = 1
                AND next_snapshot_at IS NOT NULL
@@ -4855,10 +4973,12 @@ pub async fn refresh_market_tracking(app: tauri::AppHandle) -> Result<TrackingRe
         )?;
         let now = format_timestamp(now_utc())?;
         let rows = statement.query_map(params![now], |row| {
+            let stored_seller_mode = row.get::<_, String>(3)?;
             Ok(TrackingTarget {
                 item_id: row.get(0)?,
                 slug: row.get(1)?,
                 variant_key: row.get(2)?,
+                seller_mode: normalize_seller_mode(Some(stored_seller_mode.as_str())),
             })
         })?;
         let targets = rows.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -4866,7 +4986,13 @@ pub async fn refresh_market_tracking(app: tauri::AppHandle) -> Result<TrackingRe
         let mut refreshed_items = 0;
 
         for target in targets {
-            if capture_tracking_snapshot(&connection, target.item_id, &target.slug, &target.variant_key).is_ok() {
+            if capture_tracking_snapshot(
+                &connection,
+                target.item_id,
+                &target.slug,
+                &target.variant_key,
+                &target.seller_mode,
+            ).is_ok() {
                 refreshed_items += 1;
             }
         }
@@ -4887,11 +5013,20 @@ pub async fn get_item_analytics(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
     domain_key: Option<String>,
     bucket_size_key: Option<String>,
 ) -> Result<ItemAnalyticsResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analytics_inner(app, item_id, slug, variant_key, domain_key, bucket_size_key)
+        build_item_analytics_inner(
+            app,
+            item_id,
+            slug,
+            variant_key,
+            seller_mode,
+            domain_key,
+            bucket_size_key,
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -4916,9 +5051,10 @@ pub async fn get_item_analysis(
     item_id: i64,
     slug: String,
     variant_key: Option<String>,
+    seller_mode: Option<String>,
 ) -> Result<ItemAnalysisResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analysis_inner(app, item_id, slug, variant_key)
+        build_item_analysis_inner(app, item_id, slug, variant_key, seller_mode)
     })
     .await
     .map_err(|error| error.to_string())?

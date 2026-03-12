@@ -16,6 +16,7 @@ import type {
   MarketTrackingSource,
   MarketVariant,
   PersistedWorldStateCacheEntry,
+  SellerMode,
   WfmDetailedOrder,
   WfstatFlashSale,
   WfstatNewsItem,
@@ -217,27 +218,34 @@ export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> 
   return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items');
 }
 
-export async function getWfmTopSellOrders(slug: string): Promise<WfmTopSellOrdersResponse> {
-  return invoke<WfmTopSellOrdersResponse>('get_wfm_top_sell_orders', { slug });
+export async function getWfmTopSellOrders(
+  slug: string,
+  sellerMode: SellerMode,
+): Promise<WfmTopSellOrdersResponse> {
+  return invoke<WfmTopSellOrdersResponse>('get_wfm_top_sell_orders', { slug, sellerMode });
 }
 
 export async function getWfmTopSellOrdersForVariant(
   slug: string,
   variantKey: string | null,
+  sellerMode: SellerMode,
 ): Promise<WfmTopSellOrdersResponse> {
   return invoke<WfmTopSellOrdersResponse>('get_wfm_top_sell_orders', {
     slug,
     variantKey,
+    sellerMode,
   });
 }
 
 export async function getWfmItemOrders(
   slug: string,
   variantKey: string | null,
+  sellerMode: SellerMode,
 ): Promise<WfmItemOrdersResponse> {
   return invoke<WfmItemOrdersResponse>('get_wfm_item_orders', {
     slug,
     variantKey,
+    sellerMode,
   });
 }
 
@@ -245,12 +253,14 @@ export async function ensureMarketTracking(
   itemId: number,
   slug: string,
   variantKey: string | null,
+  sellerMode: SellerMode,
   source: MarketTrackingSource,
 ): Promise<MarketSnapshot> {
   return invoke<MarketSnapshot>('ensure_market_tracking', {
     itemId,
     slug,
     variantKey,
+    sellerMode,
     source,
   });
 }
@@ -269,8 +279,10 @@ export async function stopMarketTracking(
   });
 }
 
-export async function refreshMarketTracking(): Promise<TrackingRefreshSummary> {
-  return invoke<TrackingRefreshSummary>('refresh_market_tracking');
+export async function refreshMarketTracking(
+  sellerMode: SellerMode,
+): Promise<TrackingRefreshSummary> {
+  return invoke<TrackingRefreshSummary>('refresh_market_tracking', { sellerMode });
 }
 
 export async function getItemVariantsForMarket(
@@ -287,6 +299,7 @@ export async function getItemAnalytics(
   itemId: number,
   slug: string,
   variantKey: string | null,
+  sellerMode: SellerMode,
   domainKey: AnalyticsDomainKey,
   bucketSizeKey: AnalyticsBucketSizeKey,
 ): Promise<ItemAnalyticsResponse> {
@@ -294,6 +307,7 @@ export async function getItemAnalytics(
     itemId,
     slug,
     variantKey,
+    sellerMode,
     domainKey,
     bucketSizeKey,
   });
@@ -313,11 +327,13 @@ export async function getItemAnalysis(
   itemId: number,
   slug: string,
   variantKey: string | null,
+  sellerMode: SellerMode,
 ): Promise<ItemAnalysisResponse> {
   return invoke<ItemAnalysisResponse>('get_item_analysis', {
     itemId,
     slug,
     variantKey,
+    sellerMode,
   });
 }
 
