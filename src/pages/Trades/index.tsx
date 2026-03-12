@@ -829,8 +829,13 @@ function SellOrdersTab() {
 
 export function TradesPage() {
   const tradeAccount = useAppStore((s) => s.tradeAccount);
+  const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const tradesSubTab = useAppStore((s) => s.tradesSubTab);
   const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
+
+  useEffect(() => {
+    void loadTradeAccount();
+  }, [loadTradeAccount]);
 
   return (
     <>
