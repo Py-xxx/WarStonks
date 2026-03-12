@@ -3631,12 +3631,12 @@ body {
 .scanner-results-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .scanner-list-row {
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
+  border-radius: 14px;
   background: rgba(9, 12, 18, 0.82);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
@@ -3651,8 +3651,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 10px;
+  padding: 11px 13px;
   border: 0;
   border-radius: inherit;
   background: transparent;
@@ -3664,15 +3664,15 @@ body {
 .scanner-list-primary {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
 .scanner-result-rank {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border-radius: 9px;
   border: 1px solid rgba(74, 158, 255, 0.22);
   background: rgba(74, 158, 255, 0.08);
   color: var(--accent-blue);
@@ -3680,7 +3680,7 @@ body {
   align-items: center;
   justify-content: center;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -3692,14 +3692,14 @@ body {
 }
 
 .scanner-list-name strong {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.2;
 }
 
 .scanner-list-note {
   color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 10px;
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -3708,9 +3708,9 @@ body {
 
 .scanner-result-thumb,
 .scanner-component-thumb {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.04);
@@ -3719,7 +3719,7 @@ body {
   justify-content: center;
   color: var(--text-secondary);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -3734,7 +3734,7 @@ body {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, auto));
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
@@ -3742,19 +3742,19 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .scanner-list-metric span {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .scanner-list-metric strong {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.2;
 }
 
@@ -3762,77 +3762,77 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 5px;
   flex-wrap: wrap;
 }
 
 .scanner-list-chevron {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  border-radius: 9px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
 }
 
 .scanner-row-body {
-  padding: 0 16px 16px;
+  padding: 0 13px 13px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .scanner-row-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .scanner-components-panel {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  padding-top: 10px;
+  padding-top: 8px;
 }
 
 .scanner-components-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 10px;
+  margin-bottom: 6px;
 }
 
 .scanner-components-meta {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .scanner-components-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .scanner-component-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 11px 12px;
+  gap: 10px;
+  padding: 9px 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(10, 13, 19, 0.56);
 }
 
 .scanner-component-main {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -3840,38 +3840,39 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .scanner-component-name-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex-wrap: wrap;
 }
 
 .scanner-component-name {
   font-weight: 600;
+  font-size: 13px;
 }
 
 .scanner-component-meta {
   color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .scanner-component-pill-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 6px;
 }
 
 .scanner-stat-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 12px;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 9px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(18, 24, 38, 0.88);
@@ -3884,7 +3885,7 @@ body {
 
 .scanner-stat-pill-label {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3893,19 +3894,26 @@ body {
 .scanner-stat-pill-value {
   color: var(--text-primary);
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
 }
 
 .scanner-component-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .scanner-component-input {
-  width: 92px;
+  width: 78px;
+}
+
+.scanners-shell .market-panel-badge {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.07em;
 }
 
 .scanner-component-watch-button {
