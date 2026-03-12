@@ -775,6 +775,8 @@ export interface ItemAnalysisResponse {
 export interface QuickViewSelection {
   selectedItem: WfmAutocompleteItem | null;
   sellOrders: WfmTopSellOrder[];
+  sparklinePoints: number[];
+  sparklineLoading: boolean;
   apiVersion: string | null;
   loading: boolean;
   errorMessage: string | null;

@@ -358,7 +358,7 @@ function QuickViewCard() {
   const mainOrder = quickView.sellOrders[0] ?? null;
   const compactOrders = quickView.sellOrders.slice(1, 5);
   const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath);
-  const sparklinePath = buildSparklinePath(quickView.sellOrders.map((order) => order.platinum));
+  const sparklinePath = buildSparklinePath(quickView.sparklinePoints);
   const spreadLabel = formatSpreadLabel(quickView.sellOrders);
   const mainStats = [
     {
@@ -493,6 +493,12 @@ function QuickViewCard() {
                 <svg width="100%" height="24" viewBox="0 0 300 24" preserveAspectRatio="none">
                   <polyline points={sparklinePath} fill="none" stroke="#3DD68C" strokeWidth="1.5" opacity="0.8" />
                   <polyline points={`${sparklinePath} 300,24 0,24`} fill="rgba(61,214,140,0.06)" stroke="none" />
+                </svg>
+              </div>
+            ) : quickView.sparklineLoading ? (
+              <div className="sparkline-wrap">
+                <svg width="100%" height="24" viewBox="0 0 300 24" preserveAspectRatio="none">
+                  <line x1="0" y1="12" x2="300" y2="12" stroke="rgba(152,170,210,0.24)" strokeDasharray="4 4" />
                 </svg>
               </div>
             ) : null}
