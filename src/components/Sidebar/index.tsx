@@ -105,7 +105,7 @@ export function Sidebar() {
       ))}
 
       <div className="sidebar-footer">
-        <span className="version">v3.0.0</span>
+        <span className="version">3.0.0</span>
         <button
           className="icon-btn-sm"
           onClick={toggleSidebar}

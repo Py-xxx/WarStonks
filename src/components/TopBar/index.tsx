@@ -224,7 +224,7 @@ export function TopBar() {
 
   return (
     <header className="topbar">
-      <div className="logo">WarStonks<span>v3</span></div>
+      <div className="logo">WarStonks</div>
 
       <div className="topbar-search-group">
         <div
