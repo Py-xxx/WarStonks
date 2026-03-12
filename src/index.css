@@ -266,10 +266,19 @@ body {
   margin-left: 6px;
 }
 
+.topbar-search-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
 .search-bar {
   position: relative;
   flex: 1;
   max-width: 480px;
+  min-width: 0;
   height: 30px;
   background: var(--bg-base);
   border: 1px solid var(--border);
@@ -391,6 +400,42 @@ body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.topbar-market-variant {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-base);
+}
+
+.topbar-market-variant-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.topbar-market-variant-select {
+  min-width: 108px;
+  max-width: 148px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 0;
+}
+
+.topbar-market-variant-select:focus {
+  outline: none;
 }
 
 .topbar-right {
