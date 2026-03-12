@@ -36,12 +36,6 @@ const BellIcon = () => (
   </svg>
 );
 
-const ChevronDownIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-    <path d="m6 9 6 6 6-6" />
-  </svg>
-);
-
 function formatCurrencyValue(value: number | null, loading: boolean): string {
   if (loading) {
     return '…';
@@ -71,9 +65,7 @@ export function TopBar() {
   const systemAlerts = useAppStore((s) => s.systemAlerts);
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const tradeAccountLoading = useAppStore((s) => s.tradeAccountLoading);
-  const tradeAccountError = useAppStore((s) => s.tradeAccountError);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
-  const updateTradeAccountStatus = useAppStore((s) => s.updateTradeAccountStatus);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
   const setActivePage = useAppStore((s) => s.setActivePage);
@@ -89,12 +81,9 @@ export function TopBar() {
   const [autocompleteError, setAutocompleteError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [tradeMenuOpen, setTradeMenuOpen] = useState(false);
-  const [tradeMenuError, setTradeMenuError] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const searchRef = useRef<HTMLDivElement | null>(null);
   const notificationsRef = useRef<HTMLDivElement | null>(null);
-  const tradeMenuRef = useRef<HTMLDivElement | null>(null);
   const previousAlertCountRef = useRef(0);
   const deferredSearchValue = useDeferredValue(searchValue);
   const suggestions = rankWfmAutocompleteItems(autocompleteItems, deferredSearchValue);
@@ -159,10 +148,6 @@ export function TopBar() {
       if (!notificationsRef.current?.contains(event.target as Node)) {
         setNotificationsOpen(false);
       }
-
-      if (!tradeMenuRef.current?.contains(event.target as Node)) {
-        setTradeMenuOpen(false);
-      }
     };
 
     window.addEventListener('mousedown', handlePointerDown);
@@ -215,16 +200,6 @@ export function TopBar() {
 
     if (event.key === 'Escape') {
       setDropdownOpen(false);
-    }
-  };
-
-  const handleTradeStatusUpdate = async (status: 'invisible' | 'online' | 'in_game') => {
-    setTradeMenuError(null);
-    try {
-      await updateTradeAccountStatus({ status });
-      setTradeMenuOpen(false);
-    } catch (error) {
-      setTradeMenuError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -421,92 +396,28 @@ export function TopBar() {
             </div>
           ) : null}
         </div>
-        <div ref={tradeMenuRef} className="trade-menu-wrap">
-          <button
-            className={`btn-connect${tradeAccount ? ' trade-connected' : ''}`}
-            aria-label={tradeAccount ? 'Open trade account menu' : 'Open trades'}
-            aria-expanded={tradeAccount ? tradeMenuOpen : undefined}
-            onClick={() => {
-              if (tradeAccount) {
-                setTradeMenuOpen((current) => !current);
-                return;
-              }
-
-              setActivePage('trades');
-              setTradesSubTab('sell-orders');
-            }}
-          >
-            {!tradeAccount ? <ArrowIcon /> : null}
-            {tradeAccount ? (
-              <>
-                <span>{tradeAccount.name}</span>
-                <span className="trade-connected-separator">·</span>
-                <span className={`trade-connected-status ${getTradeStatusToneClass(tradeAccount.status)}`}>
-                  {formatTradeStatusLabel(tradeAccount.status)}
-                </span>
-              </>
-            ) : tradeAccountLoading
-              ? 'Loading…'
-              : 'Connect'}
-            {tradeAccount ? <ChevronDownIcon /> : null}
-          </button>
-
-          {tradeAccount && tradeMenuOpen ? (
-            <div className="trade-menu-dropdown">
-              <div className="trade-menu-header">
-                <span className="card-label">Warframe Market</span>
-                <span className={`trade-menu-status-copy ${getTradeStatusToneClass(tradeAccount.status)}`}>
-                  Server status: {formatTradeStatusLabel(tradeAccount.status)}
-                </span>
-              </div>
-              <div className="trade-menu-actions">
-                <button
-                  className="trade-menu-link"
-                  type="button"
-                  onClick={() => {
-                    setActivePage('trades');
-                    setTradesSubTab('sell-orders');
-                    setTradeMenuOpen(false);
-                  }}
-                >
-                  Open Trades
-                </button>
-              </div>
-              <div className="trade-menu-section">
-                <span className="trade-menu-section-title">Set online status</span>
-                <div className="trade-menu-status-grid">
-                  <button
-                    className="trade-menu-status-btn"
-                    type="button"
-                    onClick={() => void handleTradeStatusUpdate('invisible')}
-                    disabled={tradeAccountLoading}
-                  >
-                    Invisible
-                  </button>
-                  <button
-                    className="trade-menu-status-btn"
-                    type="button"
-                    onClick={() => void handleTradeStatusUpdate('online')}
-                    disabled={tradeAccountLoading}
-                  >
-                    Online
-                  </button>
-                  <button
-                    className="trade-menu-status-btn"
-                    type="button"
-                    onClick={() => void handleTradeStatusUpdate('in_game')}
-                    disabled={tradeAccountLoading}
-                  >
-                    In game
-                  </button>
-                </div>
-              </div>
-              {tradeMenuError || tradeAccountError ? (
-                <div className="trade-menu-error">{tradeMenuError ?? tradeAccountError}</div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <button
+          className={`btn-connect${tradeAccount ? ' trade-connected' : ''}`}
+          aria-label="Open trades"
+          onClick={() => {
+            setActivePage('trades');
+            setTradesSubTab('sell-orders');
+            void loadTradeAccount();
+          }}
+        >
+          {!tradeAccount ? <ArrowIcon /> : null}
+          {tradeAccount ? (
+            <>
+              <span>{tradeAccount.name}</span>
+              <span className="trade-connected-separator">·</span>
+              <span className={`trade-connected-status ${getTradeStatusToneClass(tradeAccount.status)}`}>
+                {formatTradeStatusLabel(tradeAccount.status)}
+              </span>
+            </>
+          ) : tradeAccountLoading
+            ? 'Loading…'
+            : 'Connect'}
+        </button>
         <button
           className="settings-btn"
           title="Settings"
