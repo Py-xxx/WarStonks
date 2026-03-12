@@ -279,18 +279,18 @@ function TradeLogTab({ username }: { username: string | null }) {
                 <span className="portfolio-log-date">{formatShortLocalDateTime(entry.closedAt)}</span>
                 <span className="portfolio-log-actions">
                   {entry.orderType === 'buy' ? (
-                    <button
-                      className={`act-btn portfolio-keep-btn${entry.keepItem ? ' active' : ''}`}
-                      type="button"
-                      onClick={() => void handleToggleKeepItem(entry)}
-                      disabled={updatingOrderId === entry.id}
-                    >
-                      {updatingOrderId === entry.id
-                        ? 'Saving…'
-                        : entry.keepItem
-                          ? 'Unkeep'
-                          : 'Keep Item'}
-                    </button>
+                    <label className="portfolio-keep-toggle-wrap">
+                      <button
+                        className={`toggle portfolio-keep-toggle${entry.keepItem ? ' on' : ''}`}
+                        type="button"
+                        role="switch"
+                        aria-checked={entry.keepItem}
+                        aria-label={`Keep ${entry.itemName}`}
+                        onClick={() => void handleToggleKeepItem(entry)}
+                        disabled={updatingOrderId === entry.id}
+                      />
+                      <span>{updatingOrderId === entry.id ? 'Saving…' : 'Keep Item'}</span>
+                    </label>
                   ) : (
                     <span className="portfolio-log-value">—</span>
                   )}

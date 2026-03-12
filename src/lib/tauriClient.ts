@@ -21,6 +21,7 @@ import type {
   TradeCreateListingInput,
   TradeOverview,
   PortfolioTradeLogState,
+  TradeSetMapSummary,
   TradeSessionState,
   TradeSignInInput,
   TradeUpdateListingInput,
@@ -268,6 +269,14 @@ export async function setWfmTradeLogKeepItem(
     username,
     orderId,
     keepItem,
+  });
+}
+
+export async function ensureTradeSetMap(
+  apiVersion: string | null,
+): Promise<TradeSetMapSummary> {
+  return invoke<TradeSetMapSummary>('ensure_trade_set_map', {
+    apiVersion,
   });
 }
 
