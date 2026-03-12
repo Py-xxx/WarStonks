@@ -772,6 +772,50 @@ export interface ItemAnalysisResponse {
   supplyContext: ItemSupplyContext;
 }
 
+export interface ArbitrageScannerComponentEntry {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  quantityInSet: number;
+  recommendedEntryLow: number | null;
+  recommendedEntryHigh: number | null;
+  recommendedEntryPrice: number | null;
+  currentStatsPrice: number | null;
+  entryAtOrBelowPrice: boolean;
+  liquidityScore: number;
+  confidenceSummary: MarketConfidenceSummary;
+}
+
+export interface ArbitrageScannerSetEntry {
+  setItemId: number;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  componentCount: number;
+  basketEntryCost: number | null;
+  setExitLow: number | null;
+  setExitHigh: number | null;
+  recommendedSetExitPrice: number | null;
+  grossMargin: number | null;
+  roiPct: number | null;
+  liquidityScore: number;
+  arbitrageScore: number;
+  saleState: string;
+  confidenceSummary: MarketConfidenceSummary;
+  note: string;
+  components: ArbitrageScannerComponentEntry[];
+}
+
+export interface ArbitrageScannerResponse {
+  computedAt: string;
+  scannedSetCount: number;
+  opportunityCount: number;
+  refreshedSetCount: number;
+  refreshedStatisticsCount: number;
+  results: ArbitrageScannerSetEntry[];
+}
+
 export interface QuickViewSelection {
   selectedItem: WfmAutocompleteItem | null;
   sellOrders: WfmTopSellOrder[];

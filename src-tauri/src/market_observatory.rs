@@ -20,6 +20,8 @@ const WFM_CROSSPLAY_HEADER: &str = "true";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
+const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
+const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -526,6 +528,56 @@ pub struct ItemAnalysisResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ArbitrageScannerComponentEntry {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub quantity_in_set: i64,
+    pub recommended_entry_low: Option<f64>,
+    pub recommended_entry_high: Option<f64>,
+    pub recommended_entry_price: Option<f64>,
+    pub current_stats_price: Option<f64>,
+    pub entry_at_or_below_price: bool,
+    pub liquidity_score: f64,
+    pub confidence_summary: MarketConfidenceSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArbitrageScannerSetEntry {
+    pub set_item_id: i64,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub component_count: usize,
+    pub basket_entry_cost: Option<f64>,
+    pub set_exit_low: Option<f64>,
+    pub set_exit_high: Option<f64>,
+    pub recommended_set_exit_price: Option<f64>,
+    pub gross_margin: Option<f64>,
+    pub roi_pct: Option<f64>,
+    pub liquidity_score: f64,
+    pub arbitrage_score: f64,
+    pub sale_state: String,
+    pub confidence_summary: MarketConfidenceSummary,
+    pub note: String,
+    pub components: Vec<ArbitrageScannerComponentEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArbitrageScannerResponse {
+    pub computed_at: String,
+    pub scanned_set_count: usize,
+    pub opportunity_count: usize,
+    pub refreshed_set_count: usize,
+    pub refreshed_statistics_count: usize,
+    pub results: Vec<ArbitrageScannerSetEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WfmDetailedOrder {
     pub order_id: String,
     pub order_type: String,
@@ -582,7 +634,46 @@ struct WfmSetItemRecord {
     #[serde(default)]
     set_root: Option<bool>,
     #[serde(default)]
+    quantity_in_set: Option<i64>,
+    #[serde(default)]
     i18n: HashMap<String, WfmSetI18nRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct SetRootCatalogRecord {
+    item_id: i64,
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSetComponentRecord {
+    set_item_id: i64,
+    set_slug: String,
+    set_name: String,
+    set_image_path: Option<String>,
+    component_item_id: Option<i64>,
+    component_slug: String,
+    component_name: String,
+    component_image_path: Option<String>,
+    quantity_in_set: i64,
+    sort_order: i64,
+    fetched_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct ScannerPriceModel {
+    entry_low: Option<f64>,
+    entry_high: Option<f64>,
+    recommended_entry_price: Option<f64>,
+    exit_low: Option<f64>,
+    exit_high: Option<f64>,
+    recommended_exit_price: Option<f64>,
+    current_stats_price: Option<f64>,
+    liquidity_score: f64,
+    sale_state: String,
+    confidence_summary: MarketConfidenceSummary,
 }
 
 #[derive(Debug, Deserialize)]
@@ -831,6 +922,24 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_statistics_cache_lookup
           ON statistics_cache (item_id, variant_key, domain_key, source_kind, bucket_at DESC);
+
+        CREATE TABLE IF NOT EXISTS set_component_cache (
+          set_item_id INTEGER NOT NULL,
+          set_slug TEXT NOT NULL,
+          set_name TEXT NOT NULL,
+          set_image_path TEXT,
+          component_item_id INTEGER,
+          component_slug TEXT NOT NULL,
+          component_name TEXT NOT NULL,
+          component_image_path TEXT,
+          quantity_in_set INTEGER NOT NULL DEFAULT 1,
+          sort_order INTEGER NOT NULL,
+          fetched_at TEXT NOT NULL,
+          PRIMARY KEY (set_slug, component_slug)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_set_component_cache_set_slug
+          ON set_component_cache (set_slug, sort_order ASC);
 
         CREATE TABLE IF NOT EXISTS analytics_cache (
           item_id INTEGER NOT NULL,
@@ -1364,6 +1473,215 @@ fn load_chart_statistics_rows(
     live_buy_rows.sort_by_key(|row| row.bucket_at);
 
     Ok((closed_rows, live_buy_rows, latest_fetched_at))
+}
+
+fn latest_statistics_fetch_timestamp(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+) -> Result<Option<OffsetDateTime>> {
+    let fetched_at = connection
+        .query_row(
+            "SELECT MAX(fetched_at)
+             FROM statistics_cache
+             WHERE item_id = ?1
+               AND variant_key = ?2",
+            params![item_id, variant_key],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+
+    Ok(fetched_at.and_then(|value| parse_timestamp(&value)))
+}
+
+fn ensure_statistics_cached_for_scan(
+    connection: &Connection,
+    item_id: i64,
+    slug: &str,
+    variant_key: &str,
+) -> Result<bool> {
+    let needs_refresh = !statistics_cache_is_usable(
+        connection,
+        item_id,
+        variant_key,
+        AnalyticsDomainKey::ThirtyDays,
+    )? || latest_statistics_fetch_timestamp(connection, item_id, variant_key)?
+        .map(|value| (now_utc() - value) >= TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS))
+        .unwrap_or(true);
+
+    if !needs_refresh {
+        return Ok(false);
+    }
+
+    if let Err(error) = fetch_and_cache_statistics(connection, item_id, slug, variant_key) {
+        if statistics_cache_is_usable(
+            connection,
+            item_id,
+            variant_key,
+            AnalyticsDomainKey::ThirtyDays,
+        )? {
+            return Ok(false);
+        }
+
+        return Err(error);
+    }
+    Ok(true)
+}
+
+fn latest_live_sell_reference_price(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+) -> Result<Option<f64>> {
+    connection
+        .query_row(
+            "SELECT
+               min_price,
+               median,
+               avg_price,
+               wa_price,
+               closed_price,
+               open_price
+             FROM statistics_cache
+             WHERE item_id = ?1
+               AND variant_key = ?2
+               AND domain_key = '48hours'
+               AND source_kind = 'live_sell'
+             ORDER BY bucket_at DESC
+             LIMIT 1",
+            params![item_id, variant_key],
+            |row| {
+                let min_price = row.get::<_, Option<f64>>(0)?;
+                let median = row.get::<_, Option<f64>>(1)?;
+                let avg_price = row.get::<_, Option<f64>>(2)?;
+                let wa_price = row.get::<_, Option<f64>>(3)?;
+                let closed_price = row.get::<_, Option<f64>>(4)?;
+                let open_price = row.get::<_, Option<f64>>(5)?;
+                Ok(min_price
+                    .or(median)
+                    .or(avg_price)
+                    .or(wa_price)
+                    .or(closed_price)
+                    .or(open_price))
+            },
+        )
+        .optional()
+        .map(|value| value.flatten())
+        .map_err(Into::into)
+}
+
+fn score_stats_liquidity(rows: &[InternalStatsRow]) -> (f64, String) {
+    if rows.is_empty() {
+        return (20.0, "Thin".to_string());
+    }
+
+    let cutoff_48h = now_utc() - TimeDuration::hours(48);
+    let cutoff_30d = now_utc() - TimeDuration::days(30);
+    let recent_48h_volume = rows
+        .iter()
+        .filter(|row| row.bucket_at >= cutoff_48h)
+        .map(|row| row.volume)
+        .sum::<f64>();
+    let active_rows_30d = rows
+        .iter()
+        .filter(|row| row.bucket_at >= cutoff_30d && row.volume > 0.0)
+        .count();
+    let point_rows = resample_rows(
+        rows,
+        &[],
+        AnalyticsDomainKey::ThirtyDays,
+        AnalyticsBucketSizeKey::TwentyFourHours,
+    );
+    let (stability_score, _, _) = compute_stability(&point_rows);
+
+    let activity_score = if recent_48h_volume >= 120.0 {
+        100.0
+    } else if recent_48h_volume >= 60.0 {
+        80.0
+    } else if recent_48h_volume >= 24.0 {
+        60.0
+    } else if recent_48h_volume >= 10.0 {
+        40.0
+    } else {
+        20.0
+    };
+
+    let cadence_score = if active_rows_30d >= 20 {
+        100.0
+    } else if active_rows_30d >= 12 {
+        80.0
+    } else if active_rows_30d >= 6 {
+        60.0
+    } else if active_rows_30d >= 3 {
+        40.0
+    } else {
+        20.0
+    };
+
+    let liquidity_score =
+        ((activity_score * 0.5) + (cadence_score * 0.3) + (stability_score * 0.2)).clamp(20.0, 100.0);
+    let sale_state = if liquidity_score >= 80.0 {
+        "Fast mover"
+    } else if liquidity_score >= 60.0 {
+        "Healthy"
+    } else if liquidity_score >= 40.0 {
+        "Moderate"
+    } else {
+        "Thin"
+    }
+    .to_string();
+
+    (liquidity_score, sale_state)
+}
+
+fn build_statistics_price_model(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+) -> Result<Option<ScannerPriceModel>> {
+    let (closed_rows, _, _) =
+        load_chart_statistics_rows(connection, item_id, variant_key, AnalyticsDomainKey::ThirtyDays)?;
+    if closed_rows.is_empty() {
+        return Ok(None);
+    }
+
+    let anchors = build_historical_zone_anchors(&closed_rows);
+    let zone_bands = anchors.as_ref().and_then(|entry| {
+        compute_zone_bands(
+            entry.support_floor.or(entry.fair_low),
+            entry.fair_high,
+            entry.support_recurrence,
+            entry.fair_center,
+        )
+    });
+    let chart_points = resample_rows(
+        &closed_rows,
+        &[],
+        AnalyticsDomainKey::ThirtyDays,
+        AnalyticsBucketSizeKey::TwentyFourHours,
+    );
+    let confidence_summary = if let Some(anchor_values) = anchors.as_ref() {
+        build_zone_confidence(&chart_points, anchor_values.fair_low, anchor_values.fair_high)
+    } else {
+        build_confidence_summary("low", vec!["Thin history".to_string()])
+    };
+    let current_stats_price = latest_live_sell_reference_price(connection, item_id, variant_key)?
+        .map(round_platinum);
+    let (liquidity_score, sale_state) = score_stats_liquidity(&closed_rows);
+
+    Ok(Some(ScannerPriceModel {
+        entry_low: zone_bands.as_ref().map(|entry| round_platinum(entry.entry_low)),
+        entry_high: zone_bands.as_ref().map(|entry| round_platinum(entry.entry_high)),
+        recommended_entry_price: zone_bands.as_ref().map(|entry| round_platinum(entry.entry_high)),
+        exit_low: zone_bands.as_ref().map(|entry| round_platinum(entry.exit_low)),
+        exit_high: zone_bands.as_ref().map(|entry| round_platinum(entry.exit_high)),
+        recommended_exit_price: zone_bands.as_ref().map(|entry| round_platinum(entry.exit_low)),
+        current_stats_price,
+        liquidity_score,
+        sale_state,
+        confidence_summary,
+    }))
 }
 
 fn load_snapshot_chart_points(
@@ -4161,6 +4479,83 @@ fn resolve_item_id_by_slug(connection: &Connection, slug: &str) -> Result<Option
         .map_err(Into::into)
 }
 
+fn list_set_roots_from_catalog(connection: &Connection) -> Result<Vec<SetRootCatalogRecord>> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT
+           w.item_id,
+           w.slug,
+           COALESCE(w.name_en, REPLACE(w.slug, '_', ' ')) AS name,
+           COALESCE(w.thumb, w.icon) AS image_path
+         FROM wfm_items w
+         JOIN wfm_item_tags t ON t.wfm_id = w.wfm_id
+         WHERE t.tag = 'set'
+           AND w.slug LIKE '%_set'
+         ORDER BY name ASC",
+    )?;
+
+    let rows = statement.query_map([], |row| {
+        Ok(SetRootCatalogRecord {
+            item_id: row.get(0)?,
+            slug: row.get(1)?,
+            name: row.get(2)?,
+            image_path: row.get(3)?,
+        })
+    })?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn load_cached_set_components(
+    connection: &Connection,
+    set_slug: &str,
+) -> Result<Vec<CachedSetComponentRecord>> {
+    let mut statement = connection.prepare(
+        "SELECT
+           set_item_id,
+           set_slug,
+           set_name,
+           set_image_path,
+           component_item_id,
+           component_slug,
+           component_name,
+           component_image_path,
+           quantity_in_set,
+           sort_order,
+           fetched_at
+         FROM set_component_cache
+         WHERE set_slug = ?1
+         ORDER BY sort_order ASC, component_name ASC",
+    )?;
+
+    let rows = statement.query_map(params![set_slug], |row| {
+        Ok(CachedSetComponentRecord {
+            set_item_id: row.get(0)?,
+            set_slug: row.get(1)?,
+            set_name: row.get(2)?,
+            set_image_path: row.get(3)?,
+            component_item_id: row.get(4)?,
+            component_slug: row.get(5)?,
+            component_name: row.get(6)?,
+            component_image_path: row.get(7)?,
+            quantity_in_set: row.get(8)?,
+            sort_order: row.get(9)?,
+            fetched_at: row.get(10)?,
+        })
+    })?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
+    let Some(fetched_at) = entries.first().and_then(|entry| parse_timestamp(&entry.fetched_at)) else {
+        return false;
+    };
+
+    (now_utc() - fetched_at) < TimeDuration::days(SET_COMPOSITION_CACHE_RETENTION_DAYS)
+}
+
 fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
     let client = build_wfm_client()?;
     let response = client
@@ -4179,6 +4574,105 @@ fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
         .context("failed to parse WFM set response")?
         .data
         .items)
+}
+
+fn persist_set_component_cache(
+    observatory_connection: &Connection,
+    set_root: &SetRootCatalogRecord,
+    components: &[CachedSetComponentRecord],
+) -> Result<()> {
+    observatory_connection.execute(
+        "DELETE FROM set_component_cache
+         WHERE set_slug = ?1",
+        params![set_root.slug],
+    )?;
+
+    let mut statement = observatory_connection.prepare(
+        "INSERT INTO set_component_cache (
+           set_item_id,
+           set_slug,
+           set_name,
+           set_image_path,
+           component_item_id,
+           component_slug,
+           component_name,
+           component_image_path,
+           quantity_in_set,
+           sort_order,
+           fetched_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+    )?;
+
+    for component in components {
+        statement.execute(params![
+            component.set_item_id,
+            component.set_slug,
+            component.set_name,
+            component.set_image_path,
+            component.component_item_id,
+            component.component_slug,
+            component.component_name,
+            component.component_image_path,
+            component.quantity_in_set,
+            component.sort_order,
+            component.fetched_at
+        ])?;
+    }
+
+    Ok(())
+}
+
+fn ensure_set_components_cached(
+    catalog_connection: &Connection,
+    observatory_connection: &Connection,
+    set_root: &SetRootCatalogRecord,
+) -> Result<(Vec<CachedSetComponentRecord>, bool)> {
+    let cached = load_cached_set_components(observatory_connection, &set_root.slug)?;
+    if !cached.is_empty() && set_component_cache_is_fresh(&cached) {
+        return Ok((cached, false));
+    }
+
+    let fetched_at = format_timestamp(now_utc())?;
+    let fetched_items = match fetch_wfm_set_items(&set_root.slug) {
+        Ok(items) => items,
+        Err(error) if !cached.is_empty() => return Ok((cached, false)),
+        Err(error) => return Err(error),
+    };
+    let mut components = Vec::new();
+
+    for (index, component) in fetched_items.into_iter().enumerate() {
+        if component.set_root == Some(true) || component.slug == set_root.slug {
+            continue;
+        }
+
+        let component_name = component
+            .i18n
+            .get("en")
+            .and_then(|entry| entry.name.clone())
+            .unwrap_or_else(|| component.slug.replace('_', " "));
+        let component_image_path = component
+            .i18n
+            .get("en")
+            .and_then(|entry| entry.thumb.clone().or(entry.icon.clone()));
+        let component_item_id = resolve_item_id_by_slug(catalog_connection, &component.slug)?;
+
+        components.push(CachedSetComponentRecord {
+            set_item_id: set_root.item_id,
+            set_slug: set_root.slug.clone(),
+            set_name: set_root.name.clone(),
+            set_image_path: set_root.image_path.clone(),
+            component_item_id,
+            component_slug: component.slug,
+            component_name,
+            component_image_path,
+            quantity_in_set: component.quantity_in_set.unwrap_or(1).max(1),
+            sort_order: index as i64,
+            fetched_at: fetched_at.clone(),
+        });
+    }
+
+    persist_set_component_cache(observatory_connection, set_root, &components)?;
+    Ok((components, true))
 }
 
 fn load_drop_sources(
@@ -4432,6 +4926,285 @@ fn build_supply_context(
         components: Vec::new(),
         drop_sources,
         confidence_summary,
+    })
+}
+
+fn confidence_percent(confidence: &MarketConfidenceSummary) -> f64 {
+    match confidence.level.as_str() {
+        "high" => 100.0,
+        "medium" => 72.0,
+        _ => 44.0,
+    }
+}
+
+fn build_arbitrage_score(
+    gross_margin: Option<f64>,
+    roi_pct: Option<f64>,
+    liquidity_score: f64,
+    component_entries: &[ArbitrageScannerComponentEntry],
+    confidence_summary: &MarketConfidenceSummary,
+) -> f64 {
+    let margin_score = match (gross_margin.unwrap_or_default(), roi_pct.unwrap_or_default()) {
+        (gross, roi) if gross >= 40.0 || roi >= 35.0 => 100.0,
+        (gross, roi) if gross >= 25.0 || roi >= 22.0 => 82.0,
+        (gross, roi) if gross >= 15.0 || roi >= 14.0 => 64.0,
+        (gross, roi) if gross >= 8.0 || roi >= 8.0 => 46.0,
+        (gross, _) if gross > 0.0 => 28.0,
+        _ => 0.0,
+    };
+
+    let acquisition_score = if component_entries.is_empty() {
+        20.0
+    } else {
+        let total = component_entries
+            .iter()
+            .map(|entry| {
+                let mut score = (confidence_percent(&entry.confidence_summary) * 0.65)
+                    + (entry.liquidity_score * 0.25);
+                if entry.entry_at_or_below_price {
+                    score += 10.0;
+                }
+                score.clamp(20.0, 100.0)
+            })
+            .sum::<f64>();
+        total / component_entries.len() as f64
+    };
+
+    ((margin_score * 0.45)
+        + (liquidity_score * 0.3)
+        + (acquisition_score * 0.15)
+        + (confidence_percent(confidence_summary) * 0.1))
+        .clamp(0.0, 100.0)
+}
+
+fn build_arbitrage_note(
+    priced_component_count: usize,
+    total_component_count: usize,
+    entry_ready_count: usize,
+    sale_state: &str,
+    confidence_summary: &MarketConfidenceSummary,
+) -> String {
+    let mut parts = Vec::new();
+    if priced_component_count < total_component_count {
+        parts.push(format!(
+            "Incomplete component stats ({priced_component_count}/{total_component_count})"
+        ));
+    }
+    if entry_ready_count > 0 {
+        parts.push(format!("Entry <= Price on {entry_ready_count} part(s)"));
+    }
+    parts.push(format!("Set sale state: {sale_state}"));
+    if confidence_summary.level != "high" && !confidence_summary.reasons.is_empty() {
+        parts.push(confidence_summary.reasons.join(", "));
+    }
+    parts.join(" · ")
+}
+
+fn build_arbitrage_set_entry(
+    set_root: &SetRootCatalogRecord,
+    set_model: Option<&ScannerPriceModel>,
+    component_records: &[CachedSetComponentRecord],
+    component_models: &[Option<ScannerPriceModel>],
+) -> ArbitrageScannerSetEntry {
+    let mut basket_entry_cost = 0.0;
+    let mut priced_component_count = 0;
+    let mut entry_ready_count = 0;
+    let mut components = Vec::new();
+    let mut confidence_refs = Vec::new();
+    let mut extra_reasons = Vec::new();
+
+    for (component_record, model) in component_records.iter().zip(component_models.iter()) {
+        let confidence_summary = model
+            .as_ref()
+            .map(|entry| entry.confidence_summary.clone())
+            .unwrap_or_else(|| build_confidence_summary("low", vec!["Missing stats".to_string()]));
+        if let Some(model) = model {
+            confidence_refs.push(&model.confidence_summary);
+            if let Some(entry_price) = model.recommended_entry_price {
+                basket_entry_cost += entry_price * component_record.quantity_in_set as f64;
+                priced_component_count += 1;
+            }
+            if model
+                .current_stats_price
+                .zip(model.recommended_entry_price)
+                .map(|(current, entry)| current <= entry)
+                .unwrap_or(false)
+            {
+                entry_ready_count += 1;
+            }
+        } else {
+            extra_reasons.push("Missing component stats");
+        }
+
+        components.push(ArbitrageScannerComponentEntry {
+            item_id: component_record.component_item_id,
+            slug: component_record.component_slug.clone(),
+            name: component_record.component_name.clone(),
+            image_path: component_record.component_image_path.clone(),
+            quantity_in_set: component_record.quantity_in_set,
+            recommended_entry_low: model.as_ref().and_then(|entry| entry.entry_low),
+            recommended_entry_high: model.as_ref().and_then(|entry| entry.entry_high),
+            recommended_entry_price: model.as_ref().and_then(|entry| entry.recommended_entry_price),
+            current_stats_price: model.as_ref().and_then(|entry| entry.current_stats_price),
+            entry_at_or_below_price: model
+                .as_ref()
+                .and_then(|entry| {
+                    entry
+                        .current_stats_price
+                        .zip(entry.recommended_entry_price)
+                        .map(|(current, recommended)| current <= recommended)
+                })
+                .unwrap_or(false),
+            liquidity_score: model.as_ref().map(|entry| entry.liquidity_score).unwrap_or(20.0),
+            confidence_summary,
+        });
+    }
+
+    let fallback_set_confidence =
+        build_confidence_summary("low", vec!["Missing set stats".to_string()]);
+    let set_confidence = set_model
+        .map(|entry| &entry.confidence_summary)
+        .unwrap_or(&fallback_set_confidence);
+    confidence_refs.push(set_confidence);
+
+    if priced_component_count < component_records.len() {
+        extra_reasons.push("Partial set basket");
+    }
+    let confidence_summary = combined_confidence(&confidence_refs, &extra_reasons);
+
+    let basket_entry_cost = if priced_component_count == component_records.len() && !component_records.is_empty() {
+        Some(round_platinum(basket_entry_cost))
+    } else {
+        None
+    };
+    let recommended_set_exit_price = set_model.and_then(|entry| entry.recommended_exit_price);
+    let gross_margin = match (recommended_set_exit_price, basket_entry_cost) {
+        (Some(exit), Some(entry)) => Some(round_platinum(exit - entry)),
+        _ => None,
+    };
+    let roi_pct = match (gross_margin, basket_entry_cost) {
+        (Some(margin), Some(entry)) if entry > 0.0 => Some(((margin / entry) * 100.0).round()),
+        _ => None,
+    };
+    let liquidity_score = set_model.map(|entry| entry.liquidity_score).unwrap_or(20.0);
+    let sale_state = set_model
+        .map(|entry| entry.sale_state.clone())
+        .unwrap_or_else(|| "Thin".to_string());
+    let arbitrage_score = build_arbitrage_score(
+        gross_margin,
+        roi_pct,
+        liquidity_score,
+        &components,
+        &confidence_summary,
+    );
+    let note = build_arbitrage_note(
+        priced_component_count,
+        component_records.len(),
+        entry_ready_count,
+        &sale_state,
+        &confidence_summary,
+    );
+
+    ArbitrageScannerSetEntry {
+        set_item_id: set_root.item_id,
+        slug: set_root.slug.clone(),
+        name: set_root.name.clone(),
+        image_path: set_root.image_path.clone(),
+        component_count: component_records.len(),
+        basket_entry_cost,
+        set_exit_low: set_model.and_then(|entry| entry.exit_low),
+        set_exit_high: set_model.and_then(|entry| entry.exit_high),
+        recommended_set_exit_price,
+        gross_margin,
+        roi_pct,
+        liquidity_score,
+        arbitrage_score,
+        sale_state,
+        confidence_summary,
+        note,
+        components,
+    }
+}
+
+fn build_arbitrage_scanner_inner(
+    app: tauri::AppHandle,
+) -> Result<ArbitrageScannerResponse> {
+    let catalog_connection = open_catalog_database(&app)?;
+    let observatory_connection = open_market_observatory_database(&app)?;
+    let set_roots = list_set_roots_from_catalog(&catalog_connection)?;
+
+    let mut refreshed_set_count = 0;
+    let mut refreshed_statistics_count = 0;
+    let mut results = Vec::new();
+
+    for set_root in &set_roots {
+        let (components, did_refresh_set) =
+            ensure_set_components_cached(&catalog_connection, &observatory_connection, set_root)?;
+        if did_refresh_set {
+            refreshed_set_count += 1;
+        }
+
+        if ensure_statistics_cached_for_scan(
+            &observatory_connection,
+            set_root.item_id,
+            &set_root.slug,
+            "base",
+        )? {
+            refreshed_statistics_count += 1;
+        }
+        let set_model = build_statistics_price_model(&observatory_connection, set_root.item_id, "base")?;
+
+        let mut component_models = Vec::new();
+        for component in &components {
+            let model = if let Some(component_item_id) = component.component_item_id {
+                if ensure_statistics_cached_for_scan(
+                    &observatory_connection,
+                    component_item_id,
+                    &component.component_slug,
+                    "base",
+                )? {
+                    refreshed_statistics_count += 1;
+                }
+                build_statistics_price_model(&observatory_connection, component_item_id, "base")?
+            } else {
+                None
+            };
+            component_models.push(model);
+        }
+
+        results.push(build_arbitrage_set_entry(
+            set_root,
+            set_model.as_ref(),
+            &components,
+            &component_models,
+        ));
+    }
+
+    results.sort_by(|left, right| {
+        right
+            .arbitrage_score
+            .total_cmp(&left.arbitrage_score)
+            .then_with(|| {
+                right
+                    .gross_margin
+                    .unwrap_or_default()
+                    .total_cmp(&left.gross_margin.unwrap_or_default())
+            })
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let opportunity_count = results
+        .iter()
+        .filter(|entry| entry.gross_margin.unwrap_or_default() > 0.0)
+        .count();
+
+    Ok(ArbitrageScannerResponse {
+        computed_at: format_timestamp(now_utc())?,
+        scanned_set_count: set_roots.len(),
+        opportunity_count,
+        refreshed_set_count,
+        refreshed_statistics_count,
+        results,
     })
 }
 
@@ -5061,6 +5834,16 @@ pub async fn get_item_analysis(
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub async fn get_arbitrage_scanner(
+    app: tauri::AppHandle,
+) -> Result<ArbitrageScannerResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || build_arbitrage_scanner_inner(app))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -5670,5 +6453,93 @@ mod tests {
             )
             .expect("cache usability"),
         );
+    }
+
+    #[test]
+    fn arbitrage_basket_cost_respects_component_quantities() {
+        let set_root = super::SetRootCatalogRecord {
+            item_id: 1,
+            slug: "example_set".to_string(),
+            name: "Example Set".to_string(),
+            image_path: None,
+        };
+        let component_records = vec![
+            super::CachedSetComponentRecord {
+                set_item_id: 1,
+                set_slug: "example_set".to_string(),
+                set_name: "Example Set".to_string(),
+                set_image_path: None,
+                component_item_id: Some(2),
+                component_slug: "first_part".to_string(),
+                component_name: "First Part".to_string(),
+                component_image_path: None,
+                quantity_in_set: 2,
+                sort_order: 0,
+                fetched_at: "2026-03-12T00:00:00Z".to_string(),
+            },
+            super::CachedSetComponentRecord {
+                set_item_id: 1,
+                set_slug: "example_set".to_string(),
+                set_name: "Example Set".to_string(),
+                set_image_path: None,
+                component_item_id: Some(3),
+                component_slug: "second_part".to_string(),
+                component_name: "Second Part".to_string(),
+                component_image_path: None,
+                quantity_in_set: 1,
+                sort_order: 1,
+                fetched_at: "2026-03-12T00:00:00Z".to_string(),
+            },
+        ];
+        let component_models = vec![
+            Some(super::ScannerPriceModel {
+                entry_low: Some(10.0),
+                entry_high: Some(12.0),
+                recommended_entry_price: Some(12.0),
+                exit_low: Some(18.0),
+                exit_high: Some(20.0),
+                recommended_exit_price: Some(18.0),
+                current_stats_price: Some(11.0),
+                liquidity_score: 70.0,
+                sale_state: "Healthy".to_string(),
+                confidence_summary: super::build_confidence_summary("high", Vec::new()),
+            }),
+            Some(super::ScannerPriceModel {
+                entry_low: Some(5.0),
+                entry_high: Some(6.0),
+                recommended_entry_price: Some(6.0),
+                exit_low: Some(9.0),
+                exit_high: Some(10.0),
+                recommended_exit_price: Some(9.0),
+                current_stats_price: Some(5.0),
+                liquidity_score: 64.0,
+                sale_state: "Healthy".to_string(),
+                confidence_summary: super::build_confidence_summary("high", Vec::new()),
+            }),
+        ];
+        let set_model = super::ScannerPriceModel {
+            entry_low: Some(28.0),
+            entry_high: Some(30.0),
+            recommended_entry_price: Some(30.0),
+            exit_low: Some(42.0),
+            exit_high: Some(46.0),
+            recommended_exit_price: Some(42.0),
+            current_stats_price: Some(41.0),
+            liquidity_score: 82.0,
+            sale_state: "Fast mover".to_string(),
+            confidence_summary: super::build_confidence_summary("high", Vec::new()),
+        };
+
+        let entry = super::build_arbitrage_set_entry(
+            &set_root,
+            Some(&set_model),
+            &component_records,
+            &component_models,
+        );
+
+        assert_eq!(entry.basket_entry_cost, Some(30.0));
+        assert_eq!(entry.gross_margin, Some(12.0));
+        assert_eq!(entry.components[0].quantity_in_set, 2);
+        assert!(entry.note.contains("Entry <= Price"));
     }
 }

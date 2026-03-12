@@ -6,6 +6,7 @@
 import type {
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
+  ArbitrageScannerResponse,
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
   AppSettings,
@@ -335,6 +336,10 @@ export async function getItemAnalysis(
     variantKey,
     sellerMode,
   });
+}
+
+export async function getArbitrageScanner(): Promise<ArbitrageScannerResponse> {
+  return invoke<ArbitrageScannerResponse>('get_arbitrage_scanner');
 }
 
 export async function initializeAppCatalog(): Promise<StartupSummary> {
