@@ -2234,6 +2234,7 @@ function AnalysisTab() {
                     component.itemId !== null
                       ? {
                           itemId: component.itemId,
+                          wfmId: null,
                           name: component.name,
                           slug: component.slug,
                           maxRank: null,

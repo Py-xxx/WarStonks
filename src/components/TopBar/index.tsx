@@ -3,6 +3,8 @@ import type { KeyboardEvent } from 'react';
 import { AlertsPanel } from '../AlertsPanel';
 import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
+import { formatTradeStatusLabel } from '../../lib/trades';
+import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfmAutocompleteItem } from '../../types';
@@ -46,36 +48,6 @@ function formatCurrencyValue(value: number | null, loading: boolean): string {
   return new Intl.NumberFormat().format(value);
 }
 
-function rankAutocompleteItems(items: WfmAutocompleteItem[], query: string): WfmAutocompleteItem[] {
-  const trimmedQuery = query.trim().toLowerCase();
-  if (!trimmedQuery) {
-    return [];
-  }
-
-  const slugQuery = trimmedQuery.replace(/\s+/g, '_');
-  const prefixMatches: WfmAutocompleteItem[] = [];
-  const substringMatches: WfmAutocompleteItem[] = [];
-
-  for (const item of items) {
-    const normalizedName = item.name.toLowerCase();
-    const isPrefixMatch =
-      normalizedName.startsWith(trimmedQuery) || item.slug.startsWith(slugQuery);
-    const isSubstringMatch =
-      normalizedName.includes(trimmedQuery) || item.slug.includes(slugQuery);
-
-    if (isPrefixMatch) {
-      prefixMatches.push(item);
-      continue;
-    }
-
-    if (isSubstringMatch) {
-      substringMatches.push(item);
-    }
-  }
-
-  return [...prefixMatches, ...substringMatches].slice(0, 8);
-}
-
 function formatTopBarVariantLabel(variantKey: string, fallbackLabel: string): string {
   if (variantKey.startsWith('rank:')) {
     return variantKey.slice(5);
@@ -91,9 +63,14 @@ export function TopBar() {
   const marketVariantsLoading = useAppStore((s) => s.marketVariantsLoading);
   const selectedMarketVariantKey = useAppStore((s) => s.selectedMarketVariantKey);
   const systemAlerts = useAppStore((s) => s.systemAlerts);
+  const tradeAccount = useAppStore((s) => s.tradeAccount);
+  const tradeAccountLoading = useAppStore((s) => s.tradeAccountLoading);
+  const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
+  const setActivePage = useAppStore((s) => s.setActivePage);
   const setSelectedMarketVariantKey = useAppStore((s) => s.setSelectedMarketVariantKey);
+  const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
   const walletSnapshot = useAppStore((s) => s.walletSnapshot);
   const walletLoading = useAppStore((s) => s.walletLoading);
   const openSettingsSidebar = useAppStore((s) => s.openSettingsSidebar);
@@ -109,12 +86,16 @@ export function TopBar() {
   const notificationsRef = useRef<HTMLDivElement | null>(null);
   const previousAlertCountRef = useRef(0);
   const deferredSearchValue = useDeferredValue(searchValue);
-  const suggestions = rankAutocompleteItems(autocompleteItems, deferredSearchValue);
+  const suggestions = rankWfmAutocompleteItems(autocompleteItems, deferredSearchValue);
   const notificationCount = alerts.length + systemAlerts.length;
   const showMarketVariantSelect =
     Boolean(selectedQuickViewItem)
     && !marketVariantsLoading
     && marketVariants.length > 1;
+
+  useEffect(() => {
+    void loadTradeAccount();
+  }, [loadTradeAccount]);
 
   useEffect(() => {
     let isMounted = true;
@@ -388,8 +369,8 @@ export function TopBar() {
           CUSTOM · H:VERY SHORT · C:{autoProfile ? 'AUTO' : 'BALANCED'}
         </div>
         <div ref={notificationsRef} className="notification-wrap">
-          <button
-            className={`notification-btn${notificationsOpen ? ' open' : ''}`}
+        <button
+          className={`notification-btn${notificationsOpen ? ' open' : ''}`}
             type="button"
             aria-label="Open notifications"
             aria-expanded={notificationsOpen}
@@ -415,9 +396,20 @@ export function TopBar() {
             </div>
           ) : null}
         </div>
-        <button className="btn-connect" aria-label="Connect to Warframe">
+        <button
+          className="btn-connect"
+          aria-label="Open trades"
+          onClick={() => {
+            setActivePage('trades');
+            setTradesSubTab('sell-orders');
+          }}
+        >
           <ArrowIcon />
-          Connect
+          {tradeAccount
+            ? `${tradeAccount.name} · ${formatTradeStatusLabel(tradeAccount.status)}`
+            : tradeAccountLoading
+              ? 'Loading…'
+              : 'Connect'}
         </button>
         <button
           className="settings-btn"

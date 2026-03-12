@@ -80,17 +80,68 @@ export interface SystemAlert {
   createdAt: string;
 }
 
-export interface TradeOrder {
-  id: string;
+export interface TradeAccountSummary {
+  userId: string;
+  name: string;
+  status: 'offline' | 'online' | 'ingame';
+  platform: string | null;
+  reputation: number | null;
+  avatarUrl: string | null;
+  lastUpdatedAt: string;
+}
+
+export interface TradeSessionState {
+  connected: boolean;
+  account: TradeAccountSummary | null;
+}
+
+export interface TradeSellOrder {
+  orderId: string;
+  wfmId: string;
+  itemId: number | null;
   name: string;
   slug: string;
-  emoji: string;
-  qty: number;
+  imagePath: string | null;
+  rank: number | null;
+  maxRank: number | null;
+  quantity: number;
   yourPrice: number;
-  marketLow: number;
-  healthScore: number;
-  healthNote: string;
-  checkedAgo: string;
+  marketLow: number | null;
+  priceGap: number | null;
+  visible: boolean;
+  updatedAt: string;
+  healthScore: number | null;
+  healthNote: string | null;
+}
+
+export interface TradeOverview {
+  account: TradeAccountSummary;
+  lastUpdatedAt: string;
+  activeTradeValue: number;
+  totalCompletedTrades: number | null;
+  openPositions: number;
+  sellOrders: TradeSellOrder[];
+}
+
+export interface TradeSignInInput {
+  email: string;
+  password: string;
+}
+
+export interface TradeCreateListingInput {
+  wfmId: string;
+  price: number;
+  quantity: number;
+  rank: number | null;
+  visible: boolean;
+}
+
+export interface TradeUpdateListingInput {
+  orderId: string;
+  price: number;
+  quantity: number;
+  rank: number | null;
+  visible: boolean;
 }
 
 export interface PortfolioTrade {
@@ -410,6 +461,7 @@ export interface WalletSnapshot {
 
 export interface WfmAutocompleteItem {
   itemId: number;
+  wfmId: string | null;
   name: string;
   slug: string;
   maxRank: number | null;
