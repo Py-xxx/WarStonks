@@ -318,7 +318,7 @@ function RelicDropRow({
       : null;
 
   return (
-    <div className="scanner-component-row">
+    <div className="scanner-component-row scanner-component-row-inline">
       <div className="scanner-component-main">
         <span className="scanner-component-thumb">
           {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{drop.name.slice(0, 1)}</span>}
@@ -425,23 +425,25 @@ function RelicRoiRow({
 
       {expanded ? (
         <div className="scanner-row-body">
-          <div className="scanner-row-summary-grid">
-            <div className="market-metric-card">
-              <span className="info-card-label">Refinement</span>
-              <strong>{summary?.refinementLabel ?? '—'}</strong>
-            </div>
-            <div className="market-metric-card">
-              <span className="info-card-label">Buy Price</span>
-              <strong>{formatPlat(summary?.relicBuyPrice ?? null)}</strong>
-            </div>
-            <div className="market-metric-card">
-              <span className="info-card-label">Confidence</span>
-              <strong>{summary?.confidenceSummary.label ?? entry.confidenceSummary.label}</strong>
-            </div>
-            <div className="market-metric-card">
-              <span className="info-card-label">Drops</span>
-              <strong>{entry.dropCount}</strong>
-            </div>
+          <div className="scanner-inline-summary">
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">Refinement</span>
+              <span className="scanner-stat-pill-value">{summary?.refinementLabel ?? '—'}</span>
+            </span>
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">Buy Price</span>
+              <span className="scanner-stat-pill-value">{formatPlat(summary?.relicBuyPrice ?? null)}</span>
+            </span>
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">Confidence</span>
+              <span className="scanner-stat-pill-value">
+                {summary?.confidenceSummary.label ?? entry.confidenceSummary.label}
+              </span>
+            </span>
+            <span className="scanner-stat-pill">
+              <span className="scanner-stat-pill-label">Drops</span>
+              <span className="scanner-stat-pill-value">{entry.dropCount}</span>
+            </span>
           </div>
 
           <div className="scanner-components-panel">
