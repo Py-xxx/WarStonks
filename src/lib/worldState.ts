@@ -1,3 +1,5 @@
+import { formatShortLocalDateTime } from './dateTime';
+
 import type {
   VoidTraderInventoryItem,
   WorldStateEndpointKey,
@@ -1055,17 +1057,7 @@ export function formatWorldStateDateTime(value: string | null): string {
     return 'Unavailable';
   }
 
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(parsed);
+  return formatShortLocalDateTime(value);
 }
 
 export function formatWorldStateCountdown(expiry: string | null, nowMs: number): string {

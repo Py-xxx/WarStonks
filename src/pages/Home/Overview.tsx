@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
+import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -653,7 +654,7 @@ function AnalysisCard() {
 
             <div className="analysis-preview-foot">
               <span>{analysis.supplyContext.mode === 'set-components' ? 'Set breakdown ready' : analysis.supplyContext.mode === 'drop-sources' ? 'Drop sources ready' : 'No source context'}</span>
-              <span>{analysis.computedAt ? `Computed ${new Date(analysis.computedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+              <span>{analysis.computedAt ? `Computed ${formatShortLocalDateTime(analysis.computedAt)}` : ''}</span>
             </div>
           </div>
         ) : null}

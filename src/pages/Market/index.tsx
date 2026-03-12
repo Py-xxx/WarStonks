@@ -7,6 +7,7 @@ import {
   openExternalUrl,
   stopMarketTracking,
 } from '../../lib/tauriClient';
+import { formatShortLocalDate, formatShortLocalDateTime } from '../../lib/dateTime';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
@@ -165,13 +166,8 @@ function buildChartPoints(points: AnalyticsChartPoint[]): MockBucketPoint[] {
     .filter((point): point is MockBucketPoint => point !== null);
 }
 
-function formatChartTimestamp(timestamp: number, domain: ChartDomainKey): string {
-  const formatOptions: Intl.DateTimeFormatOptions =
-    domain === '48h'
-      ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
-      : { month: 'short', day: 'numeric' };
-
-  return new Intl.DateTimeFormat(undefined, formatOptions).format(new Date(timestamp));
+function formatChartTimestamp(timestamp: number, _domain: ChartDomainKey): string {
+  return formatShortLocalDateTime(new Date(timestamp).toISOString());
 }
 
 function normalizeStatHighlightText(value: string): string[] {
@@ -848,42 +844,14 @@ function formatRelativeTimestamp(value: string | null | undefined): string {
   if (!value) {
     return '—';
   }
-
-  const deltaMs = Date.now() - new Date(value).getTime();
-  if (Number.isNaN(deltaMs)) {
-    return value;
-  }
-
-  const seconds = Math.max(0, Math.floor(deltaMs / 1000));
-  if (seconds < 60) {
-    return `${seconds}s ago`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) {
-    return `${hours}h ago`;
-  }
-  return `${Math.floor(hours / 24)}d ago`;
+  return formatShortLocalDateTime(value);
 }
 
 function formatDateCompact(value: string | null | undefined): string {
   if (!value) {
     return '—';
   }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(parsed);
+  return formatShortLocalDate(value);
 }
 
 function formatNullableBoolean(value: boolean | null | undefined): string {
