@@ -391,7 +391,7 @@ export function ScannersPage() {
     setExpandedSlug((current) =>
       current && arbitrage.results.some((entry) => entry.slug === current)
         ? current
-        : arbitrage.results[0]?.slug ?? null,
+        : null,
     );
   }, [arbitrage]);
 
