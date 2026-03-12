@@ -2178,6 +2178,7 @@ fn fair_center_anchor(row: &InternalStatsRow) -> Option<f64> {
     }
 }
 
+#[derive(Debug, Clone)]
 struct ZoneBands {
     entry_low: f64,
     entry_high: f64,
@@ -2187,13 +2188,90 @@ struct ZoneBands {
     exit_target: f64,
 }
 
+struct HistoricalZoneAnchors {
+    support_floor: Option<f64>,
+    support_recurrence: Option<f64>,
+    fair_low: Option<f64>,
+    fair_high: Option<f64>,
+    fair_center: Option<f64>,
+}
+
 fn round_platinum(value: f64) -> f64 {
     value.round()
+}
+
+fn percentile_price(sorted_values: &[f64], percentile: f64) -> Option<f64> {
+    if sorted_values.is_empty() {
+        return None;
+    }
+
+    let clamped = percentile.clamp(0.0, 1.0);
+    let max_index = sorted_values.len().saturating_sub(1) as f64;
+    let index = max_index * clamped;
+    let lower_index = index.floor() as usize;
+    let upper_index = index.ceil() as usize;
+    if lower_index == upper_index {
+        return sorted_values.get(lower_index).copied();
+    }
+
+    let lower_value = *sorted_values.get(lower_index)?;
+    let upper_value = *sorted_values.get(upper_index)?;
+    let weight = index - lower_index as f64;
+    Some(lower_value + ((upper_value - lower_value) * weight))
+}
+
+fn build_historical_zone_anchors(rows: &[InternalStatsRow]) -> Option<HistoricalZoneAnchors> {
+    if rows.is_empty() {
+        return None;
+    }
+
+    let cutoff = now_utc() - TimeDuration::days(30);
+    let recent_rows = rows
+        .iter()
+        .filter(|row| row.bucket_at >= cutoff)
+        .collect::<Vec<_>>();
+    let source_rows = if recent_rows.is_empty() { rows.iter().collect::<Vec<_>>() } else { recent_rows };
+
+    let mut dip_prices = Vec::new();
+    let mut fair_values = Vec::new();
+    let mut ceiling_values = Vec::new();
+
+    for row in source_rows {
+        if let Some(value) = row.min_price.or(row.donch_bot) {
+            dip_prices.push(value);
+        }
+        if let Some(value) = row.median.or(row.wa_price).or(row.avg_price).or(row.moving_avg) {
+            fair_values.push(value);
+        }
+        if let Some(value) = row.max_price.or(row.donch_top).or(row.median).or(row.wa_price) {
+            ceiling_values.push(value);
+        }
+    }
+
+    dip_prices.sort_by(|left, right| left.total_cmp(right));
+    fair_values.sort_by(|left, right| left.total_cmp(right));
+    ceiling_values.sort_by(|left, right| left.total_cmp(right));
+
+    Some(HistoricalZoneAnchors {
+        support_floor: percentile_price(&dip_prices, 0.18)
+            .or_else(|| dip_prices.first().copied()),
+        support_recurrence: percentile_price(&dip_prices, 0.38)
+            .or_else(|| percentile_price(&dip_prices, 0.5))
+            .or_else(|| dip_prices.first().copied()),
+        fair_low: percentile_price(&fair_values, 0.35)
+            .or_else(|| fair_values.first().copied()),
+        fair_high: percentile_price(&ceiling_values, 0.82)
+            .or_else(|| ceiling_values.last().copied()),
+        fair_center: percentile_price(&fair_values, 0.55)
+            .or_else(|| percentile_price(&fair_values, 0.5))
+            .or_else(|| fair_values.first().copied()),
+    })
 }
 
 fn compute_zone_bands(
     lower_anchor: Option<f64>,
     upper_anchor: Option<f64>,
+    support_recurrence: Option<f64>,
     fair_center: Option<f64>,
 ) -> Option<ZoneBands> {
     let fair_center = fair_center.or_else(|| match (lower_anchor, upper_anchor) {
@@ -2210,17 +2288,12 @@ fn compute_zone_bands(
 
     let range = (upper_bound - lower_bound).max(4.0);
     let zone_width = (range * 0.2).round().clamp(3.0, 6.0);
-    let midpoint = (lower_bound + upper_bound) * 0.5;
-    let upward_shift = if fair_center > midpoint + 0.75 {
-        ((fair_center - midpoint) * 0.6)
-            .round()
-            .clamp(0.0, (zone_width - 1.0).max(0.0))
-    } else {
-        0.0
-    };
-    let max_entry_low = (upper_bound - zone_width - 2.0).max(lower_bound);
-    let mut entry_low = (lower_bound + upward_shift).clamp(lower_bound, max_entry_low);
-    let mut entry_high = (entry_low + zone_width).min(upper_bound - 2.0);
+    let max_entry_high = (upper_bound - 3.0).max(lower_bound + 2.0);
+    let support_high = support_recurrence
+        .map(round_platinum)
+        .unwrap_or_else(|| round_platinum(lower_bound + zone_width));
+    let mut entry_high = support_high.clamp(lower_bound + 2.0, max_entry_high);
+    let mut entry_low = (entry_high - zone_width).max(lower_bound);
     if entry_high <= entry_low {
         entry_high = entry_low + 1.0;
     }
@@ -2341,7 +2414,18 @@ fn resample_rows(
                     values.into_iter().reduce(f64::max)
                 });
             let fair_center = fair_inputs.as_ref().and_then(fair_center_anchor);
-            let zone_bands = compute_zone_bands(fair_low, fair_high, fair_center);
+            let historical_anchors = build_historical_zone_anchors(&bucket_rows);
+            let zone_bands = historical_anchors
+                .as_ref()
+                .and_then(|anchors| {
+                    compute_zone_bands(
+                        anchors.support_floor.or(fair_low),
+                        anchors.fair_high.or(fair_high),
+                        anchors.support_recurrence,
+                        anchors.fair_center.or(fair_center),
+                    )
+                })
+                .or_else(|| compute_zone_bands(fair_low, fair_high, fair_low, fair_center));
 
             AnalyticsChartPoint {
                 bucket_at: format_timestamp(bucket_at).unwrap_or_default(),
@@ -2514,6 +2598,7 @@ fn compute_stability(points: &[AnalyticsChartPoint]) -> (f64, f64, f64) {
 fn build_entry_exit_zone_overview(
     snapshot: Option<&MarketSnapshot>,
     points: &[AnalyticsChartPoint],
+    zone_bands: Option<&ZoneBands>,
 ) -> EntryExitZoneOverview {
     let latest_point = points.last();
     let fair_value_low = latest_point.and_then(|point| point.fair_value_low);
@@ -2528,11 +2613,18 @@ fn build_entry_exit_zone_overview(
                 _ => None,
             })
     });
-    let zone_bands = compute_zone_bands(fair_value_low, fair_value_high, fair_center);
-    let entry_zone_low = zone_bands.as_ref().map(|zone| zone.entry_low);
-    let entry_zone_high = zone_bands.as_ref().map(|zone| zone.entry_high);
-    let exit_zone_low = zone_bands.as_ref().map(|zone| zone.exit_low);
-    let exit_zone_high = zone_bands.as_ref().map(|zone| zone.exit_high);
+    let computed_zone_bands = zone_bands.cloned().or_else(|| {
+        compute_zone_bands(
+            fair_value_low,
+            fair_value_high,
+            fair_value_low,
+            fair_center,
+        )
+    });
+    let entry_zone_low = computed_zone_bands.as_ref().map(|zone| zone.entry_low);
+    let entry_zone_high = computed_zone_bands.as_ref().map(|zone| zone.entry_high);
+    let exit_zone_low = computed_zone_bands.as_ref().map(|zone| zone.exit_low);
+    let exit_zone_high = computed_zone_bands.as_ref().map(|zone| zone.exit_high);
 
     let current_lowest_price = snapshot.and_then(|entry| entry.lowest_sell);
     let current_median_lowest_price = snapshot.and_then(|entry| entry.median_sell);
@@ -4549,7 +4641,20 @@ fn build_item_analytics_inner(
     );
     let (chart_closed_rows, chart_live_buy_rows, chart_stats_fetched_at) =
         load_chart_statistics_rows(&connection, item_id, &variant_key, analytics_domain_key)?;
-    let chart_points = merge_snapshot_chart_points(
+    let (support_closed_rows, _, _) =
+        load_chart_statistics_rows(&connection, item_id, &variant_key, AnalyticsDomainKey::ThirtyDays)?;
+    let historical_zone_anchors = build_historical_zone_anchors(&support_closed_rows);
+    let historical_zone_bands = historical_zone_anchors
+        .as_ref()
+        .and_then(|anchors| {
+            compute_zone_bands(
+                anchors.support_floor.or(anchors.fair_low),
+                anchors.fair_high,
+                anchors.support_recurrence,
+                anchors.fair_center,
+            )
+        });
+    let mut chart_points = merge_snapshot_chart_points(
         resample_rows(
             &chart_closed_rows,
             &chart_live_buy_rows,
@@ -4564,6 +4669,12 @@ fn build_item_analytics_inner(
             analytics_bucket_size_key,
         )?,
     );
+    if let Some(zone_bands) = historical_zone_bands.as_ref() {
+        for point in &mut chart_points {
+            point.entry_zone = Some(zone_bands.entry_target);
+            point.exit_zone = Some(zone_bands.exit_target);
+        }
+    }
     let latest_stats_fetched_at = merge_latest_fetched_at(hourly_stats_fetched_at, chart_stats_fetched_at);
     let source_snapshot_at = Some(snapshot.captured_at.clone());
     if let Some(cached) = load_cached_analytics(
@@ -4581,7 +4692,11 @@ fn build_item_analytics_inner(
     let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, 12)?;
     let liquidity_confidence = build_liquidity_confidence(&snapshot, &recent_snapshots);
     let manipulation_confidence = build_manipulation_confidence(&recent_snapshots);
-    let zone_overview = build_entry_exit_zone_overview(Some(&snapshot), &trend_points);
+    let zone_overview = build_entry_exit_zone_overview(
+        Some(&snapshot),
+        &trend_points,
+        historical_zone_bands.as_ref(),
+    );
     let orderbook_pressure = build_orderbook_pressure(Some(&snapshot));
     let trend_quality_breakdown = build_trend_quality_breakdown(&trend_points);
     let action_card = build_action_card(
@@ -5101,7 +5216,7 @@ mod tests {
             },
         ];
 
-        let zone = build_entry_exit_zone_overview(Some(&snapshot), &points);
+        let zone = build_entry_exit_zone_overview(Some(&snapshot), &points, None);
         let pressure = build_orderbook_pressure(Some(&snapshot));
         let trend = build_trend_quality_breakdown(&points);
         let action = build_action_card(
@@ -5120,7 +5235,7 @@ mod tests {
 
     #[test]
     fn computes_integer_zone_bands_inside_the_historical_range() {
-        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(63.0)).expect("zone bands");
+        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(58.0), Some(63.0)).expect("zone bands");
 
         assert_eq!(zone.entry_low, 55.0);
         assert_eq!(zone.entry_high, 58.0);
@@ -5132,7 +5247,7 @@ mod tests {
 
     #[test]
     fn keeps_entry_zone_from_climbing_too_high_when_market_bias_rises() {
-        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(66.0)).expect("zone bands");
+        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(60.0), Some(66.0)).expect("zone bands");
 
         assert_eq!(zone.entry_low, 57.0);
         assert_eq!(zone.entry_high, 60.0);
@@ -5162,7 +5277,7 @@ mod tests {
             volume: 6.0,
         }];
 
-        let zone = build_entry_exit_zone_overview(Some(&snapshot), &points);
+        let zone = build_entry_exit_zone_overview(Some(&snapshot), &points, None);
 
         assert_eq!(zone.zone_quality, "Watch");
         assert_eq!(zone.confidence_summary.level, "low");
