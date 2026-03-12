@@ -3765,6 +3765,10 @@ body {
   flex-shrink: 0;
 }
 
+.scanner-list-button:not(.scanner-list-button-relic) .scanner-list-metrics {
+  gap: 16px;
+}
+
 .scanner-list-metric {
   min-width: 0;
   display: flex;
