@@ -10,6 +10,7 @@ const projectRoot = path.resolve(__dirname, '..');
 const tauriConfigPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
 const generatedConfigPath = path.join(projectRoot, 'src-tauri', 'tauri.dev.generated.json');
 const DEFAULT_ALLOWED_PORTS = [1420, 1422, 1424, 1426];
+const PNPM_COMMAND = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
 function parseAllowedPorts(rawValue) {
   if (!rawValue) {
@@ -115,7 +116,7 @@ async function runTauriDev(args) {
   }
 
   return runCommand(
-    'pnpm',
+    PNPM_COMMAND,
     ['exec', 'tauri', 'dev', '--config', generatedConfigPath, ...args],
     {
       TAURI_DEV_HOST: host,
@@ -133,7 +134,7 @@ async function main() {
     const exitCode =
       subcommand === 'dev'
         ? await runTauriDev(restArgs)
-        : await runCommand('pnpm', ['exec', 'tauri', ...args]);
+        : await runCommand(PNPM_COMMAND, ['exec', 'tauri', ...args]);
     process.exit(exitCode);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
