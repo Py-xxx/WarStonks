@@ -15,6 +15,7 @@ import type {
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
   ItemDetailSummary,
+  MarketConfidenceSummary,
   WfmAutocompleteItem,
 } from '../../types';
 
@@ -255,6 +256,19 @@ function getTrendTone(direction: string | null | undefined): PanelTone {
   return 'blue';
 }
 
+function getConfidenceTone(confidence: MarketConfidenceSummary | null | undefined): PanelTone {
+  switch (confidence?.level) {
+    case 'high':
+      return 'green';
+    case 'medium':
+      return 'amber';
+    case 'low':
+      return 'red';
+    default:
+      return 'neutral';
+  }
+}
+
 function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null) {
   const netMargin = analysis?.headline.netMargin ?? null;
   const liquidityScore = analysis?.headline.liquidityScore ?? null;
@@ -262,6 +276,10 @@ function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null) {
   const riskTone = getRiskTone(riskLevel);
   const trendTone = getTrendTone(analysis?.trend.direction);
   const confidence = analysis?.trend.confidence ?? null;
+  const headlineConfidence = analysis?.headline.confidenceSummary ?? null;
+  const confidenceNote = headlineConfidence?.reasons.length
+    ? ` ${headlineConfidence.reasons.join(', ')}.`
+    : '';
 
   if (netMargin === null || liquidityScore === null) {
     return {
@@ -275,30 +293,38 @@ function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null) {
     return {
       label: 'High Caution',
       tone: 'red' as PanelTone,
-      note: `Risk is currently elevated, so any margin on the board should be discounted until the signal stack clears.`,
+      note: `Risk is currently elevated, so any margin on the board should be discounted until the signal stack clears.${confidenceNote}`,
     };
   }
 
-  if (netMargin > 0 && liquidityScore >= 0.6 && trendTone === 'green') {
+  if (headlineConfidence?.level === 'low') {
+    return {
+      label: 'Cautious Read',
+      tone: 'amber' as PanelTone,
+      note: `The current setup has usable context, but confidence is not strong enough to present an assertive posture.${confidenceNote}`,
+    };
+  }
+
+  if (netMargin > 0 && liquidityScore >= 60 && trendTone === 'green') {
     return {
       label: 'Buy Bias',
       tone: 'green' as PanelTone,
-      note: `Current spread supports an entry bias, with ${Math.round(liquidityScore * 100)}% liquidity and ${Math.round((confidence ?? 0) * 100)}% trend confidence backing the setup.`,
+      note: `Current spread supports an entry bias, with ${Math.round(liquidityScore)}% liquidity and ${Math.round(confidence ?? 0)}% trend confidence backing the setup.${confidenceNote}`,
     };
   }
 
-  if (netMargin > 0 && liquidityScore >= 0.42) {
+  if (netMargin > 0 && liquidityScore >= 42) {
     return {
       label: 'Selective',
       tone: 'blue' as PanelTone,
-      note: `There is usable edge here, but execution quality matters more than aggression because the market is not fully aligned yet.`,
+      note: `There is usable edge here, but execution quality matters more than aggression because the market is not fully aligned yet.${confidenceNote}`,
     };
   }
 
   return {
     label: 'Wait',
     tone: 'amber' as PanelTone,
-    note: 'The current structure is not clean enough to justify forcing a trade. Let price or liquidity improve first.',
+    note: `The current structure is not clean enough to justify forcing a trade. Let price or liquidity improve first.${confidenceNote}`,
   };
 }
 
@@ -1144,6 +1170,69 @@ interface EventContextEntry {
   impact: string;
 }
 
+function buildEventContextConfidence(entries: EventContextEntry[]): MarketConfidenceSummary {
+  if (entries.length === 0) {
+    return {
+      level: 'low',
+      label: 'Low confidence',
+      reasons: ['No active context'],
+      isDegraded: true,
+    };
+  }
+
+  const hasDirectRetailHook = entries.some((entry) =>
+    ['Void Trader', 'Flash Sale', 'Alert Reward', 'Invasion Reward'].includes(entry.label),
+  );
+
+  if (hasDirectRetailHook || entries.length >= 2) {
+    return {
+      level: 'high',
+      label: 'High confidence',
+      reasons: [],
+      isDegraded: false,
+    };
+  }
+
+  return {
+    level: 'medium',
+    label: 'Medium confidence',
+    reasons: ['Indirect context'],
+    isDegraded: true,
+  };
+}
+
+function ConfidenceBadge({
+  confidence,
+}: {
+  confidence: MarketConfidenceSummary | null | undefined;
+}) {
+  if (!confidence) {
+    return null;
+  }
+
+  return (
+    <span className={`market-panel-badge tone-${getConfidenceTone(confidence)}`}>
+      {confidence.label}
+    </span>
+  );
+}
+
+function ConfidenceNote({
+  confidence,
+}: {
+  confidence: MarketConfidenceSummary | null | undefined;
+}) {
+  if (!confidence?.isDegraded || confidence.reasons.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="market-confidence-note">
+      {confidence.reasons.join(' · ')}
+    </div>
+  );
+}
+
 function buildEventContextEntries(
   analysis: ItemAnalysisResponse | null,
   eventData: {
@@ -1504,6 +1593,7 @@ function AnalyticsTab() {
               loading={!revealedPanels.overview && !errorMessage}
               errorMessage={!revealedPanels.overview ? errorMessage : null}
               loadingLabel="Calculating entry and exit zones"
+              headerAside={<ConfidenceBadge confidence={analytics?.entryExitZoneOverview.confidenceSummary} />}
             >
               <div className="market-metric-grid">
                 <div className="market-metric-card">
@@ -1539,6 +1629,7 @@ function AnalyticsTab() {
                 </span>
                 <p>{analytics?.entryExitZoneOverview.exitRationale ?? '—'}</p>
               </div>
+              <ConfidenceNote confidence={analytics?.entryExitZoneOverview.confidenceSummary} />
             </AnalyticsPanel>
 
             <AnalyticsPanel
@@ -1547,6 +1638,7 @@ function AnalyticsTab() {
               loading={!revealedPanels.pressure && !errorMessage}
               errorMessage={!revealedPanels.pressure ? errorMessage : null}
               loadingLabel="Reading current orderbook pressure"
+              headerAside={<ConfidenceBadge confidence={analytics?.orderbookPressure.confidenceSummary} />}
             >
               <div className="market-metric-grid">
                 <div className="market-metric-card">
@@ -1582,6 +1674,7 @@ function AnalyticsTab() {
                   <span>{formatNumber(analytics?.orderbookPressure.pressureRatio, 2)}</span>
                 </div>
               </div>
+              <ConfidenceNote confidence={analytics?.orderbookPressure.confidenceSummary} />
             </AnalyticsPanel>
 
             <AnalyticsPanel
@@ -1590,6 +1683,7 @@ function AnalyticsTab() {
               loading={!revealedPanels.trend && !errorMessage}
               errorMessage={!revealedPanels.trend ? errorMessage : null}
               loadingLabel="Scoring short-term trend quality"
+              headerAside={<ConfidenceBadge confidence={analytics?.trendQualityBreakdown.confidenceSummary} />}
             >
               <div className="market-tab-row">
                 {(['lowestSell', 'medianSell', 'weightedAvg'] as const).map((key) => (
@@ -1648,6 +1742,7 @@ function AnalyticsTab() {
                   <span>{formatPercent(analytics?.trendQualityBreakdown.noise)}</span>
                 </div>
               </div>
+              <ConfidenceNote confidence={analytics?.trendQualityBreakdown.confidenceSummary} />
             </AnalyticsPanel>
 
             <AnalyticsPanel
@@ -1656,6 +1751,7 @@ function AnalyticsTab() {
               loading={!revealedPanels.action && !errorMessage}
               errorMessage={!revealedPanels.action ? errorMessage : null}
               loadingLabel="Building the market readout"
+              headerAside={<ConfidenceBadge confidence={analytics?.actionCard.confidenceSummary} />}
             >
               <div className={`market-action-card tone-${analytics?.actionCard.tone ?? 'neutral'}`}>
                 <div className="market-action-header">
@@ -1688,6 +1784,7 @@ function AnalyticsTab() {
                     <span key={signal} className="market-signal-pill">{signal}</span>
                   ))}
                 </div>
+                <ConfidenceNote confidence={analytics?.actionCard.confidenceSummary} />
               </div>
             </AnalyticsPanel>
           </div>
@@ -1836,6 +1933,7 @@ function AnalysisTab() {
     voidTrader: worldStateVoidTrader,
     flashSales: worldStateFlashSales,
   });
+  const eventContextConfidence = buildEventContextConfidence(eventContextEntries);
 
   if (!selectedItem) {
     return (
@@ -1946,7 +2044,10 @@ function AnalysisTab() {
               <div className="market-hero-copy">
                 <div className="market-hero-title-row">
                   <span className="market-hero-kicker">Trade Posture</span>
-                  <span className={`market-panel-badge tone-${heroState.tone}`}>{heroState.label}</span>
+                  <div className="market-badge-stack">
+                    <span className={`market-panel-badge tone-${heroState.tone}`}>{heroState.label}</span>
+                    <ConfidenceBadge confidence={analysis?.headline.confidenceSummary} />
+                  </div>
                 </div>
                 <span className="market-hero-item-name">{selectedItem.name}</span>
                 <p className="market-hero-note">{heroState.note}</p>
@@ -2023,9 +2124,12 @@ function AnalysisTab() {
             loadingLabel="Calculating flip margins"
             className="market-panel-tone-blue"
             headerAside={
-              <span className="market-panel-badge tone-blue">
-                {analysis?.flipAnalysis.efficiencyLabel ?? 'Building'}
-              </span>
+              <div className="market-badge-stack">
+                <span className="market-panel-badge tone-blue">
+                  {analysis?.flipAnalysis.efficiencyLabel ?? 'Building'}
+                </span>
+                <ConfidenceBadge confidence={analysis?.flipAnalysis.confidenceSummary} />
+              </div>
             }
           >
             <div className="market-metric-grid">
@@ -2052,6 +2156,7 @@ function AnalysisTab() {
                 </span>
               </div>
             </div>
+            <ConfidenceNote confidence={analysis?.flipAnalysis.confidenceSummary} />
           </AnalyticsPanel>
 
           <AnalyticsPanel
@@ -2062,9 +2167,12 @@ function AnalysisTab() {
             loadingLabel="Profiling live liquidity"
             className="market-panel-tone-blue"
             headerAside={
-              <span className="market-panel-badge tone-blue">
-                {analysis?.liquidityDetail.state ?? 'Profiling'}
-              </span>
+              <div className="market-badge-stack">
+                <span className="market-panel-badge tone-blue">
+                  {analysis?.liquidityDetail.state ?? 'Profiling'}
+                </span>
+                <ConfidenceBadge confidence={analysis?.liquidityDetail.confidenceSummary} />
+              </div>
             }
           >
             <div className="market-metric-grid">
@@ -2093,6 +2201,7 @@ function AnalysisTab() {
                 <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.liquidityScore)}</span>
               </div>
             </div>
+            <ConfidenceNote confidence={analysis?.liquidityDetail.confidenceSummary} />
             <div className="market-signal-board">
               <div className="market-signal-row">
                 <span className="market-signal-label">Demand Ratio</span>
@@ -2132,9 +2241,12 @@ function AnalysisTab() {
             loadingLabel="Summarizing the current trend"
             className={`market-panel-tone-${getTrendTone(analysis?.trend.direction)}`}
             headerAside={
-              <span className={`market-panel-badge tone-${getTrendTone(analysis?.trend.direction)}`}>
-                {analysis?.trend.direction ?? 'Building'}
-              </span>
+              <div className="market-badge-stack">
+                <span className={`market-panel-badge tone-${getTrendTone(analysis?.trend.direction)}`}>
+                  {analysis?.trend.direction ?? 'Building'}
+                </span>
+                <ConfidenceBadge confidence={analysis?.trend.confidenceSummary} />
+              </div>
             }
           >
             <div className="market-metric-grid">
@@ -2185,6 +2297,7 @@ function AnalysisTab() {
               <span className="market-copy-title">Summary</span>
               <p>{analysis?.trend.summary ?? '—'}</p>
             </div>
+            <ConfidenceNote confidence={analysis?.trend.confidenceSummary} />
           </AnalyticsPanel>
 
           <AnalyticsPanel
@@ -2201,13 +2314,16 @@ function AnalysisTab() {
             loadingLabel="Building supply context"
             className="market-panel-tone-amber"
             headerAside={
-              <span className="market-panel-badge tone-amber">
-                {analysis?.supplyContext.mode === 'set-components'
-                  ? 'Set Breakdown'
-                  : analysis?.supplyContext.mode === 'drop-sources'
-                    ? 'Drop Intel'
-                    : 'No Source'}
-              </span>
+              <div className="market-badge-stack">
+                <span className="market-panel-badge tone-amber">
+                  {analysis?.supplyContext.mode === 'set-components'
+                    ? 'Set Breakdown'
+                    : analysis?.supplyContext.mode === 'drop-sources'
+                      ? 'Drop Intel'
+                      : 'No Source'}
+                </span>
+                <ConfidenceBadge confidence={analysis?.supplyContext.confidenceSummary} />
+              </div>
             }
           >
             {analysis?.supplyContext.mode === 'set-components' ? (
@@ -2299,6 +2415,7 @@ function AnalysisTab() {
                 <p>This item does not currently have set-component or catalog drop-source data available.</p>
               </div>
             )}
+            <ConfidenceNote confidence={analysis?.supplyContext.confidenceSummary} />
           </AnalyticsPanel>
         </div>
 
@@ -2313,7 +2430,9 @@ function AnalysisTab() {
                 className="market-panel-tone-neutral market-item-details-panel"
                 headerAside={
                   effectiveItemDetails?.category ? (
-                    <span className="market-panel-badge tone-neutral">{effectiveItemDetails.category}</span>
+                    <div className="market-badge-stack">
+                      <span className="market-panel-badge tone-neutral">{effectiveItemDetails.category}</span>
+                    </div>
                   ) : null
                 }
               >
@@ -2393,9 +2512,12 @@ function AnalysisTab() {
             loadingLabel="Matching worldstate context"
             className="market-panel-tone-amber"
             headerAside={
-              <span className="market-panel-badge tone-amber">
-                {eventContextEntries.length} {eventContextEntries.length === 1 ? 'match' : 'matches'}
-              </span>
+              <div className="market-badge-stack">
+                <span className="market-panel-badge tone-amber">
+                  {eventContextEntries.length} {eventContextEntries.length === 1 ? 'match' : 'matches'}
+                </span>
+                <ConfidenceBadge confidence={eventContextConfidence} />
+              </div>
             }
           >
             {eventContextEntries.length > 0 ? (
@@ -2413,6 +2535,7 @@ function AnalysisTab() {
                 <p>No current worldstate rewards or live event hooks are matching this item right now.</p>
               </div>
             )}
+            <ConfidenceNote confidence={eventContextConfidence} />
           </AnalyticsPanel>
 
           <AnalyticsPanel
@@ -2423,9 +2546,12 @@ function AnalysisTab() {
             loadingLabel="Scanning manipulation signals"
             className={`market-panel-tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
             headerAside={
-              <span className={`market-panel-badge tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}>
-                {analysis?.manipulationRisk.riskLevel ?? 'Building'}
-              </span>
+              <div className="market-badge-stack">
+                <span className={`market-panel-badge tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}>
+                  {analysis?.manipulationRisk.riskLevel ?? 'Building'}
+                </span>
+                <ConfidenceBadge confidence={analysis?.manipulationRisk.confidenceSummary} />
+              </div>
             }
           >
             <div className="market-metric-grid">
@@ -2453,6 +2579,7 @@ function AnalysisTab() {
                 </div>
               </div>
             </div>
+            <ConfidenceNote confidence={analysis?.manipulationRisk.confidenceSummary} />
             <div className="market-analysis-signal-list">
               {(analysis?.manipulationRisk.signals ?? []).map((signal) => (
                 <div
@@ -2477,9 +2604,12 @@ function AnalysisTab() {
             loadingLabel="Aggregating observatory tape"
             className="market-panel-tone-blue"
             headerAside={
-              <span className="market-panel-badge tone-blue">
-                {analysis?.timeOfDayLiquidity.strongestWindowLabel ?? 'Building'}
-              </span>
+              <div className="market-badge-stack">
+                <span className="market-panel-badge tone-blue">
+                  {analysis?.timeOfDayLiquidity.strongestWindowLabel ?? 'Building'}
+                </span>
+                <ConfidenceBadge confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
+              </div>
             }
           >
             <div className="market-pressure-row">
@@ -2510,6 +2640,7 @@ function AnalysisTab() {
                 </div>
               ))}
             </div>
+            <ConfidenceNote confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
           </AnalyticsPanel>
         </div>
       </div>
