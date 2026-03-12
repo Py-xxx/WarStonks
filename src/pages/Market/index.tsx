@@ -210,7 +210,7 @@ function toUnitInterval(value: number | null | undefined, fallback = 0): number 
   if (value === null || value === undefined || Number.isNaN(value)) {
     return fallback;
   }
-  return clampNumber(value, 0, 1);
+  return clampNumber(value > 1 ? value / 100 : value, 0, 1);
 }
 
 function ratioToUnitInterval(value: number | null | undefined): number {
@@ -1440,14 +1440,29 @@ function AnalyticsTab() {
             ))}
           </select>
         ) : null}
-        <button className="btn-sm" type="button" onClick={() => setRefreshNonce((value) => value + 1)}>
-          Refresh
-        </button>
         <div className="market-item-freshness">
           <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
           <span>Stats {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
           <span>Computed {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
         </div>
+        <button
+          className="market-refresh-button"
+          type="button"
+          aria-label="Refresh market analytics"
+          title="Refresh market analytics"
+          onClick={() => setRefreshNonce((value) => value + 1)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
       </div>
       <StaticAnalyticsChart
         itemName={selectedItem.name}
@@ -1878,14 +1893,29 @@ function AnalysisTab() {
             ))}
           </select>
         ) : null}
-        <button className="btn-sm" type="button" onClick={() => setRefreshNonce((value) => value + 1)}>
-          Refresh
-        </button>
         <div className="market-item-freshness">
           <span>Snapshot {formatRelativeTimestamp(analysis?.sourceSnapshotAt ?? null)}</span>
           <span>Stats {formatRelativeTimestamp(analysis?.sourceStatsFetchedAt ?? null)}</span>
           <span>Computed {formatRelativeTimestamp(analysis?.computedAt ?? null)}</span>
         </div>
+        <button
+          className="market-refresh-button"
+          type="button"
+          aria-label="Refresh market analysis"
+          title="Refresh market analysis"
+          onClick={() => setRefreshNonce((value) => value + 1)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
       </div>
       <div className="market-analysis-layout">
         <div className="market-analysis-column market-analysis-column-main">
