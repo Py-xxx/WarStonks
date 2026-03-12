@@ -77,6 +77,14 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
           <div className="alerts-list">
             {visibleSystemAlerts.map((alert) => (
               <div key={alert.id} className="alert-item alert-item-system">
+                <button
+                  className="alert-clear-btn alert-clear-btn-floating"
+                  type="button"
+                  aria-label={`Clear system alert for ${alert.title}`}
+                  onClick={() => dismissSystemAlert(alert.id)}
+                >
+                  ×
+                </button>
                 <div className="alert-main">
                   <span className="alert-item-thumb alert-item-thumb-system">!</span>
                   <div className="alert-copy">
@@ -108,14 +116,6 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                   >
                     Retry
                   </button>
-                  <button
-                    className="alert-clear-btn"
-                    type="button"
-                    aria-label={`Clear system alert for ${alert.title}`}
-                    onClick={() => dismissSystemAlert(alert.id)}
-                  >
-                    ×
-                  </button>
                 </div>
               </div>
             ))}
@@ -134,6 +134,14 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
 
               return (
                 <div key={alert.id} className="alert-item">
+                  <button
+                    className="alert-clear-btn alert-clear-btn-floating"
+                    type="button"
+                    aria-label={`Clear alert for ${alert.itemName}`}
+                    onClick={() => dismissAlert(alert.id)}
+                  >
+                    ×
+                  </button>
                   <div className="alert-main">
                     <span className="alert-item-thumb">
                       {imageUrl ? (
@@ -177,14 +185,6 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       }
                     >
                       Copy Message
-                    </button>
-                    <button
-                      className="alert-clear-btn"
-                      type="button"
-                      aria-label={`Clear alert for ${alert.itemName}`}
-                      onClick={() => dismissAlert(alert.id)}
-                    >
-                      ×
                     </button>
                   </div>
                 </div>
