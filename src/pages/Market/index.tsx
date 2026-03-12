@@ -864,11 +864,8 @@ function buildItemDetailSections(detail: ItemDetailSummary | null): ItemDetailSe
   const sections: ItemDetailSection[] = [];
   const overviewFields: ItemDetailField[] = [];
 
-  pushDetailField(overviewFields, 'Family', detail.itemFamily ?? '—');
   pushDetailField(overviewFields, 'Category', detail.category ?? '—');
-  pushDetailField(overviewFields, 'Type', detail.itemType ?? '—');
   pushDetailField(overviewFields, 'Rarity', detail.rarity ?? '—');
-  pushDetailField(overviewFields, 'Tradable', formatNullableBoolean(detail.tradable));
   pushDetailField(overviewFields, 'Prime', formatNullableBoolean(detail.prime));
   pushDetailField(overviewFields, 'Vaulted', formatNullableBoolean(detail.vaulted));
   if (overviewFields.length > 0) {
@@ -988,16 +985,6 @@ function buildItemDetailSections(detail: ItemDetailSummary | null): ItemDetailSe
       fields: detail.attackNames.map((name, index) => ({
         label: `${index + 1}`,
         value: name,
-      })),
-    });
-  }
-
-  if (detail.tags.length > 0) {
-    sections.push({
-      title: 'Tags',
-      fields: detail.tags.map((tag, index) => ({
-        label: `${index + 1}`,
-        value: tag,
       })),
     });
   }
