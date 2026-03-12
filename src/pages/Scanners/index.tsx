@@ -215,7 +215,7 @@ function ArbitrageRow({
 
   return (
     <article className={`scanner-list-row${expanded ? ' is-expanded' : ''}`}>
-      <button className="scanner-list-button scanner-list-button-relic" type="button" onClick={onToggle}>
+      <button className="scanner-list-button" type="button" onClick={onToggle}>
         <div className="scanner-list-primary scanner-list-primary-relic">
           <div className="scanner-result-rank">#{index + 1}</div>
           <span className="scanner-result-thumb">

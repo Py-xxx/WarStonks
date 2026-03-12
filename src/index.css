@@ -3842,10 +3842,16 @@ body {
 }
 
 .scanner-list-primary-relic {
+  grid-column: 1;
   min-width: 0;
 }
 
+.scanner-list-metrics-relic {
+  grid-column: 2 / span 5;
+}
+
 .scanner-list-badges-relic {
+  grid-column: 7;
   flex-wrap: nowrap;
   min-width: 0;
 }
