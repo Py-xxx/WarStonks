@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { getWfmProfileTradeLog } from '../../lib/tauriClient';
+import { useEffect, useState } from 'react';
+import { getCachedWfmProfileTradeLog, getWfmProfileTradeLog } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -81,15 +81,66 @@ function TradeLogTab({ username }: { username: string | null }) {
     setErrorMessage(null);
 
     try {
-      const nextEntries = await getWfmProfileTradeLog(username);
-      setEntries(nextEntries);
-      setLastUpdatedAt(new Date().toISOString());
+      const nextState = await getWfmProfileTradeLog(username);
+      setEntries(nextState.entries);
+      setLastUpdatedAt(nextState.lastUpdatedAt);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!username) {
+      setEntries([]);
+      setLastUpdatedAt(null);
+      setErrorMessage(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadOnOpen = async () => {
+      setLoading(true);
+      setErrorMessage(null);
+
+      try {
+        const cachedState = await getCachedWfmProfileTradeLog(username);
+        if (!cancelled) {
+          setEntries(cachedState.entries);
+          setLastUpdatedAt(cachedState.lastUpdatedAt);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      try {
+        const nextState = await getWfmProfileTradeLog(username);
+        if (!cancelled) {
+          setEntries(nextState.entries);
+          setLastUpdatedAt(nextState.lastUpdatedAt);
+          setErrorMessage(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadOnOpen();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [username]);
 
   return (
     <>
@@ -124,8 +175,12 @@ function TradeLogTab({ username }: { username: string | null }) {
         </div>
       ) : entries.length === 0 ? (
         <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">No trade history loaded yet</span>
-          <span className="empty-sub">Press Refresh to load your last 90 days of buy and sell orders.</span>
+          <span className="empty-primary">{loading ? 'Loading trade history…' : 'No trade history loaded yet'}</span>
+          <span className="empty-sub">
+            {loading
+              ? 'Loading your cached trade log and updating it from Warframe Market.'
+              : 'Open the tab or press Refresh to load your last 90 days of buy and sell orders.'}
+          </span>
         </div>
       ) : (
         <div className="portfolio-log-card">
