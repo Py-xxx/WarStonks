@@ -155,6 +155,19 @@ export interface PortfolioTrade {
   holdHours: number;
 }
 
+export interface PortfolioTradeLogEntry {
+  id: string;
+  itemName: string;
+  slug: string;
+  imagePath: string | null;
+  orderType: 'buy' | 'sell';
+  platinum: number;
+  quantity: number;
+  rank: number | null;
+  closedAt: string;
+  updatedAt: string;
+}
+
 export interface WfstatEventRewardCountedItem {
   count: number;
   type: string;

@@ -1,6 +1,18 @@
 import { useState } from 'react';
+import { getWfmProfileTradeLog } from '../../lib/tauriClient';
+import { formatShortLocalDateTime } from '../../lib/dateTime';
+import { formatPlatinumValue } from '../../lib/trades';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
+import type { PortfolioTradeLogEntry } from '../../types';
 import { mockPortfolioStats } from '../../mocks/portfolio';
+
+const RefreshIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+  </svg>
+);
 
 function CumulativeProfitChart() {
   return (
@@ -16,7 +28,7 @@ function CumulativeProfitChart() {
           <text x="5" y="96" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">15</text>
           <polyline points="20,75 120,55 200,50 280,30 380,12" fill="none" stroke="var(--accent-blue)" strokeWidth="2"/>
           <polyline points="20,75 120,55 200,50 280,30 380,12 380,110 20,110" fill="rgba(74,158,255,0.06)" stroke="none"/>
-          <text x="20"  y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">2026-03-09</text>
+          <text x="20" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">2026-03-09</text>
           <text x="320" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">2026-03-10</text>
         </svg>
       </div>
@@ -35,9 +47,9 @@ function ProfitPerTradeChart() {
           <text x="2" y="42" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">27</text>
           <text x="2" y="69" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">18</text>
           <text x="2" y="96" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">9</text>
-          <rect x="30"  y="10" width="80" height="100" fill="rgba(61,214,140,0.5)" rx="2"/>
-          <rect x="160" y="40" width="80" height="70"  fill="rgba(61,214,140,0.5)" rx="2"/>
-          <text x="50"  y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">Wisp Prime Set</text>
+          <rect x="30" y="10" width="80" height="100" fill="rgba(61,214,140,0.5)" rx="2"/>
+          <rect x="160" y="40" width="80" height="70" fill="rgba(61,214,140,0.5)" rx="2"/>
+          <text x="50" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">Wisp Prime Set</text>
           <text x="165" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">Wisp Prime Set</text>
         </svg>
       </div>
@@ -45,16 +57,122 @@ function ProfitPerTradeChart() {
   );
 }
 
-function TradeLogTab() {
+function renderTradeType(orderType: PortfolioTradeLogEntry['orderType']): string {
+  return orderType === 'buy' ? 'Buy' : 'Sell';
+}
+
+function buildTradeTypeClassName(orderType: PortfolioTradeLogEntry['orderType']): string {
+  return orderType === 'buy' ? 'badge-blue' : 'badge-green';
+}
+
+function TradeLogTab({ username }: { username: string | null }) {
+  const [entries, setEntries] = useState<PortfolioTradeLogEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+
+  const handleRefresh = async () => {
+    if (!username) {
+      setErrorMessage('Connect your Warframe Market account in Trades first.');
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const nextEntries = await getWfmProfileTradeLog(username);
+      setEntries(nextEntries);
+      setLastUpdatedAt(new Date().toISOString());
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-      <span className="empty-primary">No trade history yet</span>
-      <span className="empty-sub">Completed trades will appear here</span>
-    </div>
+    <>
+      <div className="period-bar">
+        <label>Trade Log</label>
+        <div className="period-right portfolio-log-toolbar">
+          {lastUpdatedAt ? (
+            <span className="portfolio-log-updated">
+              Last updated {formatShortLocalDateTime(lastUpdatedAt)}
+            </span>
+          ) : null}
+          <button
+            className="act-btn portfolio-refresh-btn"
+            type="button"
+            onClick={() => void handleRefresh()}
+            disabled={loading}
+          >
+            <RefreshIcon />
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
+      {errorMessage ? (
+        <div className="scanner-inline-error">{errorMessage}</div>
+      ) : null}
+
+      {!username ? (
+        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
+          <span className="empty-primary">Connect your Warframe Market account first</span>
+          <span className="empty-sub">Trade Log uses your public WFM profile statistics.</span>
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
+          <span className="empty-primary">No trade history loaded yet</span>
+          <span className="empty-sub">Press Refresh to load your last 90 days of buy and sell orders.</span>
+        </div>
+      ) : (
+        <div className="portfolio-log-card">
+          <div className="portfolio-log-header">
+            <span>Item</span>
+            <span>Type</span>
+            <span>Price</span>
+            <span>Qty</span>
+            <span>Rank</span>
+            <span>Closed</span>
+          </div>
+
+          <div className="portfolio-log-list">
+            {entries.map((entry) => (
+              <div key={entry.id} className="portfolio-log-row">
+                <div className="portfolio-log-item">
+                  <span className="portfolio-log-thumb">
+                    {entry.imagePath ? (
+                      <img src={resolveWfmAssetUrl(entry.imagePath)} alt="" />
+                    ) : (
+                      <span className="portfolio-log-thumb-fallback">{entry.itemName.charAt(0)}</span>
+                    )}
+                  </span>
+                  <div className="portfolio-log-item-copy">
+                    <span className="portfolio-log-item-name">{entry.itemName}</span>
+                    <span className="portfolio-log-item-slug">{entry.slug}</span>
+                  </div>
+                </div>
+
+                <span className={`badge ${buildTradeTypeClassName(entry.orderType)}`}>
+                  {renderTradeType(entry.orderType)}
+                </span>
+                <span className="portfolio-log-value">{formatPlatinumValue(entry.platinum)}</span>
+                <span className="portfolio-log-value">{entry.quantity}</span>
+                <span className="portfolio-log-value">{entry.rank ?? '—'}</span>
+                <span className="portfolio-log-date">{formatShortLocalDateTime(entry.closedAt)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
 export function PortfolioPage() {
+  const tradeAccount = useAppStore((s) => s.tradeAccount);
   const tradePeriod = useAppStore((s) => s.tradePeriod);
   const setTradePeriod = useAppStore((s) => s.setTradePeriod);
   const [portfolioTab, setPortfolioTab] = useState<'pnl' | 'log'>('pnl');
@@ -71,9 +189,8 @@ export function PortfolioPage() {
         </div>
       </div>
       <div className="page-content">
-        {portfolioTab === 'log' ? <TradeLogTab /> : (
+        {portfolioTab === 'log' ? <TradeLogTab username={tradeAccount?.name ?? null} /> : (
           <>
-            {/* Period selector */}
             <div className="period-bar">
               <label>Period:</label>
               {(['7d', '30d', 'all'] as const).map((p) => (
@@ -86,11 +203,10 @@ export function PortfolioPage() {
                 </button>
               ))}
               <div className="period-right">
-                <button className="act-btn">Refresh Trades</button>
+                <button className="act-btn" type="button">Refresh Trades</button>
               </div>
             </div>
 
-            {/* Plat grid */}
             <div className="plat-grid">
               <div className="info-card">
                 <div className="info-card-label">Total Plat (All Time)</div>
@@ -106,7 +222,6 @@ export function PortfolioPage() {
               </div>
             </div>
 
-            {/* Alloc grid */}
             <div className="alloc-grid">
               <div className="info-card">
                 <div className="info-card-label">Allocator Status</div>
@@ -122,7 +237,6 @@ export function PortfolioPage() {
               </div>
             </div>
 
-            {/* Perf grid */}
             <div className="perf-grid">
               <div className="perf-card">
                 <div className="perf-label">Profit</div>
@@ -162,7 +276,6 @@ export function PortfolioPage() {
               </div>
             </div>
 
-            {/* Charts */}
             <div className="chart-grid">
               <CumulativeProfitChart />
               <ProfitPerTradeChart />
@@ -173,4 +286,3 @@ export function PortfolioPage() {
     </>
   );
 }
-
