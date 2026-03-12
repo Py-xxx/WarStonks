@@ -3800,7 +3800,7 @@ body {
 
 .scanner-list-header-relic {
   display: grid;
-  grid-template-columns: 44px 52px minmax(260px, 1fr) 72px 96px 72px 84px 92px 360px;
+  grid-template-columns: minmax(360px, 1fr) 72px 96px 72px 84px 92px 360px;
   column-gap: 10px;
   align-items: center;
 }
@@ -3814,7 +3814,8 @@ body {
   text-align: center;
 }
 
-.scanner-list-header-empty {
+.scanner-list-header-primary,
+.scanner-list-header-actions {
   min-height: 1px;
 }
 
@@ -3828,7 +3829,7 @@ body {
 
 .scanner-list-button-relic {
   display: grid;
-  grid-template-columns: 44px 52px minmax(260px, 1fr) 72px 96px 72px 84px 92px 360px;
+  grid-template-columns: minmax(360px, 1fr) 72px 96px 72px 84px 92px 360px;
   align-items: center;
   column-gap: 10px;
 }
@@ -3840,9 +3841,7 @@ body {
   align-items: center;
 }
 
-.scanner-result-rank-relic,
-.scanner-result-thumb-relic,
-.scanner-list-name-relic {
+.scanner-list-primary-relic {
   min-width: 0;
 }
 
@@ -5416,6 +5415,7 @@ body {
 
   .scanner-list-button-relic {
     display: flex;
+    gap: 10px;
   }
 
   .scanner-list-button-relic {
