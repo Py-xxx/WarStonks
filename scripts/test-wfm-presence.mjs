@@ -116,6 +116,7 @@ Usage:
 What it does:
   - loads your saved WFM trade session by default
   - tries several websocket auth/status variants
+  - defaults to attempting a real "Online" status update in matrix mode
   - prints raw route responses so we can see which protocol actually works
 
 Options:
@@ -138,6 +139,13 @@ Examples:
   pnpm test:wfm-presence -- --status online --restore
   pnpm test:wfm-presence -- --endpoint wss://ws.warframe.market/socket --status invisible
 `);
+}
+
+function resolveRequestedStatus(args) {
+  if (args.status) {
+    return normalizeStatus(args.status);
+  }
+  return args.cases === 'read-only' ? null : 'online';
 }
 
 function getDefaultSessionPath() {
@@ -440,6 +448,7 @@ function routeShort(route) {
 
 function buildCases(args) {
   const endpoints = args.endpoint ? [args.endpoint] : DEFAULT_ENDPOINTS;
+  const requestedStatus = resolveRequestedStatus(args);
 
   if (args.cases === 'read-only') {
     return endpoints.map((endpoint) => ({
@@ -457,11 +466,12 @@ function buildCases(args) {
       endpoint: endpoints[0],
       authRoute: '@wfm|cmd/auth/signIn',
       authPayloadBuilder: (token, deviceId) => ({ token, deviceId }),
-      sendStatus: args.status ? normalizeStatus(args.status) : null,
+      statusRoute: '@wfm|cmd/status/set',
+      sendStatus: requestedStatus,
     }];
   }
 
-  const statusValue = args.status ? normalizeStatus(args.status) : null;
+  const statusValue = requestedStatus;
   return [
     {
       name: `${endpoints[0]} :: auth deviceId + route @wfm|cmd/status/set + status ${statusValue ?? '(none)'}`,
@@ -509,7 +519,7 @@ function buildCases(args) {
       authRoute: '@wfm|cmd/auth/signIn',
       authPayloadBuilder: (token, deviceId) => ({ token, deviceId }),
       statusRoute: '@wfm|cmd/status/set',
-      sendStatus: args.status ? 'ingame' : null,
+      sendStatus: statusValue ? 'ingame' : null,
     },
   ];
 }
@@ -663,6 +673,8 @@ async function runCase(testCase, session, args) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const session = await resolveSession(args);
+  const requestedStatus = resolveRequestedStatus(args);
+  const shouldAutoRestore = Boolean(requestedStatus) && (args.restore || !args.status);
 
   if (!session.token || !session.deviceId) {
     throw new Error('Missing token or device id. Provide --token and --device-id or ensure the saved session file is valid.');
@@ -674,12 +686,20 @@ async function main() {
   if (session.account?.name) {
     console.log(`Signed in as: ${session.account.name}`);
   }
-  console.log(`Mode: ${args.cases}${args.status ? ` with status=${normalizeStatus(args.status)}` : ' (read-only if no --status)'}`);
+  console.log(
+    `Mode: ${args.cases}${
+      requestedStatus ? ` with status=${requestedStatus}` : ' (read-only)'
+    }`,
+  );
+  if (shouldAutoRestore) {
+    console.log('Restore: enabled');
+  }
 
   const cases = buildCases(args).filter((testCase) => testCase.endpoint);
   let originalStatus = null;
+  const successfulCases = [];
 
-  if (args.restore) {
+  if (shouldAutoRestore) {
     const restoreProbe = await runCase(
       {
         name: 'baseline presence read',
@@ -707,6 +727,11 @@ async function main() {
       console.log(`routes: ${frameRoutes || '(none)'}`);
       console.log(`current status: ${attempt.result.currentStatus ?? '—'}`);
       console.log(`set result: ${attempt.result.setStatusResult ?? '—'}`);
+      successfulCases.push({
+        name: testCase.name,
+        currentStatus: attempt.result.currentStatus ?? null,
+        setStatusResult: attempt.result.setStatusResult ?? null,
+      });
     } else {
       console.log(`success: no`);
       console.log(`error: ${attempt.error}`);
@@ -716,7 +741,21 @@ async function main() {
     }
   }
 
-  if (args.restore && originalStatus && args.status) {
+  if (successfulCases.length > 0) {
+    console.log('\n=== successful variants ===');
+    for (const successfulCase of successfulCases) {
+      console.log(
+        `- ${successfulCase.name} -> ${
+          successfulCase.setStatusResult ?? successfulCase.currentStatus ?? 'no explicit status echoed'
+        }`,
+      );
+    }
+  } else if (requestedStatus) {
+    console.log('\n=== successful variants ===');
+    console.log('- none');
+  }
+
+  if (shouldAutoRestore && originalStatus && requestedStatus) {
     console.log(`\n=== restore original status (${originalStatus}) ===`);
     const restoreAttempt = await runCase(
       {
