@@ -3289,7 +3289,7 @@ where
         let revenue = record_total_platinum(record);
         let profit = revenue - matched_cost;
         let margin = if matched_cost > 0 {
-            Some(((profit as f64) / (matched_cost as f64)) * 100.0)
+            Some(profit as f64)
         } else {
             None
         };
@@ -5647,7 +5647,7 @@ mod tests {
             .find(|entry| entry.id == "sell-set")
             .expect("sell entry");
         assert_eq!(sell_entry.profit, Some(35));
-        assert_eq!(sell_entry.margin, Some(58.333333333333336));
+        assert_eq!(sell_entry.margin, Some(35.0));
 
         for buy_id in ["buy-chassis", "buy-neuro", "buy-systems"] {
             let buy_entry = derived
@@ -5854,7 +5854,7 @@ mod tests {
             .find(|entry| entry.id == "sell-set")
             .expect("sell entry");
         assert_eq!(sell_entry.profit, Some(75));
-        assert_eq!(sell_entry.margin, Some(300.0));
+        assert_eq!(sell_entry.margin, Some(75.0));
 
         let buy_entry = derived
             .iter()
