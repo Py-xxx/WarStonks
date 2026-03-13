@@ -4059,6 +4059,10 @@ body {
 
 .info-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; }
 .info-card-label {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 6px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   letter-spacing: 0.07em;
@@ -4079,6 +4083,10 @@ body {
 .perf-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-bottom: 14px; }
 .perf-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
 .perf-label {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 6px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 8px;
   letter-spacing: 0.07em;
@@ -4178,24 +4186,27 @@ body {
 }
 .portfolio-panel-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 .info-hint {
   position: relative;
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
+  padding-top: 1px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text-secondary);
-  font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
+  font-family: inherit;
   cursor: help;
   flex: 0 0 auto;
+  align-self: flex-start;
 }
 .info-hint-tooltip {
   position: absolute;
