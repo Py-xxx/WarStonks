@@ -36,6 +36,12 @@ const BellIcon = () => (
   </svg>
 );
 
+const ChevronDownIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+
 function formatCurrencyValue(value: number | null, loading: boolean): string {
   if (loading) {
     return '…';
@@ -65,7 +71,9 @@ export function TopBar() {
   const systemAlerts = useAppStore((s) => s.systemAlerts);
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const tradeAccountLoading = useAppStore((s) => s.tradeAccountLoading);
+  const tradeAccountError = useAppStore((s) => s.tradeAccountError);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
+  const setTradeAccountStatus = useAppStore((s) => s.setTradeAccountStatus);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
   const setActivePage = useAppStore((s) => s.setActivePage);
@@ -81,9 +89,11 @@ export function TopBar() {
   const [autocompleteError, setAutocompleteError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [tradeMenuOpen, setTradeMenuOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const searchRef = useRef<HTMLDivElement | null>(null);
   const notificationsRef = useRef<HTMLDivElement | null>(null);
+  const tradeMenuRef = useRef<HTMLDivElement | null>(null);
   const previousAlertCountRef = useRef(0);
   const deferredSearchValue = useDeferredValue(searchValue);
   const suggestions = rankWfmAutocompleteItems(autocompleteItems, deferredSearchValue);
@@ -148,6 +158,10 @@ export function TopBar() {
       if (!notificationsRef.current?.contains(event.target as Node)) {
         setNotificationsOpen(false);
       }
+
+      if (!tradeMenuRef.current?.contains(event.target as Node)) {
+        setTradeMenuOpen(false);
+      }
     };
 
     window.addEventListener('mousedown', handlePointerDown);
@@ -200,6 +214,22 @@ export function TopBar() {
 
     if (event.key === 'Escape') {
       setDropdownOpen(false);
+    }
+  };
+
+  const handleOpenTrades = () => {
+    setActivePage('trades');
+    setTradesSubTab('sell-orders');
+    void loadTradeAccount();
+    setTradeMenuOpen(false);
+  };
+
+  const handleSetPresence = async (status: 'ingame' | 'online' | 'invisible') => {
+    try {
+      await setTradeAccountStatus(status);
+      setTradeMenuOpen(false);
+    } catch (error) {
+      console.error('[trades] failed to update presence', error);
     }
   };
 
@@ -396,28 +426,78 @@ export function TopBar() {
             </div>
           ) : null}
         </div>
-        <button
-          className={`btn-connect${tradeAccount ? ' trade-connected' : ''}`}
-          aria-label="Open trades"
-          onClick={() => {
-            setActivePage('trades');
-            setTradesSubTab('sell-orders');
-            void loadTradeAccount();
-          }}
-        >
-          {!tradeAccount ? <ArrowIcon /> : null}
-          {tradeAccount ? (
-            <>
+        {!tradeAccount ? (
+          <button
+            className="btn-connect"
+            aria-label="Open trades"
+            onClick={handleOpenTrades}
+          >
+            <ArrowIcon />
+            {tradeAccountLoading ? 'Loading…' : 'Connect'}
+          </button>
+        ) : (
+          <div ref={tradeMenuRef} className="trade-menu-wrap">
+            <button
+              className="btn-connect trade-connected"
+              aria-label="Open trade account menu"
+              aria-expanded={tradeMenuOpen}
+              onClick={() => setTradeMenuOpen((value) => !value)}
+            >
               <span>{tradeAccount.name}</span>
               <span className="trade-connected-separator">·</span>
               <span className={`trade-connected-status ${getTradeStatusToneClass(tradeAccount.status)}`}>
                 {formatTradeStatusLabel(tradeAccount.status)}
               </span>
-            </>
-          ) : tradeAccountLoading
-            ? 'Loading…'
-            : 'Connect'}
-        </button>
+              <ChevronDownIcon />
+            </button>
+
+            {tradeMenuOpen ? (
+              <div className="trade-menu-dropdown">
+                <div className="trade-menu-header">
+                  <span className="card-label">Warframe Market</span>
+                  <span className="trade-menu-status-copy">
+                    Choose how your presence appears on warframe.market.
+                  </span>
+                </div>
+
+                <div className="trade-menu-section">
+                  <span className="trade-menu-section-title">Presence</span>
+                  <div className="trade-menu-status-grid">
+                    {([
+                      { value: 'ingame', label: 'Ingame' },
+                      { value: 'online', label: 'Online' },
+                      { value: 'invisible', label: 'Invisible' },
+                    ] as const).map((option) => {
+                      const isActive =
+                        (tradeAccount.status === 'offline' ? 'invisible' : tradeAccount.status) === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          className={`trade-menu-status-btn${isActive ? ' active' : ''}`}
+                          type="button"
+                          disabled={tradeAccountLoading}
+                          onClick={() => void handleSetPresence(option.value)}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="trade-menu-actions">
+                  <button type="button" className="trade-menu-link" onClick={handleOpenTrades}>
+                    Open Trades
+                  </button>
+                </div>
+
+                {tradeAccountError ? (
+                  <div className="trade-menu-error">{tradeAccountError}</div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        )}
         <button
           className="settings-btn"
           title="Settings"

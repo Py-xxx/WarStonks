@@ -984,6 +984,11 @@ body {
   border-color: rgba(74, 158, 255, 0.32);
   background: rgba(74, 158, 255, 0.08);
 }
+.trade-menu-status-btn.active {
+  border-color: rgba(74, 158, 255, 0.42);
+  background: rgba(74, 158, 255, 0.14);
+  color: #eef5ff;
+}
 .trade-menu-status-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;

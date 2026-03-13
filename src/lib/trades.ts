@@ -10,7 +10,7 @@ export function formatTradeStatusLabel(
     case 'online':
       return 'Online';
     default:
-      return 'Offline';
+      return 'Invisible';
   }
 }
 
