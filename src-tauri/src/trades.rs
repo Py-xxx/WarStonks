@@ -387,6 +387,8 @@ struct AlecaframeTradeResponse {
     buy_trades: Vec<AlecaframeTradeRecord>,
     #[serde(default)]
     sell_trades: Vec<AlecaframeTradeRecord>,
+    #[serde(default)]
+    trades: Vec<AlecaframeRawTradeRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -409,6 +411,21 @@ struct AlecaframeTradeItemRecord {
     display_name: Option<String>,
     cnt: i64,
     rank: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlecaframeRawTradeRecord {
+    #[serde(rename = "ts")]
+    timestamp: String,
+    #[serde(rename = "type")]
+    trade_type: i64,
+    #[serde(default)]
+    total_plat: Option<i64>,
+    #[serde(default, rename = "tx")]
+    items_sent: Vec<AlecaframeTradeItemRecord>,
+    #[serde(default, rename = "rx")]
+    items_received: Vec<AlecaframeTradeItemRecord>,
 }
 
 fn now_utc() -> OffsetDateTime {
@@ -991,6 +1008,35 @@ fn normalize_alecaframe_rank(rank: i64) -> Option<i64> {
     (rank >= 0).then_some(rank)
 }
 
+fn normalize_alecaframe_trade_payload(payload: AlecaframeTradeResponse) -> Vec<AlecaframeTradeRecord> {
+    let mut trades = payload
+        .buy_trades
+        .into_iter()
+        .chain(payload.sell_trades)
+        .collect::<Vec<_>>();
+
+    if trades.is_empty() {
+        trades.extend(payload.trades.into_iter().filter_map(|trade| {
+            let direction = match trade.trade_type {
+                0 => "sell",
+                1 => "buy",
+                _ => return None,
+            };
+
+            Some(AlecaframeTradeRecord {
+                timestamp: trade.timestamp,
+                direction: direction.to_string(),
+                total_plat: trade.total_plat,
+                items_sent: trade.items_sent,
+                items_received: trade.items_received,
+            })
+        }));
+    }
+
+    trades.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    trades
+}
+
 fn allocated_row_totals(total_platinum: i64, unit_counts: &[i64]) -> Vec<i64> {
     let total_units = unit_counts.iter().copied().map(|value| value.max(0)).sum::<i64>();
     if total_units <= 0 {
@@ -1105,15 +1151,11 @@ fn build_alecaframe_trade_entries(
     existing: &[StoredTradeLogRecord],
 ) -> Result<Vec<PortfolioTradeLogEntry>> {
     let baseline = parse_date_start_utc(baseline_date)?;
-    let payload = fetch_alecaframe_trade_payload(app)?;
+    let trades = normalize_alecaframe_trade_payload(fetch_alecaframe_trade_payload(app)?);
     let catalog = open_catalog_database(app)?;
     let mut imported = Vec::new();
 
-    for trade in payload
-        .buy_trades
-        .into_iter()
-        .chain(payload.sell_trades.into_iter())
-    {
+    for trade in trades {
         let order_type = match trade.direction.as_str() {
             "buy" => "buy",
             "sell" => "sell",
@@ -3192,8 +3234,9 @@ mod tests {
     use super::{
         build_trade_log_entries_from_statistics, derive_trade_log_entries_with_components,
         initialize_trades_cache_schema, load_stored_trade_log_records_inner,
-        load_trade_log_last_updated_at, normalize_avatar_url, parse_status_from_payload,
-        save_trade_log_rows_inner, PortfolioTradeLogEntry, StoredTradeLogRecord,
+        load_trade_log_last_updated_at, normalize_alecaframe_trade_payload, normalize_avatar_url,
+        parse_status_from_payload, save_trade_log_rows_inner, AlecaframeRawTradeRecord,
+        AlecaframeTradeItemRecord, AlecaframeTradeResponse, PortfolioTradeLogEntry, StoredTradeLogRecord,
         TradeSetComponentRecord, WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
     };
@@ -3297,6 +3340,55 @@ mod tests {
             entries[1].image_path.as_deref(),
             Some("items/images/en/test.png")
         );
+    }
+
+    #[test]
+    fn normalizes_raw_alecaframe_trade_payload() {
+        let trades = normalize_alecaframe_trade_payload(AlecaframeTradeResponse {
+            buy_trades: Vec::new(),
+            sell_trades: Vec::new(),
+            trades: vec![
+                AlecaframeRawTradeRecord {
+                    timestamp: "2026-03-07T12:12:25.5764897Z".to_string(),
+                    trade_type: 0,
+                    total_plat: Some(69),
+                    items_sent: vec![AlecaframeTradeItemRecord {
+                        name: "/Lotus/Types/Recipes/WarframeRecipes/WispPrimeBlueprint".to_string(),
+                        display_name: None,
+                        cnt: 1,
+                        rank: -1,
+                    }],
+                    items_received: vec![AlecaframeTradeItemRecord {
+                        name: "/AF_Special/Platinum".to_string(),
+                        display_name: None,
+                        cnt: 69,
+                        rank: -1,
+                    }],
+                },
+                AlecaframeRawTradeRecord {
+                    timestamp: "2026-03-06T03:54:00.8900411Z".to_string(),
+                    trade_type: 1,
+                    total_plat: None,
+                    items_sent: vec![AlecaframeTradeItemRecord {
+                        name: "/AF_Special/Platinum".to_string(),
+                        display_name: None,
+                        cnt: 34,
+                        rank: -1,
+                    }],
+                    items_received: vec![AlecaframeTradeItemRecord {
+                        name: "/Lotus/Types/Recipes/WarframeRecipes/NovaPrimeChassisComponent".to_string(),
+                        display_name: None,
+                        cnt: 1,
+                        rank: -1,
+                    }],
+                },
+            ],
+        });
+
+        assert_eq!(trades.len(), 2);
+        assert_eq!(trades[0].direction, "buy");
+        assert_eq!(trades[1].direction, "sell");
+        assert_eq!(trades[1].total_plat, Some(69));
     }
 
     #[test]
