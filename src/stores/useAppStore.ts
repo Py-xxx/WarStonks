@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import {
+  closeWfmBuyOrder,
+  createWfmBuyOrder,
+  deleteWfmBuyOrder,
   ensureMarketTracking,
   getWfmTradeSessionState,
   getAppSettings,
@@ -8,13 +11,14 @@ import {
   getCurrencyBalances,
   getItemVariantsForMarket,
   getWfmItemOrders,
+  updateWfmBuyOrder,
   getWfmTopSellOrdersForVariant,
   getWfmTopSellOrders,
-  signInWfmTradeAccount,
-  signOutWfmTradeAccount,
   saveAlecaframeSettings,
   saveDiscordWebhookSettings,
   sendWatchlistFoundDiscordNotification,
+  signInWfmTradeAccount,
+  signOutWfmTradeAccount,
   stopMarketTracking,
 } from '../lib/tauriClient';
 import {
@@ -181,6 +185,91 @@ function buildMarketDisplayName(name: string, variantLabel: string | null | unde
   return `${name} · ${variantLabel}`;
 }
 
+function deriveVariantRankFromKey(variantKey: string): number | null {
+  if (!variantKey.startsWith('rank:')) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(variantKey.slice(5), 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function findMatchingBuyOrderId(
+  item: WfmAutocompleteItem,
+  variantKey: string,
+  targetPrice: number,
+  overview: Awaited<ReturnType<typeof createWfmBuyOrder>>,
+): string | null {
+  const expectedRank = deriveVariantRankFromKey(variantKey);
+  const matchingOrders = overview.buyOrders.filter(
+    (order) =>
+      order.wfmId === item.wfmId &&
+      order.yourPrice === Math.round(targetPrice) &&
+      order.quantity === 1 &&
+      order.rank === expectedRank,
+  );
+
+  if (matchingOrders.length === 0) {
+    return null;
+  }
+
+  matchingOrders.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return matchingOrders[0]?.orderId ?? null;
+}
+
+async function syncWatchlistBuyOrder(
+  item: WfmAutocompleteItem,
+  variantKey: string,
+  targetPrice: number,
+  sellerMode: SellerMode,
+  linkedBuyOrderId: string | null,
+): Promise<string | null> {
+  if (!item.wfmId) {
+    return linkedBuyOrderId;
+  }
+
+  const rank = deriveVariantRankFromKey(variantKey);
+  const normalizedPrice = Math.max(1, Math.round(targetPrice));
+
+  if (linkedBuyOrderId) {
+    const overview = await updateWfmBuyOrder(
+      {
+        orderId: linkedBuyOrderId,
+        price: normalizedPrice,
+        quantity: 1,
+        rank,
+        visible: true,
+      },
+      sellerMode,
+    );
+    return findMatchingBuyOrderId(item, variantKey, normalizedPrice, overview) ?? linkedBuyOrderId;
+  }
+
+  const overview = await createWfmBuyOrder(
+    {
+      wfmId: item.wfmId,
+      price: normalizedPrice,
+      quantity: 1,
+      rank,
+      visible: true,
+    },
+    sellerMode,
+  );
+
+  return findMatchingBuyOrderId(item, variantKey, normalizedPrice, overview);
+}
+
+async function removeWatchlistBuyOrder(
+  orderId: string | null,
+  sellerMode: SellerMode,
+): Promise<void> {
+  if (!orderId) {
+    return;
+  }
+
+  await deleteWfmBuyOrder(orderId, sellerMode);
+}
+
 function buildWatchlistAlertId(watchlistId: string, orderId: string): string {
   return `${watchlistId}:${orderId}`;
 }
@@ -329,6 +418,7 @@ function createWatchlistItem(
   currentOrder: WfmTopSellOrder | null,
   currentCount: number,
   ignoredUserKeys: string[] = [],
+  linkedBuyOrderId: string | null = null,
 ): WatchlistItem {
   const nextScanAt = currentOrder
     ? Date.now() + getWatchlistPollIntervalMs(currentCount)
@@ -361,6 +451,7 @@ function createWatchlistItem(
     retryCount: 0,
     lastError: currentOrder ? null : 'Waiting for the first market refresh.',
     ignoredUserKeys,
+    linkedBuyOrderId,
   };
 }
 
@@ -371,6 +462,7 @@ function buildWatchlistUpdateState(
   variantLabel: string,
   targetPrice: number,
   preferredOrder: WfmTopSellOrder | null,
+  linkedBuyOrderId: string | null,
 ) {
   const existingItem = currentState.watchlist.find(
     (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
@@ -386,6 +478,7 @@ function buildWatchlistUpdateState(
     preferredOrder,
     watchlistCount,
     existingItem?.ignoredUserKeys ?? [],
+    linkedBuyOrderId ?? existingItem?.linkedBuyOrderId ?? null,
   );
   const nextAlert =
     preferredOrder && targetPrice >= preferredOrder.platinum
@@ -400,6 +493,7 @@ function buildWatchlistUpdateState(
                 ...nextItem,
                 retryCount: existingItem.retryCount,
                 ignoredUserKeys: existingItem.ignoredUserKeys,
+                linkedBuyOrderId: linkedBuyOrderId ?? existingItem.linkedBuyOrderId,
               }
             : entry,
         )
@@ -626,6 +720,7 @@ interface AppStore {
     targetPrice: number,
   ) => void;
   removeWatchlistItem: (id: string) => void;
+  markWatchlistItemBought: (id: string, price: number) => Promise<void>;
   dismissAlert: (id: string) => void;
   clearAllAlerts: () => void;
   markAlertBought: (id: string) => void;
@@ -660,6 +755,8 @@ interface AppStore {
   loadTradeAccount: () => Promise<void>;
   signInTradeAccount: (input: TradeSignInInput) => Promise<void>;
   signOutTradeAccount: () => Promise<void>;
+  autoWatchlistBuyOrdersEnabled: boolean;
+  setAutoWatchlistBuyOrdersEnabled: (enabled: boolean) => void;
   tradesSubTab: TradesSubTab;
   setTradesSubTab: (tab: TradesSubTab) => void;
 
@@ -1541,11 +1638,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     const variantKey = selectedVariantKey ?? 'base';
     const variantLabel = selectedVariantLabel ?? 'Base Market';
+    const existingItem = state.watchlist.find(
+      (item) => item.slug === selectedItem.slug && item.variantKey === variantKey,
+    );
     const preferredOrder = selectPreferredWatchlistOrder(
       state.quickView.sellOrders,
-      state.watchlist.find(
-        (item) => item.slug === selectedItem.slug && item.variantKey === variantKey,
-      )?.ignoredUserKeys ?? [],
+      existingItem?.ignoredUserKeys ?? [],
     );
     set((currentState) =>
       buildWatchlistUpdateState(
@@ -1555,6 +1653,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         variantLabel,
         targetPrice,
         preferredOrder,
+        existingItem?.linkedBuyOrderId ?? null,
       ),
     );
 
@@ -1569,6 +1668,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
         console.error('[watchlist] failed to start tracking item', error);
       },
     );
+
+    if (state.tradeAccount && state.autoWatchlistBuyOrdersEnabled) {
+      void syncWatchlistBuyOrder(
+        selectedItem,
+        variantKey,
+        targetPrice,
+        state.sellerMode,
+        existingItem?.linkedBuyOrderId ?? null,
+      )
+        .then((linkedBuyOrderId) => {
+          set((currentState) => ({
+            watchlist: currentState.watchlist.map((entry) =>
+              entry.id === `${buildWatchlistId(selectedItem)}:${variantKey}`
+                ? { ...entry, linkedBuyOrderId }
+                : entry,
+            ),
+          }));
+        })
+        .catch((error) => {
+          console.error('[watchlist] failed to sync buy order', error);
+          set({ watchlistFormError: toErrorMessage(error) });
+        });
+    }
   },
   addExplicitItemToWatchlist: (item, variantKey, variantLabel, targetPrice) => {
     if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
@@ -1587,9 +1709,43 @@ export const useAppStore = create<AppStore>((set, get) => ({
             variantLabel,
             targetPrice,
             preferredOrder,
+            currentState.watchlist.find(
+              (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
+            )?.linkedBuyOrderId ?? null,
           ),
         );
-        return ensureMarketTracking(item.itemId, item.slug, variantKey, get().sellerMode, 'watchlist');
+        const latestState = get();
+        const existingItem = latestState.watchlist.find(
+          (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
+        );
+
+        const trackingPromise = ensureMarketTracking(
+          item.itemId,
+          item.slug,
+          variantKey,
+          latestState.sellerMode,
+          'watchlist',
+        );
+        const orderPromise =
+          latestState.tradeAccount && latestState.autoWatchlistBuyOrdersEnabled
+            ? syncWatchlistBuyOrder(
+                item,
+                variantKey,
+                targetPrice,
+                latestState.sellerMode,
+                existingItem?.linkedBuyOrderId ?? null,
+              ).then((linkedBuyOrderId) => {
+                set((currentState) => ({
+                  watchlist: currentState.watchlist.map((entry) =>
+                    entry.id === `${buildWatchlistId(item)}:${variantKey}`
+                      ? { ...entry, linkedBuyOrderId }
+                      : entry,
+                  ),
+                }));
+              })
+            : Promise.resolve();
+
+        return Promise.all([trackingPromise, orderPromise]);
       })
       .catch((error) => {
         console.error('[watchlist] failed to add explicit item', error);
@@ -1598,30 +1754,70 @@ export const useAppStore = create<AppStore>((set, get) => ({
         });
       });
   },
-  removeWatchlistItem: (id) =>
-    set((state) => {
-      const itemToRemove = state.watchlist.find((item) => item.id === id);
-      if (itemToRemove) {
-        void stopMarketTracking(
-          itemToRemove.itemId,
-          itemToRemove.slug,
-          itemToRemove.variantKey,
-          'watchlist',
-        ).catch((error) => {
-          console.error('[watchlist] failed to stop tracking item', error);
-        });
+  removeWatchlistItem: (id) => {
+    const state = get();
+    const itemToRemove = state.watchlist.find((item) => item.id === id);
+    if (itemToRemove) {
+      void stopMarketTracking(
+        itemToRemove.itemId,
+        itemToRemove.slug,
+        itemToRemove.variantKey,
+        'watchlist',
+      ).catch((error) => {
+        console.error('[watchlist] failed to stop tracking item', error);
+      });
+      void removeWatchlistBuyOrder(itemToRemove.linkedBuyOrderId, state.sellerMode).catch((error) => {
+        console.error('[watchlist] failed to remove linked buy order', error);
+      });
+    }
+
+    set((currentState) => ({
+      watchlist: currentState.watchlist.filter((item) => item.id !== id),
+      alerts: currentState.alerts.filter((alert) => alert.watchlistId !== id),
+      selectedWatchlistId:
+        currentState.selectedWatchlistId === id
+          ? currentState.watchlist.find((item) => item.id !== id)?.id ?? null
+          : currentState.selectedWatchlistId,
+      watchlistFormError: null,
+    }));
+  },
+  markWatchlistItemBought: async (id, price) => {
+    const state = get();
+    const item = state.watchlist.find((entry) => entry.id === id);
+    if (!item) {
+      throw new Error('That watchlist item could not be found.');
+    }
+
+    const normalizedPrice = Math.max(1, Math.round(price));
+    if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
+      throw new Error('Bought price must be greater than zero.');
+    }
+
+    if (item.linkedBuyOrderId) {
+      const expectedRank = deriveVariantRankFromKey(item.variantKey);
+      if (item.targetPrice !== normalizedPrice) {
+        await updateWfmBuyOrder(
+          {
+            orderId: item.linkedBuyOrderId,
+            price: normalizedPrice,
+            quantity: 1,
+            rank: expectedRank,
+            visible: true,
+          },
+          state.sellerMode,
+        );
       }
 
-      return {
-        watchlist: state.watchlist.filter((item) => item.id !== id),
-        alerts: state.alerts.filter((alert) => alert.watchlistId !== id),
-        selectedWatchlistId:
-          state.selectedWatchlistId === id
-            ? state.watchlist.find((item) => item.id !== id)?.id ?? null
-            : state.selectedWatchlistId,
-        watchlistFormError: null,
-      };
-    }),
+      await closeWfmBuyOrder(item.linkedBuyOrderId, 1, state.sellerMode);
+      set((currentState) => ({
+        watchlist: currentState.watchlist.map((entry) =>
+          entry.id === id ? { ...entry, linkedBuyOrderId: null } : entry,
+        ),
+      }));
+    }
+
+    get().removeWatchlistItem(id);
+  },
   dismissAlert: (id) =>
     set((state) => ({
       alerts: state.alerts.filter((alert) => alert.id !== id),
@@ -2242,6 +2438,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       throw error;
     }
   },
+  autoWatchlistBuyOrdersEnabled: true,
+  setAutoWatchlistBuyOrdersEnabled: (enabled) =>
+    set({ autoWatchlistBuyOrdersEnabled: enabled }),
   tradesSubTab: 'sell-orders',
   setTradesSubTab: (tab) => set({ tradesSubTab: tab }),
 

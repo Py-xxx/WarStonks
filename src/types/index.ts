@@ -54,6 +54,7 @@ export interface WatchlistItem {
   retryCount: number;
   lastError: string | null;
   ignoredUserKeys: string[];
+  linkedBuyOrderId: string | null;
 }
 
 export interface WatchlistAlert {

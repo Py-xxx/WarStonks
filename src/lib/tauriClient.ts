@@ -370,6 +370,13 @@ export async function updateWfmSellOrder(
   return invoke<TradeOverview>('update_wfm_sell_order', { input, sellerMode });
 }
 
+export async function updateWfmBuyOrder(
+  input: TradeUpdateListingInput,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('update_wfm_buy_order', { input, sellerMode });
+}
+
 export async function closeWfmSellOrder(
   orderId: string,
   quantity: number,
@@ -382,11 +389,30 @@ export async function closeWfmSellOrder(
   });
 }
 
+export async function closeWfmBuyOrder(
+  orderId: string,
+  quantity: number,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('close_wfm_buy_order', {
+    orderId,
+    quantity,
+    sellerMode,
+  });
+}
+
 export async function deleteWfmSellOrder(
   orderId: string,
   sellerMode: SellerMode,
 ): Promise<TradeOverview> {
   return invoke<TradeOverview>('delete_wfm_sell_order', { orderId, sellerMode });
+}
+
+export async function deleteWfmBuyOrder(
+  orderId: string,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('delete_wfm_buy_order', { orderId, sellerMode });
 }
 
 export async function getWfmTopSellOrders(
