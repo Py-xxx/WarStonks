@@ -4234,6 +4234,10 @@ body {
   transform: translateY(4px);
   transition: opacity 120ms ease, transform 120ms ease;
 }
+.info-hint-tooltip.bottom {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
 .info-hint:hover .info-hint-tooltip,
 .info-hint:focus-visible .info-hint-tooltip {
   opacity: 1;

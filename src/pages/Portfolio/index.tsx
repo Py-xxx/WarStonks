@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   forceWfmTradeLogResync,
   getCachedWfmProfileTradeLog,
@@ -22,10 +22,38 @@ const RefreshIcon = () => (
 );
 
 function InfoHint({ text }: { text: string }) {
+  const hintRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipRef = useRef<HTMLSpanElement | null>(null);
+  const [expandDownward, setExpandDownward] = useState(false);
+
+  const updatePlacement = () => {
+    const hintRect = hintRef.current?.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current?.getBoundingClientRect();
+    if (!hintRect || !tooltipRect) {
+      return;
+    }
+
+    const topClearance = hintRect.top;
+    const requiredClearance = tooltipRect.height + 20;
+    setExpandDownward(topClearance < requiredClearance);
+  };
+
   return (
-    <span className="info-hint" tabIndex={0} aria-label={text}>
+    <span
+      ref={hintRef}
+      className="info-hint"
+      tabIndex={0}
+      aria-label={text}
+      onMouseEnter={updatePlacement}
+      onFocus={updatePlacement}
+    >
       i
-      <span className="info-hint-tooltip">{text}</span>
+      <span
+        ref={tooltipRef}
+        className={`info-hint-tooltip${expandDownward ? ' bottom' : ''}`}
+      >
+        {text}
+      </span>
     </span>
   );
 }
