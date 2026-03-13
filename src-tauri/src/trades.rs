@@ -947,7 +947,7 @@ fn resolve_catalog_trade_item_by_alias(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              COALESCE(wfm_items.max_rank, items.max_rank)
+              wfm_items.max_rank
             FROM items
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
             WHERE items.primary_wfstat_unique_name = ?2
@@ -963,7 +963,7 @@ fn resolve_catalog_trade_item_by_alias(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              COALESCE(wfm_items.max_rank, items.max_rank)
+              wfm_items.max_rank
             FROM wfstat_item_components
             JOIN items ON items.item_id = wfstat_item_components.component_item_id
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
@@ -980,7 +980,7 @@ fn resolve_catalog_trade_item_by_alias(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              COALESCE(wfm_items.max_rank, items.max_rank)
+              wfm_items.max_rank
             FROM item_aliases
             JOIN items ON items.item_id = item_aliases.item_id
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
@@ -1003,7 +1003,7 @@ fn resolve_catalog_trade_item_by_alias(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              COALESCE(wfm_items.max_rank, items.max_rank)
+              wfm_items.max_rank
             FROM items
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
             WHERE LOWER(COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, '')) = ?2
