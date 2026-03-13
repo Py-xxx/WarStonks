@@ -12,6 +12,7 @@ import { StrategyPage } from './pages/Strategy';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsSidebar } from './components/SettingsSidebar';
 import { AlecaframeModal } from './components/AlecaframeModal';
+import { DiscordWebhookModal } from './components/DiscordWebhookModal';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
@@ -59,6 +60,7 @@ function AppShell() {
       </div>
       <SettingsSidebar />
       <AlecaframeModal />
+      <DiscordWebhookModal />
     </>
   );
 }

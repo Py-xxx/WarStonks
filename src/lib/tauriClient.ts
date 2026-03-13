@@ -8,6 +8,8 @@ import type {
   ArbitrageScannerState,
   AlecaframeSettingsInput,
   AlecaframeValidationResult,
+  DiscordWebhookSettingsInput,
+  DiscordWatchlistNotificationInput,
   ArbitrageScannerResponse,
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
@@ -157,6 +159,18 @@ export async function saveAlecaframeSettings(
   input: AlecaframeSettingsInput,
 ): Promise<AppSettings> {
   return invoke<AppSettings>('save_alecaframe_settings', { input });
+}
+
+export async function saveDiscordWebhookSettings(
+  input: DiscordWebhookSettingsInput,
+): Promise<AppSettings> {
+  return invoke<AppSettings>('save_discord_webhook_settings', { input });
+}
+
+export async function sendWatchlistFoundDiscordNotification(
+  input: DiscordWatchlistNotificationInput,
+): Promise<boolean> {
+  return invoke<boolean>('send_watchlist_found_discord_notification', { input });
 }
 
 export async function getCurrencyBalances(): Promise<WalletSnapshot> {

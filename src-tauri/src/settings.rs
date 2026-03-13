@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,25 @@ pub struct AlecaframeSettings {
 pub struct DiscordWebhookSettings {
     pub enabled: bool,
     pub webhook_url: Option<String>,
+    #[serde(default)]
+    pub notifications: DiscordWebhookNotificationSettings,
+    pub last_validated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordWebhookNotificationSettings {
+    pub watchlist_found: bool,
+    pub worldstate_offline: bool,
+}
+
+impl Default for DiscordWebhookNotificationSettings {
+    fn default() -> Self {
+        Self {
+            watchlist_found: true,
+            worldstate_offline: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,6 +73,15 @@ pub struct AppSettings {
 pub struct AlecaframeSettingsInput {
     pub enabled: bool,
     pub public_link: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordWebhookSettingsInput {
+    pub enabled: bool,
+    pub webhook_url: Option<String>,
+    #[serde(default)]
+    pub notifications: DiscordWebhookNotificationSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +104,21 @@ pub struct WalletSnapshot {
     pub username_when_public: Option<String>,
     pub last_update: Option<String>,
     pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordWatchlistNotificationInput {
+    pub item_name: String,
+    pub item_slug: String,
+    pub item_image_path: Option<String>,
+    pub target_price: i64,
+    pub current_price: i64,
+    pub username: String,
+    pub quantity: i64,
+    pub rank: Option<i64>,
+    pub order_id: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -178,6 +222,111 @@ pub(crate) fn load_settings_for_internal_use(app: &tauri::AppHandle) -> Result<A
 fn save_settings_inner(app: &tauri::AppHandle, settings: &AppSettings) -> Result<()> {
     let path = build_settings_path(app)?;
     save_settings_to_path(&path, settings)
+}
+
+fn normalize_optional_webhook_url(value: Option<String>) -> Option<String> {
+    normalize_optional(value)
+}
+
+fn validate_discord_webhook_url(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("Enter a Discord webhook URL."));
+    }
+
+    let parsed = Url::parse(trimmed).context("Enter a valid Discord webhook URL.")?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("Enter a valid Discord webhook URL."))?;
+    let normalized_host = host.to_ascii_lowercase();
+    if normalized_host != "discord.com" && normalized_host != "discordapp.com" {
+        return Err(anyhow!("Webhook URL must point to Discord."));
+    }
+
+    if !parsed.path().contains("/api/webhooks/") {
+        return Err(anyhow!("Webhook URL must be a Discord webhook endpoint."));
+    }
+
+    Ok(parsed.to_string())
+}
+
+fn post_discord_webhook_payload(webhook_url: &str, payload: serde_json::Value) -> Result<()> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
+        .build()
+        .context("failed to construct Discord webhook client")?;
+
+    client
+        .post(webhook_url)
+        .header("User-Agent", ALECAFRAME_USER_AGENT)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .context("failed to send Discord webhook request")?
+        .error_for_status()
+        .context("Discord webhook request failed")?;
+
+    Ok(())
+}
+
+fn build_wfm_asset_url(asset_path: Option<&str>) -> Option<String> {
+    let trimmed = asset_path?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+    Some(format!(
+        "https://warframe.market/static/assets/{}",
+        trimmed.trim_start_matches('/')
+    ))
+}
+
+fn build_discord_test_payload() -> serde_json::Value {
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "title": "🧪 WarStonks Discord Webhook Connected",
+        "description": "Your Discord webhook is active and ready to receive WarStonks alerts.",
+        "color": 0x3D7BFF,
+        "fields": [
+          { "name": "Notification Type", "value": "Test Notification", "inline": true },
+          { "name": "Source", "value": "Settings Save", "inline": true }
+        ],
+        "footer": { "text": "WarStonks • Discord integration" }
+      }]
+    })
+}
+
+fn build_watchlist_found_payload(input: &DiscordWatchlistNotificationInput) -> serde_json::Value {
+    let rank_value = input
+        .rank
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    let image_url = build_wfm_asset_url(input.item_image_path.as_deref());
+
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "title": "🔔 Watchlist Hit",
+        "description": format!("{} is now at or below your target price.", input.item_name),
+        "color": 0x3DD68C,
+        "thumbnail": image_url.as_ref().map(|url| json!({ "url": url })),
+        "fields": [
+          { "name": "Item", "value": input.item_name, "inline": true },
+          { "name": "Seller", "value": input.username, "inline": true },
+          { "name": "Current Price", "value": format!("{}p", input.current_price), "inline": true },
+          { "name": "Desired Price", "value": format!("{}p", input.target_price), "inline": true },
+          { "name": "Gap", "value": format!("{}p", input.target_price - input.current_price), "inline": true },
+          { "name": "Quantity", "value": input.quantity.to_string(), "inline": true },
+          { "name": "Rank", "value": rank_value, "inline": true },
+          { "name": "Order", "value": input.order_id, "inline": false }
+        ],
+        "footer": { "text": "WarStonks • Watchlist alert" },
+        "timestamp": input.created_at
+      }]
+    })
 }
 
 fn extract_public_token(value: &str) -> Option<String> {
@@ -308,6 +457,70 @@ pub fn save_alecaframe_settings(
 }
 
 #[tauri::command]
+pub fn save_discord_webhook_settings(
+    app: tauri::AppHandle,
+    input: DiscordWebhookSettingsInput,
+) -> Result<AppSettings, String> {
+    let mut settings = load_settings_inner(&app).map_err(|error| error.to_string())?;
+    let normalized_webhook_url = normalize_optional_webhook_url(input.webhook_url);
+
+    let validated_webhook_url = match normalized_webhook_url {
+        Some(url) => Some(
+            validate_discord_webhook_url(&url)
+                .map_err(|error| format!("Could not save Discord webhook settings: {error}"))?,
+        ),
+        None => None,
+    };
+
+    if input.enabled && validated_webhook_url.is_none() {
+        return Err("Enter a valid Discord webhook URL before enabling Discord notifications.".to_string());
+    }
+
+    if let Some(webhook_url) = validated_webhook_url.as_deref() {
+        post_discord_webhook_payload(webhook_url, build_discord_test_payload())
+            .map_err(|error| format!("Discord webhook test failed: {error}"))?;
+    }
+
+    settings.discord_webhook = DiscordWebhookSettings {
+        enabled: input.enabled,
+        webhook_url: validated_webhook_url,
+        notifications: input.notifications,
+        last_validated_at: Some(time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default()),
+    };
+
+    save_settings_inner(&app, &settings).map_err(|error| error.to_string())?;
+
+    Ok(settings)
+}
+
+pub(crate) fn send_watchlist_found_discord_notification_inner(
+    app: &tauri::AppHandle,
+    input: &DiscordWatchlistNotificationInput,
+) -> Result<bool> {
+    let settings = load_settings_inner(app)?;
+    let discord = settings.discord_webhook;
+    if !discord.enabled || !discord.notifications.watchlist_found {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+
+    post_discord_webhook_payload(&webhook_url, build_watchlist_found_payload(input))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn send_watchlist_found_discord_notification(
+    app: tauri::AppHandle,
+    input: DiscordWatchlistNotificationInput,
+) -> Result<bool, String> {
+    send_watchlist_found_discord_notification_inner(&app, &input)
+        .map_err(|error| error.to_string())
+}
+
+
+#[tauri::command]
 pub fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapshot, String> {
     let settings = load_settings_inner(&app).map_err(|error| error.to_string())?;
     let alecaframe_settings = settings.alecaframe;
@@ -350,7 +563,7 @@ mod tests {
     use super::{
         extract_public_token, load_settings_from_path, map_currency_balance, save_settings_to_path,
         select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings, AppSettings,
-        DiscordWebhookSettings,
+        DiscordWebhookNotificationSettings, DiscordWebhookSettings,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -427,6 +640,8 @@ mod tests {
             discord_webhook: DiscordWebhookSettings {
                 enabled: false,
                 webhook_url: None,
+                notifications: DiscordWebhookNotificationSettings::default(),
+                last_validated_at: None,
             },
         };
 
