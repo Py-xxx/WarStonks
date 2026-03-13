@@ -534,6 +534,13 @@ export interface AlecaframeSettings {
 export interface DiscordWebhookSettings {
   enabled: boolean;
   webhookUrl: string | null;
+  notifications: DiscordWebhookNotificationSettings;
+  lastValidatedAt: string | null;
+}
+
+export interface DiscordWebhookNotificationSettings {
+  watchlistFound: boolean;
+  worldstateOffline: boolean;
 }
 
 export interface AppSettings {
@@ -544,6 +551,25 @@ export interface AppSettings {
 export interface AlecaframeSettingsInput {
   enabled: boolean;
   publicLink: string | null;
+}
+
+export interface DiscordWebhookSettingsInput {
+  enabled: boolean;
+  webhookUrl: string | null;
+  notifications: DiscordWebhookNotificationSettings;
+}
+
+export interface DiscordWatchlistNotificationInput {
+  itemName: string;
+  itemSlug: string;
+  itemImagePath: string | null;
+  targetPrice: number;
+  currentPrice: number;
+  username: string;
+  quantity: number;
+  rank: number | null;
+  orderId: string;
+  createdAt: string;
 }
 
 export interface AlecaframeValidationResult {

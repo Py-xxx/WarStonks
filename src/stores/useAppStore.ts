@@ -13,6 +13,8 @@ import {
   signInWfmTradeAccount,
   signOutWfmTradeAccount,
   saveAlecaframeSettings,
+  saveDiscordWebhookSettings,
+  sendWatchlistFoundDiscordNotification,
   stopMarketTracking,
 } from '../lib/tauriClient';
 import {
@@ -77,6 +79,7 @@ import type {
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
   AppSettings,
+  DiscordWebhookSettingsInput,
   ItemAnalysisResponse,
   MarketVariant,
   WalletSnapshot,
@@ -107,6 +110,11 @@ const defaultAppSettings: AppSettings = {
   discordWebhook: {
     enabled: false,
     webhookUrl: null,
+    notifications: {
+      watchlistFound: true,
+      worldstateOffline: false,
+    },
+    lastValidatedAt: null,
   },
 };
 
@@ -516,6 +524,7 @@ interface AppStore {
   settingsSidebarOpen: boolean;
   settingsSection: SettingsSection;
   alecaframeModalOpen: boolean;
+  discordWebhookModalOpen: boolean;
   appSettings: AppSettings;
   walletSnapshot: WalletSnapshot;
   settingsLoading: boolean;
@@ -577,9 +586,12 @@ interface AppStore {
   setSettingsSection: (section: SettingsSection) => void;
   openAlecaframeModal: () => void;
   closeAlecaframeModal: () => void;
+  openDiscordWebhookModal: () => void;
+  closeDiscordWebhookModal: () => void;
   loadAppSettings: () => Promise<void>;
   refreshWalletSnapshot: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
+  saveDiscordWebhookConfiguration: (input: DiscordWebhookSettingsInput) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
   refreshWorldStateAlerts: () => Promise<void>;
   refreshWorldStateSortie: () => Promise<void>;
@@ -673,6 +685,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   settingsSidebarOpen: false,
   settingsSection: 'alecaframe',
   alecaframeModalOpen: false,
+  discordWebhookModalOpen: false,
   appSettings: defaultAppSettings,
   walletSnapshot: defaultWalletSnapshot,
   settingsLoading: false,
@@ -730,16 +743,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateVoidTraderNextRefreshAt: null,
   worldStateVoidTraderLastUpdatedAt: null,
   openSettingsSidebar: (section = 'alecaframe') =>
-    set({ settingsSidebarOpen: true, settingsSection: section, alecaframeModalOpen: false }),
-  closeSettingsSidebar: () => set({ settingsSidebarOpen: false, alecaframeModalOpen: false }),
+    set({
+      settingsSidebarOpen: true,
+      settingsSection: section,
+      alecaframeModalOpen: false,
+      discordWebhookModalOpen: false,
+    }),
+  closeSettingsSidebar: () =>
+    set({
+      settingsSidebarOpen: false,
+      alecaframeModalOpen: false,
+      discordWebhookModalOpen: false,
+    }),
   setSettingsSection: (section) => set({ settingsSection: section }),
   openAlecaframeModal: () =>
     set({
       settingsSidebarOpen: true,
       settingsSection: 'alecaframe',
       alecaframeModalOpen: true,
+      discordWebhookModalOpen: false,
     }),
   closeAlecaframeModal: () => set({ alecaframeModalOpen: false }),
+  openDiscordWebhookModal: () =>
+    set({
+      settingsSidebarOpen: true,
+      settingsSection: 'discord-webhook',
+      alecaframeModalOpen: false,
+      discordWebhookModalOpen: true,
+    }),
+  closeDiscordWebhookModal: () => set({ discordWebhookModalOpen: false }),
   loadAppSettings: async () => {
     set({ settingsLoading: true, settingsError: null });
 
@@ -793,6 +825,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         walletSnapshot: snapshot,
         walletLoading: false,
+      });
+    } catch (error) {
+      set({
+        settingsLoading: false,
+        settingsError: toErrorMessage(error),
+      });
+      throw error;
+    }
+  },
+  saveDiscordWebhookConfiguration: async (input) => {
+    set({ settingsLoading: true, settingsError: null });
+
+    try {
+      const settings = await saveDiscordWebhookSettings(input);
+      set({
+        appSettings: settings,
+        settingsLoading: false,
+        settingsError: null,
+        discordWebhookModalOpen: false,
       });
     } catch (error) {
       set({
@@ -1713,6 +1764,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
             ]
           : state.alerts,
       }));
+
+      if (nextAlert && alertTriggered) {
+        void sendWatchlistFoundDiscordNotification({
+          itemName: nextAlert.itemName,
+          itemSlug: nextAlert.itemSlug,
+          itemImagePath: nextAlert.itemImagePath,
+          targetPrice: latestItem.targetPrice,
+          currentPrice: nextAlert.price,
+          username: nextAlert.username,
+          quantity: nextAlert.quantity,
+          rank: nextAlert.rank,
+          orderId: nextAlert.orderId,
+          createdAt: nextAlert.createdAt,
+        }).catch((error) => {
+          console.error('[discord] failed to send watchlist notification', error);
+        });
+      }
 
       return { alertTriggered };
     } catch (error) {

@@ -48,6 +48,7 @@ export function SettingsSidebar() {
   const closeSidebar = useAppStore((state) => state.closeSettingsSidebar);
   const setSection = useAppStore((state) => state.setSettingsSection);
   const openAlecaframeModal = useAppStore((state) => state.openAlecaframeModal);
+  const openDiscordWebhookModal = useAppStore((state) => state.openDiscordWebhookModal);
   const appSettings = useAppStore((state) => state.appSettings);
   const walletSnapshot = useAppStore((state) => state.walletSnapshot);
 
@@ -70,6 +71,18 @@ export function SettingsSidebar() {
     appSettings.alecaframe.publicLink,
     walletSnapshot.errorMessage,
   ]);
+
+  const discordStatus = useMemo(() => {
+    if (!appSettings.discordWebhook.enabled) {
+      return 'Disabled';
+    }
+
+    if (!appSettings.discordWebhook.webhookUrl) {
+      return 'Missing URL';
+    }
+
+    return 'Enabled';
+  }, [appSettings.discordWebhook.enabled, appSettings.discordWebhook.webhookUrl]);
 
   if (!sidebarOpen) {
     return null;
@@ -105,7 +118,7 @@ export function SettingsSidebar() {
               section.id === 'alecaframe'
                 ? alecaframeStatus
                 : section.id === 'discord-webhook'
-                  ? 'Soon'
+                  ? discordStatus
                   : null;
 
             const statusClassName =
@@ -124,6 +137,8 @@ export function SettingsSidebar() {
                   setSection(section.id);
                   if (section.id === 'alecaframe') {
                     openAlecaframeModal();
+                  } else if (section.id === 'discord-webhook') {
+                    openDiscordWebhookModal();
                   }
                 }}
               >
@@ -139,6 +154,12 @@ export function SettingsSidebar() {
                     <span className="settings-nav-subtext">
                       Last validation:{' '}
                       {formatShortLocalDateTime(appSettings.alecaframe.lastValidatedAt)}
+                    </span>
+                  ) : null}
+                  {section.id === 'discord-webhook' ? (
+                    <span className="settings-nav-subtext">
+                      Last validation:{' '}
+                      {formatShortLocalDateTime(appSettings.discordWebhook.lastValidatedAt)}
                     </span>
                   ) : null}
                 </span>
