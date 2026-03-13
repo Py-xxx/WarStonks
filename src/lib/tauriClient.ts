@@ -296,7 +296,7 @@ export async function getCachedWfmProfileTradeLog(
 
 export async function getPortfolioPnlSummary(
   username: string,
-  period: '7d' | '30d' | 'all',
+  period: '7d' | '30d' | '90d' | 'all',
 ): Promise<PortfolioPnlSummary> {
   return invoke<PortfolioPnlSummary>('get_portfolio_pnl_summary', { username, period });
 }

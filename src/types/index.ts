@@ -10,7 +10,7 @@ export type PageId =
 
 export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
-export type TradePeriod = '7d' | '30d' | 'all';
+export type TradePeriod = '7d' | '30d' | '90d' | 'all';
 export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
 export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'import-export';
 export type WorldStateEndpointKey =
@@ -180,6 +180,16 @@ export interface PortfolioTradeLogEntry {
   groupItemCount: number | null;
   allocationTotalPlatinum: number | null;
   groupSortOrder: number | null;
+  allocationMode: 'auto' | 'manual' | null;
+  costBasisConfidence: 'full' | 'partial' | 'none' | null;
+  costBasisLabel: string | null;
+  matchedCost: number | null;
+  matchedQuantity: number | null;
+  matchedBuyCount: number;
+  matchedBuyRows: PortfolioMatchedBuyRow[];
+  setComponentRows: PortfolioSetComponentRow[];
+  profitFormula: string | null;
+  duplicateRisk: boolean;
 }
 
 export interface PortfolioTradeLogState {
@@ -187,7 +197,26 @@ export interface PortfolioTradeLogState {
   lastUpdatedAt: string | null;
 }
 
-export type PortfolioPnlPeriod = '7d' | '30d' | 'all';
+export type PortfolioPnlPeriod = '7d' | '30d' | '90d' | 'all';
+
+export interface PortfolioMatchedBuyRow {
+  orderId: string;
+  itemName: string;
+  slug: string;
+  quantity: number;
+  consumedCost: number;
+  closedAt: string;
+  matchKind: 'flip' | 'sold_as_set';
+}
+
+export interface PortfolioSetComponentRow {
+  slug: string;
+  name: string;
+  requiredQuantity: number;
+  matchedQuantity: number;
+  missingQuantity: number;
+  matchedCost: number;
+}
 
 export interface PortfolioPnlMetricPoint {
   bucketAt: string;
@@ -207,6 +236,31 @@ export interface PortfolioBreakdownRow {
   label: string;
   value: number;
   tradeCount: number;
+}
+
+export interface PortfolioInventoryRow {
+  id: string;
+  itemName: string;
+  slug: string;
+  imagePath: string | null;
+  quantity: number;
+  rank: number | null;
+  status: 'open' | 'kept';
+  costBasis: number;
+  estimatedValue: number;
+  unrealizedPnl: number;
+  lastUpdatedAt: string;
+}
+
+export interface PortfolioAuditRow {
+  id: string;
+  itemName: string;
+  slug: string;
+  orderType: 'buy' | 'sell';
+  source: 'wfm' | 'alecaframe';
+  closedAt: string;
+  label: string;
+  detail: string;
 }
 
 export interface PortfolioPnlSummary {
@@ -233,10 +287,14 @@ export interface PortfolioPnlSummary {
   flipProfit: number;
   unmatchedSellRevenue: number;
   partialCostBasisRevenue: number;
+  keptInventoryValue: number;
+  partialSetProfit: number;
   bestTradeItem: string | null;
   bestTradeProfit: number | null;
   worstTradeItem: string | null;
   worstTradeProfit: number | null;
+  inventoryRows: PortfolioInventoryRow[];
+  auditRows: PortfolioAuditRow[];
   categoryBreakdown: PortfolioBreakdownRow[];
   sourceBreakdown: PortfolioBreakdownRow[];
   cumulativeProfitPoints: PortfolioPnlMetricPoint[];
