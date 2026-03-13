@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { WORLDSTATE_ENDPOINT_LABELS } from '../../lib/worldState';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
+import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
 
 interface AlertsPanelProps {
   compact?: boolean;
@@ -26,16 +28,26 @@ function formatAlertTimestamp(isoTimestamp: string): string {
 
 export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const alerts = useAppStore((state) => state.alerts);
+  const watchlist = useAppStore((state) => state.watchlist);
   const systemAlerts = useAppStore((state) => state.systemAlerts);
   const clearAllAlerts = useAppStore((state) => state.clearAllAlerts);
   const clearAllSystemAlerts = useAppStore((state) => state.clearAllSystemAlerts);
   const dismissAlert = useAppStore((state) => state.dismissAlert);
   const dismissSystemAlert = useAppStore((state) => state.dismissSystemAlert);
-  const markAlertBought = useAppStore((state) => state.markAlertBought);
   const markAlertNoResponse = useAppStore((state) => state.markAlertNoResponse);
+  const markWatchlistItemBought = useAppStore((state) => state.markWatchlistItemBought);
   const retryWorldStateSystemAlert = useAppStore((state) => state.retryWorldStateSystemAlert);
+  const [purchaseAlertId, setPurchaseAlertId] = useState<string | null>(null);
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
 
   const totalAlerts = alerts.length + systemAlerts.length;
+  const purchaseAlert = purchaseAlertId
+    ? alerts.find((alert) => alert.id === purchaseAlertId) ?? null
+    : null;
+  const purchaseWatchlistItem = purchaseAlert
+    ? watchlist.find((item) => item.id === purchaseAlert.watchlistId) ?? null
+    : null;
 
   if (totalAlerts === 0) {
     return (
@@ -168,7 +180,14 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                   </div>
 
                   <div className="alert-actions">
-                    <button className="act-btn" type="button" onClick={() => markAlertBought(alert.id)}>
+                    <button
+                      className="act-btn"
+                      type="button"
+                      onClick={() => {
+                        setPurchaseError(null);
+                        setPurchaseAlertId(alert.id);
+                      }}
+                    >
                       Mark as bought
                     </button>
                     <button className="act-btn" type="button" onClick={() => markAlertNoResponse(alert.id)}>
@@ -192,6 +211,36 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
             })}
           </div>
         </div>
+      ) : null}
+
+      {purchaseAlert && purchaseWatchlistItem ? (
+        <WatchlistPurchaseModal
+          itemName={purchaseAlert.itemName}
+          defaultPrice={purchaseWatchlistItem.targetPrice}
+          loading={purchaseLoading}
+          errorMessage={purchaseError}
+          onClose={() => {
+            if (purchaseLoading) {
+              return;
+            }
+            setPurchaseAlertId(null);
+            setPurchaseError(null);
+          }}
+          onSubmit={(price) => {
+            setPurchaseLoading(true);
+            setPurchaseError(null);
+            void markWatchlistItemBought(purchaseWatchlistItem.id, price)
+              .then(() => {
+                setPurchaseAlertId(null);
+              })
+              .catch((error) => {
+                setPurchaseError(error instanceof Error ? error.message : String(error));
+              })
+              .finally(() => {
+                setPurchaseLoading(false);
+              });
+          }}
+        />
       ) : null}
     </div>
   );

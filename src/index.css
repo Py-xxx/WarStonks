@@ -3856,6 +3856,13 @@ body {
 .watchlist-purchase-modal {
   width: min(460px, calc(100vw - 32px));
 }
+.watchlist-purchase-modal-fullscreen {
+  top: 50%;
+  left: 50%;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  transform: translate(-50%, -50%);
+}
 .trade-listing-modal-body {
   display: grid;
   gap: 14px;
