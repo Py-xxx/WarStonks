@@ -237,7 +237,9 @@ function formatMarginValue(value: number | null): string {
     return '—';
   }
 
-  return formatSignedPlatinumValue(Math.round(value));
+  const rounded = Math.round(value * 10) / 10;
+  const normalized = Number.isInteger(rounded) ? String(Math.trunc(rounded)) : rounded.toFixed(1);
+  return `${normalized}%`;
 }
 
 function buildDefaultMigrationDate(): string {
@@ -1113,9 +1115,7 @@ function PnlSummaryTab({
             </div>
             <div className="perf-card">
               <div className="perf-label">Avg Margin</div>
-              <div className="perf-val blue">
-                {summary.averageMargin == null ? '—' : formatSignedPlatinumValue(Math.round(summary.averageMargin))}
-              </div>
+              <div className="perf-val blue">{formatPercentValue(summary.averageMargin)}</div>
             </div>
             <div className="perf-card">
               <div className="perf-label">Avg Hold</div>
