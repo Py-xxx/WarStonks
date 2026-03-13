@@ -4207,9 +4207,18 @@ body {
   font-size: 11px;
   line-height: 1;
   font-family: inherit;
+  text-transform: none;
   cursor: help;
   flex: 0 0 auto;
   align-self: flex-start;
+}
+.info-hint-glyph {
+  display: inline-block;
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+  text-transform: none;
 }
 .info-hint-tooltip {
   position: absolute;

@@ -47,7 +47,7 @@ function InfoHint({ text }: { text: string }) {
       onMouseEnter={updatePlacement}
       onFocus={updatePlacement}
     >
-      i
+      <span className="info-hint-glyph" aria-hidden="true">i</span>
       <span
         ref={tooltipRef}
         className={`info-hint-tooltip${expandDownward ? ' bottom' : ''}`}
