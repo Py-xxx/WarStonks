@@ -934,8 +934,45 @@ fn resolve_catalog_trade_item_by_alias(
     alias_value: &str,
 ) -> Result<Option<CatalogTradeItemMeta>> {
     let normalized = normalize_alias_lookup_value(alias_value);
-    connection
-        .query_row(
+    let trimmed = alias_value.trim();
+    let preferred_name = prettify_alecaframe_name(trimmed);
+    let normalized_preferred_name = normalize_alias_lookup_value(&preferred_name);
+
+    let queries = [
+        (
+            "
+            SELECT
+              items.item_id,
+              COALESCE(items.wfm_id, wfm_items.wfm_id),
+              COALESCE(items.wfm_slug, wfm_items.slug, ''),
+              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
+              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
+              COALESCE(wfm_items.max_rank, items.max_rank)
+            FROM items
+            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
+            WHERE items.primary_wfstat_unique_name = ?2
+            LIMIT 1
+            ",
+            params![preferred_name.as_str(), trimmed],
+        ),
+        (
+            "
+            SELECT
+              items.item_id,
+              COALESCE(items.wfm_id, wfm_items.wfm_id),
+              COALESCE(items.wfm_slug, wfm_items.slug, ''),
+              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
+              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
+              COALESCE(wfm_items.max_rank, items.max_rank)
+            FROM wfstat_item_components
+            JOIN items ON items.item_id = wfstat_item_components.component_item_id
+            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
+            WHERE wfstat_item_components.component_unique_name = ?2
+            LIMIT 1
+            ",
+            params![preferred_name.as_str(), trimmed],
+        ),
+        (
             "
             SELECT
               items.item_id,
@@ -947,17 +984,38 @@ fn resolve_catalog_trade_item_by_alias(
             FROM item_aliases
             JOIN items ON items.item_id = item_aliases.item_id
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
-            WHERE item_aliases.alias_value = ?1
-               OR item_aliases.normalized_alias_value = ?2
+            WHERE item_aliases.alias_value = ?2
+               OR item_aliases.normalized_alias_value = ?3
             ORDER BY CASE
-              WHEN item_aliases.alias_value = ?1 THEN 0
-              WHEN item_aliases.normalized_alias_value = ?2 THEN 1
+              WHEN item_aliases.alias_value = ?2 THEN 0
+              WHEN item_aliases.normalized_alias_value = ?3 THEN 1
               ELSE 2
             END
             LIMIT 1
             ",
-            params![alias_value.trim(), normalized],
-            |row| {
+            params![preferred_name.as_str(), trimmed, normalized.as_str()],
+        ),
+        (
+            "
+            SELECT
+              items.item_id,
+              COALESCE(items.wfm_id, wfm_items.wfm_id),
+              COALESCE(items.wfm_slug, wfm_items.slug, ''),
+              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
+              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
+              COALESCE(wfm_items.max_rank, items.max_rank)
+            FROM items
+            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
+            WHERE LOWER(COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, '')) = ?2
+            LIMIT 1
+            ",
+            params![preferred_name.as_str(), normalized_preferred_name.as_str()],
+        ),
+    ];
+
+    for (sql, params) in queries {
+        let resolved = connection
+            .query_row(sql, params, |row| {
                 Ok(CatalogTradeItemMeta {
                     item_id: row.get(0)?,
                     wfm_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -966,10 +1024,16 @@ fn resolve_catalog_trade_item_by_alias(
                     image_path: row.get(4)?,
                     max_rank: row.get(5)?,
                 })
-            },
-        )
-        .optional()
-        .context("failed to resolve catalog item by alias")
+            })
+            .optional()
+            .context("failed to resolve catalog item by alias")?;
+
+        if resolved.is_some() {
+            return Ok(resolved);
+        }
+    }
+
+    Ok(None)
 }
 
 fn fetch_alecaframe_trade_payload(app: &tauri::AppHandle) -> Result<AlecaframeTradeResponse> {
