@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface WatchlistPurchaseModalProps {
   itemName: string;
@@ -23,10 +24,14 @@ export function WatchlistPurchaseModal({
     setPriceInput(String(Math.max(1, Math.round(defaultPrice))));
   }, [defaultPrice]);
 
-  return (
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
     <div className="modal-backdrop" role="presentation" onClick={loading ? undefined : onClose}>
       <div
-        className="settings-modal watchlist-purchase-modal"
+        className="settings-modal watchlist-purchase-modal watchlist-purchase-modal-fullscreen"
         role="dialog"
         aria-modal="true"
         aria-labelledby="watchlist-purchase-modal-title"
@@ -97,6 +102,7 @@ export function WatchlistPurchaseModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
