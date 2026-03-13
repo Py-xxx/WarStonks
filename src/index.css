@@ -4541,33 +4541,6 @@ body {
 .portfolio-card-footnote {
   margin-top: 10px;
 }
-.portfolio-inventory-row,
-.portfolio-audit-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: start;
-  padding: 12px 14px;
-  border-top: 1px solid var(--border-subtle);
-}
-.portfolio-inventory-row:first-child,
-.portfolio-audit-row:first-child {
-  border-top: 0;
-}
-.portfolio-inventory-metrics {
-  display: grid;
-  gap: 4px;
-  justify-items: end;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.portfolio-inventory-metrics .positive {
-  color: var(--success);
-}
-.portfolio-inventory-metrics .negative {
-  color: var(--danger);
-}
 .portfolio-audit-detail {
   color: var(--text-secondary);
   font-size: 12px;
@@ -4938,14 +4911,6 @@ body {
     display: none;
   }
 
-  .portfolio-inventory-row,
-  .portfolio-audit-row {
-    grid-template-columns: 1fr;
-  }
-
-  .portfolio-inventory-metrics {
-    justify-items: start;
-  }
 }
 
 @media (max-width: 720px) {

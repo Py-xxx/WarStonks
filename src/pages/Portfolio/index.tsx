@@ -483,102 +483,6 @@ function PortfolioPanelHeader({
   );
 }
 
-function TradeLogSellDetail({ entry }: { entry: PortfolioTradeLogEntry }) {
-  const isSetSell = entry.setComponentRows.length > 0;
-
-  return (
-    <div className="portfolio-drilldown">
-      <div className="portfolio-drilldown-grid">
-        <div className="portfolio-drilldown-card">
-          <div className="portfolio-drilldown-title">
-            Profit Formula
-            <InfoHint text="This shows the exact local formula used to compute profit for this sell row." />
-          </div>
-          <div className="portfolio-drilldown-formula">
-            {entry.profitFormula ?? 'No local cost basis is currently matched for this sell.'}
-          </div>
-          <div className="portfolio-drilldown-meta">
-            <span>Matched quantity: {entry.matchedQuantity ?? 0}</span>
-            <span>Matched cost: {entry.matchedCost == null ? '—' : formatPlatinumValue(entry.matchedCost)}</span>
-            <span>Matched buys: {entry.matchedBuyCount}</span>
-          </div>
-        </div>
-
-        <div className="portfolio-drilldown-card">
-          <div className="portfolio-drilldown-title">
-            Cost Basis Confidence
-            <InfoHint text="Full means the full sold quantity has a local buy cost basis. Partial means only some of the sold quantity was matched. No Cost Basis means no prior local buy cost basis was found." />
-          </div>
-          <div className="portfolio-drilldown-badges">
-            {entry.costBasisLabel ? (
-              <span className={`badge ${buildCostBasisClassName(entry.costBasisConfidence)}`}>
-                {entry.costBasisLabel}
-              </span>
-            ) : (
-              <span className="portfolio-log-value">—</span>
-            )}
-            {entry.duplicateRisk ? <span className="badge badge-amber">Duplicate Risk</span> : null}
-          </div>
-        </div>
-      </div>
-
-      {entry.matchedBuyRows.length > 0 ? (
-        <div className="portfolio-drilldown-card">
-          <div className="portfolio-drilldown-title">
-            Matched Buy Rows
-            <InfoHint text="These are the buy rows currently being used as the cost basis for this sell." />
-          </div>
-          <div className="portfolio-detail-table">
-            <div className="portfolio-detail-header">
-              <span>Item</span>
-              <span>Qty</span>
-              <span>Cost</span>
-              <span>Closed</span>
-              <span>Match</span>
-            </div>
-            {entry.matchedBuyRows.map((row) => (
-              <div key={`${entry.id}-${row.orderId}-${row.closedAt}`} className="portfolio-detail-row">
-                <span>{row.itemName}</span>
-                <span>{row.quantity}</span>
-                <span>{formatPlatinumValue(row.consumedCost)}</span>
-                <span>{formatShortLocalDateTime(row.closedAt)}</span>
-                <span>{row.matchKind === 'sold_as_set' ? 'Sold As Set' : 'Flip'}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {isSetSell ? (
-        <div className="portfolio-drilldown-card">
-          <div className="portfolio-drilldown-title">
-            Set Component Accounting
-            <InfoHint text="For set sells, these rows show which components were matched, what is still missing, and how much component cost was deducted from the set sale." />
-          </div>
-          <div className="portfolio-detail-table">
-            <div className="portfolio-detail-header">
-              <span>Component</span>
-              <span>Required</span>
-              <span>Matched</span>
-              <span>Missing</span>
-              <span>Cost</span>
-            </div>
-            {entry.setComponentRows.map((row) => (
-              <div key={`${entry.id}-${row.slug}`} className="portfolio-detail-row">
-                <span>{row.name}</span>
-                <span>{row.requiredQuantity}</span>
-                <span>{row.matchedQuantity}</span>
-                <span>{row.missingQuantity}</span>
-                <span>{formatPlatinumValue(row.matchedCost)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function TradeLogTab({ username }: { username: string | null }) {
   const appSettings = useAppStore((state) => state.appSettings);
   const [entries, setEntries] = useState<PortfolioTradeLogEntry[]>([]);
@@ -590,7 +494,6 @@ function TradeLogTab({ username }: { username: string | null }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
-  const [expandedTradeIds, setExpandedTradeIds] = useState<string[]>([]);
   const [migrateModalOpen, setMigrateModalOpen] = useState(false);
   const [migrationBaselineDate, setMigrationBaselineDate] = useState(buildDefaultMigrationDate);
   const [allocationGroupId, setAllocationGroupId] = useState<string | null>(null);
@@ -707,14 +610,6 @@ function TradeLogTab({ username }: { username: string | null }) {
       current.includes(groupId)
         ? current.filter((value) => value !== groupId)
         : [...current, groupId],
-    );
-  };
-
-  const handleToggleTradeExpanded = (tradeId: string) => {
-    setExpandedTradeIds((current) =>
-      current.includes(tradeId)
-        ? current.filter((value) => value !== tradeId)
-        : [...current, tradeId],
     );
   };
 
@@ -1088,19 +983,10 @@ function TradeLogTab({ username }: { username: string | null }) {
                               <span>{updatingOrderId === row.entry.id ? 'Saving…' : 'Keep Item'}</span>
                             </label>
                           ) : (
-                            <button
-                              className="act-btn portfolio-secondary-btn"
-                              type="button"
-                              onClick={() => handleToggleTradeExpanded(row.entry.id)}
-                            >
-                              {expandedTradeIds.includes(row.entry.id) ? 'Hide Details' : 'Details'}
-                            </button>
+                            <span className="portfolio-log-value">—</span>
                           )}
                         </span>
                       </div>
-                      {row.entry.orderType === 'sell' && expandedTradeIds.includes(row.entry.id) ? (
-                        <TradeLogSellDetail entry={row.entry} />
-                      ) : null}
                     </div>
                   ) : (
                     <div key={row.groupId} className="portfolio-log-group">
@@ -1202,19 +1088,10 @@ function TradeLogTab({ username }: { username: string | null }) {
                                       <span>{updatingOrderId === child.id ? 'Saving…' : 'Keep Item'}</span>
                                     </label>
                                   ) : (
-                                    <button
-                                      className="act-btn portfolio-secondary-btn"
-                                      type="button"
-                                      onClick={() => handleToggleTradeExpanded(child.id)}
-                                    >
-                                      {expandedTradeIds.includes(child.id) ? 'Hide Details' : 'Details'}
-                                    </button>
+                                    <span className="portfolio-log-value">—</span>
                                   )}
                                 </span>
                               </div>
-                              {child.orderType === 'sell' && expandedTradeIds.includes(child.id) ? (
-                                <TradeLogSellDetail entry={child} />
-                              ) : null}
                             </div>
                           ))
                         : null}
@@ -1671,62 +1548,6 @@ function PnlSummaryTab({
               <div className="info-card-label">Worst Trade <InfoHint text="Lowest-profit closed sell row in the selected period." /></div>
               <div className="info-card-val neutral portfolio-inline-stat">
                 {summary.worstTradeItem ? `${summary.worstTradeItem} · ${formatPlatinumValue(summary.worstTradeProfit ?? 0)}` : '—'}
-              </div>
-            </div>
-          </div>
-
-          <div className="portfolio-breakdown-grid">
-            <div className="chart-card">
-              <PortfolioPanelHeader
-                title="Inventory / Open Positions"
-                info="Current open or kept inventory with cost basis, estimated value, and unrealized P&L."
-              />
-              <div className="portfolio-breakdown-list">
-                {summary.inventoryRows.length === 0 ? (
-                  <div className="portfolio-breakdown-empty">No open or kept inventory is currently held.</div>
-                ) : (
-                  summary.inventoryRows.map((row) => (
-                    <div key={row.id} className="portfolio-inventory-row">
-                      <div className="portfolio-breakdown-copy">
-                        <span className="portfolio-breakdown-name">{row.itemName}</span>
-                        <span className="portfolio-breakdown-meta">
-                          Qty {row.quantity}{row.rank != null ? ` · Rank ${row.rank}` : ''} · {row.status === 'kept' ? 'Kept' : 'Open'}
-                        </span>
-                      </div>
-                      <div className="portfolio-inventory-metrics">
-                        <span>{formatPlatinumValue(row.costBasis)}</span>
-                        <span>{formatPlatinumValue(row.estimatedValue)}</span>
-                        <span className={row.unrealizedPnl >= 0 ? 'positive' : 'negative'}>
-                          {formatSignedPlatinumValue(row.unrealizedPnl)}
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-            <div className="chart-card">
-              <PortfolioPanelHeader
-                title="Reconciliation / Audit"
-                info="Rows that deserve review: unmatched sells, duplicate-risk rows, grouped trades needing allocation review, and Alecaframe-imported rows."
-              />
-              <div className="portfolio-breakdown-list">
-                {summary.auditRows.length === 0 ? (
-                  <div className="portfolio-breakdown-empty">No audit flags are currently present.</div>
-                ) : (
-                  summary.auditRows.map((row) => (
-                    <div key={`${row.id}-${row.label}`} className="portfolio-audit-row">
-                      <div className="portfolio-breakdown-copy">
-                        <span className="portfolio-breakdown-name">{row.label}</span>
-                        <span className="portfolio-breakdown-meta">
-                          {row.itemName} · {formatShortLocalDateTime(row.closedAt)}
-                        </span>
-                        <span className="portfolio-audit-detail">{row.detail}</span>
-                      </div>
-                      <span className="badge">{row.source === 'wfm' ? 'WFM' : 'Alecaframe'}</span>
-                    </div>
-                  ))
-                )}
               </div>
             </div>
           </div>
