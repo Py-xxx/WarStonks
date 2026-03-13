@@ -46,9 +46,10 @@ pub struct DiscordWebhookSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct DiscordWebhookNotificationSettings {
     pub watchlist_found: bool,
+    pub trade_detected: bool,
     pub worldstate_offline: bool,
 }
 
@@ -56,6 +57,7 @@ impl Default for DiscordWebhookNotificationSettings {
     fn default() -> Self {
         Self {
             watchlist_found: true,
+            trade_detected: true,
             worldstate_offline: false,
         }
     }
@@ -119,6 +121,26 @@ pub struct DiscordWatchlistNotificationInput {
     pub rank: Option<i64>,
     pub order_id: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordTradeNotificationItem {
+    pub item_name: String,
+    pub quantity: i64,
+    pub rank: Option<i64>,
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordTradeDetectedNotificationInput {
+    pub source: String,
+    pub order_type: String,
+    pub total_platinum: i64,
+    pub closed_at: String,
+    pub summary_label: String,
+    pub items: Vec<DiscordTradeNotificationItem>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -329,6 +351,65 @@ fn build_watchlist_found_payload(input: &DiscordWatchlistNotificationInput) -> s
     })
 }
 
+fn build_trade_detected_payload(
+    input: &DiscordTradeDetectedNotificationInput,
+) -> serde_json::Value {
+    let order_type_label = if input.order_type.eq_ignore_ascii_case("buy") {
+        "Buy"
+    } else {
+        "Sell"
+    };
+    let title_icon = if input.order_type.eq_ignore_ascii_case("buy") {
+        "🛒"
+    } else {
+        "💸"
+    };
+    let source_label = if input.source.eq_ignore_ascii_case("wfm") {
+        "Warframe Market"
+    } else {
+        "Alecaframe"
+    };
+    let image_url = input
+        .items
+        .iter()
+        .find_map(|item| build_wfm_asset_url(item.image_path.as_deref()));
+    let item_lines = input
+        .items
+        .iter()
+        .map(|item| {
+            let rank_suffix = item
+                .rank
+                .map(|rank| format!(" · Rank {rank}"))
+                .unwrap_or_default();
+            format!(
+                "• {} x{}{}",
+                item.item_name,
+                item.quantity.max(1),
+                rank_suffix
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "title": format!("{title_icon} New {order_type_label} Trade Detected"),
+        "description": input.summary_label,
+        "color": if input.order_type.eq_ignore_ascii_case("buy") { 0x3D7BFF } else { 0x3DD68C },
+        "thumbnail": image_url.as_ref().map(|url| json!({ "url": url })),
+        "fields": [
+          { "name": "Trade Type", "value": order_type_label, "inline": true },
+          { "name": "Source", "value": source_label, "inline": true },
+          { "name": "Price", "value": format!("{}p", input.total_platinum), "inline": true },
+          { "name": if input.order_type.eq_ignore_ascii_case("buy") { "Items Received" } else { "Items Given" }, "value": item_lines, "inline": false }
+        ],
+        "footer": { "text": "WarStonks • Trade detection" },
+        "timestamp": input.closed_at
+      }]
+    })
+}
+
 fn extract_public_token(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -473,7 +554,9 @@ pub fn save_discord_webhook_settings(
     };
 
     if input.enabled && validated_webhook_url.is_none() {
-        return Err("Enter a valid Discord webhook URL before enabling Discord notifications.".to_string());
+        return Err(
+            "Enter a valid Discord webhook URL before enabling Discord notifications.".to_string(),
+        );
     }
 
     if let Some(webhook_url) = validated_webhook_url.as_deref() {
@@ -485,7 +568,11 @@ pub fn save_discord_webhook_settings(
         enabled: input.enabled,
         webhook_url: validated_webhook_url,
         notifications: input.notifications,
-        last_validated_at: Some(time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default()),
+        last_validated_at: Some(
+            time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        ),
     };
 
     save_settings_inner(&app, &settings).map_err(|error| error.to_string())?;
@@ -510,15 +597,30 @@ pub(crate) fn send_watchlist_found_discord_notification_inner(
     Ok(true)
 }
 
+pub(crate) fn send_trade_detected_discord_notification_inner(
+    app: &tauri::AppHandle,
+    input: &DiscordTradeDetectedNotificationInput,
+) -> Result<bool> {
+    let settings = load_settings_inner(app)?;
+    let discord = settings.discord_webhook;
+    if !discord.enabled || !discord.notifications.trade_detected {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+
+    post_discord_webhook_payload(&webhook_url, build_trade_detected_payload(input))?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub fn send_watchlist_found_discord_notification(
     app: tauri::AppHandle,
     input: DiscordWatchlistNotificationInput,
 ) -> Result<bool, String> {
-    send_watchlist_found_discord_notification_inner(&app, &input)
-        .map_err(|error| error.to_string())
+    send_watchlist_found_discord_notification_inner(&app, &input).map_err(|error| error.to_string())
 }
-
 
 #[tauri::command]
 pub fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapshot, String> {

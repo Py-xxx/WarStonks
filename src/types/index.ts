@@ -260,6 +260,19 @@ export interface TradeSetMapSummary {
   filePath: string;
 }
 
+export interface TradeDetectionRefreshResult {
+  source: 'wfm' | 'alecaframe';
+  newTradeCount: number;
+  notificationCount: number;
+  lastUpdatedAt: string | null;
+  skipped: boolean;
+  message: string | null;
+}
+
+export interface TradeDetectionRefreshInput {
+  sessionStartedAt: string | null;
+}
+
 export interface WfstatEventRewardCountedItem {
   count: number;
   type: string;
@@ -540,6 +553,7 @@ export interface DiscordWebhookSettings {
 
 export interface DiscordWebhookNotificationSettings {
   watchlistFound: boolean;
+  tradeDetected: boolean;
   worldstateOffline: boolean;
 }
 

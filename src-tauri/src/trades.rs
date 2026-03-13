@@ -1,5 +1,8 @@
+use crate::settings::{
+    load_settings_for_internal_use, send_trade_detected_discord_notification_inner,
+    DiscordTradeDetectedNotificationInput, DiscordTradeNotificationItem,
+};
 use anyhow::{anyhow, Context, Result};
-use crate::settings::load_settings_for_internal_use;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::blocking::Client;
 use reqwest::Method;
@@ -7,7 +10,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Digest;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -32,6 +35,7 @@ const PORTFOLIO_PNL_CHART_BUCKET_LIMIT: usize = 90;
 const PORTFOLIO_PROFIT_POINT_LIMIT: usize = 12;
 const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
+const ALECAFRAME_NOTIFICATION_DELAY_SECONDS: i64 = 90;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://warframe.market/socket-v2";
@@ -260,6 +264,23 @@ pub struct TradeGroupAllocationInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TradeDetectionRefreshResult {
+    pub source: String,
+    pub new_trade_count: i64,
+    pub notification_count: i64,
+    pub last_updated_at: Option<String>,
+    pub skipped: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeDetectionRefreshInput {
+    pub session_started_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredTradeSession {
     token: String,
     device_id: String,
@@ -418,6 +439,17 @@ struct TradeSetComponentRecord {
     component_slug: String,
     quantity_in_set: i64,
     fetched_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct TradeNotificationCandidate {
+    fingerprint: String,
+    source: String,
+    order_type: String,
+    total_platinum: i64,
+    closed_at: String,
+    summary_label: String,
+    items: Vec<DiscordTradeNotificationItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -727,7 +759,8 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
             CREATE TABLE IF NOT EXISTS portfolio_trade_log_cache_meta (
               username TEXT PRIMARY KEY,
               last_updated_at TEXT NOT NULL,
-              entry_count INTEGER NOT NULL
+              entry_count INTEGER NOT NULL,
+              alecaframe_baseline_date TEXT
             );
 
             CREATE TABLE IF NOT EXISTS portfolio_trade_log_derived (
@@ -748,6 +781,15 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
               sort_order INTEGER NOT NULL,
               fetched_at TEXT NOT NULL,
               PRIMARY KEY (set_slug, component_slug)
+            );
+
+            CREATE TABLE IF NOT EXISTS portfolio_trade_log_notifications (
+              username TEXT NOT NULL,
+              fingerprint TEXT NOT NULL,
+              source TEXT NOT NULL,
+              notified_at TEXT NOT NULL,
+              closed_at TEXT NOT NULL,
+              PRIMARY KEY (username, fingerprint)
             );
             ",
         )
@@ -828,13 +870,37 @@ fn migrate_trades_cache_schema(connection: &Connection) -> Result<()> {
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to collect derived trade log columns")?;
 
-    if !derived_columns.iter().any(|column| column == "derived_version") {
+    if !derived_columns
+        .iter()
+        .any(|column| column == "derived_version")
+    {
         connection
             .execute(
                 "ALTER TABLE portfolio_trade_log_derived ADD COLUMN derived_version INTEGER NOT NULL DEFAULT 0",
                 [],
             )
             .context("failed to add derived_version column to derived trade log")?;
+    }
+
+    let mut meta_statement = connection
+        .prepare("PRAGMA table_info(portfolio_trade_log_cache_meta)")
+        .context("failed to inspect trade log cache metadata schema")?;
+    let meta_columns = meta_statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("failed to query trade log cache metadata columns")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect trade log cache metadata columns")?;
+
+    if !meta_columns
+        .iter()
+        .any(|column| column == "alecaframe_baseline_date")
+    {
+        connection
+            .execute(
+                "ALTER TABLE portfolio_trade_log_cache_meta ADD COLUMN alecaframe_baseline_date TEXT",
+                [],
+            )
+            .context("failed to add alecaframe_baseline_date column to trade log cache metadata")?;
     }
 
     Ok(())
@@ -1177,7 +1243,9 @@ fn normalize_alecaframe_rank(rank: i64) -> Option<i64> {
     (rank >= 0).then_some(rank)
 }
 
-fn normalize_alecaframe_trade_payload(payload: AlecaframeTradeResponse) -> Vec<AlecaframeTradeRecord> {
+fn normalize_alecaframe_trade_payload(
+    payload: AlecaframeTradeResponse,
+) -> Vec<AlecaframeTradeRecord> {
     let mut trades = payload
         .buy_trades
         .into_iter()
@@ -1207,7 +1275,11 @@ fn normalize_alecaframe_trade_payload(payload: AlecaframeTradeResponse) -> Vec<A
 }
 
 fn allocated_row_totals(total_platinum: i64, unit_counts: &[i64]) -> Vec<i64> {
-    let total_units = unit_counts.iter().copied().map(|value| value.max(0)).sum::<i64>();
+    let total_units = unit_counts
+        .iter()
+        .copied()
+        .map(|value| value.max(0))
+        .sum::<i64>();
     if total_units <= 0 {
         return vec![0; unit_counts.len()];
     }
@@ -1283,8 +1355,285 @@ fn build_trade_log_entries_from_statistics(
     entries
 }
 
+fn build_trade_notification_minute_bucket(value: &str) -> String {
+    parse_timestamp(value)
+        .and_then(|timestamp| {
+            timestamp
+                .replace_second(0)
+                .ok()
+                .and_then(|candidate| candidate.replace_nanosecond(0).ok())
+        })
+        .and_then(|timestamp| format_timestamp(timestamp).ok())
+        .unwrap_or_else(|| value.trim().to_string())
+}
+
+fn build_trade_notification_fingerprint(
+    order_type: &str,
+    total_platinum: i64,
+    closed_at: &str,
+    items: &[DiscordTradeNotificationItem],
+) -> String {
+    let mut item_parts = items
+        .iter()
+        .map(|item| {
+            format!(
+                "{}:{}:{}",
+                normalize_alias_lookup_value(&item.item_name),
+                item.quantity.max(1),
+                item.rank.unwrap_or(-1)
+            )
+        })
+        .collect::<Vec<_>>();
+    item_parts.sort();
+
+    format!(
+        "{}|{}|{}|{}",
+        order_type.trim().to_lowercase(),
+        total_platinum,
+        build_trade_notification_minute_bucket(closed_at),
+        item_parts.join("|")
+    )
+}
+
+fn build_trade_notification_items_from_entry(
+    entry: &PortfolioTradeLogEntry,
+) -> Vec<DiscordTradeNotificationItem> {
+    vec![DiscordTradeNotificationItem {
+        item_name: entry.item_name.clone(),
+        quantity: entry.quantity.max(1),
+        rank: entry.rank,
+        image_path: entry.image_path.clone(),
+    }]
+}
+
+fn build_trade_notification_candidates_for_wfm(
+    entries: &[PortfolioTradeLogEntry],
+) -> Vec<TradeNotificationCandidate> {
+    entries
+        .iter()
+        .map(|entry| {
+            let items = build_trade_notification_items_from_entry(entry);
+            let total_platinum = entry
+                .allocation_total_platinum
+                .unwrap_or(entry.platinum.saturating_mul(entry.quantity.max(1)));
+            let summary_label = format!(
+                "{} {} x{} for {}p",
+                if entry.order_type == "buy" {
+                    "Bought"
+                } else {
+                    "Sold"
+                },
+                entry.item_name,
+                entry.quantity.max(1),
+                total_platinum
+            );
+
+            TradeNotificationCandidate {
+                fingerprint: build_trade_notification_fingerprint(
+                    &entry.order_type,
+                    total_platinum,
+                    &entry.closed_at,
+                    &items,
+                ),
+                source: "wfm".to_string(),
+                order_type: entry.order_type.clone(),
+                total_platinum,
+                closed_at: entry.closed_at.clone(),
+                summary_label,
+                items,
+            }
+        })
+        .collect()
+}
+
+fn build_trade_notification_candidates_for_alecaframe(
+    entries: &[PortfolioTradeLogEntry],
+) -> Vec<TradeNotificationCandidate> {
+    let mut grouped = HashMap::<String, Vec<PortfolioTradeLogEntry>>::new();
+    let mut singles = Vec::<PortfolioTradeLogEntry>::new();
+
+    for entry in entries {
+        if let Some(group_id) = &entry.group_id {
+            grouped
+                .entry(group_id.clone())
+                .or_default()
+                .push(entry.clone());
+        } else {
+            singles.push(entry.clone());
+        }
+    }
+
+    let mut candidates = Vec::new();
+
+    for entry in singles {
+        let items = build_trade_notification_items_from_entry(&entry);
+        let total_platinum = entry
+            .allocation_total_platinum
+            .unwrap_or(entry.platinum.saturating_mul(entry.quantity.max(1)));
+        let summary_label = format!(
+            "{} {} x{} for {}p",
+            if entry.order_type == "buy" {
+                "Bought"
+            } else {
+                "Sold"
+            },
+            entry.item_name,
+            entry.quantity.max(1),
+            total_platinum
+        );
+
+        candidates.push(TradeNotificationCandidate {
+            fingerprint: build_trade_notification_fingerprint(
+                &entry.order_type,
+                total_platinum,
+                &entry.closed_at,
+                &items,
+            ),
+            source: "alecaframe".to_string(),
+            order_type: entry.order_type.clone(),
+            total_platinum,
+            closed_at: entry.closed_at.clone(),
+            summary_label,
+            items,
+        });
+    }
+
+    for mut group_entries in grouped.into_values() {
+        group_entries.sort_by(|left, right| {
+            left.group_sort_order
+                .unwrap_or(0)
+                .cmp(&right.group_sort_order.unwrap_or(0))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let Some(first) = group_entries.first() else {
+            continue;
+        };
+
+        let total_platinum = first.group_total_platinum.unwrap_or_else(|| {
+            group_entries
+                .iter()
+                .map(|entry| entry.allocation_total_platinum.unwrap_or(entry.platinum))
+                .sum::<i64>()
+        });
+        let items = group_entries
+            .iter()
+            .map(|entry| DiscordTradeNotificationItem {
+                item_name: entry.item_name.clone(),
+                quantity: entry.quantity.max(1),
+                rank: entry.rank,
+                image_path: entry.image_path.clone(),
+            })
+            .collect::<Vec<_>>();
+        let summary_label = format!(
+            "{} {} item{} for {}p",
+            if first.order_type == "buy" {
+                "Bought"
+            } else {
+                "Sold"
+            },
+            items.len(),
+            if items.len() == 1 { "" } else { "s" },
+            total_platinum
+        );
+
+        candidates.push(TradeNotificationCandidate {
+            fingerprint: build_trade_notification_fingerprint(
+                &first.order_type,
+                total_platinum,
+                &first.closed_at,
+                &items,
+            ),
+            source: "alecaframe".to_string(),
+            order_type: first.order_type.clone(),
+            total_platinum,
+            closed_at: first.closed_at.clone(),
+            summary_label,
+            items,
+        });
+    }
+
+    candidates.sort_by(|left, right| left.closed_at.cmp(&right.closed_at));
+    candidates
+}
+
+fn should_send_alecaframe_trade_notification(candidate: &TradeNotificationCandidate) -> bool {
+    parse_timestamp(&candidate.closed_at)
+        .map(|closed_at| {
+            (now_utc() - closed_at).whole_seconds() >= ALECAFRAME_NOTIFICATION_DELAY_SECONDS
+        })
+        .unwrap_or(true)
+}
+
+fn trade_happened_after_session_start(
+    candidate: &TradeNotificationCandidate,
+    session_started_at: Option<&OffsetDateTime>,
+) -> bool {
+    let Some(session_started_at) = session_started_at else {
+        return false;
+    };
+
+    parse_timestamp(&candidate.closed_at)
+        .map(|closed_at| closed_at >= *session_started_at)
+        .unwrap_or(false)
+}
+
+fn send_trade_notification_candidates_inner(
+    app: &tauri::AppHandle,
+    connection: &Connection,
+    username: &str,
+    candidates: &[TradeNotificationCandidate],
+    source: &str,
+    session_started_at: Option<&OffsetDateTime>,
+) -> Result<i64> {
+    let mut sent_count = 0_i64;
+
+    for candidate in candidates {
+        if !trade_happened_after_session_start(candidate, session_started_at) {
+            continue;
+        }
+
+        if source == "alecaframe" && !should_send_alecaframe_trade_notification(candidate) {
+            continue;
+        }
+
+        if trade_notification_fingerprint_exists_inner(
+            connection,
+            username,
+            &candidate.fingerprint,
+        )? {
+            continue;
+        }
+
+        let sent = send_trade_detected_discord_notification_inner(
+            app,
+            &DiscordTradeDetectedNotificationInput {
+                source: candidate.source.clone(),
+                order_type: candidate.order_type.clone(),
+                total_platinum: candidate.total_platinum,
+                closed_at: candidate.closed_at.clone(),
+                summary_label: candidate.summary_label.clone(),
+                items: candidate.items.clone(),
+            },
+        )?;
+
+        if sent {
+            persist_trade_notification_fingerprint_inner(
+                connection,
+                username,
+                &candidate.fingerprint,
+                &candidate.source,
+                &candidate.closed_at,
+            )?;
+            sent_count += 1;
+        }
+    }
+
+    Ok(sent_count)
+}
+
 fn prettify_alecaframe_name(value: &str) -> String {
-    value.trim()
+    value
+        .trim()
         .rsplit('/')
         .next()
         .unwrap_or(value)
@@ -1303,12 +1652,17 @@ fn find_duplicate_trade_record(
             return false;
         }
 
-        if normalize_alias_lookup_value(&record.item_name) != normalize_alias_lookup_value(item_name) {
+        if normalize_alias_lookup_value(&record.item_name)
+            != normalize_alias_lookup_value(item_name)
+        {
             return false;
         }
 
         parse_timestamp(&record.closed_at)
-            .map(|existing_time| (existing_time - *closed_at).whole_seconds().abs() <= TRADE_TIME_DUPLICATE_WINDOW_SECONDS)
+            .map(|existing_time| {
+                (existing_time - *closed_at).whole_seconds().abs()
+                    <= TRADE_TIME_DUPLICATE_WINDOW_SECONDS
+            })
             .unwrap_or(false)
     })
 }
@@ -1441,9 +1795,7 @@ fn collapse_grouped_trade_sets(
                         .map(|candidate_time| {
                             parse_timestamp(&group[0].closed_at)
                                 .map(|group_time| {
-                                    (candidate_time - group_time)
-                                        .whole_seconds()
-                                        .abs()
+                                    (candidate_time - group_time).whole_seconds().abs()
                                         <= TRADE_TIME_DUPLICATE_WINDOW_SECONDS
                                 })
                                 .unwrap_or(false)
@@ -1542,7 +1894,9 @@ fn build_alecaframe_trade_entries(
         let preview_rows = trade_items
             .iter()
             .map(|item| {
-                let meta = resolve_catalog_trade_item_by_alias(&catalog, &item.name).ok().flatten();
+                let meta = resolve_catalog_trade_item_by_alias(&catalog, &item.name)
+                    .ok()
+                    .flatten();
                 let item_name = meta
                     .as_ref()
                     .map(|entry| entry.name.clone())
@@ -1560,7 +1914,9 @@ fn build_alecaframe_trade_entries(
             preview_rows
                 .first()
                 .map(|(item_name, quantity)| {
-                    find_duplicate_trade_record(existing, order_type, item_name, *quantity, &closed_at)
+                    find_duplicate_trade_record(
+                        existing, order_type, item_name, *quantity, &closed_at,
+                    )
                 })
                 .unwrap_or(false)
         };
@@ -1580,7 +1936,10 @@ fn build_alecaframe_trade_entries(
                 order_type,
                 &trade.timestamp,
                 total_platinum,
-                &trade_items.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                &trade_items
+                    .iter()
+                    .map(|item| item.name.clone())
+                    .collect::<Vec<_>>(),
             ))
         } else {
             None
@@ -1595,7 +1954,9 @@ fn build_alecaframe_trade_entries(
                 .unwrap_or_else(|| prettify_alecaframe_name(&item.name));
             let quantity = item.cnt.max(1);
             if group_id.is_none()
-                && find_duplicate_trade_record(existing, order_type, &item_name, quantity, &closed_at)
+                && find_duplicate_trade_record(
+                    existing, order_type, &item_name, quantity, &closed_at,
+                )
             {
                 continue;
             }
@@ -1635,9 +1996,13 @@ fn build_alecaframe_trade_entries(
                 status: None,
                 keep_item: false,
                 group_id: effective_group_id.clone(),
-                group_label: effective_group_id.as_ref().map(|_| "Multiple Item Trade".to_string()),
+                group_label: effective_group_id
+                    .as_ref()
+                    .map(|_| "Multiple Item Trade".to_string()),
                 group_total_platinum: effective_group_id.as_ref().map(|_| total_platinum),
-                group_item_count: effective_group_id.as_ref().map(|_| preview_rows.len() as i64),
+                group_item_count: effective_group_id
+                    .as_ref()
+                    .map(|_| preview_rows.len() as i64),
                 allocation_total_platinum: Some(allocations[index]),
                 group_sort_order: effective_group_id.as_ref().map(|_| sort_order),
             });
@@ -1761,6 +2126,155 @@ fn load_trade_log_last_updated_at(
         )
         .optional()
         .context("failed to read cached trade log metadata")
+}
+
+fn load_alecaframe_trade_baseline_date_inner(
+    connection: &Connection,
+    username: &str,
+) -> Result<Option<String>> {
+    connection
+        .query_row(
+            "
+            SELECT alecaframe_baseline_date
+            FROM portfolio_trade_log_cache_meta
+            WHERE username = ?1
+            ",
+            params![username.trim()],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .context("failed to read Alecaframe trade baseline date")
+        .map(|value| value.flatten())
+}
+
+fn save_alecaframe_trade_baseline_date_inner(
+    connection: &Connection,
+    username: &str,
+    baseline_date: &str,
+) -> Result<()> {
+    let trimmed_username = username.trim();
+    let trimmed_baseline = baseline_date.trim();
+    if trimmed_username.is_empty() || trimmed_baseline.is_empty() {
+        return Ok(());
+    }
+
+    let updated_at = format_timestamp(now_utc())?;
+    connection
+        .execute(
+            "
+            INSERT INTO portfolio_trade_log_cache_meta (
+              username,
+              last_updated_at,
+              entry_count,
+              alecaframe_baseline_date
+            ) VALUES (?1, ?2, 0, ?3)
+            ON CONFLICT(username) DO UPDATE SET
+              alecaframe_baseline_date = excluded.alecaframe_baseline_date
+            ",
+            params![trimmed_username, updated_at, trimmed_baseline],
+        )
+        .context("failed to persist Alecaframe trade baseline date")?;
+    Ok(())
+}
+
+fn trade_notification_fingerprint_exists_inner(
+    connection: &Connection,
+    username: &str,
+    fingerprint: &str,
+) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "
+            SELECT 1
+            FROM portfolio_trade_log_notifications
+            WHERE username = ?1
+              AND fingerprint = ?2
+            LIMIT 1
+            ",
+            params![username.trim(), fingerprint.trim()],
+            |_row| Ok(()),
+        )
+        .optional()
+        .context("failed to read trade notification fingerprint")?
+        .is_some())
+}
+
+fn persist_trade_notification_fingerprint_inner(
+    connection: &Connection,
+    username: &str,
+    fingerprint: &str,
+    source: &str,
+    closed_at: &str,
+) -> Result<()> {
+    let notified_at = format_timestamp(now_utc())?;
+    connection
+        .execute(
+            "
+            INSERT OR IGNORE INTO portfolio_trade_log_notifications (
+              username,
+              fingerprint,
+              source,
+              notified_at,
+              closed_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)
+            ",
+            params![
+                username.trim(),
+                fingerprint.trim(),
+                source.trim(),
+                notified_at,
+                closed_at.trim(),
+            ],
+        )
+        .context("failed to persist trade notification fingerprint")?;
+    Ok(())
+}
+
+fn trade_record_matches_existing_duplicate(
+    existing: &[StoredTradeLogRecord],
+    entry: &PortfolioTradeLogEntry,
+) -> bool {
+    let Some(closed_at) = parse_timestamp(&entry.closed_at) else {
+        return false;
+    };
+
+    find_duplicate_trade_record(
+        existing,
+        &entry.order_type,
+        &entry.item_name,
+        entry.quantity,
+        &closed_at,
+    )
+}
+
+fn merge_wfm_trade_log_entries(
+    existing: &[StoredTradeLogRecord],
+    fetched_entries: &[PortfolioTradeLogEntry],
+) -> (Vec<PortfolioTradeLogEntry>, Vec<PortfolioTradeLogEntry>) {
+    let existing_ids = existing
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<HashSet<_>>();
+
+    let persisted_entries = fetched_entries
+        .iter()
+        .filter(|entry| {
+            if existing_ids.contains(&entry.id) {
+                return true;
+            }
+
+            !trade_record_matches_existing_duplicate(existing, entry)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let new_entries = persisted_entries
+        .iter()
+        .filter(|entry| !existing_ids.contains(&entry.id))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    (persisted_entries, new_entries)
 }
 
 fn has_complete_derived_trade_log_state(connection: &Connection, username: &str) -> Result<bool> {
@@ -1978,8 +2492,12 @@ fn load_trade_set_map_file(path: &Path) -> Result<Option<TradeSetMapFile>> {
 
 fn save_trade_set_map_file(path: &Path, file: &TradeSetMapFile) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create trade set map directory {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create trade set map directory {}",
+                parent.display()
+            )
+        })?;
     }
 
     let raw = serde_json::to_string_pretty(file).context("failed to serialize trade set map")?;
@@ -2012,7 +2530,9 @@ fn build_trade_set_map_inner(
     api_version: Option<&str>,
 ) -> Result<TradeSetMapSummary> {
     let map_path = build_trade_set_map_path(app)?;
-    let version_key = api_version.map(|value| value.trim()).filter(|value| !value.is_empty());
+    let version_key = api_version
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
 
     if let Some(existing) = load_trade_set_map_file(&map_path)? {
         let existing_version = existing
@@ -2256,7 +2776,9 @@ fn replace_trade_log_rows_inner(
 ) -> Result<String> {
     let trimmed_username = username.trim();
     if trimmed_username.is_empty() {
-        return Err(anyhow!("Username is required to replace the trade log cache."));
+        return Err(anyhow!(
+            "Username is required to replace the trade log cache."
+        ));
     }
 
     connection
@@ -2293,7 +2815,9 @@ fn persist_derived_trade_log_entries_inner(
 ) -> Result<()> {
     let trimmed_username = username.trim();
     if trimmed_username.is_empty() {
-        return Err(anyhow!("Username is required to persist the derived trade log."));
+        return Err(anyhow!(
+            "Username is required to persist the derived trade log."
+        ));
     }
 
     let derived_at = format_timestamp(now_utc())?;
@@ -2353,7 +2877,9 @@ fn record_total_platinum(record: &StoredTradeLogRecord) -> i64 {
         .unwrap_or(record.platinum.saturating_mul(record.quantity))
 }
 
-fn build_portfolio_entry_from_stored_record(record: &StoredTradeLogRecord) -> PortfolioTradeLogEntry {
+fn build_portfolio_entry_from_stored_record(
+    record: &StoredTradeLogRecord,
+) -> PortfolioTradeLogEntry {
     PortfolioTradeLogEntry {
         id: record.id.clone(),
         item_name: record.item_name.clone(),
@@ -2484,7 +3010,8 @@ fn consume_set_component_buy_lots(
             })
             .sum::<i64>();
 
-        fully_supported_sets = fully_supported_sets.min(available_quantity / component.quantity_in_set);
+        fully_supported_sets =
+            fully_supported_sets.min(available_quantity / component.quantity_in_set);
     }
 
     let mut total_cost = 0_i64;
@@ -2578,9 +3105,7 @@ where
             image_path: record.image_path.clone(),
             order_type: "sell".to_string(),
             source: record.source.clone(),
-            platinum: record
-                .allocation_total_platinum
-                .unwrap_or(record.platinum),
+            platinum: record.allocation_total_platinum.unwrap_or(record.platinum),
             quantity: record.quantity,
             rank: record.rank,
             closed_at: record.closed_at.clone(),
@@ -2626,9 +3151,7 @@ where
             image_path: record.image_path.clone(),
             order_type: "buy".to_string(),
             source: record.source.clone(),
-            platinum: record
-                .allocation_total_platinum
-                .unwrap_or(record.platinum),
+            platinum: record.allocation_total_platinum.unwrap_or(record.platinum),
             quantity: record.quantity,
             rank: record.rank,
             closed_at: record.closed_at.clone(),
@@ -2843,7 +3366,11 @@ fn set_trade_log_keep_item_inner(
             ON CONFLICT(username, order_id) DO UPDATE SET
               keep_item = excluded.keep_item
             ",
-            params![trimmed_username, trimmed_order_id, if keep_item { 1 } else { 0 }],
+            params![
+                trimmed_username,
+                trimmed_order_id,
+                if keep_item { 1 } else { 0 }
+            ],
         )
         .context("failed to update trade log keep override")?;
 
@@ -2861,13 +3388,10 @@ fn migrate_alecaframe_trade_log_inner(
     }
 
     let mut connection = open_trades_cache_database(app)?;
+    save_alecaframe_trade_baseline_date_inner(&connection, trimmed_username, &input.baseline_date)?;
     let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
-    let imported = build_alecaframe_trade_entries(
-        app,
-        trimmed_username,
-        &input.baseline_date,
-        &existing,
-    )?;
+    let imported =
+        build_alecaframe_trade_entries(app, trimmed_username, &input.baseline_date, &existing)?;
 
     if !imported.is_empty() {
         save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
@@ -2885,7 +3409,9 @@ fn update_trade_group_allocations_inner(
     let trimmed_username = username.trim();
     let trimmed_group_id = group_id.trim();
     if trimmed_username.is_empty() {
-        return Err(anyhow!("Username is required to update grouped trade allocations."));
+        return Err(anyhow!(
+            "Username is required to update grouped trade allocations."
+        ));
     }
     if trimmed_group_id.is_empty() {
         return Err(anyhow!("Trade group id is required to update allocations."));
@@ -2937,7 +3463,9 @@ fn update_trade_group_allocations_inner(
             .iter()
             .any(|allocation| !expected_ids.contains(&allocation.order_id.as_str()))
     {
-        return Err(anyhow!("Allocation rows do not match the stored grouped trade items."));
+        return Err(anyhow!(
+            "Allocation rows do not match the stored grouped trade items."
+        ));
     }
 
     let supplied_total = allocations
@@ -2949,7 +3477,10 @@ fn update_trade_group_allocations_inner(
             "Adjusted totals must add up to {expected_total} platinum."
         ));
     }
-    if allocations.iter().any(|allocation| allocation.total_platinum < 0) {
+    if allocations
+        .iter()
+        .any(|allocation| allocation.total_platinum < 0)
+    {
         return Err(anyhow!("Adjusted trade totals cannot be negative."));
     }
 
@@ -3012,10 +3543,152 @@ fn refresh_trade_log_state_for_app(
     app: &tauri::AppHandle,
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
-    let entries = fetch_profile_trade_log_inner(username)?;
     let mut connection = open_trades_cache_database(app)?;
-    save_trade_log_rows_inner(&mut connection, username, &entries)?;
+    let existing = load_stored_trade_log_records_inner(&connection, username)?;
+    let fetched_entries = fetch_profile_trade_log_inner(username)?;
+    let (persisted_entries, _) = merge_wfm_trade_log_entries(&existing, &fetched_entries);
+    save_trade_log_rows_inner(&mut connection, username, &persisted_entries)?;
     reconcile_trade_log_state_inner(app, &mut connection, username)
+}
+
+fn refresh_wfm_trade_detection_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+    input: &TradeDetectionRefreshInput,
+) -> Result<TradeDetectionRefreshResult> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!(
+            "Username is required to detect new Warframe Market trades."
+        ));
+    }
+
+    let mut connection = open_trades_cache_database(app)?;
+    let session_started_at = input
+        .session_started_at
+        .as_deref()
+        .and_then(parse_timestamp);
+    let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
+    let fetched_entries = fetch_profile_trade_log_inner(trimmed_username)?;
+    let (persisted_entries, new_entries) = merge_wfm_trade_log_entries(&existing, &fetched_entries);
+
+    if persisted_entries.is_empty() {
+        return Ok(TradeDetectionRefreshResult {
+            source: "wfm".to_string(),
+            new_trade_count: 0,
+            notification_count: 0,
+            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
+            skipped: false,
+            message: Some("No trade history rows were returned.".to_string()),
+        });
+    }
+
+    if new_entries.is_empty() {
+        return Ok(TradeDetectionRefreshResult {
+            source: "wfm".to_string(),
+            new_trade_count: 0,
+            notification_count: 0,
+            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
+            skipped: false,
+            message: None,
+        });
+    }
+
+    let last_updated_at =
+        save_trade_log_rows_inner(&mut connection, trimmed_username, &persisted_entries)?;
+    let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+    let notification_count = send_trade_notification_candidates_inner(
+        app,
+        &connection,
+        trimmed_username,
+        &build_trade_notification_candidates_for_wfm(&new_entries),
+        "wfm",
+        session_started_at.as_ref(),
+    )?;
+
+    Ok(TradeDetectionRefreshResult {
+        source: "wfm".to_string(),
+        new_trade_count: new_entries.len() as i64,
+        notification_count,
+        last_updated_at: Some(last_updated_at),
+        skipped: false,
+        message: None,
+    })
+}
+
+fn refresh_alecaframe_trade_detection_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+    input: &TradeDetectionRefreshInput,
+) -> Result<TradeDetectionRefreshResult> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to detect Alecaframe trades."));
+    }
+
+    let settings = load_settings_for_internal_use(app)?;
+    if !settings.alecaframe.enabled || settings.alecaframe.public_link.is_none() {
+        return Ok(TradeDetectionRefreshResult {
+            source: "alecaframe".to_string(),
+            new_trade_count: 0,
+            notification_count: 0,
+            last_updated_at: None,
+            skipped: true,
+            message: Some("Alecaframe is not enabled.".to_string()),
+        });
+    }
+
+    let mut connection = open_trades_cache_database(app)?;
+    let session_started_at = input
+        .session_started_at
+        .as_deref()
+        .and_then(parse_timestamp);
+    let Some(baseline_date) =
+        load_alecaframe_trade_baseline_date_inner(&connection, trimmed_username)?
+    else {
+        return Ok(TradeDetectionRefreshResult {
+            source: "alecaframe".to_string(),
+            new_trade_count: 0,
+            notification_count: 0,
+            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
+            skipped: true,
+            message: Some("No Alecaframe migration baseline has been saved yet.".to_string()),
+        });
+    };
+
+    let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
+    let imported =
+        build_alecaframe_trade_entries(app, trimmed_username, &baseline_date, &existing)?;
+    if imported.is_empty() {
+        return Ok(TradeDetectionRefreshResult {
+            source: "alecaframe".to_string(),
+            new_trade_count: 0,
+            notification_count: 0,
+            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
+            skipped: false,
+            message: None,
+        });
+    }
+
+    let last_updated_at = save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
+    let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+    let notification_count = send_trade_notification_candidates_inner(
+        app,
+        &connection,
+        trimmed_username,
+        &build_trade_notification_candidates_for_alecaframe(&imported),
+        "alecaframe",
+        session_started_at.as_ref(),
+    )?;
+
+    Ok(TradeDetectionRefreshResult {
+        source: "alecaframe".to_string(),
+        new_trade_count: imported.len() as i64,
+        notification_count,
+        last_updated_at: Some(last_updated_at),
+        skipped: false,
+        message: None,
+    })
 }
 
 fn normalize_portfolio_pnl_period(value: &str) -> String {
@@ -3053,7 +3726,13 @@ fn month_short_label(month: time::Month) -> &'static str {
 
 fn build_portfolio_bucket_label(bucket_at: &str) -> String {
     parse_timestamp(bucket_at)
-        .map(|timestamp| format!("{} {}", timestamp.day(), month_short_label(timestamp.month())))
+        .map(|timestamp| {
+            format!(
+                "{} {}",
+                timestamp.day(),
+                month_short_label(timestamp.month())
+            )
+        })
         .unwrap_or_else(|| bucket_at.to_string())
 }
 
@@ -3423,7 +4102,9 @@ fn build_portfolio_pnl_summary_inner(
             &record.item_name,
         );
         {
-            let entry = category_breakdown_map.entry(category_label).or_insert((0, 0));
+            let entry = category_breakdown_map
+                .entry(category_label)
+                .or_insert((0, 0));
             entry.0 += profit;
             entry.1 += 1;
         }
@@ -3432,11 +4113,11 @@ fn build_portfolio_pnl_summary_inner(
             let mut weighted_hold_hours = 0_f64;
             let mut weighted_units = 0_f64;
             for matched_buy in &detail.matches {
-                if let (Some(sell_at), Some(buy_at)) =
-                    (parse_timestamp(&record.closed_at), parse_timestamp(&matched_buy.buy_closed_at))
-                {
-                    let hold_hours =
-                        (sell_at - buy_at).whole_minutes().max(0) as f64 / 60.0;
+                if let (Some(sell_at), Some(buy_at)) = (
+                    parse_timestamp(&record.closed_at),
+                    parse_timestamp(&matched_buy.buy_closed_at),
+                ) {
+                    let hold_hours = (sell_at - buy_at).whole_minutes().max(0) as f64 / 60.0;
                     weighted_hold_hours += hold_hours * matched_buy.quantity as f64;
                     weighted_units += matched_buy.quantity as f64;
                 }
@@ -3533,7 +4214,11 @@ fn build_portfolio_pnl_summary_inner(
     if kept_items > 0 {
         notes.push(format!(
             "{kept_items} kept buy {} excluded from set/flip matching.",
-            if kept_items == 1 { "entry is" } else { "entries are" }
+            if kept_items == 1 {
+                "entry is"
+            } else {
+                "entries are"
+            }
         ));
     }
 
@@ -3855,7 +4540,10 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
     let mut sell_orders = Vec::new();
     let mut buy_orders = Vec::new();
 
-    for order in orders.into_iter().filter(|entry| matches!(entry.order_type.as_str(), "sell" | "buy")) {
+    for order in orders
+        .into_iter()
+        .filter(|entry| matches!(entry.order_type.as_str(), "sell" | "buy"))
+    {
         let Some(meta) = resolve_catalog_trade_item_meta(&connection, &order.item_id)? else {
             continue;
         };
@@ -4169,6 +4857,34 @@ pub async fn get_wfm_profile_trade_log(
 }
 
 #[tauri::command]
+pub async fn refresh_wfm_trade_detection(
+    app: tauri::AppHandle,
+    username: String,
+    input: TradeDetectionRefreshInput,
+) -> Result<TradeDetectionRefreshResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        refresh_wfm_trade_detection_inner(&app, username.trim(), &input)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn refresh_alecaframe_trade_detection(
+    app: tauri::AppHandle,
+    username: String,
+    input: TradeDetectionRefreshInput,
+) -> Result<TradeDetectionRefreshResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        refresh_alecaframe_trade_detection_inner(&app, username.trim(), &input)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn get_portfolio_pnl_summary(
     app: tauri::AppHandle,
     username: String,
@@ -4326,16 +5042,17 @@ pub async fn delete_wfm_sell_order(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trade_log_entries_from_statistics, collapse_grouped_trade_sets,
-        compute_cost_basis_coverage, compute_current_value_coverage,
-        derive_trade_log_entries_with_components,
-        initialize_trades_cache_schema, load_stored_trade_log_records_inner,
-        load_trade_log_last_updated_at, normalize_alecaframe_trade_payload, normalize_avatar_url,
+        build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
+        collapse_grouped_trade_sets, compute_cost_basis_coverage, compute_current_value_coverage,
+        derive_trade_log_entries_with_components, initialize_trades_cache_schema,
+        load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
+        merge_wfm_trade_log_entries, normalize_alecaframe_trade_payload, normalize_avatar_url,
         parse_status_from_payload, save_trade_log_rows_inner, AlecaframeRawTradeRecord,
-        AlecaframeTradeItemRecord, AlecaframeTradeResponse, PortfolioTradeLogEntry, StoredTradeLogRecord,
-        TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
+        AlecaframeTradeItemRecord, AlecaframeTradeResponse, PortfolioTradeLogEntry,
+        StoredTradeLogRecord, TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
     };
+    use crate::settings::DiscordTradeNotificationItem;
     use rusqlite::Connection;
     use serde_json::json;
 
@@ -4472,7 +5189,8 @@ mod tests {
                         rank: -1,
                     }],
                     items_received: vec![AlecaframeTradeItemRecord {
-                        name: "/Lotus/Types/Recipes/WarframeRecipes/NovaPrimeChassisComponent".to_string(),
+                        name: "/Lotus/Types/Recipes/WarframeRecipes/NovaPrimeChassisComponent"
+                            .to_string(),
                         display_name: None,
                         cnt: 1,
                         rank: -1,
@@ -4541,10 +5259,10 @@ mod tests {
             },
         ];
 
-        let saved_updated_at =
-            save_trade_log_rows_inner(&mut connection, "qtpyth", &entries).expect("save cached trade log");
-        let loaded_records =
-            load_stored_trade_log_records_inner(&connection, "qtpyth").expect("load cached trade log");
+        let saved_updated_at = save_trade_log_rows_inner(&mut connection, "qtpyth", &entries)
+            .expect("save cached trade log");
+        let loaded_records = load_stored_trade_log_records_inner(&connection, "qtpyth")
+            .expect("load cached trade log");
         let loaded_updated_at =
             load_trade_log_last_updated_at(&connection, "qtpyth").expect("load cached metadata");
 
@@ -4663,12 +5381,18 @@ mod tests {
             }
         });
 
-        let sell_entry = derived.iter().find(|entry| entry.id == "sell-set").expect("sell entry");
+        let sell_entry = derived
+            .iter()
+            .find(|entry| entry.id == "sell-set")
+            .expect("sell entry");
         assert_eq!(sell_entry.profit, Some(35));
         assert_eq!(sell_entry.margin, Some(58.333333333333336));
 
         for buy_id in ["buy-chassis", "buy-neuro", "buy-systems"] {
-            let buy_entry = derived.iter().find(|entry| entry.id == buy_id).expect("buy entry");
+            let buy_entry = derived
+                .iter()
+                .find(|entry| entry.id == buy_id)
+                .expect("buy entry");
             assert_eq!(buy_entry.status.as_deref(), Some("Sold As Set"));
         }
     }
@@ -4809,5 +5533,87 @@ mod tests {
         assert!((current_value_coverage - 25.0).abs() < f64::EPSILON);
         assert_eq!(compute_cost_basis_coverage(0, 0, 0), 100.0);
         assert_eq!(compute_current_value_coverage(0, 0), 100.0);
+    }
+
+    #[test]
+    fn trade_notification_fingerprint_is_source_agnostic() {
+        let fingerprint = build_trade_notification_fingerprint(
+            "sell",
+            68,
+            "2026-03-10T09:00:45Z",
+            &[DiscordTradeNotificationItem {
+                item_name: "Wisp Prime Set".to_string(),
+                quantity: 1,
+                rank: None,
+                image_path: None,
+            }],
+        );
+        let same_trade_fingerprint = build_trade_notification_fingerprint(
+            "sell",
+            68,
+            "2026-03-10T09:00:10Z",
+            &[DiscordTradeNotificationItem {
+                item_name: "wisp prime set".to_string(),
+                quantity: 1,
+                rank: None,
+                image_path: None,
+            }],
+        );
+
+        assert_eq!(fingerprint, same_trade_fingerprint);
+    }
+
+    #[test]
+    fn merge_wfm_trade_log_entries_skips_cross_source_duplicates() {
+        let existing = vec![StoredTradeLogRecord {
+            id: "af-trade-1".to_string(),
+            item_name: "Wisp Prime Chassis Blueprint".to_string(),
+            slug: "wisp_prime_chassis_blueprint".to_string(),
+            image_path: None,
+            order_type: "sell".to_string(),
+            source: "alecaframe".to_string(),
+            platinum: 34,
+            quantity: 1,
+            rank: None,
+            closed_at: "2026-03-10T09:00:00Z".to_string(),
+            updated_at: "2026-03-10T09:00:00Z".to_string(),
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+        }];
+
+        let fetched_entries = vec![PortfolioTradeLogEntry {
+            id: "wfm-trade-1".to_string(),
+            item_name: "Wisp Prime Chassis Blueprint".to_string(),
+            slug: "wisp_prime_chassis_blueprint".to_string(),
+            image_path: None,
+            order_type: "sell".to_string(),
+            source: "wfm".to_string(),
+            platinum: 34,
+            quantity: 1,
+            rank: None,
+            closed_at: "2026-03-10T09:00:30Z".to_string(),
+            updated_at: "2026-03-10T09:00:30Z".to_string(),
+            profit: None,
+            margin: None,
+            status: None,
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+        }];
+
+        let (persisted_entries, new_entries) =
+            merge_wfm_trade_log_entries(&existing, &fetched_entries);
+
+        assert!(persisted_entries.is_empty());
+        assert!(new_entries.is_empty());
     }
 }
