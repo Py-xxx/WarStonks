@@ -37,6 +37,7 @@ pub fn run() {
             trades::set_wfm_trade_log_keep_item,
             trades::migrate_alecaframe_trade_log,
             trades::update_trade_group_allocations,
+            trades::force_wfm_trade_log_resync,
             trades::ensure_trade_set_map,
             trades::create_wfm_sell_order,
             trades::update_wfm_sell_order,
