@@ -4891,6 +4891,7 @@ async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str)
     let mut ws_stream = connect_wfm_websocket(token, device_id).await?;
     let mut authenticated = false;
     let mut status_sent = false;
+    let mut latest_emitted_status: Option<String> = None;
 
     timeout(Duration::from_secs(10), async {
         while let Some(message) = ws_stream.next().await {
@@ -4956,14 +4957,21 @@ async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str)
                 return Err(anyhow!(reason.to_string()));
             }
 
-            if route == "event/status/set" || route == "cmd/status/set:ok" {
+            if route == "event/status/set" {
+                latest_emitted_status = payload.payload.as_ref().and_then(parse_status_from_payload);
+                continue;
+            }
+
+            if route == "cmd/status/set:ok" {
                 if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload) {
                     return Ok(status);
                 }
 
-                if route == "cmd/status/set:ok" {
-                    return Ok(normalize_status_label(requested_status));
+                if let Some(status) = latest_emitted_status.clone() {
+                    return Ok(status);
                 }
+
+                return Ok(normalize_status_label(requested_status));
             }
         }
 
