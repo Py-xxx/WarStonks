@@ -667,6 +667,17 @@ pub struct ArbitrageScannerState {
     pub progress: ArbitrageScannerProgress,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionOwnedItem {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub quantity: i64,
+    pub updated_at: String,
+}
+
 struct ArbitrageScannerRunOutcome {
     response: ArbitrageScannerResponse,
     was_stopped: bool,
@@ -1076,6 +1087,18 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_set_component_cache_set_slug
           ON set_component_cache (set_slug, sort_order ASC);
 
+        CREATE TABLE IF NOT EXISTS owned_set_components (
+          component_slug TEXT PRIMARY KEY,
+          component_item_id INTEGER,
+          component_name TEXT NOT NULL,
+          component_image_path TEXT,
+          quantity INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_owned_set_components_name
+          ON owned_set_components (component_name COLLATE NOCASE ASC);
+
         CREATE TABLE IF NOT EXISTS scanner_cache (
           scanner_key TEXT PRIMARY KEY,
           computed_at TEXT NOT NULL,
@@ -1478,7 +1501,12 @@ fn statistics_cache_is_usable(
                AND domain_key = ?3
                AND source_kind = 'closed'",
             params![item_id, variant_key, source_domain],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                ))
+            },
         )?;
 
         if closed_row_count < expected_min_rows {
@@ -1616,7 +1644,9 @@ fn load_chart_statistics_rows(
     let recent_cutoff = now_utc() - TimeDuration::hours(48);
     let source_domains = match domain_key {
         AnalyticsDomainKey::FortyEightHours => vec!["48hours"],
-        AnalyticsDomainKey::SevenDays | AnalyticsDomainKey::ThirtyDays | AnalyticsDomainKey::NinetyDays => {
+        AnalyticsDomainKey::SevenDays
+        | AnalyticsDomainKey::ThirtyDays
+        | AnalyticsDomainKey::NinetyDays => {
             vec!["90days", "48hours"]
         }
     };
@@ -1797,7 +1827,8 @@ fn score_stats_liquidity(rows: &[InternalStatsRow]) -> (f64, String) {
     };
 
     let liquidity_score =
-        ((activity_score * 0.5) + (cadence_score * 0.3) + (stability_score * 0.2)).clamp(20.0, 100.0);
+        ((activity_score * 0.5) + (cadence_score * 0.3) + (stability_score * 0.2))
+            .clamp(20.0, 100.0);
     let sale_state = if liquidity_score >= 80.0 {
         "Fast mover"
     } else if liquidity_score >= 60.0 {
@@ -1817,8 +1848,12 @@ fn build_statistics_price_model(
     item_id: i64,
     variant_key: &str,
 ) -> Result<Option<ScannerPriceModel>> {
-    let (closed_rows, _, _) =
-        load_chart_statistics_rows(connection, item_id, variant_key, AnalyticsDomainKey::ThirtyDays)?;
+    let (closed_rows, _, _) = load_chart_statistics_rows(
+        connection,
+        item_id,
+        variant_key,
+        AnalyticsDomainKey::ThirtyDays,
+    )?;
     if closed_rows.is_empty() {
         return Ok(None);
     }
@@ -1839,21 +1874,37 @@ fn build_statistics_price_model(
         AnalyticsBucketSizeKey::TwentyFourHours,
     );
     let confidence_summary = if let Some(anchor_values) = anchors.as_ref() {
-        build_zone_confidence(&chart_points, anchor_values.fair_low, anchor_values.fair_high)
+        build_zone_confidence(
+            &chart_points,
+            anchor_values.fair_low,
+            anchor_values.fair_high,
+        )
     } else {
         build_confidence_summary("low", vec!["Thin history".to_string()])
     };
-    let current_stats_price = latest_live_sell_reference_price(connection, item_id, variant_key)?
-        .map(round_platinum);
+    let current_stats_price =
+        latest_live_sell_reference_price(connection, item_id, variant_key)?.map(round_platinum);
     let (liquidity_score, sale_state) = score_stats_liquidity(&closed_rows);
 
     Ok(Some(ScannerPriceModel {
-        entry_low: zone_bands.as_ref().map(|entry| round_platinum(entry.entry_low)),
-        entry_high: zone_bands.as_ref().map(|entry| round_platinum(entry.entry_high)),
-        recommended_entry_price: zone_bands.as_ref().map(|entry| round_platinum(entry.entry_high)),
-        exit_low: zone_bands.as_ref().map(|entry| round_platinum(entry.exit_low)),
-        exit_high: zone_bands.as_ref().map(|entry| round_platinum(entry.exit_high)),
-        recommended_exit_price: zone_bands.as_ref().map(|entry| round_platinum(entry.exit_low)),
+        entry_low: zone_bands
+            .as_ref()
+            .map(|entry| round_platinum(entry.entry_low)),
+        entry_high: zone_bands
+            .as_ref()
+            .map(|entry| round_platinum(entry.entry_high)),
+        recommended_entry_price: zone_bands
+            .as_ref()
+            .map(|entry| round_platinum(entry.entry_high)),
+        exit_low: zone_bands
+            .as_ref()
+            .map(|entry| round_platinum(entry.exit_low)),
+        exit_high: zone_bands
+            .as_ref()
+            .map(|entry| round_platinum(entry.exit_high)),
+        recommended_exit_price: zone_bands
+            .as_ref()
+            .map(|entry| round_platinum(entry.exit_low)),
         current_stats_price,
         liquidity_score,
         sale_state,
@@ -2111,10 +2162,20 @@ fn pressure_label(pressure_ratio: Option<f64>) -> String {
     }
 }
 
-fn build_market_snapshot(captured_at: &str, sell_orders: &[WfmDetailedOrder], buy_orders: &[WfmDetailedOrder]) -> MarketSnapshot {
-    let mut sorted_sell_prices = sell_orders.iter().map(|entry| entry.platinum).collect::<Vec<_>>();
+fn build_market_snapshot(
+    captured_at: &str,
+    sell_orders: &[WfmDetailedOrder],
+    buy_orders: &[WfmDetailedOrder],
+) -> MarketSnapshot {
+    let mut sorted_sell_prices = sell_orders
+        .iter()
+        .map(|entry| entry.platinum)
+        .collect::<Vec<_>>();
     sorted_sell_prices.sort_by(|left, right| left.total_cmp(right));
-    let mut sorted_buy_prices = buy_orders.iter().map(|entry| entry.platinum).collect::<Vec<_>>();
+    let mut sorted_buy_prices = buy_orders
+        .iter()
+        .map(|entry| entry.platinum)
+        .collect::<Vec<_>>();
     sorted_buy_prices.sort_by(|left, right| right.total_cmp(left));
 
     let lowest_sell = sorted_sell_prices.first().copied();
@@ -2153,12 +2214,22 @@ fn build_market_snapshot(captured_at: &str, sell_orders: &[WfmDetailedOrder], bu
 
     let unique_sell_users = sell_orders
         .iter()
-        .map(|order| order.user_slug.clone().unwrap_or_else(|| order.username.to_lowercase()))
+        .map(|order| {
+            order
+                .user_slug
+                .clone()
+                .unwrap_or_else(|| order.username.to_lowercase())
+        })
         .collect::<HashSet<_>>()
         .len() as i64;
     let unique_buy_users = buy_orders
         .iter()
-        .map(|order| order.user_slug.clone().unwrap_or_else(|| order.username.to_lowercase()))
+        .map(|order| {
+            order
+                .user_slug
+                .clone()
+                .unwrap_or_else(|| order.username.to_lowercase())
+        })
         .collect::<HashSet<_>>()
         .len() as i64;
     let pressure_ratio = compute_pressure_ratio(
@@ -2212,7 +2283,12 @@ fn fetch_filtered_orders(
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
-) -> Result<(Option<String>, Vec<WfmDetailedOrder>, Vec<WfmDetailedOrder>, MarketSnapshot)> {
+) -> Result<(
+    Option<String>,
+    Vec<WfmDetailedOrder>,
+    Vec<WfmDetailedOrder>,
+    MarketSnapshot,
+)> {
     let client = shared_wfm_client()?;
     let response = client
         .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
@@ -2247,15 +2323,18 @@ fn fetch_filtered_orders(
     }
 
     sell_orders.sort_by(|left, right| {
-        left.platinum
-            .total_cmp(&right.platinum)
-            .then_with(|| left.username.to_lowercase().cmp(&right.username.to_lowercase()))
+        left.platinum.total_cmp(&right.platinum).then_with(|| {
+            left.username
+                .to_lowercase()
+                .cmp(&right.username.to_lowercase())
+        })
     });
     buy_orders.sort_by(|left, right| {
-        right
-            .platinum
-            .total_cmp(&left.platinum)
-            .then_with(|| left.username.to_lowercase().cmp(&right.username.to_lowercase()))
+        right.platinum.total_cmp(&left.platinum).then_with(|| {
+            left.username
+                .to_lowercase()
+                .cmp(&right.username.to_lowercase())
+        })
     });
 
     let captured_at = format_timestamp(now_utc())?;
@@ -2483,7 +2562,14 @@ fn capture_tracking_snapshot(
 ) -> Result<MarketSnapshot> {
     let (_, sell_orders, buy_orders, snapshot) =
         fetch_filtered_orders(slug, variant_key, seller_mode)?;
-    persist_snapshot(connection, item_id, slug, variant_key, seller_mode, &snapshot)?;
+    persist_snapshot(
+        connection,
+        item_id,
+        slug,
+        variant_key,
+        seller_mode,
+        &snapshot,
+    )?;
     prune_old_rows(connection)?;
     update_tracking_row(
         connection,
@@ -2500,7 +2586,11 @@ fn capture_tracking_snapshot(
     Ok(snapshot)
 }
 
-fn resolve_variants_from_catalog(app: &tauri::AppHandle, item_id: i64, slug: &str) -> Result<Vec<MarketVariant>> {
+fn resolve_variants_from_catalog(
+    app: &tauri::AppHandle,
+    item_id: i64,
+    slug: &str,
+) -> Result<Vec<MarketVariant>> {
     let connection = open_catalog_database(app)?;
     let max_rank = connection
         .query_row(
@@ -2631,7 +2721,8 @@ fn maybe_capture_fresh_snapshot(
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<MarketSnapshot> {
-    if let Some(snapshot) = latest_snapshot_for_item(connection, item_id, variant_key, seller_mode)? {
+    if let Some(snapshot) = latest_snapshot_for_item(connection, item_id, variant_key, seller_mode)?
+    {
         if let Some(captured_at) = parse_timestamp(&snapshot.captured_at) {
             if now_utc() - captured_at < TimeDuration::minutes(TRACKING_SNAPSHOT_INTERVAL_MINUTES) {
                 return Ok(snapshot);
@@ -2799,7 +2890,11 @@ fn build_historical_zone_anchors(rows: &[InternalStatsRow]) -> Option<Historical
         .iter()
         .filter(|row| row.bucket_at >= cutoff)
         .collect::<Vec<_>>();
-    let source_rows = if recent_rows.is_empty() { rows.iter().collect::<Vec<_>>() } else { recent_rows };
+    let source_rows = if recent_rows.is_empty() {
+        rows.iter().collect::<Vec<_>>()
+    } else {
+        recent_rows
+    };
 
     let mut dip_prices = Vec::new();
     let mut fair_values = Vec::new();
@@ -2809,10 +2904,20 @@ fn build_historical_zone_anchors(rows: &[InternalStatsRow]) -> Option<Historical
         if let Some(value) = row.min_price.or(row.donch_bot) {
             dip_prices.push(value);
         }
-        if let Some(value) = row.median.or(row.wa_price).or(row.avg_price).or(row.moving_avg) {
+        if let Some(value) = row
+            .median
+            .or(row.wa_price)
+            .or(row.avg_price)
+            .or(row.moving_avg)
+        {
             fair_values.push(value);
         }
-        if let Some(value) = row.max_price.or(row.donch_top).or(row.median).or(row.wa_price) {
+        if let Some(value) = row
+            .max_price
+            .or(row.donch_top)
+            .or(row.median)
+            .or(row.wa_price)
+        {
             ceiling_values.push(value);
         }
     }
@@ -2822,13 +2927,11 @@ fn build_historical_zone_anchors(rows: &[InternalStatsRow]) -> Option<Historical
     ceiling_values.sort_by(|left, right| left.total_cmp(right));
 
     Some(HistoricalZoneAnchors {
-        support_floor: percentile_price(&dip_prices, 0.18)
-            .or_else(|| dip_prices.first().copied()),
+        support_floor: percentile_price(&dip_prices, 0.18).or_else(|| dip_prices.first().copied()),
         support_recurrence: percentile_price(&dip_prices, 0.38)
             .or_else(|| percentile_price(&dip_prices, 0.5))
             .or_else(|| dip_prices.first().copied()),
-        fair_low: percentile_price(&fair_values, 0.35)
-            .or_else(|| fair_values.first().copied()),
+        fair_low: percentile_price(&fair_values, 0.35).or_else(|| fair_values.first().copied()),
         fair_high: percentile_price(&ceiling_values, 0.82)
             .or_else(|| ceiling_values.last().copied()),
         fair_center: percentile_price(&fair_values, 0.55)
@@ -2880,7 +2983,11 @@ fn compute_zone_bands(
     upper_bound = round_platinum(upper_bound);
     entry_low = round_platinum(entry_low.clamp(lower_bound, upper_bound));
     entry_high = round_platinum(entry_high.clamp(entry_low + 1.0, upper_bound));
-    exit_low = round_platinum(exit_low.max(entry_high + 1.0).clamp(lower_bound, upper_bound));
+    exit_low = round_platinum(
+        exit_low
+            .max(entry_high + 1.0)
+            .clamp(lower_bound, upper_bound),
+    );
     exit_high = round_platinum(exit_high.max(exit_low + 1.0).max(upper_bound));
 
     Some(ZoneBands {
@@ -2900,7 +3007,10 @@ fn last_defined_value(
     rows.iter().rev().find_map(selector)
 }
 
-fn floor_timestamp(timestamp: OffsetDateTime, bucket_size_key: AnalyticsBucketSizeKey) -> OffsetDateTime {
+fn floor_timestamp(
+    timestamp: OffsetDateTime,
+    bucket_size_key: AnalyticsBucketSizeKey,
+) -> OffsetDateTime {
     let unix = timestamp.unix_timestamp();
     let bucket_seconds = bucket_size_key.duration().whole_seconds();
     let floored = unix - (unix.rem_euclid(bucket_seconds));
@@ -2941,47 +3051,43 @@ fn resample_rows(
         .into_iter()
         .map(|(bucket_start, bucket_rows)| {
             let live_bucket_rows = live_buy_map.get(&bucket_start).cloned().unwrap_or_default();
-            let bucket_at = OffsetDateTime::from_unix_timestamp(bucket_start)
-                .unwrap_or_else(|_| now_utc());
+            let bucket_at =
+                OffsetDateTime::from_unix_timestamp(bucket_start).unwrap_or_else(|_| now_utc());
             let volume = bucket_rows.iter().map(|row| row.volume).sum::<f64>();
 
             let fair_inputs = bucket_rows.last().cloned();
-            let fair_low = fair_inputs
-                .as_ref()
-                .and_then(|row| {
-                    let mut values = vec![];
-                    if let Some(value) = row_median_anchor(row) {
-                        values.push(value);
-                    }
-                    if let Some(value) = row.wa_price {
-                        values.push(value);
-                    }
-                    if let Some(value) = row.moving_avg {
-                        values.push(value);
-                    }
-                    if let Some(value) = row.donch_bot {
-                        values.push(value);
-                    }
-                    values.into_iter().reduce(f64::min)
-                });
-            let fair_high = fair_inputs
-                .as_ref()
-                .and_then(|row| {
-                    let mut values = vec![];
-                    if let Some(value) = row_median_anchor(row) {
-                        values.push(value);
-                    }
-                    if let Some(value) = row.wa_price {
-                        values.push(value);
-                    }
-                    if let Some(value) = row.moving_avg {
-                        values.push(value);
-                    }
-                    if let Some(value) = row.donch_top {
-                        values.push(value);
-                    }
-                    values.into_iter().reduce(f64::max)
-                });
+            let fair_low = fair_inputs.as_ref().and_then(|row| {
+                let mut values = vec![];
+                if let Some(value) = row_median_anchor(row) {
+                    values.push(value);
+                }
+                if let Some(value) = row.wa_price {
+                    values.push(value);
+                }
+                if let Some(value) = row.moving_avg {
+                    values.push(value);
+                }
+                if let Some(value) = row.donch_bot {
+                    values.push(value);
+                }
+                values.into_iter().reduce(f64::min)
+            });
+            let fair_high = fair_inputs.as_ref().and_then(|row| {
+                let mut values = vec![];
+                if let Some(value) = row_median_anchor(row) {
+                    values.push(value);
+                }
+                if let Some(value) = row.wa_price {
+                    values.push(value);
+                }
+                if let Some(value) = row.moving_avg {
+                    values.push(value);
+                }
+                if let Some(value) = row.donch_top {
+                    values.push(value);
+                }
+                values.into_iter().reduce(f64::max)
+            });
             let fair_center = fair_inputs.as_ref().and_then(fair_center_anchor);
             let historical_anchors = build_historical_zone_anchors(&bucket_rows);
             let zone_bands = historical_anchors
@@ -3000,14 +3106,22 @@ fn resample_rows(
                 bucket_at: format_timestamp(bucket_at).unwrap_or_default(),
                 open_price: bucket_rows.first().and_then(row_open_anchor),
                 closed_price: bucket_rows.last().and_then(row_close_anchor),
-                low_price: bucket_rows.iter().filter_map(row_low_anchor).reduce(f64::min),
-                high_price: bucket_rows.iter().filter_map(row_high_anchor).reduce(f64::max),
+                low_price: bucket_rows
+                    .iter()
+                    .filter_map(row_low_anchor)
+                    .reduce(f64::min),
+                high_price: bucket_rows
+                    .iter()
+                    .filter_map(row_high_anchor)
+                    .reduce(f64::max),
                 lowest_sell: bucket_rows
                     .iter()
                     .filter_map(row_low_anchor)
                     .reduce(f64::min),
                 median_sell: aggregate_weighted(
-                    bucket_rows.iter().map(|row| (row_median_anchor(row), row.volume)),
+                    bucket_rows
+                        .iter()
+                        .map(|row| (row_median_anchor(row), row.volume)),
                 ),
                 moving_avg: last_defined_value(&bucket_rows, |row| {
                     row.moving_avg
@@ -3059,7 +3173,11 @@ fn slope_over_hours(points: &[AnalyticsChartPoint], series_key: &str, hours: i64
     let start = points
         .iter()
         .rev()
-        .find(|point| parse_timestamp(&point.bucket_at).map(|value| value <= cutoff).unwrap_or(false))
+        .find(|point| {
+            parse_timestamp(&point.bucket_at)
+                .map(|value| value <= cutoff)
+                .unwrap_or(false)
+        })
         .or_else(|| points.first())?;
 
     let end_value = value_from_series(latest, series_key)?;
@@ -3086,10 +3204,13 @@ fn build_trend_metric_set(points: &[AnalyticsChartPoint], series_key: &str) -> T
     let slope_6h = slope_over_hours(points, series_key, 6);
     let latest = points.last();
     let current_value = latest.and_then(|point| value_from_series(point, series_key));
-    let fair_midpoint = latest.and_then(|point| match (point.fair_value_low, point.fair_value_high) {
-        (Some(low), Some(high)) => Some((low + high) / 2.0),
-        _ => None,
-    });
+    let fair_midpoint =
+        latest.and_then(
+            |point| match (point.fair_value_low, point.fair_value_high) {
+                (Some(low), Some(high)) => Some((low + high) / 2.0),
+                _ => None,
+            },
+        );
 
     let cross_signal = match (current_value, fair_midpoint) {
         (Some(current), Some(fair)) if current < fair => "Below fair value".to_string(),
@@ -3098,8 +3219,12 @@ fn build_trend_metric_set(points: &[AnalyticsChartPoint], series_key: &str) -> T
     };
 
     let reversal = match (slope_1h, slope_3h) {
-        (Some(short), Some(medium)) if short > 0.0 && medium < 0.0 => "Bullish reversal".to_string(),
-        (Some(short), Some(medium)) if short < 0.0 && medium > 0.0 => "Bearish reversal".to_string(),
+        (Some(short), Some(medium)) if short > 0.0 && medium < 0.0 => {
+            "Bullish reversal".to_string()
+        }
+        (Some(short), Some(medium)) if short < 0.0 && medium > 0.0 => {
+            "Bearish reversal".to_string()
+        }
         _ => "No active reversal".to_string(),
     };
 
@@ -3183,12 +3308,7 @@ fn build_entry_exit_zone_overview(
             })
     });
     let computed_zone_bands = zone_bands.cloned().or_else(|| {
-        compute_zone_bands(
-            fair_value_low,
-            fair_value_high,
-            fair_value_low,
-            fair_center,
-        )
+        compute_zone_bands(fair_value_low, fair_value_high, fair_value_low, fair_center)
     });
     let entry_zone_low = computed_zone_bands.as_ref().map(|zone| zone.entry_low);
     let entry_zone_high = computed_zone_bands.as_ref().map(|zone| zone.entry_high);
@@ -3197,13 +3317,16 @@ fn build_entry_exit_zone_overview(
 
     let current_lowest_price = snapshot.and_then(|entry| entry.lowest_sell);
     let current_median_lowest_price = snapshot.and_then(|entry| entry.median_sell);
-    let base_zone_quality = match (current_lowest_price, entry_zone_low, entry_zone_high, exit_zone_low) {
+    let base_zone_quality = match (
+        current_lowest_price,
+        entry_zone_low,
+        entry_zone_high,
+        exit_zone_low,
+    ) {
         (Some(current), Some(low), Some(high), _) if current >= low && current <= high => {
             "Excellent".to_string()
         }
-        (Some(current), Some(_low), Some(high), _) if current <= high + 2.0 => {
-            "Good".to_string()
-        }
+        (Some(current), Some(_low), Some(high), _) if current <= high + 2.0 => "Good".to_string(),
         (Some(current), _, _, Some(exit_low)) if current >= exit_low => "Extended".to_string(),
         (Some(_), Some(_), Some(_), _) => "Watch".to_string(),
         _ => "Thin data".to_string(),
@@ -3309,7 +3432,9 @@ fn build_action_card(
         && orderbook_pressure.pressure_label != "Exit Pressure"
     {
         "Buy"
-    } else if zone_overview.zone_quality == "Good" && orderbook_pressure.spread_pct.unwrap_or(100.0) <= 15.0 {
+    } else if zone_overview.zone_quality == "Good"
+        && orderbook_pressure.spread_pct.unwrap_or(100.0) <= 15.0
+    {
         "Hold"
     } else if orderbook_pressure.pressure_label == "Exit Pressure" {
         "Caution"
@@ -3340,7 +3465,10 @@ fn build_action_card(
         _ => "amber",
     }
     .to_string();
-    let zone_adjusted_edge = match (zone_overview.exit_zone_low, snapshot.and_then(|entry| entry.lowest_sell)) {
+    let zone_adjusted_edge = match (
+        zone_overview.exit_zone_low,
+        snapshot.and_then(|entry| entry.lowest_sell),
+    ) {
         (Some(exit), Some(entry)) => Some(exit - entry),
         _ => None,
     };
@@ -3376,10 +3504,7 @@ fn round_price_option(value: Option<f64>) -> Option<f64> {
     value.map(round_platinum)
 }
 
-fn build_confidence_summary(
-    level: &str,
-    mut reasons: Vec<String>,
-) -> MarketConfidenceSummary {
+fn build_confidence_summary(level: &str, mut reasons: Vec<String>) -> MarketConfidenceSummary {
     let normalized_level = match level {
         "high" | "medium" | "low" => level,
         _ => "medium",
@@ -3444,7 +3569,10 @@ fn confidence_suffix(confidence: &MarketConfidenceSummary) -> String {
     if confidence.reasons.is_empty() {
         String::new()
     } else {
-        format!(" Confidence is reduced because {}.", confidence.reasons.join(", ").to_lowercase())
+        format!(
+            " Confidence is reduced because {}.",
+            confidence.reasons.join(", ").to_lowercase()
+        )
     }
 }
 
@@ -3574,7 +3702,11 @@ fn build_trend_confidence(
 ) -> MarketConfidenceSummary {
     let usable_points = points
         .iter()
-        .filter(|point| point.lowest_sell.is_some() || point.median_sell.is_some() || point.weighted_avg.is_some())
+        .filter(|point| {
+            point.lowest_sell.is_some()
+                || point.median_sell.is_some()
+                || point.weighted_avg.is_some()
+        })
         .count();
     let latest_age = latest_point_age_hours(points).unwrap_or(999);
     let confidence_pct = selected_metric.map(|entry| entry.confidence).unwrap_or(0.0);
@@ -3671,7 +3803,9 @@ fn build_supply_confidence(
             if drop_sources.is_empty() {
                 return build_confidence_summary("low", vec!["No drop data".to_string()]);
             }
-            let has_exact_chance = drop_sources.iter().any(|entry| entry.chance.unwrap_or(0.0) > 0.0);
+            let has_exact_chance = drop_sources
+                .iter()
+                .any(|entry| entry.chance.unwrap_or(0.0) > 0.0);
             build_confidence_summary(
                 if has_exact_chance { "high" } else { "medium" },
                 if has_exact_chance {
@@ -3767,19 +3901,17 @@ fn liquidity_label(score: f64) -> String {
     }
 }
 
-fn weighted_sell_percentile_price(sell_orders: &[WfmDetailedOrder], percentile: f64) -> Option<f64> {
+fn weighted_sell_percentile_price(
+    sell_orders: &[WfmDetailedOrder],
+    percentile: f64,
+) -> Option<f64> {
     if sell_orders.is_empty() {
         return None;
     }
 
     let mut ladder = sell_orders
         .iter()
-        .map(|order| {
-            (
-                order.platinum,
-                (order.quantity.max(1) as f64).sqrt(),
-            )
-        })
+        .map(|order| (order.platinum, (order.quantity.max(1) as f64).sqrt()))
         .collect::<Vec<_>>();
     ladder.sort_by(|left, right| left.0.total_cmp(&right.0));
 
@@ -3823,10 +3955,16 @@ fn recommended_exit_price(
     let historical_ceiling = historical_exit_ceiling(stats_rows)
         .or(zone_overview.exit_zone_high)
         .or(zone_overview.fair_value_high);
-    let depth_based_cushion = if snapshot.sell_order_count < 12 { 2.0 } else { 1.0 };
+    let depth_based_cushion = if snapshot.sell_order_count < 12 {
+        2.0
+    } else {
+        1.0
+    };
 
     let candidate = match (p60, historical_ceiling) {
-        (Some(percentile), Some(ceiling)) => percentile.max(ceiling - depth_based_cushion).min(ceiling),
+        (Some(percentile), Some(ceiling)) => {
+            percentile.max(ceiling - depth_based_cushion).min(ceiling)
+        }
         (Some(percentile), None) => percentile,
         (None, Some(ceiling)) => ceiling - depth_based_cushion,
         (None, None) => return entry_price,
@@ -3942,7 +4080,9 @@ fn undercut_velocity_per_hour(snapshots: &[MarketSnapshot]) -> Option<f64> {
 
     for window in snapshots.windows(2) {
         if let [previous, current] = window {
-            if let (Some(previous_floor), Some(current_floor)) = (previous.lowest_sell, current.lowest_sell) {
+            if let (Some(previous_floor), Some(current_floor)) =
+                (previous.lowest_sell, current.lowest_sell)
+            {
                 if current_floor < previous_floor {
                     undercut_steps += 1.0;
                 }
@@ -3994,8 +4134,13 @@ fn build_manipulation_risk(
             .sum::<f64>()
             / (recent_snapshots.len() - split_index) as f64;
         let floor_start = recent_snapshots[split_index - 1].lowest_sell.unwrap_or(0.0);
-        let floor_end = recent_snapshots.last().and_then(|entry| entry.lowest_sell).unwrap_or(0.0);
-        previous_avg > 0.0 && recent_avg <= previous_avg * 0.65 && (floor_end - floor_start).abs() <= 2.0
+        let floor_end = recent_snapshots
+            .last()
+            .and_then(|entry| entry.lowest_sell)
+            .unwrap_or(0.0);
+        previous_avg > 0.0
+            && recent_avg <= previous_avg * 0.65
+            && (floor_end - floor_start).abs() <= 2.0
     } else {
         false
     };
@@ -4005,13 +4150,16 @@ fn build_manipulation_risk(
         let mut previous_direction = 0_i8;
         for window in recent_snapshots.windows(2) {
             if let [previous, current] = window {
-                if let (Some(previous_floor), Some(current_floor)) = (previous.lowest_sell, current.lowest_sell) {
+                if let (Some(previous_floor), Some(current_floor)) =
+                    (previous.lowest_sell, current.lowest_sell)
+                {
                     let direction = match current_floor.partial_cmp(&previous_floor) {
                         Some(Ordering::Less) => -1,
                         Some(Ordering::Greater) => 1,
                         _ => 0,
                     };
-                    if direction != 0 && previous_direction != 0 && direction != previous_direction {
+                    if direction != 0 && previous_direction != 0 && direction != previous_direction
+                    {
                         direction_changes += 1;
                     }
                     if direction != 0 {
@@ -4020,7 +4168,8 @@ fn build_manipulation_risk(
                 }
             }
         }
-        direction_changes >= 3 || undercut_velocity_per_hour(recent_snapshots).unwrap_or(0.0) >= 0.45
+        direction_changes >= 3
+            || undercut_velocity_per_hour(recent_snapshots).unwrap_or(0.0) >= 0.45
     } else {
         false
     };
@@ -4038,8 +4187,9 @@ fn build_manipulation_risk(
         false
     };
 
-    let thin_market_active =
-        snapshot.sell_order_count < 6 || snapshot.unique_sell_users < 4 || snapshot.buy_order_count < 3;
+    let thin_market_active = snapshot.sell_order_count < 6
+        || snapshot.unique_sell_users < 4
+        || snapshot.buy_order_count < 3;
 
     let signals = vec![
         ManipulationSignalState {
@@ -4057,7 +4207,8 @@ fn build_manipulation_risk(
             label: "Liquidity Withdrawal".to_string(),
             active: liquidity_withdrawal_active,
             detail: if liquidity_withdrawal_active {
-                "Buy-side quantity has fallen materially without the floor repricing down.".to_string()
+                "Buy-side quantity has fallen materially without the floor repricing down."
+                    .to_string()
             } else {
                 "Buy-side liquidity is not showing a sharp withdrawal pattern.".to_string()
             },
@@ -4067,7 +4218,8 @@ fn build_manipulation_risk(
             label: "Volatile Undercut Cycling".to_string(),
             active: volatile_undercut_active,
             detail: if volatile_undercut_active {
-                "Recent floor changes are cycling fast enough to suggest unstable queue behavior.".to_string()
+                "Recent floor changes are cycling fast enough to suggest unstable queue behavior."
+                    .to_string()
             } else {
                 "Recent floor changes are not cycling aggressively.".to_string()
             },
@@ -4077,7 +4229,8 @@ fn build_manipulation_risk(
             label: "Unstable Buy Pressure".to_string(),
             active: unstable_buy_pressure_active,
             detail: if unstable_buy_pressure_active {
-                "Pressure ratio is moving around too aggressively across recent snapshots.".to_string()
+                "Pressure ratio is moving around too aggressively across recent snapshots."
+                    .to_string()
             } else {
                 "Buy pressure has been comparatively stable across recent snapshots.".to_string()
             },
@@ -4148,13 +4301,17 @@ fn build_time_of_day_liquidity(
         let Some(timestamp) = parse_timestamp(&captured_at) else {
             continue;
         };
-        per_hour
-            .entry(timestamp.hour() as i64)
-            .or_default()
-            .push((visible_quantity as f64, sell_orders as f64, spread_pct));
+        per_hour.entry(timestamp.hour() as i64).or_default().push((
+            visible_quantity as f64,
+            sell_orders as f64,
+            spread_pct,
+        ));
     }
 
-    let sample_count = per_hour.values().map(|entries| entries.len()).sum::<usize>();
+    let sample_count = per_hour
+        .values()
+        .map(|entries| entries.len())
+        .sum::<usize>();
     let buckets = per_hour
         .into_iter()
         .map(|(hour, entries)| {
@@ -4183,11 +4340,17 @@ fn build_time_of_day_liquidity(
 
     let strongest_window_label = buckets
         .iter()
-        .max_by(|left, right| left.avg_visible_quantity.total_cmp(&right.avg_visible_quantity))
+        .max_by(|left, right| {
+            left.avg_visible_quantity
+                .total_cmp(&right.avg_visible_quantity)
+        })
         .map(|bucket| bucket.label.clone());
     let weakest_window_label = buckets
         .iter()
-        .min_by(|left, right| left.avg_visible_quantity.total_cmp(&right.avg_visible_quantity))
+        .min_by(|left, right| {
+            left.avg_visible_quantity
+                .total_cmp(&right.avg_visible_quantity)
+        })
         .map(|bucket| bucket.label.clone());
     let current_hour_label = format!("{:02}:00", now_utc().hour());
     let confidence_summary = build_time_of_day_confidence(buckets.len(), sample_count);
@@ -4302,7 +4465,10 @@ fn extract_rank_stat_highlights(raw_json: &str) -> Result<(Option<String>, Vec<S
     highlights.dedup();
 
     Ok((
-        Some(format!("Rank 0 -> Rank {}", level_stats.len().saturating_sub(1))),
+        Some(format!(
+            "Rank 0 -> Rank {}",
+            level_stats.len().saturating_sub(1)
+        )),
         highlights,
     ))
 }
@@ -4776,7 +4942,10 @@ fn load_cached_set_components(
 }
 
 fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
-    let Some(fetched_at) = entries.first().and_then(|entry| parse_timestamp(&entry.fetched_at)) else {
+    let Some(fetched_at) = entries
+        .first()
+        .and_then(|entry| parse_timestamp(&entry.fetched_at))
+    else {
         return false;
     };
 
@@ -5091,6 +5260,85 @@ fn persist_arbitrage_scanner_cache(
     Ok(())
 }
 
+fn load_set_completion_owned_items(
+    connection: &Connection,
+) -> Result<Vec<SetCompletionOwnedItem>> {
+    let mut statement = connection.prepare(
+        "SELECT component_item_id,
+                component_slug,
+                component_name,
+                component_image_path,
+                quantity,
+                updated_at
+         FROM owned_set_components
+         WHERE quantity > 0
+         ORDER BY component_name COLLATE NOCASE ASC, component_slug ASC",
+    )?;
+
+    let rows = statement.query_map([], |row| {
+        Ok(SetCompletionOwnedItem {
+            item_id: row.get(0)?,
+            slug: row.get(1)?,
+            name: row.get(2)?,
+            image_path: row.get(3)?,
+            quantity: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    })?;
+
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to load owned set components")
+}
+
+fn upsert_set_completion_owned_item(
+    connection: &Connection,
+    item_id: Option<i64>,
+    slug: &str,
+    name: &str,
+    image_path: Option<&str>,
+    quantity: i64,
+) -> Result<Vec<SetCompletionOwnedItem>> {
+    if slug.trim().is_empty() {
+        return Err(anyhow!("component slug is required"));
+    }
+    if name.trim().is_empty() {
+        return Err(anyhow!("component name is required"));
+    }
+    if quantity < 0 {
+        return Err(anyhow!("owned quantity cannot be negative"));
+    }
+
+    if quantity == 0 {
+        connection.execute(
+            "DELETE FROM owned_set_components
+             WHERE component_slug = ?1",
+            params![slug],
+        )?;
+        return load_set_completion_owned_items(connection);
+    }
+
+    let updated_at = format_timestamp(now_utc())?;
+    connection.execute(
+        "INSERT INTO owned_set_components (
+           component_slug,
+           component_item_id,
+           component_name,
+           component_image_path,
+           quantity,
+           updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(component_slug) DO UPDATE SET
+           component_item_id = excluded.component_item_id,
+           component_name = excluded.component_name,
+           component_image_path = excluded.component_image_path,
+           quantity = excluded.quantity,
+           updated_at = excluded.updated_at",
+        params![slug, item_id, name, image_path, quantity, updated_at],
+    )?;
+
+    load_set_completion_owned_items(connection)
+}
+
 fn load_arbitrage_scanner_cache(
     connection: &Connection,
 ) -> Result<Option<ArbitrageScannerResponse>> {
@@ -5106,30 +5354,25 @@ fn load_arbitrage_scanner_cache(
         .optional()?;
 
     payload
-        .map(|json| serde_json::from_str::<ArbitrageScannerResponse>(&json).context("failed to parse arbitrage cache"))
+        .map(|json| {
+            serde_json::from_str::<ArbitrageScannerResponse>(&json)
+                .context("failed to parse arbitrage cache")
+        })
         .transpose()
 }
 
-fn load_arbitrage_scanner_state(
-    connection: &Connection,
-) -> Result<ArbitrageScannerState> {
+fn load_arbitrage_scanner_state(connection: &Connection) -> Result<ArbitrageScannerState> {
     Ok(ArbitrageScannerState {
         latest_scan: load_arbitrage_scanner_cache(connection)?,
         progress: load_arbitrage_scanner_progress(connection)?,
     })
 }
 
-fn emit_arbitrage_scanner_progress(
-    app: &tauri::AppHandle,
-    progress: &ArbitrageScannerProgress,
-) {
+fn emit_arbitrage_scanner_progress(app: &tauri::AppHandle, progress: &ArbitrageScannerProgress) {
     let _ = app.emit(ARBITRAGE_SCANNER_PROGRESS_EVENT, progress.clone());
 }
 
-fn load_drop_sources(
-    app: &tauri::AppHandle,
-    item_id: i64,
-) -> Result<Vec<DropSourceEntry>> {
+fn load_drop_sources(app: &tauri::AppHandle, item_id: i64) -> Result<Vec<DropSourceEntry>> {
     let connection = open_catalog_database(app)?;
     let primary_unique_name = connection
         .query_row(
@@ -5275,8 +5518,8 @@ fn build_supply_context(
     item_details: &ItemDetailSummary,
     seller_mode: &str,
 ) -> Result<ItemSupplyContext> {
-    let looks_like_set = item_details.tags.iter().any(|tag| tag == "set")
-        || item_details.name.ends_with(" Set");
+    let looks_like_set =
+        item_details.tags.iter().any(|tag| tag == "set") || item_details.name.ends_with(" Set");
 
     if looks_like_set {
         let connection = open_catalog_database(app)?;
@@ -5395,7 +5638,10 @@ fn build_arbitrage_score(
     component_entries: &[ArbitrageScannerComponentEntry],
     confidence_summary: &MarketConfidenceSummary,
 ) -> f64 {
-    let margin_score = match (gross_margin.unwrap_or_default(), roi_pct.unwrap_or_default()) {
+    let margin_score = match (
+        gross_margin.unwrap_or_default(),
+        roi_pct.unwrap_or_default(),
+    ) {
         (gross, roi) if gross >= 40.0 || roi >= 35.0 => 100.0,
         (gross, roi) if gross >= 25.0 || roi >= 22.0 => 82.0,
         (gross, roi) if gross >= 15.0 || roi >= 14.0 => 64.0,
@@ -5495,7 +5741,9 @@ fn build_arbitrage_set_entry(
             quantity_in_set: component_record.quantity_in_set,
             recommended_entry_low: model.as_ref().and_then(|entry| entry.entry_low),
             recommended_entry_high: model.as_ref().and_then(|entry| entry.entry_high),
-            recommended_entry_price: model.as_ref().and_then(|entry| entry.recommended_entry_price),
+            recommended_entry_price: model
+                .as_ref()
+                .and_then(|entry| entry.recommended_entry_price),
             current_stats_price: model.as_ref().and_then(|entry| entry.current_stats_price),
             entry_at_or_below_price: model
                 .as_ref()
@@ -5506,7 +5754,10 @@ fn build_arbitrage_set_entry(
                         .map(|(current, recommended)| current <= recommended)
                 })
                 .unwrap_or(false),
-            liquidity_score: model.as_ref().map(|entry| entry.liquidity_score).unwrap_or(20.0),
+            liquidity_score: model
+                .as_ref()
+                .map(|entry| entry.liquidity_score)
+                .unwrap_or(20.0),
             confidence_summary,
         });
     }
@@ -5523,11 +5774,12 @@ fn build_arbitrage_set_entry(
     }
     let confidence_summary = combined_confidence(&confidence_refs, &extra_reasons);
 
-    let basket_entry_cost = if priced_component_count == component_records.len() && !component_records.is_empty() {
-        Some(round_platinum(basket_entry_cost))
-    } else {
-        None
-    };
+    let basket_entry_cost =
+        if priced_component_count == component_records.len() && !component_records.is_empty() {
+            Some(round_platinum(basket_entry_cost))
+        } else {
+            None
+        };
     let recommended_set_exit_price = set_model.and_then(|entry| entry.recommended_exit_price);
     let gross_margin = match (recommended_set_exit_price, basket_entry_cost) {
         (Some(exit), Some(entry)) => Some(round_platinum(exit - entry)),
@@ -5633,10 +5885,7 @@ fn load_relic_reward_profiles(
     )?;
 
     let rows = statement.query_map(params![relic_item_id], |row| {
-        Ok((
-            row.get::<_, Option<String>>(0)?,
-            row.get::<_, String>(1)?,
-        ))
+        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
     })?;
 
     let mut reward_map = BTreeMap::<String, RelicRoiDropEntry>::new();
@@ -5657,7 +5906,9 @@ fn load_relic_reward_profiles(
             .context("failed to parse wfstat relic raw json")?;
         let rewards = payload
             .get("rewards")
-            .and_then(|value| serde_json::from_value::<Vec<WfstatRelicRewardApi>>(value.clone()).ok())
+            .and_then(|value| {
+                serde_json::from_value::<Vec<WfstatRelicRewardApi>>(value.clone()).ok()
+            })
             .unwrap_or_default();
 
         for reward in rewards {
@@ -5674,38 +5925,41 @@ fn load_relic_reward_profiles(
             };
 
             let item_id = resolve_item_id_by_slug(catalog_connection, &reward_slug)?;
-            let image_path = item_id
-                .and_then(|resolved_item_id| {
-                    catalog_connection
-                        .query_row(
-                            "SELECT preferred_image
+            let image_path = item_id.and_then(|resolved_item_id| {
+                catalog_connection
+                    .query_row(
+                        "SELECT preferred_image
                              FROM items
                              WHERE item_id = ?1",
-                            params![resolved_item_id],
-                            |row| row.get::<_, Option<String>>(0),
-                        )
-                        .optional()
-                        .ok()
-                        .flatten()
-                        .flatten()
-                });
+                        params![resolved_item_id],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+                    .flatten()
+            });
 
-            let entry = reward_map
-                .entry(reward_slug.clone())
-                .or_insert_with(|| RelicRoiDropEntry {
-                    item_id,
-                    slug: reward_slug.clone(),
-                    name: reward_name.clone(),
-                    image_path,
-                    rarity: reward.rarity.clone(),
-                    chance_profile: RelicRefinementChanceProfile::default(),
-                    recommended_exit_low: None,
-                    recommended_exit_high: None,
-                    recommended_exit_price: None,
-                    current_stats_price: None,
-                    liquidity_score: 20.0,
-                    confidence_summary: build_confidence_summary("low", vec!["Missing stats".to_string()]),
-                });
+            let entry =
+                reward_map
+                    .entry(reward_slug.clone())
+                    .or_insert_with(|| RelicRoiDropEntry {
+                        item_id,
+                        slug: reward_slug.clone(),
+                        name: reward_name.clone(),
+                        image_path,
+                        rarity: reward.rarity.clone(),
+                        chance_profile: RelicRefinementChanceProfile::default(),
+                        recommended_exit_low: None,
+                        recommended_exit_high: None,
+                        recommended_exit_price: None,
+                        current_stats_price: None,
+                        liquidity_score: 20.0,
+                        confidence_summary: build_confidence_summary(
+                            "low",
+                            vec!["Missing stats".to_string()],
+                        ),
+                    });
 
             match refinement_key {
                 RELIC_REFINEMENT_EXCEPTIONAL => entry.chance_profile.exceptional = reward.chance,
@@ -5732,7 +5986,8 @@ fn build_relic_roi_score(
     let roi_component = roi_pct.unwrap_or_default().max(0.0).min(300.0) * 0.38;
     let liquidity_component = weighted_liquidity.clamp(0.0, 100.0) * 0.28;
     let confidence_component = confidence_score(&confidence_summary.level) * 0.18;
-    (profit_component + roi_component + liquidity_component + confidence_component).clamp(0.0, 100.0)
+    (profit_component + roi_component + liquidity_component + confidence_component)
+        .clamp(0.0, 100.0)
 }
 
 fn build_relic_roi_note(
@@ -5741,7 +5996,9 @@ fn build_relic_roi_note(
     refinement_label: &str,
     confidence_summary: &MarketConfidenceSummary,
 ) -> String {
-    let mut parts = vec![format!("{priced_drop_count}/{drop_count} priced prime drops at {refinement_label}")];
+    let mut parts = vec![format!(
+        "{priced_drop_count}/{drop_count} priced prime drops at {refinement_label}"
+    )];
     if confidence_summary.level != "high" && !confidence_summary.reasons.is_empty() {
         parts.push(confidence_summary.reasons.join(", "));
     }
@@ -5785,9 +6042,16 @@ fn build_relic_roi_entry(
         };
         drop.recommended_exit_low = reward_model.as_ref().and_then(|entry| entry.exit_low);
         drop.recommended_exit_high = reward_model.as_ref().and_then(|entry| entry.exit_high);
-        drop.recommended_exit_price = reward_model.as_ref().and_then(|entry| entry.recommended_exit_price);
-        drop.current_stats_price = reward_model.as_ref().and_then(|entry| entry.current_stats_price);
-        drop.liquidity_score = reward_model.as_ref().map(|entry| entry.liquidity_score).unwrap_or(20.0);
+        drop.recommended_exit_price = reward_model
+            .as_ref()
+            .and_then(|entry| entry.recommended_exit_price);
+        drop.current_stats_price = reward_model
+            .as_ref()
+            .and_then(|entry| entry.current_stats_price);
+        drop.liquidity_score = reward_model
+            .as_ref()
+            .map(|entry| entry.liquidity_score)
+            .unwrap_or(20.0);
         drop.confidence_summary = reward_model
             .as_ref()
             .map(|entry| entry.confidence_summary.clone())
@@ -5799,7 +6063,9 @@ fn build_relic_roi_entry(
     let relic_confidence = relic_model
         .as_ref()
         .map(|entry| entry.confidence_summary.clone())
-        .unwrap_or_else(|| build_confidence_summary("low", vec!["Missing relic stats".to_string()]));
+        .unwrap_or_else(|| {
+            build_confidence_summary("low", vec!["Missing relic stats".to_string()])
+        });
     let mut refinement_summaries = Vec::new();
 
     for refinement_key in all_relic_refinement_keys() {
@@ -5847,7 +6113,10 @@ fn build_relic_roi_entry(
         let mut combined_refs = confidence_refs.clone();
         combined_refs.push(&relic_confidence);
         if priced_drop_count < drops.len() {
-            extra_reasons.push(format!("Incomplete priced drops ({priced_drop_count}/{})", drops.len()));
+            extra_reasons.push(format!(
+                "Incomplete priced drops ({priced_drop_count}/{})",
+                drops.len()
+            ));
         }
         if relic_buy_price.is_none() {
             extra_reasons.push("Missing relic buy price".to_string());
@@ -5884,7 +6153,9 @@ fn build_relic_roi_entry(
         .iter()
         .find(|entry| entry.refinement_key == RELIC_REFINEMENT_INTACT)
         .map(|entry| entry.confidence_summary.clone())
-        .unwrap_or_else(|| build_confidence_summary("low", vec!["Missing ROI summary".to_string()]));
+        .unwrap_or_else(|| {
+            build_confidence_summary("low", vec!["Missing ROI summary".to_string()])
+        });
     let default_note = refinement_summaries
         .iter()
         .find(|entry| entry.refinement_key == RELIC_REFINEMENT_INTACT)
@@ -6267,7 +6538,12 @@ fn build_item_analysis_inner(
         },
         trend,
         manipulation_risk,
-        time_of_day_liquidity: build_time_of_day_liquidity(&connection, item_id, &variant_key, &seller_mode)?,
+        time_of_day_liquidity: build_time_of_day_liquidity(
+            &connection,
+            item_id,
+            &variant_key,
+            &seller_mode,
+        )?,
         item_details,
         supply_context,
     })
@@ -6310,7 +6586,8 @@ fn load_cached_analytics(
         )
         .optional()?;
 
-    let Some((payload_json, cached_snapshot_at, cached_stats_at, cache_version)) = cached_row else {
+    let Some((payload_json, cached_snapshot_at, cached_stats_at, cache_version)) = cached_row
+    else {
         return Ok(None);
     };
 
@@ -6321,8 +6598,8 @@ fn load_cached_analytics(
         return Ok(None);
     }
 
-    let parsed =
-        serde_json::from_str::<ItemAnalyticsResponse>(&payload_json).context("failed to parse analytics cache payload")?;
+    let parsed = serde_json::from_str::<ItemAnalyticsResponse>(&payload_json)
+        .context("failed to parse analytics cache payload")?;
 
     Ok(Some(parsed))
 }
@@ -6421,19 +6698,21 @@ fn build_item_analytics_inner(
     );
     let (chart_closed_rows, chart_live_buy_rows, chart_stats_fetched_at) =
         load_chart_statistics_rows(&connection, item_id, &variant_key, analytics_domain_key)?;
-    let (support_closed_rows, _, _) =
-        load_chart_statistics_rows(&connection, item_id, &variant_key, AnalyticsDomainKey::ThirtyDays)?;
+    let (support_closed_rows, _, _) = load_chart_statistics_rows(
+        &connection,
+        item_id,
+        &variant_key,
+        AnalyticsDomainKey::ThirtyDays,
+    )?;
     let historical_zone_anchors = build_historical_zone_anchors(&support_closed_rows);
-    let historical_zone_bands = historical_zone_anchors
-        .as_ref()
-        .and_then(|anchors| {
-            compute_zone_bands(
-                anchors.support_floor.or(anchors.fair_low),
-                anchors.fair_high,
-                anchors.support_recurrence,
-                anchors.fair_center,
-            )
-        });
+    let historical_zone_bands = historical_zone_anchors.as_ref().and_then(|anchors| {
+        compute_zone_bands(
+            anchors.support_floor.or(anchors.fair_low),
+            anchors.fair_high,
+            anchors.support_recurrence,
+            anchors.fair_center,
+        )
+    });
     let mut chart_points = merge_snapshot_chart_points(
         resample_rows(
             &chart_closed_rows,
@@ -6456,7 +6735,8 @@ fn build_item_analytics_inner(
             point.exit_zone = Some(zone_bands.exit_target);
         }
     }
-    let latest_stats_fetched_at = merge_latest_fetched_at(hourly_stats_fetched_at, chart_stats_fetched_at);
+    let latest_stats_fetched_at =
+        merge_latest_fetched_at(hourly_stats_fetched_at, chart_stats_fetched_at);
     let source_snapshot_at = Some(snapshot.captured_at.clone());
     if let Some(cached) = load_cached_analytics(
         &connection,
@@ -6523,10 +6803,12 @@ pub async fn get_item_variants_for_market(
     item_id: i64,
     slug: String,
 ) -> Result<Vec<MarketVariant>, String> {
-    tauri::async_runtime::spawn_blocking(move || resolve_variants_from_catalog(&app, item_id, &slug))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_variants_from_catalog(&app, item_id, &slug)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -6581,7 +6863,8 @@ pub async fn ensure_market_tracking(
             true,
             None,
         )?;
-        let snapshot = capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode)?;
+        let snapshot =
+            capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode)?;
         Ok::<_, anyhow::Error>(snapshot)
     })
     .await
@@ -6610,7 +6893,8 @@ pub async fn stop_market_tracking(
         if !sources.is_empty()
             || latest_snapshot_for_item(&connection, item_id, &variant_key, &seller_mode)?.is_some()
         {
-            let _ = capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode);
+            let _ =
+                capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode);
         }
         update_tracking_row(
             &connection,
@@ -6677,7 +6961,9 @@ pub async fn refresh_market_tracking(
                 &target.slug,
                 &target.variant_key,
                 &target.seller_mode,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 refreshed_items += 1;
             }
         }
@@ -6715,7 +7001,7 @@ pub async fn get_item_analytics(
     })
     .await
     .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -6753,9 +7039,9 @@ pub async fn get_arbitrage_scanner(
     tauri::async_runtime::spawn_blocking(move || {
         build_arbitrage_scanner_inner(app, |_| {}).map(|outcome| outcome.response)
     })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -6772,11 +7058,49 @@ pub async fn get_arbitrage_scanner_state(
 }
 
 #[tauri::command]
-pub async fn start_arbitrage_scanner(
+pub async fn get_set_completion_owned_items(
     app: tauri::AppHandle,
-) -> Result<bool, String> {
-    let state_connection = open_market_observatory_database(&app).map_err(|error| error.to_string())?;
-    let current_state = load_arbitrage_scanner_state(&state_connection).map_err(|error| error.to_string())?;
+) -> Result<Vec<SetCompletionOwnedItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)?;
+        load_set_completion_owned_items(&connection)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_set_completion_owned_item_quantity(
+    app: tauri::AppHandle,
+    item_id: Option<i64>,
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+    quantity: i64,
+) -> Result<Vec<SetCompletionOwnedItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)?;
+        upsert_set_completion_owned_item(
+            &connection,
+            item_id,
+            &slug,
+            &name,
+            image_path.as_deref(),
+            quantity,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, String> {
+    let state_connection =
+        open_market_observatory_database(&app).map_err(|error| error.to_string())?;
+    let current_state =
+        load_arbitrage_scanner_state(&state_connection).map_err(|error| error.to_string())?;
     if current_state.progress.status == "running" {
         return Ok(false);
     }
@@ -6803,7 +7127,9 @@ pub async fn start_arbitrage_scanner(
             Ok(connection) => connection,
             Err(_) => return,
         };
-        let emit_progress = |progress: ArbitrageScannerProgress, connection: &Connection, app: &tauri::AppHandle| {
+        let emit_progress = |progress: ArbitrageScannerProgress,
+                             connection: &Connection,
+                             app: &tauri::AppHandle| {
             let _ = persist_arbitrage_scanner_progress(connection, &progress);
             emit_arbitrage_scanner_progress(app, &progress);
         };
@@ -6873,9 +7199,7 @@ pub async fn start_arbitrage_scanner(
 }
 
 #[tauri::command]
-pub async fn stop_arbitrage_scanner(
-    app: tauri::AppHandle,
-) -> Result<bool, String> {
+pub async fn stop_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let connection = open_market_observatory_database(&app)?;
         let stopped = request_arbitrage_scanner_stop(&connection)?;
@@ -6898,11 +7222,10 @@ mod tests {
         build_orderbook_pressure, build_relic_roi_score, build_supply_confidence,
         build_trend_quality_breakdown, chance_for_refinement, compute_pressure_ratio,
         compute_zone_bands, extract_rank_stat_highlights, initialize_market_observatory_schema,
-        insert_statistics_rows_for_domain, normalize_variant_key,
-        pressure_label, resample_rows, stale_arbitrage_scanner_progress,
-        AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey, ArbitrageScannerProgress,
-        InternalStatsRow, MarketConfidenceSummary, MarketSnapshot, RelicRefinementChanceProfile,
-        WfmDetailedOrder,
+        insert_statistics_rows_for_domain, normalize_variant_key, pressure_label, resample_rows,
+        stale_arbitrage_scanner_progress, AnalyticsBucketSizeKey, AnalyticsChartPoint,
+        AnalyticsDomainKey, ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary,
+        MarketSnapshot, RelicRefinementChanceProfile, WfmDetailedOrder,
     };
     use rusqlite::Connection;
     fn sample_order(
@@ -7229,7 +7552,8 @@ mod tests {
 
     #[test]
     fn computes_integer_zone_bands_inside_the_historical_range() {
-        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(58.0), Some(63.0)).expect("zone bands");
+        let zone =
+            compute_zone_bands(Some(55.0), Some(70.0), Some(58.0), Some(63.0)).expect("zone bands");
 
         assert_eq!(zone.entry_low, 55.0);
         assert_eq!(zone.entry_high, 58.0);
@@ -7241,7 +7565,8 @@ mod tests {
 
     #[test]
     fn keeps_entry_zone_from_climbing_too_high_when_market_bias_rises() {
-        let zone = compute_zone_bands(Some(55.0), Some(70.0), Some(60.0), Some(66.0)).expect("zone bands");
+        let zone =
+            compute_zone_bands(Some(55.0), Some(70.0), Some(60.0), Some(66.0)).expect("zone bands");
 
         assert_eq!(zone.entry_low, 57.0);
         assert_eq!(zone.entry_high, 60.0);
@@ -7482,6 +7807,38 @@ mod tests {
     }
 
     #[test]
+    fn owned_set_components_upsert_and_remove_cleanly() {
+        let connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        let items = super::upsert_set_completion_owned_item(
+            &connection,
+            Some(42),
+            "wisp_prime_chassis",
+            "Wisp Prime Chassis",
+            Some("items/images/en/thumbs/wisp_prime_chassis.png"),
+            2,
+        )
+        .expect("upsert owned item");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].slug, "wisp_prime_chassis");
+        assert_eq!(items[0].quantity, 2);
+
+        let items = super::upsert_set_completion_owned_item(
+            &connection,
+            Some(42),
+            "wisp_prime_chassis",
+            "Wisp Prime Chassis",
+            Some("items/images/en/thumbs/wisp_prime_chassis.png"),
+            0,
+        )
+        .expect("remove owned item");
+
+        assert!(items.is_empty());
+    }
+
+    #[test]
     fn flags_sparse_closed_cache_as_unusable() {
         let connection = Connection::open_in_memory().expect("in-memory sqlite");
         initialize_market_observatory_schema(&connection).expect("schema");
@@ -7519,15 +7876,13 @@ mod tests {
         )
         .expect("insert sparse rows");
 
-        assert!(
-            !super::statistics_cache_is_usable(
-                &connection,
-                5,
-                "base",
-                AnalyticsDomainKey::ThirtyDays
-            )
-            .expect("cache usability"),
-        );
+        assert!(!super::statistics_cache_is_usable(
+            &connection,
+            5,
+            "base",
+            AnalyticsDomainKey::ThirtyDays
+        )
+        .expect("cache usability"),);
     }
 
     #[test]
@@ -7686,8 +8041,12 @@ mod tests {
         .expect("cached model should resolve");
 
         assert_eq!(
-            reused.as_ref().and_then(|entry| entry.recommended_exit_price),
-            cached_model.as_ref().and_then(|entry| entry.recommended_exit_price)
+            reused
+                .as_ref()
+                .and_then(|entry| entry.recommended_exit_price),
+            cached_model
+                .as_ref()
+                .and_then(|entry| entry.recommended_exit_price)
         );
         assert_eq!(refreshed_statistics_count, 0);
     }
