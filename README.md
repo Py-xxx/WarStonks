@@ -50,9 +50,12 @@ It is designed to run as a native desktop app on macOS and Windows without requi
   - 24-hour lowest-price sparkline
 - Watchlist with:
   - desired price targets
+  - persistent saved state across app sessions
   - adaptive background polling
   - seller blacklist support per item
   - alert creation when target conditions are met
+  - linked WFM buy-order automation
+  - mark-as-bought flow that can update and close the linked buy order
 - Notification bell with actionable alerts
 - Shared analysis preview that reuses full Market analysis output
 
@@ -101,6 +104,59 @@ Worldstate responses are cached locally so the app can still show the last known
 
 The scan runs in the background and persists the last completed results locally.
 
+### Opportunities
+
+- Set Completion Planner
+  - persistent owned-prime-part inventory
+  - collapsible owned-parts drawer with autocomplete and quantity controls
+  - uses Arbitrage cache pricing for missing-part entry and set exit
+  - highlights owned vs missing components
+  - quick add missing parts to watchlist
+  - shows remaining investment, completion value, completion profit, and ROI
+
+### Trades
+
+- warframe.market V1 auth with V2 trade/profile/order operations
+- Sell Orders tab
+- Buy Orders tab
+- shared create/edit listing modal for buy and sell orders
+- live account header with avatar and current presence
+- active trade value and open positions summary
+- linked watchlist buy-order automation toggle
+- trade history polling for newly detected trades while the app is open
+
+### Portfolio
+
+- Trade Log
+  - permanent local trade ledger
+  - WFM 90-day history sync
+  - Alecaframe migration support
+  - grouped multi-item trade handling
+  - `Keep Item` override
+  - `Sold As Set` reconciliation
+  - local profit / margin / status derivation
+- P&L Summary
+  - realized profit
+  - unrealized value and unrealized P&L
+  - total P&L and open exposure
+  - win rate, average margin, average hold time
+  - cumulative P&L and profit-per-trade charts
+  - flip vs sold-as-set breakdowns
+
+### Integrations
+
+- Alecaframe public-link integration for wallet balances
+- Discord webhook notifications with rich embeds for:
+  - watchlist hits
+  - newly detected trades
+
+### Local Automation
+
+- owned set-part quantities now sync automatically from newly detected trades
+- component buys add owned quantity
+- component sells reduce owned quantity
+- set sells reduce owned component quantities automatically
+
 ## Current Project Status
 
 The strongest parts of the app right now are:
@@ -109,15 +165,15 @@ The strongest parts of the app right now are:
 - Market
 - Events
 - Scanners
-
-The following areas still exist but are not feature-complete yet:
-
 - Opportunities
 - Trades
 - Portfolio
+
+The following area still exists but is not feature-complete yet:
+
 - Strategy
 
-Those pages are still scaffolded or partially mocked and should be treated as work in progress.
+Most major user-facing pages are now implemented with real local caching and live integrations. `Strategy` remains the main work-in-progress area.
 
 ## Tech Stack
 
@@ -143,6 +199,8 @@ It also maintains local SQLite caches for:
 - market observatory snapshots
 - analysis and scanner caches
 - worldstate cache
+- trades cache and permanent trade ledger
+- trade set-component map
 
 ## Local Storage
 
@@ -156,6 +214,8 @@ Typical files created there:
 
 - `item_catalog.sqlite`
 - `market_observatory.sqlite`
+- `trades/trades-cache.sqlite`
+- `data/wfm-set-map.json`
 - `data/WFM-items.json`
 - `data/WFStat-items.json`
 
@@ -251,13 +311,17 @@ scripts/      helper scripts such as the Tauri wrapper
   - `Ingame`
   - `Ingame + Online`
 - Offline sellers are not used in market analysis calculations.
+- Watchlist, scanner results, trade ledger, and owned set-part inventory persist locally.
+- Trade notifications only fire for new trades detected while the app is open.
 
 ## Roadmap Direction
 
 Planned and expanding areas include:
 
-- deeper scanner coverage
 - richer trade-health workflows
+- more opportunity scanners
+- deeper strategy tooling
+- additional Discord/system notification controls
 - portfolio and strategy completion
 - more calibration and validation across item classes
 - continued refinement of market confidence and scoring models
