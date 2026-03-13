@@ -4190,6 +4190,9 @@ body {
   justify-content: space-between;
   gap: 10px;
 }
+.portfolio-summary-body .chart-card {
+  overflow: visible;
+}
 .info-hint {
   position: relative;
   display: inline-flex;
@@ -4210,9 +4213,10 @@ body {
 }
 .info-hint-tooltip {
   position: absolute;
-  right: 0;
+  left: 0;
+  right: auto;
   bottom: calc(100% + 8px);
-  z-index: 20;
+  z-index: 320;
   width: 240px;
   padding: 10px 12px;
   border-radius: 10px;
@@ -4221,6 +4225,9 @@ body {
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.55;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
   opacity: 0;
   pointer-events: none;
