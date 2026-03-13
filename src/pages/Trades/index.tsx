@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   closeWfmSellOrder,
+  createWfmBuyOrder,
   createWfmSellOrder,
   deleteWfmSellOrder,
   getWfmAutocompleteItems,
@@ -21,9 +22,11 @@ import type {
 } from '../../types';
 
 type ListingModalMode = 'create' | 'edit';
+type TradeListingKind = 'sell' | 'buy';
 
 interface ListingModalState {
   mode: ListingModalMode;
+  orderType: TradeListingKind;
   orderId: string | null;
   selectedItem: WfmAutocompleteItem | null;
   itemName: string;
@@ -49,6 +52,7 @@ function buildItemFromOrder(order: TradeSellOrder): WfmAutocompleteItem {
 
 function createListingModalState(
   mode: ListingModalMode,
+  orderType: TradeListingKind,
   item: WfmAutocompleteItem | null,
   order?: TradeSellOrder,
 ): ListingModalState {
@@ -60,6 +64,7 @@ function createListingModalState(
 
   return {
     mode,
+    orderType: order?.orderType ?? orderType,
     orderId: order?.orderId ?? null,
     selectedItem: item,
     itemName: item?.name ?? order?.name ?? '',
@@ -145,6 +150,7 @@ function ListingModal({
   onSelectItem: (item: WfmAutocompleteItem) => void;
 }) {
   const rankApplicable = isRankApplicable(form.selectedItem);
+  const typeLocked = form.mode === 'edit';
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -159,7 +165,9 @@ function ListingModal({
           <div className="settings-modal-title">
             <span className="card-label">Trades</span>
             <h3 id="trade-listing-modal-title">
-              {form.mode === 'create' ? 'Create Listing' : 'Edit Listing'}
+              {form.mode === 'create'
+                ? `Create ${form.orderType === 'sell' ? 'Sell' : 'Buy'} Listing`
+                : `Edit ${form.orderType === 'sell' ? 'Sell' : 'Buy'} Listing`}
             </h3>
           </div>
           <button className="settings-close-btn" type="button" onClick={onClose} aria-label="Close listing modal">
@@ -168,6 +176,21 @@ function ListingModal({
         </div>
 
         <div className="settings-modal-body trade-listing-modal-body">
+          <div className="trade-listing-type-tabs" role="tablist" aria-label="Listing type">
+            {(['sell', 'buy'] as TradeListingKind[]).map((type) => (
+              <button
+                key={type}
+                className={`trade-listing-type-tab${form.orderType === type ? ' active' : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={form.orderType === type}
+                disabled={typeLocked}
+                onClick={() => onChange({ orderType: type })}
+              >
+                {type === 'sell' ? 'Sell' : 'Buy'}
+              </button>
+            ))}
+          </div>
           <div className="trade-listing-fieldset">
             <label className="trade-listing-label" htmlFor="trade-listing-item">
               Item name
@@ -291,7 +314,11 @@ function ListingModal({
             Cancel
           </button>
           <button className="btn-primary" type="button" onClick={onSubmit} disabled={submitting}>
-            {submitting ? 'Saving…' : form.mode === 'create' ? 'Post Listing' : 'Save Changes'}
+            {submitting
+              ? 'Saving…'
+              : form.mode === 'create'
+                ? `Post ${form.orderType === 'sell' ? 'Sell' : 'Buy'} Order`
+                : 'Save Changes'}
           </button>
         </div>
       </div>
@@ -380,16 +407,6 @@ function SignInPanel() {
   );
 }
 
-function BuyOrdersTab() {
-  return (
-    <div className="trade-placeholder-card">
-      <span className="card-label">Trades</span>
-      <h3>Buy Orders</h3>
-      <p>Buy-order management is not wired yet. Sell Orders is the active live workflow for this release.</p>
-    </div>
-  );
-}
-
 function HealthTab() {
   return (
     <div className="trade-placeholder-card">
@@ -400,7 +417,7 @@ function HealthTab() {
   );
 }
 
-function SellOrdersTab() {
+function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const sellerMode = useAppStore((s) => s.sellerMode);
@@ -502,13 +519,13 @@ function SellOrdersTab() {
 
   const openCreateListing = () => {
     setListingActionError(null);
-    setListingModal(createListingModalState('create', null));
+    setListingModal(createListingModalState('create', listingType, null));
   };
 
   const openEditListing = (order: TradeSellOrder) => {
     setListingActionError(null);
     const item = buildItemFromOrder(order);
-    setListingModal(createListingModalState('edit', item, order));
+    setListingModal(createListingModalState('edit', order.orderType, item, order));
   };
 
   const closeListingModal = () => {
@@ -560,7 +577,7 @@ function SellOrdersTab() {
     try {
       const nextOverview =
         listingModal.mode === 'create'
-          ? await createWfmSellOrder(
+          ? await (listingModal.orderType === 'sell' ? createWfmSellOrder : createWfmBuyOrder)(
               {
                 wfmId: selectedItem.wfmId,
                 price,
@@ -634,6 +651,8 @@ function SellOrdersTab() {
     return <SignInPanel />;
   }
 
+  const orders = listingType === 'sell' ? (overview?.sellOrders ?? []) : (overview?.buyOrders ?? []);
+
   return (
     <>
       <div className="trade-hero">
@@ -654,7 +673,7 @@ function SellOrdersTab() {
         </div>
         <div className="trade-hero-actions">
           <button className="btn-primary" type="button" onClick={openCreateListing}>
-            Create Listing
+            Create {listingType === 'sell' ? 'Sell' : 'Buy'} Order
           </button>
           <button className="btn-secondary" type="button" onClick={() => void handleDisconnect()}>
             Disconnect
@@ -688,7 +707,9 @@ function SellOrdersTab() {
       <div className="card trade-list-card">
         {overviewLoading && !overview ? (
           <div className="empty-state">
-            <span className="empty-primary">Loading sell orders…</span>
+            <span className="empty-primary">
+              Loading {listingType === 'sell' ? 'sell' : 'buy'} orders…
+            </span>
             <span className="empty-sub">Warframe Market data is being synced for this account.</span>
           </div>
         ) : null}
@@ -707,7 +728,7 @@ function SellOrdersTab() {
               </tr>
             </thead>
             <tbody>
-              {(overview?.sellOrders ?? []).map((order) => (
+              {orders.map((order) => (
                 <tr key={order.orderId}>
                   <td>
                     <div className="item-cell">
@@ -752,24 +773,26 @@ function SellOrdersTab() {
                   </td>
                   <td>
                     <div className="actions-cell trade-actions-cell">
-                      <div className="trade-sold-action">
-                        <input
-                          className="qty-input"
-                          type="number"
-                          min={1}
-                          max={order.quantity}
-                          value={soldQuantities[order.orderId] ?? DEFAULT_MARK_SOLD_QTY}
-                          onChange={(event) =>
-                            setSoldQuantities((current) => ({
-                              ...current,
-                              [order.orderId]: event.target.value,
-                            }))
-                          }
-                        />
-                        <button className="act-btn" type="button" onClick={() => void handleMarkAsSold(order)}>
-                          Mark as Sold
-                        </button>
-                      </div>
+                      {listingType === 'sell' ? (
+                        <div className="trade-sold-action">
+                          <input
+                            className="qty-input"
+                            type="number"
+                            min={1}
+                            max={order.quantity}
+                            value={soldQuantities[order.orderId] ?? DEFAULT_MARK_SOLD_QTY}
+                            onChange={(event) =>
+                              setSoldQuantities((current) => ({
+                                ...current,
+                                [order.orderId]: event.target.value,
+                              }))
+                            }
+                          />
+                          <button className="act-btn" type="button" onClick={() => void handleMarkAsSold(order)}>
+                            Mark as Sold
+                          </button>
+                        </div>
+                      ) : null}
                       <button className="act-btn" type="button" onClick={() => openEditListing(order)}>
                         Edit
                       </button>
@@ -781,12 +804,16 @@ function SellOrdersTab() {
                 </tr>
               ))}
 
-              {overview && overview.sellOrders.length === 0 ? (
+              {overview && orders.length === 0 ? (
                 <tr>
                   <td colSpan={7}>
                     <div className="empty-state">
-                      <span className="empty-primary">No sell orders</span>
-                      <span className="empty-sub">Create a listing to start managing your live sell orders.</span>
+                      <span className="empty-primary">
+                        No {listingType === 'sell' ? 'sell' : 'buy'} orders
+                      </span>
+                      <span className="empty-sub">
+                        Create a listing to start managing your live {listingType} orders.
+                      </span>
                     </div>
                   </td>
                 </tr>
@@ -852,9 +879,11 @@ export function TradesPage() {
             Health
           </span>
         </div>
-        {tradeAccount && tradesSubTab === 'sell-orders' ? (
+        {tradeAccount && (tradesSubTab === 'sell-orders' || tradesSubTab === 'buy-orders') ? (
           <div className="subnav-right">
-            <span className="trade-subnav-hint">Live WFM sell orders</span>
+            <span className="trade-subnav-hint">
+              Live WFM {tradesSubTab === 'sell-orders' ? 'sell' : 'buy'} orders
+            </span>
           </div>
         ) : null}
       </div>
@@ -863,8 +892,8 @@ export function TradesPage() {
           <SignInPanel />
         ) : (
           <>
-            {tradesSubTab === 'sell-orders' && <SellOrdersTab />}
-            {tradesSubTab === 'buy-orders' && <BuyOrdersTab />}
+            {tradesSubTab === 'sell-orders' && <ListingsTab listingType="sell" />}
+            {tradesSubTab === 'buy-orders' && <ListingsTab listingType="buy" />}
             {tradesSubTab === 'health' && <HealthTab />}
           </>
         )}

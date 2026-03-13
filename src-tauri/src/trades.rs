@@ -60,6 +60,7 @@ pub struct TradeSessionState {
 #[serde(rename_all = "camelCase")]
 pub struct TradeSellOrder {
     pub order_id: String,
+    pub order_type: String,
     pub wfm_id: String,
     pub item_id: Option<i64>,
     pub name: String,
@@ -86,6 +87,7 @@ pub struct TradeOverview {
     pub total_completed_trades: Option<i64>,
     pub open_positions: i64,
     pub sell_orders: Vec<TradeSellOrder>,
+    pub buy_orders: Vec<TradeSellOrder>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3166,11 +3168,9 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
 
     let mut market_low_cache = HashMap::<(String, Option<i64>), Option<i64>>::new();
     let mut sell_orders = Vec::new();
+    let mut buy_orders = Vec::new();
 
-    for order in orders
-        .into_iter()
-        .filter(|entry| entry.order_type == "sell")
-    {
+    for order in orders.into_iter().filter(|entry| matches!(entry.order_type.as_str(), "sell" | "buy")) {
         let Some(meta) = resolve_catalog_trade_item_meta(&connection, &order.item_id)? else {
             continue;
         };
@@ -3191,8 +3191,9 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
             fetched
         };
 
-        sell_orders.push(TradeSellOrder {
+        let trade_order = TradeSellOrder {
             order_id: order.id,
+            order_type: order.order_type.clone(),
             wfm_id: meta.wfm_id,
             item_id: meta.item_id,
             name: meta.name,
@@ -3208,13 +3209,21 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
             updated_at: order.updated_at,
             health_score: None,
             health_note: None,
-        });
+        };
+
+        if order.order_type == "sell" {
+            sell_orders.push(trade_order);
+        } else {
+            buy_orders.push(trade_order);
+        }
     }
 
     sell_orders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    buy_orders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
 
     let active_trade_value = sell_orders
         .iter()
+        .chain(buy_orders.iter())
         .filter(|order| order.visible)
         .map(|order| order.your_price * order.quantity)
         .sum::<i64>();
@@ -3224,18 +3233,23 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
         last_updated_at: format_timestamp(now_utc())?,
         active_trade_value,
         total_completed_trades: None,
-        open_positions: sell_orders.len() as i64,
+        open_positions: (sell_orders.len() + buy_orders.len()) as i64,
         sell_orders,
+        buy_orders,
     })
 }
 
-fn create_sell_order_inner(
+fn create_order_inner(
     app: &tauri::AppHandle,
     input: &TradeCreateListingInput,
+    order_type: &str,
     seller_mode: &str,
 ) -> Result<TradeOverview> {
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
+    if !matches!(order_type, "sell" | "buy") {
+        return Err(anyhow!("Unsupported order type."));
+    }
     if input.price <= 0 || input.quantity <= 0 {
         return Err(anyhow!(
             "Price and quantity must both be greater than zero."
@@ -3244,7 +3258,7 @@ fn create_sell_order_inner(
 
     let mut payload = json!({
         "itemId": input.wfm_id,
-        "type": "sell",
+        "type": order_type,
         "platinum": input.price,
         "quantity": input.quantity,
         "visible": input.visible,
@@ -3261,7 +3275,7 @@ fn create_sell_order_inner(
             Some(&session.token),
         )
         .json(&payload),
-        "create sell order",
+        &format!("create {order_type} order"),
     )?;
 
     build_trade_overview_inner(app, seller_mode)
@@ -3546,7 +3560,21 @@ pub async fn create_wfm_sell_order(
     seller_mode: String,
 ) -> Result<TradeOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        create_sell_order_inner(&app, &input, seller_mode.trim())
+        create_order_inner(&app, &input, "sell", seller_mode.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_wfm_buy_order(
+    app: tauri::AppHandle,
+    input: TradeCreateListingInput,
+    seller_mode: String,
+) -> Result<TradeOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        create_order_inner(&app, &input, "buy", seller_mode.trim())
     })
     .await
     .map_err(|error| error.to_string())?

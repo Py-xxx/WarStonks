@@ -97,6 +97,7 @@ export interface TradeSessionState {
 
 export interface TradeSellOrder {
   orderId: string;
+  orderType: 'buy' | 'sell';
   wfmId: string;
   itemId: number | null;
   name: string;
@@ -121,6 +122,7 @@ export interface TradeOverview {
   totalCompletedTrades: number | null;
   openPositions: number;
   sellOrders: TradeSellOrder[];
+  buyOrders: TradeSellOrder[];
 }
 
 export interface TradeSignInInput {
