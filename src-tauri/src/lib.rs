@@ -40,6 +40,7 @@ pub fn run() {
             trades::force_wfm_trade_log_resync,
             trades::ensure_trade_set_map,
             trades::create_wfm_sell_order,
+            trades::create_wfm_buy_order,
             trades::update_wfm_sell_order,
             trades::close_wfm_sell_order,
             trades::delete_wfm_sell_order,

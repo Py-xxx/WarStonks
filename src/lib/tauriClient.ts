@@ -317,6 +317,13 @@ export async function createWfmSellOrder(
   return invoke<TradeOverview>('create_wfm_sell_order', { input, sellerMode });
 }
 
+export async function createWfmBuyOrder(
+  input: TradeCreateListingInput,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('create_wfm_buy_order', { input, sellerMode });
+}
+
 export async function updateWfmSellOrder(
   input: TradeUpdateListingInput,
   sellerMode: SellerMode,
