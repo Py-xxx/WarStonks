@@ -5455,6 +5455,98 @@ fn apply_owned_set_component_deltas_inner(
         .context("failed to commit owned set component sync transaction")
 }
 
+fn replace_owned_set_component_deltas_inner(
+    connection: &mut Connection,
+    deltas: &[OwnedSetComponentDelta],
+) -> Result<()> {
+    let transaction = connection
+        .transaction()
+        .context("failed to start owned set component rebuild transaction")?;
+    let rebuilt_at = format_timestamp(now_utc())?;
+
+    transaction.execute("DELETE FROM owned_set_component_trade_sync", [])?;
+    transaction.execute("DELETE FROM owned_set_components", [])?;
+
+    let mut aggregated = BTreeMap::<String, OwnedSetComponentDelta>::new();
+    for delta in deltas {
+        if delta.sync_key.trim().is_empty()
+            || delta.slug.trim().is_empty()
+            || delta.name.trim().is_empty()
+            || delta.quantity_delta == 0
+        {
+            continue;
+        }
+
+        let entry = aggregated.entry(delta.slug.clone()).or_insert_with(|| OwnedSetComponentDelta {
+            sync_key: String::new(),
+            item_id: delta.item_id,
+            slug: delta.slug.clone(),
+            name: delta.name.clone(),
+            image_path: delta.image_path.clone(),
+            quantity_delta: 0,
+        });
+
+        entry.quantity_delta += delta.quantity_delta;
+        if entry.item_id.is_none() {
+            entry.item_id = delta.item_id;
+        }
+        if entry.name.trim().is_empty() {
+            entry.name = delta.name.clone();
+        }
+        if entry.image_path.is_none() {
+            entry.image_path = delta.image_path.clone();
+        }
+    }
+
+    for delta in aggregated.values() {
+        let next_quantity = delta.quantity_delta.max(0);
+        if next_quantity <= 0 {
+            continue;
+        }
+
+        transaction.execute(
+            "INSERT INTO owned_set_components (
+               component_slug,
+               component_item_id,
+               component_name,
+               component_image_path,
+               quantity,
+               updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                delta.slug.as_str(),
+                delta.item_id,
+                delta.name.as_str(),
+                delta.image_path.as_deref(),
+                next_quantity,
+                rebuilt_at.as_str(),
+            ],
+        )?;
+    }
+
+    for delta in deltas {
+        if delta.sync_key.trim().is_empty() || delta.slug.trim().is_empty() {
+            continue;
+        }
+
+        transaction.execute(
+            "INSERT INTO owned_set_component_trade_sync (
+               sync_key,
+               component_slug,
+               applied_at
+             ) VALUES (?1, ?2, ?3)
+             ON CONFLICT(sync_key) DO UPDATE SET
+               component_slug = excluded.component_slug,
+               applied_at = excluded.applied_at",
+            params![delta.sync_key.as_str(), delta.slug.as_str(), rebuilt_at.as_str()],
+        )?;
+    }
+
+    transaction
+        .commit()
+        .context("failed to commit owned set component rebuild transaction")
+}
+
 pub(crate) fn apply_owned_set_component_deltas(
     app: &tauri::AppHandle,
     deltas: &[OwnedSetComponentDelta],
@@ -5465,6 +5557,14 @@ pub(crate) fn apply_owned_set_component_deltas(
 
     let mut connection = open_market_observatory_database(app)?;
     apply_owned_set_component_deltas_inner(&mut connection, deltas)
+}
+
+pub(crate) fn replace_owned_set_component_deltas(
+    app: &tauri::AppHandle,
+    deltas: &[OwnedSetComponentDelta],
+) -> Result<()> {
+    let mut connection = open_market_observatory_database(app)?;
+    replace_owned_set_component_deltas_inner(&mut connection, deltas)
 }
 
 fn load_arbitrage_scanner_cache(
@@ -7999,6 +8099,43 @@ mod tests {
             )
             .expect("count sync rows");
         assert_eq!(sync_count, 1);
+    }
+
+    #[test]
+    fn replacing_owned_set_component_deltas_rebuilds_inventory() {
+        let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        super::apply_owned_set_component_deltas_inner(
+            &mut connection,
+            &[super::OwnedSetComponentDelta {
+                sync_key: "trade-owned:wfm:old:wisp_prime_chassis".to_string(),
+                item_id: Some(42),
+                slug: "wisp_prime_chassis".to_string(),
+                name: "Wisp Prime Chassis".to_string(),
+                image_path: None,
+                quantity_delta: 2,
+            }],
+        )
+        .expect("apply initial delta");
+
+        super::replace_owned_set_component_deltas_inner(
+            &mut connection,
+            &[super::OwnedSetComponentDelta {
+                sync_key: "trade-owned:wfm:new:wisp_prime_systems".to_string(),
+                item_id: Some(84),
+                slug: "wisp_prime_systems".to_string(),
+                name: "Wisp Prime Systems".to_string(),
+                image_path: None,
+                quantity_delta: 1,
+            }],
+        )
+        .expect("replace inventory");
+
+        let items = super::load_set_completion_owned_items(&connection).expect("load items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].slug, "wisp_prime_systems");
+        assert_eq!(items[0].quantity, 1);
     }
 
     #[test]
