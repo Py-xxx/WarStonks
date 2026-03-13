@@ -186,6 +186,63 @@ export interface PortfolioTradeLogState {
   lastUpdatedAt: string | null;
 }
 
+export type PortfolioPnlPeriod = '7d' | '30d' | 'all';
+
+export interface PortfolioPnlMetricPoint {
+  bucketAt: string;
+  label: string;
+  realizedProfit: number;
+  cumulativeProfit: number;
+}
+
+export interface PortfolioTradeProfitPoint {
+  id: string;
+  itemName: string;
+  closedAt: string;
+  profit: number;
+}
+
+export interface PortfolioBreakdownRow {
+  label: string;
+  value: number;
+  tradeCount: number;
+}
+
+export interface PortfolioPnlSummary {
+  period: PortfolioPnlPeriod;
+  lastUpdatedAt: string | null;
+  realizedProfit: number;
+  unrealizedValue: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  openExposure: number;
+  turnoverBought: number;
+  turnoverSold: number;
+  totalTrades: number;
+  closedTrades: number;
+  openBuys: number;
+  keptItems: number;
+  costBasisCoveragePct: number;
+  currentValueCoveragePct: number;
+  winRate: number;
+  averageMargin: number | null;
+  averageProfitPerTrade: number;
+  averageHoldHours: number | null;
+  soldAsSetProfit: number;
+  flipProfit: number;
+  unmatchedSellRevenue: number;
+  partialCostBasisRevenue: number;
+  bestTradeItem: string | null;
+  bestTradeProfit: number | null;
+  worstTradeItem: string | null;
+  worstTradeProfit: number | null;
+  categoryBreakdown: PortfolioBreakdownRow[];
+  sourceBreakdown: PortfolioBreakdownRow[];
+  cumulativeProfitPoints: PortfolioPnlMetricPoint[];
+  profitPerTradePoints: PortfolioTradeProfitPoint[];
+  notes: string[];
+}
+
 export interface AlecaframeTradeMigrationInput {
   baselineDate: string;
 }
@@ -982,6 +1039,15 @@ export interface ArbitrageScannerProgress {
 export interface ArbitrageScannerState {
   latestScan: ArbitrageScannerResponse | null;
   progress: ArbitrageScannerProgress;
+}
+
+export interface SetCompletionOwnedItem {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  quantity: number;
+  updatedAt: string;
 }
 
 export interface QuickViewSelection {

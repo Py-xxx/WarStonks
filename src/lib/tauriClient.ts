@@ -28,6 +28,7 @@ import type {
   TradeSessionState,
   TradeSignInInput,
   TradeUpdateListingInput,
+  SetCompletionOwnedItem,
   PersistedWorldStateCacheEntry,
   SellerMode,
   WfmDetailedOrder,
@@ -483,6 +484,26 @@ export async function getArbitrageScanner(): Promise<ArbitrageScannerResponse> {
 
 export async function getArbitrageScannerState(): Promise<ArbitrageScannerState> {
   return invoke<ArbitrageScannerState>('get_arbitrage_scanner_state');
+}
+
+export async function getSetCompletionOwnedItems(): Promise<SetCompletionOwnedItem[]> {
+  return invoke<SetCompletionOwnedItem[]>('get_set_completion_owned_items');
+}
+
+export async function setSetCompletionOwnedItemQuantity(input: {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  quantity: number;
+}): Promise<SetCompletionOwnedItem[]> {
+  return invoke<SetCompletionOwnedItem[]>('set_set_completion_owned_item_quantity', {
+    itemId: input.itemId,
+    slug: input.slug,
+    name: input.name,
+    imagePath: input.imagePath,
+    quantity: input.quantity,
+  });
 }
 
 export async function startArbitrageScanner(): Promise<boolean> {
