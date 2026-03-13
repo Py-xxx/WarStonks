@@ -161,6 +161,7 @@ export interface PortfolioTradeLogEntry {
   slug: string;
   imagePath: string | null;
   orderType: 'buy' | 'sell';
+  source: 'wfm' | 'alecaframe';
   platinum: number;
   quantity: number;
   rank: number | null;
@@ -170,11 +171,26 @@ export interface PortfolioTradeLogEntry {
   margin: number | null;
   status: string | null;
   keepItem: boolean;
+  groupId: string | null;
+  groupLabel: string | null;
+  groupTotalPlatinum: number | null;
+  groupItemCount: number | null;
+  allocationTotalPlatinum: number | null;
+  groupSortOrder: number | null;
 }
 
 export interface PortfolioTradeLogState {
   entries: PortfolioTradeLogEntry[];
   lastUpdatedAt: string | null;
+}
+
+export interface AlecaframeTradeMigrationInput {
+  baselineDate: string;
+}
+
+export interface TradeGroupAllocationInput {
+  orderId: string;
+  totalPlatinum: number;
 }
 
 export interface TradeSetMapSummary {
