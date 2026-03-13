@@ -34,6 +34,7 @@ pub fn run() {
             trades::get_wfm_trade_overview,
             trades::get_cached_wfm_profile_trade_log,
             trades::get_wfm_profile_trade_log,
+            trades::get_portfolio_pnl_summary,
             trades::set_wfm_trade_log_keep_item,
             trades::migrate_alecaframe_trade_log,
             trades::update_trade_group_allocations,

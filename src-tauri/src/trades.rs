@@ -28,6 +28,8 @@ const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
 const TRADE_LOG_DERIVED_VERSION: i64 = 3;
+const PORTFOLIO_PNL_CHART_BUCKET_LIMIT: usize = 90;
+const PORTFOLIO_PROFIT_POINT_LIMIT: usize = 12;
 const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
@@ -148,6 +150,99 @@ pub struct PortfolioTradeLogEntry {
 pub struct PortfolioTradeLogState {
     pub entries: Vec<PortfolioTradeLogEntry>,
     pub last_updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioPnlMetricPoint {
+    pub bucket_at: String,
+    pub label: String,
+    pub realized_profit: i64,
+    pub cumulative_profit: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioTradeProfitPoint {
+    pub id: String,
+    pub item_name: String,
+    pub closed_at: String,
+    pub profit: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioBreakdownRow {
+    pub label: String,
+    pub value: i64,
+    pub trade_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioPnlSummary {
+    pub period: String,
+    pub last_updated_at: Option<String>,
+    pub realized_profit: i64,
+    pub unrealized_value: i64,
+    pub unrealized_pnl: i64,
+    pub total_pnl: i64,
+    pub open_exposure: i64,
+    pub turnover_bought: i64,
+    pub turnover_sold: i64,
+    pub total_trades: i64,
+    pub closed_trades: i64,
+    pub open_buys: i64,
+    pub kept_items: i64,
+    pub cost_basis_coverage_pct: f64,
+    pub current_value_coverage_pct: f64,
+    pub win_rate: f64,
+    pub average_margin: Option<f64>,
+    pub average_profit_per_trade: f64,
+    pub average_hold_hours: Option<f64>,
+    pub sold_as_set_profit: i64,
+    pub flip_profit: i64,
+    pub unmatched_sell_revenue: i64,
+    pub partial_cost_basis_revenue: i64,
+    pub best_trade_item: Option<String>,
+    pub best_trade_profit: Option<i64>,
+    pub worst_trade_item: Option<String>,
+    pub worst_trade_profit: Option<i64>,
+    pub category_breakdown: Vec<PortfolioBreakdownRow>,
+    pub source_breakdown: Vec<PortfolioBreakdownRow>,
+    pub cumulative_profit_points: Vec<PortfolioPnlMetricPoint>,
+    pub profit_per_trade_points: Vec<PortfolioTradeProfitPoint>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PortfolioCatalogMeta {
+    item_id: Option<i64>,
+    item_family: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ConsumedBuyMatch {
+    quantity: i64,
+    buy_closed_at: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DerivedSellDetail {
+    revenue: i64,
+    matched_quantity: i64,
+    matched_cost: i64,
+    flip_quantity: i64,
+    flip_cost: i64,
+    sold_as_set_quantity: i64,
+    sold_as_set_cost: i64,
+    matches: Vec<ConsumedBuyMatch>,
+}
+
+#[derive(Debug, Clone)]
+struct DerivedTradeLedger {
+    entries: Vec<PortfolioTradeLogEntry>,
+    sell_details: HashMap<String, DerivedSellDetail>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2309,9 +2404,10 @@ fn consume_matching_buy_lots(
     required_quantity: i64,
     sell_closed_at: &str,
     as_set: bool,
-) -> (i64, i64) {
+) -> (i64, i64, Vec<ConsumedBuyMatch>) {
     let mut matched_quantity = 0_i64;
     let mut matched_cost = 0_i64;
+    let mut matches = Vec::new();
     let normalized_slug = slug.trim();
 
     for record in records {
@@ -2340,16 +2436,22 @@ fn consume_matching_buy_lots(
         }
 
         matched_quantity += quantity_to_consume;
-        matched_cost += record_consumed_platinum(record, quantity_to_consume);
+        let consumed_cost = record_consumed_platinum(record, quantity_to_consume);
+        matched_cost += consumed_cost;
 
         if as_set {
             entry.sold_as_set_quantity += quantity_to_consume;
         } else {
             entry.flipped_quantity += quantity_to_consume;
         }
+
+        matches.push(ConsumedBuyMatch {
+            quantity: quantity_to_consume,
+            buy_closed_at: record.closed_at.clone(),
+        });
     }
 
-    (matched_quantity, matched_cost)
+    (matched_quantity, matched_cost, matches)
 }
 
 fn consume_set_component_buy_lots(
@@ -2358,9 +2460,9 @@ fn consume_set_component_buy_lots(
     components: &[TradeSetComponentRecord],
     sell_quantity: i64,
     sell_closed_at: &str,
-) -> (i64, i64) {
+) -> (i64, i64, Vec<ConsumedBuyMatch>) {
     if components.is_empty() || sell_quantity <= 0 {
-        return (0, 0);
+        return (0, 0, Vec::new());
     }
 
     let mut fully_supported_sets = sell_quantity;
@@ -2386,8 +2488,9 @@ fn consume_set_component_buy_lots(
     }
 
     let mut total_cost = 0_i64;
+    let mut all_matches = Vec::new();
     for component in components {
-        let (_, component_cost) = consume_matching_buy_lots(
+        let (_, component_cost, component_matches) = consume_matching_buy_lots(
             records,
             consumption,
             &component.component_slug,
@@ -2397,20 +2500,22 @@ fn consume_set_component_buy_lots(
             true,
         );
         total_cost += component_cost;
+        all_matches.extend(component_matches);
     }
 
-    (fully_supported_sets.max(0), total_cost)
+    (fully_supported_sets.max(0), total_cost, all_matches)
 }
 
-fn derive_trade_log_entries_with_components<F>(
+fn derive_trade_ledger_with_components<F>(
     records: &[StoredTradeLogRecord],
     mut load_components: F,
-) -> Vec<PortfolioTradeLogEntry>
+) -> DerivedTradeLedger
 where
     F: FnMut(&str) -> Vec<TradeSetComponentRecord>,
 {
     let mut consumption = HashMap::<String, BuyConsumptionState>::new();
     let mut derived = Vec::with_capacity(records.len());
+    let mut sell_details = HashMap::<String, DerivedSellDetail>::new();
 
     for record in records {
         if record.order_type == "buy" {
@@ -2420,11 +2525,12 @@ where
         let mut remaining_quantity = record.quantity;
         let mut matched_quantity = 0_i64;
         let mut matched_cost = 0_i64;
+        let mut detail = DerivedSellDetail::default();
 
         if record.slug.ends_with("_set") {
             let components = load_components(&record.slug);
             if !components.is_empty() {
-                let (set_quantity, set_cost) = consume_set_component_buy_lots(
+                let (set_quantity, set_cost, set_matches) = consume_set_component_buy_lots(
                     records,
                     &mut consumption,
                     &components,
@@ -2434,11 +2540,14 @@ where
                 matched_quantity += set_quantity;
                 matched_cost += set_cost;
                 remaining_quantity -= set_quantity;
+                detail.sold_as_set_quantity = set_quantity;
+                detail.sold_as_set_cost = set_cost;
+                detail.matches.extend(set_matches);
             }
         }
 
         if remaining_quantity > 0 {
-            let (flip_quantity, flip_cost) = consume_matching_buy_lots(
+            let (flip_quantity, flip_cost, flip_matches) = consume_matching_buy_lots(
                 records,
                 &mut consumption,
                 &record.slug,
@@ -2449,6 +2558,9 @@ where
             );
             matched_quantity += flip_quantity;
             matched_cost += flip_cost;
+            detail.flip_quantity = flip_quantity;
+            detail.flip_cost = flip_cost;
+            detail.matches.extend(flip_matches);
         }
 
         let revenue = record_total_platinum(record);
@@ -2484,6 +2596,11 @@ where
             allocation_total_platinum: record.allocation_total_platinum,
             group_sort_order: record.group_sort_order,
         });
+
+        detail.revenue = revenue;
+        detail.matched_quantity = matched_quantity;
+        detail.matched_cost = matched_cost;
+        sell_details.insert(record.id.clone(), detail);
     }
 
     for record in records {
@@ -2537,7 +2654,20 @@ where
             .then_with(|| right.id.cmp(&left.id))
     });
 
-    derived
+    DerivedTradeLedger {
+        entries: derived,
+        sell_details,
+    }
+}
+
+fn derive_trade_log_entries_with_components<F>(
+    records: &[StoredTradeLogRecord],
+    load_components: F,
+) -> Vec<PortfolioTradeLogEntry>
+where
+    F: FnMut(&str) -> Vec<TradeSetComponentRecord>,
+{
+    derive_trade_ledger_with_components(records, load_components).entries
 }
 
 fn derive_trade_log_entries(
@@ -2886,6 +3016,561 @@ fn refresh_trade_log_state_for_app(
     let mut connection = open_trades_cache_database(app)?;
     save_trade_log_rows_inner(&mut connection, username, &entries)?;
     reconcile_trade_log_state_inner(app, &mut connection, username)
+}
+
+fn normalize_portfolio_pnl_period(value: &str) -> String {
+    match value.trim() {
+        "7d" => "7d".to_string(),
+        "30d" => "30d".to_string(),
+        _ => "all".to_string(),
+    }
+}
+
+fn portfolio_pnl_cutoff(period: &str) -> Option<OffsetDateTime> {
+    match period {
+        "7d" => Some(now_utc() - time::Duration::days(7)),
+        "30d" => Some(now_utc() - time::Duration::days(30)),
+        _ => None,
+    }
+}
+
+fn month_short_label(month: time::Month) -> &'static str {
+    match month {
+        time::Month::January => "Jan",
+        time::Month::February => "Feb",
+        time::Month::March => "Mar",
+        time::Month::April => "Apr",
+        time::Month::May => "May",
+        time::Month::June => "Jun",
+        time::Month::July => "Jul",
+        time::Month::August => "Aug",
+        time::Month::September => "Sep",
+        time::Month::October => "Oct",
+        time::Month::November => "Nov",
+        time::Month::December => "Dec",
+    }
+}
+
+fn build_portfolio_bucket_label(bucket_at: &str) -> String {
+    parse_timestamp(bucket_at)
+        .map(|timestamp| format!("{} {}", timestamp.day(), month_short_label(timestamp.month())))
+        .unwrap_or_else(|| bucket_at.to_string())
+}
+
+fn average(values: &[f64]) -> Option<f64> {
+    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+}
+
+fn compute_cost_basis_coverage(
+    total_sell_revenue: i64,
+    full_cost_basis_revenue: i64,
+    partial_cost_basis_revenue: i64,
+) -> f64 {
+    if total_sell_revenue <= 0 {
+        return 100.0;
+    }
+
+    (((full_cost_basis_revenue as f64) + ((partial_cost_basis_revenue as f64) * 0.5))
+        / total_sell_revenue as f64)
+        * 100.0
+}
+
+fn compute_current_value_coverage(open_exposure: i64, current_value_covered_cost: i64) -> f64 {
+    if open_exposure <= 0 {
+        return 100.0;
+    }
+
+    (current_value_covered_cost as f64 / open_exposure as f64) * 100.0
+}
+
+fn round_money(value: f64) -> i64 {
+    value.round() as i64
+}
+
+fn build_trade_variant_key(rank: Option<i64>) -> String {
+    rank.map(|value| format!("rank:{value}"))
+        .unwrap_or_else(|| "base".to_string())
+}
+
+fn query_latest_statistics_reference_price(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+    domain_key: &str,
+    source_kind: &str,
+) -> Result<Option<f64>> {
+    connection
+        .query_row(
+            "SELECT
+               min_price,
+               median,
+               avg_price,
+               wa_price,
+               closed_price,
+               open_price
+             FROM statistics_cache
+             WHERE item_id = ?1
+               AND variant_key = ?2
+               AND domain_key = ?3
+               AND source_kind = ?4
+             ORDER BY bucket_at DESC
+             LIMIT 1",
+            params![item_id, variant_key, domain_key, source_kind],
+            |row| {
+                let min_price = row.get::<_, Option<f64>>(0)?;
+                let median = row.get::<_, Option<f64>>(1)?;
+                let avg_price = row.get::<_, Option<f64>>(2)?;
+                let wa_price = row.get::<_, Option<f64>>(3)?;
+                let closed_price = row.get::<_, Option<f64>>(4)?;
+                let open_price = row.get::<_, Option<f64>>(5)?;
+                Ok(min_price
+                    .or(median)
+                    .or(avg_price)
+                    .or(wa_price)
+                    .or(closed_price)
+                    .or(open_price))
+            },
+        )
+        .optional()
+        .map(|value| value.flatten())
+        .map_err(Into::into)
+}
+
+fn load_portfolio_catalog_meta_map(
+    app: &tauri::AppHandle,
+    records: &[StoredTradeLogRecord],
+) -> Result<HashMap<String, PortfolioCatalogMeta>> {
+    let connection = open_catalog_database(app)?;
+    let unique_slugs = records
+        .iter()
+        .map(|record| record.slug.trim().to_string())
+        .filter(|slug| !slug.is_empty())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              items.item_id,
+              items.item_family
+            FROM items
+            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
+            WHERE COALESCE(items.wfm_slug, wfm_items.slug) = ?1
+            LIMIT 1
+            ",
+        )
+        .context("failed to prepare portfolio catalog metadata query")?;
+
+    let mut metadata = HashMap::new();
+    for slug in unique_slugs {
+        let maybe_meta = statement
+            .query_row(params![slug.as_str()], |row| {
+                Ok(PortfolioCatalogMeta {
+                    item_id: row.get(0)?,
+                    item_family: row.get(1)?,
+                })
+            })
+            .optional()
+            .context("failed to resolve portfolio catalog metadata")?;
+
+        if let Some(meta) = maybe_meta {
+            metadata.insert(slug, meta);
+        }
+    }
+
+    Ok(metadata)
+}
+
+fn classify_portfolio_category(
+    metadata: Option<&PortfolioCatalogMeta>,
+    slug: &str,
+    item_name: &str,
+) -> String {
+    let normalized_slug = slug.trim().to_lowercase();
+    let normalized_name = item_name.trim().to_lowercase();
+    let family = metadata
+        .and_then(|entry| entry.item_family.as_deref())
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+
+    if normalized_slug.ends_with("_set")
+        || family.contains("set")
+        || normalized_name.ends_with(" set")
+    {
+        "Sets".to_string()
+    } else if normalized_name.contains("arcane") || family.contains("arcane") {
+        "Arcanes".to_string()
+    } else if normalized_name.contains("relic") || family.contains("relic") {
+        "Relics".to_string()
+    } else if family.contains("mod") {
+        "Mods".to_string()
+    } else if family.contains("weapon") {
+        "Weapons".to_string()
+    } else if family.contains("warframe") || family.contains("frame") {
+        "Warframes".to_string()
+    } else {
+        "Components".to_string()
+    }
+}
+
+fn latest_local_market_estimate(
+    connection: &Connection,
+    item_id: i64,
+    rank: Option<i64>,
+) -> Result<Option<i64>> {
+    let variant_key = build_trade_variant_key(rank);
+
+    for (domain_key, source_kind) in [
+        ("48hours", "live_sell"),
+        ("48hours", "closed"),
+        ("90days", "closed"),
+    ] {
+        if let Some(value) = query_latest_statistics_reference_price(
+            connection,
+            item_id,
+            &variant_key,
+            domain_key,
+            source_kind,
+        )? {
+            return Ok(Some(round_money(value)));
+        }
+    }
+
+    Ok(None)
+}
+
+fn record_matches_cutoff(record: &StoredTradeLogRecord, cutoff: Option<OffsetDateTime>) -> bool {
+    let Some(cutoff) = cutoff else {
+        return true;
+    };
+
+    parse_timestamp(&record.closed_at)
+        .map(|timestamp| timestamp >= cutoff)
+        .unwrap_or(false)
+}
+
+fn breakdown_rows_from_map(
+    mut values: HashMap<String, (i64, i64)>,
+    limit: usize,
+) -> Vec<PortfolioBreakdownRow> {
+    let mut rows = values
+        .drain()
+        .map(|(label, (value, trade_count))| PortfolioBreakdownRow {
+            label,
+            value,
+            trade_count,
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .value
+            .cmp(&left.value)
+            .then_with(|| right.trade_count.cmp(&left.trade_count))
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    rows.truncate(limit);
+    rows
+}
+
+fn build_portfolio_pnl_summary_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+    period: &str,
+) -> Result<PortfolioPnlSummary> {
+    let normalized_period = normalize_portfolio_pnl_period(period);
+    let cutoff = portfolio_pnl_cutoff(&normalized_period);
+    let mut trades_connection = open_trades_cache_database(app)?;
+    let trade_log_state = ensure_trade_log_state_inner(app, &mut trades_connection, username)?;
+    let records = load_stored_trade_log_records_inner(&trades_connection, username)?;
+    let derived_ledger = derive_trade_ledger_with_components(&records, |set_slug| {
+        load_trade_set_components_for_slug(app, set_slug).unwrap_or_default()
+    });
+    let last_updated_at = trade_log_state.last_updated_at.clone();
+
+    let mut derived_by_id = HashMap::<String, PortfolioTradeLogEntry>::new();
+    for entry in derived_ledger.entries.iter().cloned() {
+        derived_by_id.insert(entry.id.clone(), entry);
+    }
+
+    let metadata_by_slug = load_portfolio_catalog_meta_map(app, &records)?;
+    let market_connection = open_market_observatory_database(app).ok();
+
+    let mut realized_profit = 0_i64;
+    let mut turnover_bought = 0_i64;
+    let mut turnover_sold = 0_i64;
+    let mut closed_trades = 0_i64;
+    let mut total_trades = 0_i64;
+    let mut win_count = 0_i64;
+    let mut positive_margin_values = Vec::<f64>::new();
+    let mut average_hold_values = Vec::<f64>::new();
+    let mut sold_as_set_profit = 0_i64;
+    let mut flip_profit = 0_i64;
+    let mut unmatched_sell_revenue = 0_i64;
+    let mut partial_cost_basis_revenue = 0_i64;
+    let mut total_sell_revenue = 0_i64;
+    let mut full_cost_basis_revenue = 0_i64;
+    let mut best_trade: Option<(String, i64)> = None;
+    let mut worst_trade: Option<(String, i64)> = None;
+    let mut category_breakdown_map = HashMap::<String, (i64, i64)>::new();
+    let mut source_breakdown_map = HashMap::<String, (i64, i64)>::new();
+    let mut cumulative_bucket_map = std::collections::BTreeMap::<String, i64>::new();
+    let mut profit_points = Vec::<PortfolioTradeProfitPoint>::new();
+    let mut unrealized_value = 0_i64;
+    let mut unrealized_pnl = 0_i64;
+    let mut open_exposure = 0_i64;
+    let mut open_buys = 0_i64;
+    let mut kept_items = 0_i64;
+    let mut current_value_covered_cost = 0_i64;
+
+    for record in &records {
+        let Some(derived_entry) = derived_by_id.get(&record.id) else {
+            continue;
+        };
+        let total_platinum = record_total_platinum(record);
+
+        if record.order_type == "buy" {
+            if matches!(derived_entry.status.as_deref(), Some("Open" | "Kept")) {
+                open_exposure += total_platinum;
+                if derived_entry.status.as_deref() == Some("Open") {
+                    open_buys += 1;
+                }
+                if derived_entry.status.as_deref() == Some("Kept") {
+                    kept_items += 1;
+                }
+
+                let maybe_estimate = metadata_by_slug
+                    .get(record.slug.as_str())
+                    .and_then(|meta| meta.item_id)
+                    .and_then(|item_id| {
+                        market_connection
+                            .as_ref()
+                            .and_then(|connection| {
+                                latest_local_market_estimate(connection, item_id, record.rank).ok()
+                            })
+                            .flatten()
+                    });
+
+                let estimated_total = maybe_estimate
+                    .map(|unit_price| unit_price.saturating_mul(record.quantity))
+                    .unwrap_or(total_platinum);
+                unrealized_value += estimated_total;
+                unrealized_pnl += estimated_total - total_platinum;
+
+                if maybe_estimate.is_some() {
+                    current_value_covered_cost += total_platinum;
+                }
+            }
+
+            if !record_matches_cutoff(record, cutoff) {
+                continue;
+            }
+
+            total_trades += 1;
+            turnover_bought += total_platinum;
+
+            continue;
+        }
+
+        if !record_matches_cutoff(record, cutoff) {
+            continue;
+        }
+
+        total_trades += 1;
+        turnover_sold += total_platinum;
+        total_sell_revenue += total_platinum;
+        closed_trades += 1;
+
+        let profit = derived_entry.profit.unwrap_or(0);
+        realized_profit += profit;
+        if profit > 0 {
+            win_count += 1;
+        }
+        if let Some(margin) = derived_entry.margin {
+            positive_margin_values.push(margin);
+            full_cost_basis_revenue += total_platinum;
+        }
+
+        let detail = derived_ledger.sell_details.get(&record.id);
+        let matched_cost = detail.map(|value| value.matched_cost).unwrap_or(0);
+        if derived_entry.margin.is_none() && matched_cost > 0 {
+            partial_cost_basis_revenue += total_platinum;
+        }
+        if matched_cost <= 0 {
+            unmatched_sell_revenue += total_platinum;
+        }
+
+        let source_label = if detail.map(|value| value.sold_as_set_cost).unwrap_or(0) > 0 {
+            sold_as_set_profit += profit;
+            "Sold As Set"
+        } else if matched_cost > 0 {
+            flip_profit += profit;
+            "Flip"
+        } else {
+            "Direct Sell"
+        };
+        {
+            let entry = source_breakdown_map
+                .entry(source_label.to_string())
+                .or_insert((0, 0));
+            entry.0 += profit;
+            entry.1 += 1;
+        }
+
+        let category_label = classify_portfolio_category(
+            metadata_by_slug.get(record.slug.as_str()),
+            &record.slug,
+            &record.item_name,
+        );
+        {
+            let entry = category_breakdown_map.entry(category_label).or_insert((0, 0));
+            entry.0 += profit;
+            entry.1 += 1;
+        }
+
+        if let Some(detail) = detail {
+            let mut weighted_hold_hours = 0_f64;
+            let mut weighted_units = 0_f64;
+            for matched_buy in &detail.matches {
+                if let (Some(sell_at), Some(buy_at)) =
+                    (parse_timestamp(&record.closed_at), parse_timestamp(&matched_buy.buy_closed_at))
+                {
+                    let hold_hours =
+                        (sell_at - buy_at).whole_minutes().max(0) as f64 / 60.0;
+                    weighted_hold_hours += hold_hours * matched_buy.quantity as f64;
+                    weighted_units += matched_buy.quantity as f64;
+                }
+            }
+            if weighted_units > 0.0 {
+                average_hold_values.push(weighted_hold_hours / weighted_units);
+            }
+        }
+
+        match best_trade {
+            Some((_, value)) if value >= profit => {}
+            _ => best_trade = Some((record.item_name.clone(), profit)),
+        }
+        match worst_trade {
+            Some((_, value)) if value <= profit => {}
+            _ => worst_trade = Some((record.item_name.clone(), profit)),
+        }
+
+        let bucket_key = parse_timestamp(&record.closed_at)
+            .and_then(|timestamp| {
+                let date = timestamp.date();
+                let midnight = date.with_hms(0, 0, 0).ok()?;
+                format_timestamp(midnight.assume_utc()).ok()
+            })
+            .unwrap_or_else(|| record.closed_at.clone());
+        *cumulative_bucket_map.entry(bucket_key).or_insert(0) += profit;
+
+        profit_points.push(PortfolioTradeProfitPoint {
+            id: record.id.clone(),
+            item_name: record.item_name.clone(),
+            closed_at: record.closed_at.clone(),
+            profit,
+        });
+    }
+
+    let average_margin = average(&positive_margin_values);
+    let average_hold_hours = average(&average_hold_values);
+    let average_profit_per_trade = if closed_trades > 0 {
+        realized_profit as f64 / closed_trades as f64
+    } else {
+        0.0
+    };
+    let win_rate = if closed_trades > 0 {
+        (win_count as f64 / closed_trades as f64) * 100.0
+    } else {
+        0.0
+    };
+    let cost_basis_coverage_pct = compute_cost_basis_coverage(
+        total_sell_revenue,
+        full_cost_basis_revenue,
+        partial_cost_basis_revenue,
+    );
+    let current_value_coverage_pct =
+        compute_current_value_coverage(open_exposure, current_value_covered_cost);
+
+    let mut cumulative_profit = 0_i64;
+    let mut cumulative_profit_points = cumulative_bucket_map
+        .into_iter()
+        .map(|(bucket_at, realized_profit_bucket)| {
+            cumulative_profit += realized_profit_bucket;
+            PortfolioPnlMetricPoint {
+                label: build_portfolio_bucket_label(&bucket_at),
+                bucket_at,
+                realized_profit: realized_profit_bucket,
+                cumulative_profit,
+            }
+        })
+        .collect::<Vec<_>>();
+    if cumulative_profit_points.len() > PORTFOLIO_PNL_CHART_BUCKET_LIMIT {
+        let start = cumulative_profit_points.len() - PORTFOLIO_PNL_CHART_BUCKET_LIMIT;
+        cumulative_profit_points = cumulative_profit_points.split_off(start);
+    }
+
+    profit_points.sort_by(|left, right| right.closed_at.cmp(&left.closed_at));
+    profit_points.truncate(PORTFOLIO_PROFIT_POINT_LIMIT);
+    profit_points.reverse();
+
+    let mut notes = Vec::new();
+    if closed_trades == 0 {
+        notes.push("No closed sell trades were found for the selected period.".to_string());
+    }
+    if cost_basis_coverage_pct < 99.9 {
+        notes.push(format!(
+            "Profit coverage is {:.0}% because some sells do not have a full local cost basis yet.",
+            cost_basis_coverage_pct
+        ));
+    }
+    if current_value_coverage_pct < 99.9 {
+        notes.push(format!(
+            "Unrealized value coverage is {:.0}% because some held items do not have cached market statistics yet.",
+            current_value_coverage_pct
+        ));
+    }
+    if kept_items > 0 {
+        notes.push(format!(
+            "{kept_items} kept buy {} excluded from set/flip matching.",
+            if kept_items == 1 { "entry is" } else { "entries are" }
+        ));
+    }
+
+    Ok(PortfolioPnlSummary {
+        period: normalized_period,
+        last_updated_at,
+        realized_profit,
+        unrealized_value,
+        unrealized_pnl,
+        total_pnl: realized_profit + unrealized_pnl,
+        open_exposure,
+        turnover_bought,
+        turnover_sold,
+        total_trades,
+        closed_trades,
+        open_buys,
+        kept_items,
+        cost_basis_coverage_pct,
+        current_value_coverage_pct,
+        win_rate,
+        average_margin,
+        average_profit_per_trade,
+        average_hold_hours,
+        sold_as_set_profit,
+        flip_profit,
+        unmatched_sell_revenue,
+        partial_cost_basis_revenue,
+        best_trade_item: best_trade.as_ref().map(|value| value.0.clone()),
+        best_trade_profit: best_trade.as_ref().map(|value| value.1),
+        worst_trade_item: worst_trade.as_ref().map(|value| value.0.clone()),
+        worst_trade_profit: worst_trade.as_ref().map(|value| value.1),
+        category_breakdown: breakdown_rows_from_map(category_breakdown_map, 6),
+        source_breakdown: breakdown_rows_from_map(source_breakdown_map, 6),
+        cumulative_profit_points,
+        profit_per_trade_points: profit_points,
+        notes,
+    })
 }
 
 fn parse_status_from_payload(payload: &Value) -> Option<String> {
@@ -3484,6 +4169,20 @@ pub async fn get_wfm_profile_trade_log(
 }
 
 #[tauri::command]
+pub async fn get_portfolio_pnl_summary(
+    app: tauri::AppHandle,
+    username: String,
+    period: String,
+) -> Result<PortfolioPnlSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        build_portfolio_pnl_summary_inner(&app, username.trim(), period.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn set_wfm_trade_log_keep_item(
     app: tauri::AppHandle,
     username: String,
@@ -3628,6 +4327,7 @@ pub async fn delete_wfm_sell_order(
 mod tests {
     use super::{
         build_trade_log_entries_from_statistics, collapse_grouped_trade_sets,
+        compute_cost_basis_coverage, compute_current_value_coverage,
         derive_trade_log_entries_with_components,
         initialize_trades_cache_schema, load_stored_trade_log_records_inner,
         load_trade_log_last_updated_at, normalize_alecaframe_trade_payload, normalize_avatar_url,
@@ -4098,5 +4798,16 @@ mod tests {
         assert_eq!(collapsed[0].quantity, 1);
         assert_eq!(collapsed[0].allocation_total_platinum, Some(68));
         assert!(collapsed[0].group_id.is_none());
+    }
+
+    #[test]
+    fn computes_portfolio_coverage_with_partial_credit() {
+        let cost_basis_coverage = compute_cost_basis_coverage(100, 40, 20);
+        let current_value_coverage = compute_current_value_coverage(80, 20);
+
+        assert!((cost_basis_coverage - 50.0).abs() < f64::EPSILON);
+        assert!((current_value_coverage - 25.0).abs() < f64::EPSILON);
+        assert_eq!(compute_cost_basis_coverage(0, 0, 0), 100.0);
+        assert_eq!(compute_current_value_coverage(0, 0), 100.0);
     }
 }
