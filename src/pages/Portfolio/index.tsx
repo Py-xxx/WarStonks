@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  forceWfmTradeLogResync,
   getCachedWfmProfileTradeLog,
   getWfmProfileTradeLog,
   migrateAlecaframeTradeLog,
@@ -185,6 +186,7 @@ function TradeLogTab({ username }: { username: string | null }) {
   const [loading, setLoading] = useState(false);
   const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
   const [migrating, setMigrating] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
   const [savingAllocations, setSavingAllocations] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
@@ -298,6 +300,25 @@ function TradeLogTab({ username }: { username: string | null }) {
     }
   };
 
+  const handleForceResync = async () => {
+    if (!username) {
+      setErrorMessage('Connect your Warframe Market account in Trades first.');
+      return;
+    }
+
+    setResyncing(true);
+    setErrorMessage(null);
+
+    try {
+      const nextState = await forceWfmTradeLogResync(username);
+      applyTradeLogState(nextState);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setResyncing(false);
+    }
+  };
+
   const handleSaveAllocations = async () => {
     if (!username || !allocationGroup) {
       return;
@@ -403,11 +424,21 @@ function TradeLogTab({ username }: { username: string | null }) {
               Migrate
             </button>
           ) : null}
+          {username ? (
+            <button
+              className="act-btn portfolio-secondary-btn"
+              type="button"
+              onClick={() => void handleForceResync()}
+              disabled={resyncing || loading}
+            >
+              {resyncing ? 'Resyncing…' : 'Force Resync'}
+            </button>
+          ) : null}
           <button
             className="act-btn portfolio-refresh-btn"
             type="button"
             onClick={() => void handleRefresh()}
-            disabled={loading}
+            disabled={loading || resyncing}
           >
             <RefreshIcon />
             {loading ? 'Refreshing…' : 'Refresh'}

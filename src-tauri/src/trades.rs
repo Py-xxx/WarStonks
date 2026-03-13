@@ -27,7 +27,7 @@ const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
-const TRADE_LOG_DERIVED_VERSION: i64 = 2;
+const TRADE_LOG_DERIVED_VERSION: i64 = 3;
 const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
@@ -362,6 +362,14 @@ struct TradeSetRootRecord {
     slug: String,
     name: String,
     image_path: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MatchedTradeSet {
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+    quantity: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1208,6 +1216,174 @@ fn find_duplicate_trade_record(
     })
 }
 
+fn match_grouped_trade_to_exact_set(
+    group: &[StoredTradeLogRecord],
+    set_definitions: &[(TradeSetRootRecord, Vec<TradeSetComponentRecord>)],
+) -> Option<MatchedTradeSet> {
+    if group.len() < 2 {
+        return None;
+    }
+
+    let mut grouped_quantities = HashMap::<String, i64>::new();
+    for record in group {
+        if record.slug.trim().is_empty() || record.quantity <= 0 {
+            return None;
+        }
+
+        *grouped_quantities.entry(record.slug.clone()).or_insert(0) += record.quantity.max(0);
+    }
+
+    for (set_root, components) in set_definitions {
+        if components.is_empty() || components.len() != grouped_quantities.len() {
+            continue;
+        }
+
+        let mut matched_set_quantity: Option<i64> = None;
+        let mut is_exact_match = true;
+
+        for component in components {
+            let Some(actual_quantity) = grouped_quantities.get(&component.component_slug) else {
+                is_exact_match = false;
+                break;
+            };
+
+            if *actual_quantity <= 0 || actual_quantity % component.quantity_in_set != 0 {
+                is_exact_match = false;
+                break;
+            }
+
+            let candidate_set_quantity = actual_quantity / component.quantity_in_set;
+            if candidate_set_quantity <= 0 {
+                is_exact_match = false;
+                break;
+            }
+
+            matched_set_quantity = match matched_set_quantity {
+                Some(existing) if existing != candidate_set_quantity => {
+                    is_exact_match = false;
+                    break;
+                }
+                Some(existing) => Some(existing),
+                None => Some(candidate_set_quantity),
+            };
+        }
+
+        if is_exact_match {
+            return matched_set_quantity.map(|quantity| MatchedTradeSet {
+                slug: set_root.slug.clone(),
+                name: set_root.name.clone(),
+                image_path: set_root.image_path.clone(),
+                quantity,
+            });
+        }
+    }
+
+    None
+}
+
+fn collapse_grouped_trade_sets(
+    records: &[StoredTradeLogRecord],
+    set_definitions: &[(TradeSetRootRecord, Vec<TradeSetComponentRecord>)],
+) -> (Vec<StoredTradeLogRecord>, bool) {
+    let mut grouped_records = HashMap::<String, Vec<StoredTradeLogRecord>>::new();
+    for record in records {
+        if let Some(group_id) = &record.group_id {
+            grouped_records
+                .entry(group_id.clone())
+                .or_default()
+                .push(record.clone());
+        }
+    }
+
+    if grouped_records.is_empty() {
+        return (records.to_vec(), false);
+    }
+
+    let mut collapsed = Vec::with_capacity(records.len());
+    let mut seen_group_ids = HashMap::<String, bool>::new();
+    let mut changed = false;
+
+    for record in records {
+        let Some(group_id) = &record.group_id else {
+            collapsed.push(record.clone());
+            continue;
+        };
+
+        if seen_group_ids.contains_key(group_id) {
+            continue;
+        }
+        seen_group_ids.insert(group_id.clone(), true);
+
+        let Some(group) = grouped_records.get(group_id) else {
+            continue;
+        };
+
+        let Some(matched_set) = match_grouped_trade_to_exact_set(group, set_definitions) else {
+            collapsed.extend(group.iter().cloned());
+            continue;
+        };
+
+        let total_platinum = group
+            .first()
+            .and_then(|entry| entry.group_total_platinum)
+            .unwrap_or_else(|| group.iter().map(record_total_platinum).sum::<i64>());
+        let average_unit_platinum = if matched_set.quantity > 0 {
+            (total_platinum + (matched_set.quantity / 2)) / matched_set.quantity
+        } else {
+            total_platinum
+        };
+
+        let duplicate_exists = records
+            .iter()
+            .filter(|candidate| candidate.group_id.as_deref() != Some(group_id.as_str()))
+            .any(|candidate| {
+                candidate.order_type == group[0].order_type
+                    && candidate.quantity == matched_set.quantity
+                    && candidate.slug == matched_set.slug
+                    && parse_timestamp(&candidate.closed_at)
+                        .map(|candidate_time| {
+                            parse_timestamp(&group[0].closed_at)
+                                .map(|group_time| {
+                                    (candidate_time - group_time)
+                                        .whole_seconds()
+                                        .abs()
+                                        <= TRADE_TIME_DUPLICATE_WINDOW_SECONDS
+                                })
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+            });
+
+        changed = true;
+        if duplicate_exists {
+            continue;
+        }
+
+        collapsed.push(StoredTradeLogRecord {
+            id: format!("af-set-{group_id}"),
+            item_name: matched_set.name,
+            slug: matched_set.slug,
+            image_path: matched_set.image_path,
+            order_type: group[0].order_type.clone(),
+            source: group[0].source.clone(),
+            platinum: average_unit_platinum,
+            quantity: matched_set.quantity,
+            rank: None,
+            closed_at: group[0].closed_at.clone(),
+            updated_at: group[0].updated_at.clone(),
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: Some(total_platinum),
+            group_sort_order: None,
+        });
+    }
+
+    (collapsed, changed)
+}
+
 fn build_alecaframe_trade_entries(
     app: &tauri::AppHandle,
     username: &str,
@@ -1976,6 +2152,43 @@ fn save_trade_log_rows_inner(
     Ok(last_updated_at)
 }
 
+fn replace_trade_log_rows_inner(
+    connection: &mut Connection,
+    username: &str,
+    entries: &[PortfolioTradeLogEntry],
+) -> Result<String> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to replace the trade log cache."));
+    }
+
+    connection
+        .execute(
+            "DELETE FROM portfolio_trade_log_cache WHERE username = ?1",
+            params![trimmed_username],
+        )
+        .context("failed to clear cached trade log rows for replacement")?;
+
+    let last_updated_at = save_trade_log_rows_inner(connection, trimmed_username, entries)?;
+
+    connection
+        .execute(
+            "
+            DELETE FROM portfolio_trade_log_overrides
+            WHERE username = ?1
+              AND order_id NOT IN (
+                SELECT order_id
+                FROM portfolio_trade_log_cache
+                WHERE username = ?1
+              )
+            ",
+            params![trimmed_username],
+        )
+        .context("failed to prune stale trade log overrides")?;
+
+    Ok(last_updated_at)
+}
+
 fn persist_derived_trade_log_entries_inner(
     connection: &mut Connection,
     username: &str,
@@ -2041,6 +2254,32 @@ fn record_total_platinum(record: &StoredTradeLogRecord) -> i64 {
     record
         .allocation_total_platinum
         .unwrap_or(record.platinum.saturating_mul(record.quantity))
+}
+
+fn build_portfolio_entry_from_stored_record(record: &StoredTradeLogRecord) -> PortfolioTradeLogEntry {
+    PortfolioTradeLogEntry {
+        id: record.id.clone(),
+        item_name: record.item_name.clone(),
+        slug: record.slug.clone(),
+        image_path: record.image_path.clone(),
+        order_type: record.order_type.clone(),
+        source: record.source.clone(),
+        platinum: record.platinum,
+        quantity: record.quantity,
+        rank: record.rank,
+        closed_at: record.closed_at.clone(),
+        updated_at: record.updated_at.clone(),
+        profit: None,
+        margin: None,
+        status: None,
+        keep_item: record.keep_item,
+        group_id: record.group_id.clone(),
+        group_label: record.group_label.clone(),
+        group_total_platinum: record.group_total_platinum,
+        group_item_count: record.group_item_count,
+        allocation_total_platinum: record.allocation_total_platinum,
+        group_sort_order: record.group_sort_order,
+    }
 }
 
 fn record_consumed_platinum(record: &StoredTradeLogRecord, quantity: i64) -> i64 {
@@ -2388,11 +2627,48 @@ fn load_cached_trade_log_state_inner(
     })
 }
 
+fn normalize_grouped_trade_sets_inner(
+    app: &tauri::AppHandle,
+    connection: &mut Connection,
+    username: &str,
+) -> Result<bool> {
+    let records = load_stored_trade_log_records_inner(connection, username)?;
+    if records.iter().all(|record| record.group_id.is_none()) {
+        return Ok(false);
+    }
+
+    let catalog = open_catalog_database(app)?;
+    let set_roots = list_trade_set_roots_from_catalog(&catalog)?;
+    let mut set_definitions = Vec::new();
+    for set_root in set_roots {
+        let components = load_trade_set_components_for_slug(app, &set_root.slug)?;
+        if components.is_empty() {
+            continue;
+        }
+
+        set_definitions.push((set_root, components));
+    }
+
+    let (collapsed_records, changed) = collapse_grouped_trade_sets(&records, &set_definitions);
+    if !changed {
+        return Ok(false);
+    }
+
+    let collapsed_entries = collapsed_records
+        .iter()
+        .map(build_portfolio_entry_from_stored_record)
+        .collect::<Vec<_>>();
+    replace_trade_log_rows_inner(connection, username, &collapsed_entries)?;
+
+    Ok(true)
+}
+
 fn reconcile_trade_log_state_inner(
     app: &tauri::AppHandle,
     connection: &mut Connection,
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
+    let _ = normalize_grouped_trade_sets_inner(app, connection, username)?;
     let records = load_stored_trade_log_records_inner(connection, username)?;
     let entries = derive_trade_log_entries(app, &records);
     persist_derived_trade_log_entries_inner(connection, username, &entries)?;
@@ -2575,6 +2851,20 @@ fn update_trade_group_allocations_inner(
         .commit()
         .context("failed to commit grouped trade allocation transaction")?;
 
+    reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
+}
+
+fn force_trade_log_resync_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+) -> Result<PortfolioTradeLogState> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to resync the trade log."));
+    }
+
+    let mut connection = open_trades_cache_database(app)?;
+    let _ = normalize_grouped_trade_sets_inner(app, &mut connection, trimmed_username)?;
     reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
 }
 
@@ -3224,6 +3514,19 @@ pub async fn update_trade_group_allocations(
 }
 
 #[tauri::command]
+pub async fn force_wfm_trade_log_resync(
+    app: tauri::AppHandle,
+    username: String,
+) -> Result<PortfolioTradeLogState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        force_trade_log_resync_inner(&app, username.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn ensure_trade_set_map(
     app: tauri::AppHandle,
     api_version: Option<String>,
@@ -3296,12 +3599,13 @@ pub async fn delete_wfm_sell_order(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trade_log_entries_from_statistics, derive_trade_log_entries_with_components,
+        build_trade_log_entries_from_statistics, collapse_grouped_trade_sets,
+        derive_trade_log_entries_with_components,
         initialize_trades_cache_schema, load_stored_trade_log_records_inner,
         load_trade_log_last_updated_at, normalize_alecaframe_trade_payload, normalize_avatar_url,
         parse_status_from_payload, save_trade_log_rows_inner, AlecaframeRawTradeRecord,
         AlecaframeTradeItemRecord, AlecaframeTradeResponse, PortfolioTradeLogEntry, StoredTradeLogRecord,
-        TradeSetComponentRecord, WfmProfileClosedOrder,
+        TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
     };
     use rusqlite::Connection;
@@ -3639,5 +3943,132 @@ mod tests {
             let buy_entry = derived.iter().find(|entry| entry.id == buy_id).expect("buy entry");
             assert_eq!(buy_entry.status.as_deref(), Some("Sold As Set"));
         }
+    }
+
+    #[test]
+    fn collapses_grouped_component_rows_into_exact_set_row() {
+        let records = vec![
+            StoredTradeLogRecord {
+                id: "child-1".to_string(),
+                item_name: "Wisp Prime Chassis Blueprint".to_string(),
+                slug: "wisp_prime_chassis_blueprint".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                source: "alecaframe".to_string(),
+                platinum: 23,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                keep_item: false,
+                group_id: Some("group-1".to_string()),
+                group_label: Some("Multiple Item Trade".to_string()),
+                group_total_platinum: Some(68),
+                group_item_count: Some(4),
+                allocation_total_platinum: Some(23),
+                group_sort_order: Some(0),
+            },
+            StoredTradeLogRecord {
+                id: "child-2".to_string(),
+                item_name: "Wisp Prime Neuroptics Blueprint".to_string(),
+                slug: "wisp_prime_neuroptics_blueprint".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                source: "alecaframe".to_string(),
+                platinum: 15,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                keep_item: false,
+                group_id: Some("group-1".to_string()),
+                group_label: Some("Multiple Item Trade".to_string()),
+                group_total_platinum: Some(68),
+                group_item_count: Some(4),
+                allocation_total_platinum: Some(15),
+                group_sort_order: Some(1),
+            },
+            StoredTradeLogRecord {
+                id: "child-3".to_string(),
+                item_name: "Wisp Prime Systems Blueprint".to_string(),
+                slug: "wisp_prime_systems_blueprint".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                source: "alecaframe".to_string(),
+                platinum: 15,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                keep_item: false,
+                group_id: Some("group-1".to_string()),
+                group_label: Some("Multiple Item Trade".to_string()),
+                group_total_platinum: Some(68),
+                group_item_count: Some(4),
+                allocation_total_platinum: Some(15),
+                group_sort_order: Some(2),
+            },
+            StoredTradeLogRecord {
+                id: "child-4".to_string(),
+                item_name: "Wisp Prime Blueprint".to_string(),
+                slug: "wisp_prime_blueprint".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                source: "alecaframe".to_string(),
+                platinum: 15,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                keep_item: false,
+                group_id: Some("group-1".to_string()),
+                group_label: Some("Multiple Item Trade".to_string()),
+                group_total_platinum: Some(68),
+                group_item_count: Some(4),
+                allocation_total_platinum: Some(15),
+                group_sort_order: Some(3),
+            },
+        ];
+
+        let (collapsed, changed) = collapse_grouped_trade_sets(
+            &records,
+            &[(
+                TradeSetRootRecord {
+                    slug: "wisp_prime_set".to_string(),
+                    name: "Wisp Prime Set".to_string(),
+                    image_path: None,
+                },
+                vec![
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_blueprint".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_chassis_blueprint".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_neuroptics_blueprint".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_systems_blueprint".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                ],
+            )],
+        );
+
+        assert!(changed);
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed[0].slug, "wisp_prime_set");
+        assert_eq!(collapsed[0].item_name, "Wisp Prime Set");
+        assert_eq!(collapsed[0].quantity, 1);
+        assert_eq!(collapsed[0].allocation_total_platinum, Some(68));
+        assert!(collapsed[0].group_id.is_none());
     }
 }
