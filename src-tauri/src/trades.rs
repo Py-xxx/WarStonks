@@ -1,3 +1,4 @@
+use crate::market_observatory::{apply_owned_set_component_deltas, OwnedSetComponentDelta};
 use crate::settings::{
     load_settings_for_internal_use, send_trade_detected_discord_notification_inner,
     DiscordTradeDetectedNotificationInput, DiscordTradeNotificationItem,
@@ -1205,6 +1206,61 @@ fn resolve_catalog_trade_item_by_alias(
     }
 
     Ok(None)
+}
+
+fn resolve_catalog_trade_item_by_slug(
+    connection: &Connection,
+    slug: &str,
+) -> Result<Option<CatalogTradeItemMeta>> {
+    let trimmed = slug.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    connection
+        .query_row(
+            "
+            SELECT
+              items.item_id,
+              COALESCE(items.wfm_id, wfm_items.wfm_id, ''),
+              COALESCE(items.wfm_slug, wfm_items.slug, ''),
+              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
+              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
+              wfm_items.max_rank
+            FROM items
+            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
+            WHERE COALESCE(items.wfm_slug, wfm_items.slug) = ?2
+            LIMIT 1
+            ",
+            params![trimmed, trimmed],
+            |row| {
+                Ok(CatalogTradeItemMeta {
+                    item_id: row.get(0)?,
+                    wfm_id: row.get(1)?,
+                    slug: row.get(2)?,
+                    name: row.get(3)?,
+                    image_path: row.get(4)?,
+                    max_rank: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .context("failed to resolve catalog item by slug")
+}
+
+fn observatory_contains_set_component_slug(connection: &Connection, slug: &str) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT 1
+             FROM set_component_cache
+             WHERE component_slug = ?1
+             LIMIT 1",
+            params![slug],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .context("failed to check observatory set component membership")
 }
 
 fn fetch_alecaframe_trade_payload(app: &tauri::AppHandle) -> Result<AlecaframeTradeResponse> {
@@ -2905,6 +2961,140 @@ fn build_portfolio_entry_from_stored_record(
     }
 }
 
+fn build_stored_trade_record_from_entry(entry: &PortfolioTradeLogEntry) -> StoredTradeLogRecord {
+    StoredTradeLogRecord {
+        id: entry.id.clone(),
+        item_name: entry.item_name.clone(),
+        slug: entry.slug.clone(),
+        image_path: entry.image_path.clone(),
+        order_type: entry.order_type.clone(),
+        source: entry.source.clone(),
+        platinum: entry.platinum,
+        quantity: entry.quantity,
+        rank: entry.rank,
+        closed_at: entry.closed_at.clone(),
+        updated_at: entry.updated_at.clone(),
+        keep_item: entry.keep_item,
+        group_id: entry.group_id.clone(),
+        group_label: entry.group_label.clone(),
+        group_total_platinum: entry.group_total_platinum,
+        group_item_count: entry.group_item_count,
+        allocation_total_platinum: entry.allocation_total_platinum,
+        group_sort_order: entry.group_sort_order,
+    }
+}
+
+fn load_trade_set_definitions(
+    app: &tauri::AppHandle,
+) -> Result<Vec<(TradeSetRootRecord, Vec<TradeSetComponentRecord>)>> {
+    let catalog = open_catalog_database(app)?;
+    let set_roots = list_trade_set_roots_from_catalog(&catalog)?;
+    let mut set_definitions = Vec::new();
+    for set_root in set_roots {
+        let components = load_trade_set_components_for_slug(app, &set_root.slug)?;
+        if components.is_empty() {
+            continue;
+        }
+
+        set_definitions.push((set_root, components));
+    }
+
+    Ok(set_definitions)
+}
+
+fn normalize_trade_entries_for_owned_component_sync(
+    app: &tauri::AppHandle,
+    entries: &[PortfolioTradeLogEntry],
+) -> Result<Vec<StoredTradeLogRecord>> {
+    let records = entries
+        .iter()
+        .map(build_stored_trade_record_from_entry)
+        .collect::<Vec<_>>();
+    if records.iter().all(|record| record.group_id.is_none()) {
+        return Ok(records);
+    }
+
+    let set_definitions = load_trade_set_definitions(app)?;
+    Ok(collapse_grouped_trade_sets(&records, &set_definitions).0)
+}
+
+fn build_owned_set_component_deltas_for_entries(
+    app: &tauri::AppHandle,
+    entries: &[PortfolioTradeLogEntry],
+    source: &str,
+) -> Result<Vec<OwnedSetComponentDelta>> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let normalized_records = normalize_trade_entries_for_owned_component_sync(app, entries)?;
+    let catalog = open_catalog_database(app)?;
+    let observatory = open_market_observatory_database(app)?;
+    let mut deltas = Vec::new();
+
+    for record in normalized_records {
+        let direction = match record.order_type.as_str() {
+            "buy" => 1_i64,
+            "sell" => -1_i64,
+            _ => continue,
+        };
+        let trade_quantity = record.quantity.max(1);
+
+        if record.slug.ends_with("_set") {
+            let components = load_trade_set_components_for_slug(app, &record.slug)?;
+            for component in components {
+                let Some(meta) =
+                    resolve_catalog_trade_item_by_slug(&catalog, &component.component_slug)?
+                else {
+                    continue;
+                };
+                let quantity_delta = direction
+                    .saturating_mul(trade_quantity)
+                    .saturating_mul(component.quantity_in_set.max(1));
+                if quantity_delta == 0 {
+                    continue;
+                }
+
+                deltas.push(OwnedSetComponentDelta {
+                    sync_key: format!(
+                        "trade-owned:{source}:{}:{}",
+                        record.id, component.component_slug
+                    ),
+                    item_id: meta.item_id,
+                    slug: meta.slug,
+                    name: meta.name,
+                    image_path: meta.image_path,
+                    quantity_delta,
+                });
+            }
+            continue;
+        }
+
+        if !observatory_contains_set_component_slug(&observatory, &record.slug)? {
+            continue;
+        }
+
+        let Some(meta) = resolve_catalog_trade_item_by_slug(&catalog, &record.slug)? else {
+            continue;
+        };
+        let quantity_delta = direction.saturating_mul(trade_quantity);
+        if quantity_delta == 0 {
+            continue;
+        }
+
+        deltas.push(OwnedSetComponentDelta {
+            sync_key: format!("trade-owned:{source}:{}:{}", record.id, record.slug),
+            item_id: meta.item_id,
+            slug: meta.slug,
+            name: meta.name,
+            image_path: meta.image_path,
+            quantity_delta,
+        });
+    }
+
+    Ok(deltas)
+}
+
 fn record_consumed_platinum(record: &StoredTradeLogRecord, quantity: i64) -> i64 {
     let normalized_quantity = quantity.max(0);
     if normalized_quantity <= 0 {
@@ -3597,6 +3787,9 @@ fn refresh_wfm_trade_detection_inner(
     let last_updated_at =
         save_trade_log_rows_inner(&mut connection, trimmed_username, &persisted_entries)?;
     let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+    let owned_part_deltas =
+        build_owned_set_component_deltas_for_entries(app, &new_entries, "wfm-detect")?;
+    apply_owned_set_component_deltas(app, &owned_part_deltas)?;
     let notification_count = send_trade_notification_candidates_inner(
         app,
         &connection,
@@ -3672,6 +3865,9 @@ fn refresh_alecaframe_trade_detection_inner(
 
     let last_updated_at = save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
     let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+    let owned_part_deltas =
+        build_owned_set_component_deltas_for_entries(app, &imported, "alecaframe-detect")?;
+    apply_owned_set_component_deltas(app, &owned_part_deltas)?;
     let notification_count = send_trade_notification_candidates_inner(
         app,
         &connection,

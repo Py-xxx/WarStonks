@@ -678,6 +678,16 @@ pub struct SetCompletionOwnedItem {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct OwnedSetComponentDelta {
+    pub sync_key: String,
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub quantity_delta: i64,
+}
+
 struct ArbitrageScannerRunOutcome {
     response: ArbitrageScannerResponse,
     was_stopped: bool,
@@ -969,7 +979,7 @@ fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
     .context("failed to open the local item catalog")
 }
 
-fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
+pub(crate) fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
     let db_path = resolve_market_observatory_db_path(app)?;
     if let Some(parent_dir) = db_path.parent() {
         std::fs::create_dir_all(parent_dir).context("failed to create app data directory")?;
@@ -1098,6 +1108,12 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_owned_set_components_name
           ON owned_set_components (component_name COLLATE NOCASE ASC);
+
+        CREATE TABLE IF NOT EXISTS owned_set_component_trade_sync (
+          sync_key TEXT PRIMARY KEY,
+          component_slug TEXT NOT NULL,
+          applied_at TEXT NOT NULL
+        );
 
         CREATE TABLE IF NOT EXISTS scanner_cache (
           scanner_key TEXT PRIMARY KEY,
@@ -5260,9 +5276,7 @@ fn persist_arbitrage_scanner_cache(
     Ok(())
 }
 
-fn load_set_completion_owned_items(
-    connection: &Connection,
-) -> Result<Vec<SetCompletionOwnedItem>> {
+fn load_set_completion_owned_items(connection: &Connection) -> Result<Vec<SetCompletionOwnedItem>> {
     let mut statement = connection.prepare(
         "SELECT component_item_id,
                 component_slug,
@@ -5337,6 +5351,120 @@ fn upsert_set_completion_owned_item(
     )?;
 
     load_set_completion_owned_items(connection)
+}
+
+fn apply_owned_set_component_deltas_inner(
+    connection: &mut Connection,
+    deltas: &[OwnedSetComponentDelta],
+) -> Result<()> {
+    if deltas.is_empty() {
+        return Ok(());
+    }
+
+    let transaction = connection
+        .transaction()
+        .context("failed to start owned set component sync transaction")?;
+    let applied_at = format_timestamp(now_utc())?;
+
+    for delta in deltas {
+        if delta.sync_key.trim().is_empty()
+            || delta.slug.trim().is_empty()
+            || delta.name.trim().is_empty()
+            || delta.quantity_delta == 0
+        {
+            continue;
+        }
+
+        let already_applied = transaction
+            .query_row(
+                "SELECT 1
+                 FROM owned_set_component_trade_sync
+                 WHERE sync_key = ?1
+                 LIMIT 1",
+                params![delta.sync_key.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if already_applied {
+            continue;
+        }
+
+        let current_quantity = transaction
+            .query_row(
+                "SELECT quantity
+                 FROM owned_set_components
+                 WHERE component_slug = ?1
+                 LIMIT 1",
+                params![delta.slug.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let next_quantity = (current_quantity + delta.quantity_delta).max(0);
+
+        if next_quantity == 0 {
+            transaction.execute(
+                "DELETE FROM owned_set_components
+                 WHERE component_slug = ?1",
+                params![delta.slug.as_str()],
+            )?;
+        } else {
+            transaction.execute(
+                "INSERT INTO owned_set_components (
+                   component_slug,
+                   component_item_id,
+                   component_name,
+                   component_image_path,
+                   quantity,
+                   updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(component_slug) DO UPDATE SET
+                   component_item_id = excluded.component_item_id,
+                   component_name = excluded.component_name,
+                   component_image_path = excluded.component_image_path,
+                   quantity = excluded.quantity,
+                   updated_at = excluded.updated_at",
+                params![
+                    delta.slug.as_str(),
+                    delta.item_id,
+                    delta.name.as_str(),
+                    delta.image_path.as_deref(),
+                    next_quantity,
+                    applied_at.as_str(),
+                ],
+            )?;
+        }
+
+        transaction.execute(
+            "INSERT INTO owned_set_component_trade_sync (
+               sync_key,
+               component_slug,
+               applied_at
+             ) VALUES (?1, ?2, ?3)",
+            params![
+                delta.sync_key.as_str(),
+                delta.slug.as_str(),
+                applied_at.as_str()
+            ],
+        )?;
+    }
+
+    transaction
+        .commit()
+        .context("failed to commit owned set component sync transaction")
+}
+
+pub(crate) fn apply_owned_set_component_deltas(
+    app: &tauri::AppHandle,
+    deltas: &[OwnedSetComponentDelta],
+) -> Result<()> {
+    if deltas.is_empty() {
+        return Ok(());
+    }
+
+    let mut connection = open_market_observatory_database(app)?;
+    apply_owned_set_component_deltas_inner(&mut connection, deltas)
 }
 
 fn load_arbitrage_scanner_cache(
@@ -7836,6 +7964,41 @@ mod tests {
         .expect("remove owned item");
 
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn owned_set_component_trade_sync_applies_once() {
+        let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        let delta = super::OwnedSetComponentDelta {
+            sync_key: "trade-owned:wfm:abc:wisp_prime_chassis".to_string(),
+            item_id: Some(42),
+            slug: "wisp_prime_chassis".to_string(),
+            name: "Wisp Prime Chassis".to_string(),
+            image_path: Some("items/images/en/thumbs/wisp_prime_chassis.png".to_string()),
+            quantity_delta: 2,
+        };
+
+        super::apply_owned_set_component_deltas_inner(&mut connection, &[delta.clone()])
+            .expect("apply initial delta");
+        super::apply_owned_set_component_deltas_inner(&mut connection, &[delta])
+            .expect("ignore duplicate sync delta");
+
+        let items = super::load_set_completion_owned_items(&connection).expect("load items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].quantity, 2);
+
+        let sync_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM owned_set_component_trade_sync
+                 WHERE component_slug = 'wisp_prime_chassis'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count sync rows");
+        assert_eq!(sync_count, 1);
     }
 
     #[test]
