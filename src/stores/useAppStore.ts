@@ -10,6 +10,7 @@ import {
   getItemAnalysis,
   getCurrencyBalances,
   getItemVariantsForMarket,
+  getWfmTradeOverview,
   getWfmItemOrders,
   updateWfmBuyOrder,
   getWfmTopSellOrdersForVariant,
@@ -138,6 +139,25 @@ const defaultWalletSnapshot: WalletSnapshot = {
   errorMessage: null,
 };
 
+const WATCHLIST_STORAGE_KEY = 'warstonks.watchlist.v1';
+
+interface PersistedWatchlistState {
+  watchlist: Array<{
+    itemId: number;
+    name: string;
+    displayName: string;
+    slug: string;
+    variantKey: string;
+    variantLabel: string;
+    imagePath: string | null;
+    itemFamily: string | null;
+    targetPrice: number;
+    ignoredUserKeys: string[];
+    linkedBuyOrderId: string | null;
+  }>;
+  selectedWatchlistId: string | null;
+}
+
 interface WatchlistRefreshResult {
   alertTriggered: boolean;
 }
@@ -154,6 +174,61 @@ function buildMarketAnalysisCacheKey(
   sellerMode: SellerMode,
 ): string {
   return `${itemId}:${variantKey}:${sellerMode}`;
+}
+
+function readPersistedWatchlistState(): PersistedWatchlistState {
+  if (typeof window === 'undefined') {
+    return { watchlist: [], selectedWatchlistId: null };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WATCHLIST_STORAGE_KEY);
+    if (!raw) {
+      return { watchlist: [], selectedWatchlistId: null };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<PersistedWatchlistState>;
+    return {
+      watchlist: Array.isArray(parsed.watchlist) ? parsed.watchlist : [],
+      selectedWatchlistId:
+        typeof parsed.selectedWatchlistId === 'string' ? parsed.selectedWatchlistId : null,
+    };
+  } catch (error) {
+    console.error('[watchlist] failed to read persisted state', error);
+    return { watchlist: [], selectedWatchlistId: null };
+  }
+}
+
+function writePersistedWatchlistState(
+  watchlist: WatchlistItem[],
+  selectedWatchlistId: string | null,
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const nextState: PersistedWatchlistState = {
+    watchlist: watchlist.map((item) => ({
+      itemId: item.itemId,
+      name: item.name,
+      displayName: item.displayName,
+      slug: item.slug,
+      variantKey: item.variantKey,
+      variantLabel: item.variantLabel,
+      imagePath: item.imagePath,
+      itemFamily: item.itemFamily,
+      targetPrice: item.targetPrice,
+      ignoredUserKeys: item.ignoredUserKeys,
+      linkedBuyOrderId: item.linkedBuyOrderId,
+    })),
+    selectedWatchlistId,
+  };
+
+  try {
+    window.localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(nextState));
+  } catch (error) {
+    console.error('[watchlist] failed to persist state', error);
+  }
 }
 
 function extractQuickViewSparklinePoints(chartPoints: Awaited<ReturnType<typeof getItemAnalytics>>['chartPoints']): number[] {
@@ -454,6 +529,99 @@ function createWatchlistItem(
     linkedBuyOrderId,
   };
 }
+
+function restorePersistedWatchlistItems(entries: PersistedWatchlistState['watchlist']): WatchlistItem[] {
+  const currentCount = Math.max(entries.length, 1);
+  return entries.map((entry) =>
+    createWatchlistItem(
+      {
+        itemId: entry.itemId,
+        wfmId: null,
+        name: entry.name,
+        slug: entry.slug,
+        maxRank: deriveVariantRankFromKey(entry.variantKey),
+        itemFamily: entry.itemFamily,
+        imagePath: entry.imagePath,
+      },
+      entry.variantKey,
+      entry.variantLabel,
+      entry.targetPrice,
+      null,
+      currentCount,
+      entry.ignoredUserKeys,
+      entry.linkedBuyOrderId,
+    ),
+  );
+}
+
+function createWatchlistItemFromTradeBuyOrder(
+  order: Awaited<ReturnType<typeof getWfmTradeOverview>>['buyOrders'][number],
+  currentCount: number,
+): WatchlistItem | null {
+  if (order.itemId === null) {
+    return null;
+  }
+
+  const variantKey = order.rank === null ? 'base' : `rank:${order.rank}`;
+  const variantLabel = order.rank === null ? 'Base Market' : `Rank ${order.rank}`;
+  return createWatchlistItem(
+    {
+      itemId: order.itemId,
+      wfmId: order.wfmId,
+      name: order.name,
+      slug: order.slug,
+      maxRank: order.maxRank,
+      itemFamily: null,
+      imagePath: order.imagePath,
+    },
+    variantKey,
+    variantLabel,
+    order.yourPrice,
+    null,
+    currentCount,
+    [],
+    order.orderId,
+  );
+}
+
+function mergeWatchlistWithTradeBuyOrders(
+  existingWatchlist: WatchlistItem[],
+  buyOrders: Awaited<ReturnType<typeof getWfmTradeOverview>>['buyOrders'],
+): WatchlistItem[] {
+  let nextWatchlist = [...existingWatchlist];
+
+  for (const order of buyOrders) {
+    const variantKey = order.rank === null ? 'base' : `rank:${order.rank}`;
+    const existingIndex = nextWatchlist.findIndex(
+      (item) => item.slug === order.slug && item.variantKey === variantKey,
+    );
+
+    if (existingIndex >= 0) {
+      nextWatchlist[existingIndex] = {
+        ...nextWatchlist[existingIndex],
+        targetPrice: order.yourPrice,
+        linkedBuyOrderId: order.orderId,
+        imagePath: order.imagePath ?? nextWatchlist[existingIndex].imagePath,
+      };
+      continue;
+    }
+
+    const nextItem = createWatchlistItemFromTradeBuyOrder(order, nextWatchlist.length + 1);
+    if (nextItem) {
+      nextWatchlist = [...nextWatchlist, nextItem];
+    }
+  }
+
+  return nextWatchlist;
+}
+
+const persistedWatchlistState = readPersistedWatchlistState();
+const restoredWatchlist = restorePersistedWatchlistItems(persistedWatchlistState.watchlist);
+const restoredSelectedWatchlistId =
+  persistedWatchlistState.selectedWatchlistId
+  && restoredWatchlist.some((item) => item.id === persistedWatchlistState.selectedWatchlistId)
+    ? persistedWatchlistState.selectedWatchlistId
+    : restoredWatchlist[0]?.id ?? null;
 
 function buildWatchlistUpdateState(
   currentState: AppStore,
@@ -1600,14 +1768,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
   autoProfile: false,
   toggleAutoProfile: () => set((s) => ({ autoProfile: !s.autoProfile })),
 
-  watchlist: [],
+  watchlist: restoredWatchlist,
   alerts: [],
   systemAlerts: [],
   worldStateSystemAlertDismissed: false,
-  selectedWatchlistId: null,
+  selectedWatchlistId: restoredSelectedWatchlistId,
   watchlistTargetInput: '',
   watchlistFormError: null,
-  setSelectedWatchlist: (id) => set({ selectedWatchlistId: id }),
+  setSelectedWatchlist: (id) => {
+    set({ selectedWatchlistId: id });
+    writePersistedWatchlistState(get().watchlist, id);
+  },
   setWatchlistTargetInput: (val) =>
     set({ watchlistTargetInput: val, watchlistFormError: null }),
   addSelectedQuickViewToWatchlist: () => {
@@ -1645,8 +1816,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       state.quickView.sellOrders,
       existingItem?.ignoredUserKeys ?? [],
     );
-    set((currentState) =>
-      buildWatchlistUpdateState(
+    set((currentState) => {
+      const nextState = buildWatchlistUpdateState(
         currentState,
         selectedItem,
         variantKey,
@@ -1654,8 +1825,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
         targetPrice,
         preferredOrder,
         existingItem?.linkedBuyOrderId ?? null,
-      ),
-    );
+      );
+      writePersistedWatchlistState(nextState.watchlist, nextState.selectedWatchlistId);
+      return nextState;
+    });
 
     void ensureMarketTracking(
       selectedItem.itemId,
@@ -1678,13 +1851,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
         existingItem?.linkedBuyOrderId ?? null,
       )
         .then((linkedBuyOrderId) => {
-          set((currentState) => ({
-            watchlist: currentState.watchlist.map((entry) =>
+          set((currentState) => {
+            const nextWatchlist = currentState.watchlist.map((entry) =>
               entry.id === `${buildWatchlistId(selectedItem)}:${variantKey}`
                 ? { ...entry, linkedBuyOrderId }
                 : entry,
-            ),
-          }));
+            );
+            writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
+            return { watchlist: nextWatchlist };
+          });
         })
         .catch((error) => {
           console.error('[watchlist] failed to sync buy order', error);
@@ -1701,8 +1876,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     void getWfmTopSellOrdersForVariant(item.slug, variantKey, get().sellerMode)
       .then((response) => {
         const preferredOrder = selectPreferredWatchlistOrder(response.sellOrders, []);
-        set((currentState) =>
-          buildWatchlistUpdateState(
+        set((currentState) => {
+          const nextState = buildWatchlistUpdateState(
             currentState,
             item,
             variantKey,
@@ -1712,8 +1887,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
             currentState.watchlist.find(
               (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
             )?.linkedBuyOrderId ?? null,
-          ),
-        );
+          );
+          writePersistedWatchlistState(nextState.watchlist, nextState.selectedWatchlistId);
+          return nextState;
+        });
         const latestState = get();
         const existingItem = latestState.watchlist.find(
           (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
@@ -1735,13 +1912,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
                 latestState.sellerMode,
                 existingItem?.linkedBuyOrderId ?? null,
               ).then((linkedBuyOrderId) => {
-                set((currentState) => ({
-                  watchlist: currentState.watchlist.map((entry) =>
+                set((currentState) => {
+                  const nextWatchlist = currentState.watchlist.map((entry) =>
                     entry.id === `${buildWatchlistId(item)}:${variantKey}`
                       ? { ...entry, linkedBuyOrderId }
                       : entry,
-                  ),
-                }));
+                  );
+                  writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
+                  return { watchlist: nextWatchlist };
+                });
               })
             : Promise.resolve();
 
@@ -1771,15 +1950,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
     }
 
-    set((currentState) => ({
-      watchlist: currentState.watchlist.filter((item) => item.id !== id),
-      alerts: currentState.alerts.filter((alert) => alert.watchlistId !== id),
-      selectedWatchlistId:
+    set((currentState) => {
+      const nextWatchlist = currentState.watchlist.filter((item) => item.id !== id);
+      const nextSelectedWatchlistId =
         currentState.selectedWatchlistId === id
-          ? currentState.watchlist.find((item) => item.id !== id)?.id ?? null
-          : currentState.selectedWatchlistId,
-      watchlistFormError: null,
-    }));
+          ? nextWatchlist[0]?.id ?? null
+          : currentState.selectedWatchlistId;
+      writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
+      return {
+        watchlist: nextWatchlist,
+        alerts: currentState.alerts.filter((alert) => alert.watchlistId !== id),
+        selectedWatchlistId: nextSelectedWatchlistId,
+        watchlistFormError: null,
+      };
+    });
   },
   markWatchlistItemBought: async (id, price) => {
     const state = get();
@@ -1809,11 +1993,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
 
       await closeWfmBuyOrder(item.linkedBuyOrderId, 1, state.sellerMode);
-      set((currentState) => ({
-        watchlist: currentState.watchlist.map((entry) =>
+      set((currentState) => {
+        const nextWatchlist = currentState.watchlist.map((entry) =>
           entry.id === id ? { ...entry, linkedBuyOrderId: null } : entry,
-        ),
-      }));
+        );
+        writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
+        return { watchlist: nextWatchlist };
+      });
     }
 
     get().removeWatchlistItem(id);
@@ -1835,7 +2021,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
       return {
         alerts: state.alerts.filter((entry) => entry.id !== id),
-        watchlist: state.watchlist.map((item) =>
+        watchlist: (() => {
+          const nextWatchlist = state.watchlist.map((item) =>
           item.id === alert.watchlistId
             ? {
                 ...item,
@@ -1846,7 +2033,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
                 lastError: null,
               }
             : item,
-        ),
+          );
+          writePersistedWatchlistState(nextWatchlist, state.selectedWatchlistId);
+          return nextWatchlist;
+        })(),
       };
     }),
   dismissSystemAlert: (id) =>
@@ -2387,8 +2577,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     try {
       const sessionState = await getWfmTradeSessionState();
+      let nextWatchlist = get().watchlist;
+      let nextSelectedWatchlistId = get().selectedWatchlistId;
+
+      if (sessionState.account) {
+        try {
+          const overview = await getWfmTradeOverview(get().sellerMode);
+          nextWatchlist = mergeWatchlistWithTradeBuyOrders(nextWatchlist, overview.buyOrders);
+          if (!nextSelectedWatchlistId || !nextWatchlist.some((item) => item.id === nextSelectedWatchlistId)) {
+            nextSelectedWatchlistId = nextWatchlist[0]?.id ?? null;
+          }
+          writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
+        } catch (error) {
+          console.error('[watchlist] failed to hydrate from active buy orders', error);
+        }
+      }
+
       set({
         tradeAccount: sessionState.account,
+        watchlist: nextWatchlist,
+        selectedWatchlistId: nextSelectedWatchlistId,
         tradeAccountLoading: false,
         tradeAccountError: null,
       });
@@ -2405,8 +2613,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     try {
       const sessionState = await signInWfmTradeAccount(input);
+      let nextWatchlist = get().watchlist;
+      let nextSelectedWatchlistId = get().selectedWatchlistId;
+
+      if (sessionState.account) {
+        try {
+          const overview = await getWfmTradeOverview(get().sellerMode);
+          nextWatchlist = mergeWatchlistWithTradeBuyOrders(nextWatchlist, overview.buyOrders);
+          if (!nextSelectedWatchlistId || !nextWatchlist.some((item) => item.id === nextSelectedWatchlistId)) {
+            nextSelectedWatchlistId = nextWatchlist[0]?.id ?? null;
+          }
+          writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
+        } catch (error) {
+          console.error('[watchlist] failed to hydrate from active buy orders', error);
+        }
+      }
+
       set({
         tradeAccount: sessionState.account,
+        watchlist: nextWatchlist,
+        selectedWatchlistId: nextSelectedWatchlistId,
         tradeAccountLoading: false,
         tradeAccountError: null,
         activePage: 'trades',
