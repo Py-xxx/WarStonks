@@ -1,4 +1,6 @@
-use crate::market_observatory::{apply_owned_set_component_deltas, OwnedSetComponentDelta};
+use crate::market_observatory::{
+    apply_owned_set_component_deltas, replace_owned_set_component_deltas, OwnedSetComponentDelta,
+};
 use crate::settings::{
     load_settings_for_internal_use, send_trade_detected_discord_notification_inner,
     DiscordTradeDetectedNotificationInput, DiscordTradeNotificationItem,
@@ -3033,6 +3035,10 @@ fn build_owned_set_component_deltas_for_entries(
     let mut deltas = Vec::new();
 
     for record in normalized_records {
+        if record.order_type == "buy" && record.keep_item {
+            continue;
+        }
+
         let direction = match record.order_type.as_str() {
             "buy" => 1_i64,
             "sell" => -1_i64,
@@ -3282,7 +3288,7 @@ where
 
         let revenue = record_total_platinum(record);
         let profit = revenue - matched_cost;
-        let margin = if matched_cost > 0 && matched_quantity == record.quantity {
+        let margin = if matched_cost > 0 {
             Some(((profit as f64) / (matched_cost as f64)) * 100.0)
         } else {
             None
@@ -3564,7 +3570,11 @@ fn set_trade_log_keep_item_inner(
         )
         .context("failed to update trade log keep override")?;
 
-    reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
+    let next_state = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+    let owned_part_deltas =
+        build_owned_set_component_deltas_for_entries(app, &next_state.entries, "trade-log")?;
+    replace_owned_set_component_deltas(app, &owned_part_deltas)?;
+    Ok(next_state)
 }
 
 fn migrate_alecaframe_trade_log_inner(
@@ -5773,6 +5783,84 @@ mod tests {
         assert_eq!(collapsed[0].quantity, 1);
         assert_eq!(collapsed[0].allocation_total_platinum, Some(68));
         assert!(collapsed[0].group_id.is_none());
+    }
+
+    #[test]
+    fn computes_margin_for_partial_sold_as_set_cost_basis() {
+        let records = vec![
+            StoredTradeLogRecord {
+                id: "buy-chassis".to_string(),
+                item_name: "Wisp Prime Chassis".to_string(),
+                slug: "wisp_prime_chassis".to_string(),
+                image_path: None,
+                order_type: "buy".to_string(),
+                source: "wfm".to_string(),
+                platinum: 25,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T08:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T08:00:00.000+00:00".to_string(),
+                keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
+            },
+            StoredTradeLogRecord {
+                id: "sell-set".to_string(),
+                item_name: "Wisp Prime Set".to_string(),
+                slug: "wisp_prime_set".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                source: "wfm".to_string(),
+                platinum: 100,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
+                keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
+            },
+        ];
+
+        let derived = derive_trade_log_entries_with_components(&records, |slug| {
+            if slug == "wisp_prime_set" {
+                vec![
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_chassis".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                    TradeSetComponentRecord {
+                        component_slug: "wisp_prime_systems".to_string(),
+                        quantity_in_set: 1,
+                        fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                    },
+                ]
+            } else {
+                Vec::new()
+            }
+        });
+
+        let sell_entry = derived
+            .iter()
+            .find(|entry| entry.id == "sell-set")
+            .expect("sell entry");
+        assert_eq!(sell_entry.profit, Some(75));
+        assert_eq!(sell_entry.margin, Some(300.0));
+
+        let buy_entry = derived
+            .iter()
+            .find(|entry| entry.id == "buy-chassis")
+            .expect("buy entry");
+        assert_eq!(buy_entry.status.as_deref(), Some("Sold As Set"));
     }
 
     #[test]
