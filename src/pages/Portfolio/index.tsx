@@ -21,6 +21,8 @@ const RefreshIcon = () => (
   </svg>
 );
 
+const PORTFOLIO_TOOLTIP_TOP_CLEARANCE_PX = 120;
+
 function InfoHint({ text }: { text: string }) {
   const hintRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
@@ -34,7 +36,10 @@ function InfoHint({ text }: { text: string }) {
     }
 
     const topClearance = hintRect.top;
-    const requiredClearance = tooltipRect.height + 20;
+    const requiredClearance = Math.max(
+      tooltipRect.height + 20,
+      PORTFOLIO_TOOLTIP_TOP_CLEARANCE_PX,
+    );
     setExpandDownward(topClearance < requiredClearance);
   };
 
