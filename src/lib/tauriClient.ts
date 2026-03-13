@@ -20,6 +20,7 @@ import type {
   MarketTrackingSource,
   MarketVariant,
   TradeCreateListingInput,
+  PortfolioPnlSummary,
   TradeOverview,
   PortfolioTradeLogState,
   TradeGroupAllocationInput,
@@ -260,6 +261,13 @@ export async function getCachedWfmProfileTradeLog(
   username: string,
 ): Promise<PortfolioTradeLogState> {
   return invoke<PortfolioTradeLogState>('get_cached_wfm_profile_trade_log', { username });
+}
+
+export async function getPortfolioPnlSummary(
+  username: string,
+  period: '7d' | '30d' | 'all',
+): Promise<PortfolioPnlSummary> {
+  return invoke<PortfolioPnlSummary>('get_portfolio_pnl_summary', { username, period });
 }
 
 export async function setWfmTradeLogKeepItem(

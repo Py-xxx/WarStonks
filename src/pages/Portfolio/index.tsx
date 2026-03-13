@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   forceWfmTradeLogResync,
   getCachedWfmProfileTradeLog,
+  getPortfolioPnlSummary,
   getWfmProfileTradeLog,
   migrateAlecaframeTradeLog,
   setWfmTradeLogKeepItem,
@@ -11,8 +12,7 @@ import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import type { PortfolioTradeLogEntry } from '../../types';
-import { mockPortfolioStats } from '../../mocks/portfolio';
+import type { PortfolioPnlSummary, PortfolioTradeLogEntry } from '../../types';
 
 const RefreshIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -21,44 +21,189 @@ const RefreshIcon = () => (
   </svg>
 );
 
-function CumulativeProfitChart() {
+function formatSignedPlatinumValue(value: number): string {
+  const prefix = value > 0 ? '+' : '';
+  return `${prefix}${formatPlatinumValue(value)}`;
+}
+
+function formatPercentValue(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) {
+    return '—';
+  }
+
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 1)}%`;
+}
+
+function formatHoursValue(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) {
+    return '—';
+  }
+
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 1)}h`;
+}
+
+function buildLineChartPoints(
+  values: number[],
+  width: number,
+  height: number,
+  padding: { top: number; right: number; bottom: number; left: number },
+) {
+  if (values.length === 0) {
+    return { polyline: '', area: '', guides: [0, 0, 0, 0] };
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(Math.abs(max - min), 1);
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+
+  const toPoint = (value: number, index: number) => {
+    const x = padding.left + (values.length === 1 ? innerWidth / 2 : (index / (values.length - 1)) * innerWidth);
+    const normalized = (value - min) / range;
+    const y = padding.top + innerHeight - normalized * innerHeight;
+    return `${x},${y}`;
+  };
+
+  const polyline = values.map((value, index) => toPoint(value, index)).join(' ');
+  const firstX = padding.left;
+  const lastX = padding.left + innerWidth;
+  const area = `${firstX},${height - padding.bottom} ${polyline} ${lastX},${height - padding.bottom}`;
+  const guides = Array.from({ length: 4 }, (_, index) => min + (range / 3) * index);
+
+  return { polyline, area, guides };
+}
+
+function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
+  const width = 420;
+  const height = 160;
+  const padding = { top: 14, right: 12, bottom: 26, left: 42 };
+  const values = summary.cumulativeProfitPoints.map((point) => point.cumulativeProfit);
+  const { polyline, area, guides } = buildLineChartPoints(values, width, height, padding);
+  const xLabels = summary.cumulativeProfitPoints.filter((_, index, points) => {
+    if (points.length <= 4) {
+      return true;
+    }
+    return index === 0 || index === points.length - 1 || index === Math.floor(points.length / 2);
+  });
+
   return (
     <div className="chart-card">
       <div className="chart-header">Cumulative Profit Curve</div>
-      <div className="chart-body" style={{ padding: 16, display: 'block', position: 'relative' }}>
-        <svg width="100%" height="130" viewBox="0 0 400 130" preserveAspectRatio="none">
-          <line x1="0" y1="0" x2="0" y2="110" stroke="var(--border)" strokeWidth="1"/>
-          <line x1="0" y1="110" x2="400" y2="110" stroke="var(--border)" strokeWidth="1"/>
-          <text x="5" y="15" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">60</text>
-          <text x="5" y="42" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">45</text>
-          <text x="5" y="69" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">30</text>
-          <text x="5" y="96" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">15</text>
-          <polyline points="20,75 120,55 200,50 280,30 380,12" fill="none" stroke="var(--accent-blue)" strokeWidth="2"/>
-          <polyline points="20,75 120,55 200,50 280,30 380,12 380,110 20,110" fill="rgba(74,158,255,0.06)" stroke="none"/>
-          <text x="20" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">2026-03-09</text>
-          <text x="320" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">2026-03-10</text>
-        </svg>
+      <div className="chart-body portfolio-chart-body">
+        {summary.cumulativeProfitPoints.length === 0 ? (
+          <div className="portfolio-chart-empty">No closed trades in this period yet.</div>
+        ) : (
+          <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+            {guides.map((guide, index) => {
+              const y =
+                padding.top +
+                ((guides.length - 1 - index) / (guides.length - 1)) *
+                  (height - padding.top - padding.bottom);
+              return (
+                <g key={`${guide}-${index}`}>
+                  <line
+                    x1={padding.left}
+                    y1={y}
+                    x2={width - padding.right}
+                    y2={y}
+                    stroke="rgba(255,255,255,0.07)"
+                    strokeWidth="1"
+                  />
+                  <text
+                    x="6"
+                    y={y + 3}
+                    fill="var(--text-muted)"
+                    fontSize="9"
+                    fontFamily="JetBrains Mono"
+                  >
+                    {Math.round(guide)}
+                  </text>
+                </g>
+              );
+            })}
+            <polygon points={area} fill="rgba(74, 158, 255, 0.12)" />
+            <polyline points={polyline} fill="none" stroke="var(--accent-blue)" strokeWidth="2" />
+            {xLabels.map((point) => {
+              const index = summary.cumulativeProfitPoints.findIndex((entry) => entry.bucketAt === point.bucketAt);
+              const x =
+                padding.left +
+                (summary.cumulativeProfitPoints.length === 1
+                  ? (width - padding.left - padding.right) / 2
+                  : (index / (summary.cumulativeProfitPoints.length - 1)) *
+                    (width - padding.left - padding.right));
+              return (
+                <text
+                  key={point.bucketAt}
+                  x={x}
+                  y={height - 8}
+                  textAnchor={index === 0 ? 'start' : index === summary.cumulativeProfitPoints.length - 1 ? 'end' : 'middle'}
+                  fill="var(--text-muted)"
+                  fontSize="9"
+                  fontFamily="JetBrains Mono"
+                >
+                  {point.label}
+                </text>
+              );
+            })}
+          </svg>
+        )}
       </div>
     </div>
   );
 }
 
-function ProfitPerTradeChart() {
+function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
+  const width = 320;
+  const height = 160;
+  const padding = { top: 16, right: 12, bottom: 28, left: 24 };
+  const points = summary.profitPerTradePoints;
+  const maxAbs = Math.max(...points.map((point) => Math.abs(point.profit)), 1);
+  const innerHeight = height - padding.top - padding.bottom;
+  const baseline = padding.top + innerHeight / 2;
+  const barWidth = points.length > 0 ? Math.max(12, (width - padding.left - padding.right) / points.length - 10) : 0;
+
   return (
     <div className="chart-card">
       <div className="chart-header">Profit Per Trade</div>
-      <div className="chart-body" style={{ padding: 16, display: 'block' }}>
-        <svg width="100%" height="130" viewBox="0 0 300 130" preserveAspectRatio="none">
-          <line x1="0" y1="110" x2="300" y2="110" stroke="var(--border)" strokeWidth="1"/>
-          <text x="2" y="15" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">36</text>
-          <text x="2" y="42" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">27</text>
-          <text x="2" y="69" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">18</text>
-          <text x="2" y="96" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">9</text>
-          <rect x="30" y="10" width="80" height="100" fill="rgba(61,214,140,0.5)" rx="2"/>
-          <rect x="160" y="40" width="80" height="70" fill="rgba(61,214,140,0.5)" rx="2"/>
-          <text x="50" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">Wisp Prime Set</text>
-          <text x="165" y="124" fill="var(--text-muted)" fontSize="9" fontFamily="JetBrains Mono">Wisp Prime Set</text>
-        </svg>
+      <div className="chart-body portfolio-chart-body">
+        {points.length === 0 ? (
+          <div className="portfolio-chart-empty">Profit bars will appear after your first completed sells.</div>
+        ) : (
+          <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+            <line
+              x1={padding.left}
+              y1={baseline}
+              x2={width - padding.right}
+              y2={baseline}
+              stroke="rgba(255,255,255,0.09)"
+              strokeWidth="1"
+            />
+            {points.map((point, index) => {
+              const x =
+                padding.left +
+                index * ((width - padding.left - padding.right) / Math.max(points.length, 1)) +
+                4;
+              const normalizedHeight = (Math.abs(point.profit) / maxAbs) * (innerHeight / 2 - 8);
+              const isPositive = point.profit >= 0;
+              const y = isPositive ? baseline - normalizedHeight : baseline;
+              return (
+                <g key={point.id}>
+                  <rect
+                    x={x}
+                    y={y}
+                    width={barWidth}
+                    height={Math.max(normalizedHeight, 2)}
+                    rx="3"
+                    fill={isPositive ? 'rgba(61,214,140,0.58)' : 'rgba(240,79,88,0.58)'}
+                  />
+                </g>
+              );
+            })}
+          </svg>
+        )}
       </div>
     </div>
   );
@@ -791,13 +936,288 @@ function TradeLogTab({ username }: { username: string | null }) {
   );
 }
 
+function PnlSummaryTab({
+  username,
+  period,
+  onRefreshTrades,
+}: {
+  username: string | null;
+  period: '7d' | '30d' | 'all';
+  onRefreshTrades: () => Promise<void>;
+}) {
+  const setTradePeriod = useAppStore((state) => state.setTradePeriod);
+  const [summary, setSummary] = useState<PortfolioPnlSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [refreshingTrades, setRefreshingTrades] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!username) {
+      setSummary(null);
+      setErrorMessage(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadSummary = async () => {
+      setLoading(true);
+      setErrorMessage(null);
+
+      try {
+        const nextSummary = await getPortfolioPnlSummary(username, period);
+        if (!cancelled) {
+          setSummary(nextSummary);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [period, username]);
+
+  const handleRefresh = async () => {
+    if (!username) {
+      return;
+    }
+
+    setRefreshingTrades(true);
+    setErrorMessage(null);
+
+    try {
+      await onRefreshTrades();
+      const nextSummary = await getPortfolioPnlSummary(username, period);
+      setSummary(nextSummary);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRefreshingTrades(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="period-bar">
+        <label>Period:</label>
+        {(['7d', '30d', 'all'] as const).map((nextPeriod) => (
+          <button
+            key={nextPeriod}
+            className={`period-btn${period === nextPeriod ? ' active' : ''}`}
+            onClick={() => setTradePeriod(nextPeriod)}
+          >
+            {nextPeriod === 'all' ? 'All Time' : nextPeriod}
+          </button>
+        ))}
+        <div className="period-right portfolio-log-toolbar">
+          {summary?.lastUpdatedAt ? (
+            <span className="portfolio-log-updated">
+              Last updated {formatShortLocalDateTime(summary.lastUpdatedAt)}
+            </span>
+          ) : null}
+          <button
+            className="act-btn portfolio-refresh-btn"
+            type="button"
+            onClick={() => void handleRefresh()}
+            disabled={loading || refreshingTrades || !username}
+          >
+            <RefreshIcon />
+            {refreshingTrades ? 'Refreshing…' : 'Refresh Trades'}
+          </button>
+        </div>
+      </div>
+
+      {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
+
+      {!username ? (
+        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
+          <span className="empty-primary">Connect your Warframe Market account first</span>
+          <span className="empty-sub">
+            P&amp;L Summary uses your permanent local trade ledger and cached market history.
+          </span>
+        </div>
+      ) : loading && !summary ? (
+        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
+          <span className="empty-primary">Loading portfolio summary…</span>
+          <span className="empty-sub">
+            Calculating realized profit, open exposure, and valuation from your local trade ledger.
+          </span>
+        </div>
+      ) : summary ? (
+        <>
+          <div className="plat-grid portfolio-summary-grid">
+            <div className="info-card">
+              <div className="info-card-label">Realized Profit</div>
+              <div className={`info-card-val${summary.realizedProfit >= 0 ? '' : ' negative'}`}>
+                {formatSignedPlatinumValue(summary.realizedProfit)}
+              </div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Unrealized Value</div>
+              <div className="info-card-val neutral">{formatPlatinumValue(summary.unrealizedValue)}</div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Total P&amp;L</div>
+              <div className={`info-card-val${summary.totalPnl >= 0 ? '' : ' negative'}`}>
+                {formatSignedPlatinumValue(summary.totalPnl)}
+              </div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Open Exposure</div>
+              <div className="info-card-val neutral">{formatPlatinumValue(summary.openExposure)}</div>
+            </div>
+          </div>
+
+          <div className="perf-grid portfolio-perf-grid">
+            <div className="perf-card">
+              <div className="perf-label">Closed Trades</div>
+              <div className="perf-val">{summary.closedTrades}</div>
+            </div>
+            <div className="perf-card">
+              <div className="perf-label">Win Rate</div>
+              <div className="perf-val blue">{formatPercentValue(summary.winRate)}</div>
+            </div>
+            <div className="perf-card">
+              <div className="perf-label">Avg Margin</div>
+              <div className="perf-val blue">{formatPercentValue(summary.averageMargin)}</div>
+            </div>
+            <div className="perf-card">
+              <div className="perf-label">Avg Hold</div>
+              <div className="perf-val">{formatHoursValue(summary.averageHoldHours)}</div>
+            </div>
+            <div className="perf-card">
+              <div className="perf-label">Avg Profit / Trade</div>
+              <div className="perf-val green">{formatPlatinumValue(Math.round(summary.averageProfitPerTrade))}</div>
+            </div>
+            <div className="perf-card">
+              <div className="perf-label">Flip Profit</div>
+              <div className="perf-val green">{formatPlatinumValue(summary.flipProfit)}</div>
+            </div>
+            <div className="perf-card">
+              <div className="perf-label">Set Profit</div>
+              <div className="perf-val green">{formatPlatinumValue(summary.soldAsSetProfit)}</div>
+            </div>
+            <div className="perf-card">
+              <div className="perf-label">Cost Basis Coverage</div>
+              <div className="perf-val">{formatPercentValue(summary.costBasisCoveragePct)}</div>
+            </div>
+          </div>
+
+          <div className="chart-grid portfolio-chart-grid">
+            <CumulativeProfitChart summary={summary} />
+            <ProfitPerTradeChart summary={summary} />
+          </div>
+
+          <div className="portfolio-breakdown-grid">
+            <div className="chart-card">
+              <div className="chart-header">Trade Breakdown</div>
+              <div className="portfolio-breakdown-list">
+                {summary.sourceBreakdown.length === 0 ? (
+                  <div className="portfolio-breakdown-empty">No closed sell trades in this period yet.</div>
+                ) : (
+                  summary.sourceBreakdown.map((row) => (
+                    <div key={row.label} className="portfolio-breakdown-row">
+                      <div className="portfolio-breakdown-copy">
+                        <span className="portfolio-breakdown-name">{row.label}</span>
+                        <span className="portfolio-breakdown-meta">{row.tradeCount} trades</span>
+                      </div>
+                      <span className="portfolio-breakdown-value">{formatSignedPlatinumValue(row.value)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="chart-card">
+              <div className="chart-header">Category Breakdown</div>
+              <div className="portfolio-breakdown-list">
+                {summary.categoryBreakdown.length === 0 ? (
+                  <div className="portfolio-breakdown-empty">No category profit data is available yet.</div>
+                ) : (
+                  summary.categoryBreakdown.map((row) => (
+                    <div key={row.label} className="portfolio-breakdown-row">
+                      <div className="portfolio-breakdown-copy">
+                        <span className="portfolio-breakdown-name">{row.label}</span>
+                        <span className="portfolio-breakdown-meta">{row.tradeCount} trades</span>
+                      </div>
+                      <span className="portfolio-breakdown-value">{formatSignedPlatinumValue(row.value)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="portfolio-insight-grid">
+            <div className="info-card">
+              <div className="info-card-label">Open Buys</div>
+              <div className="info-card-val neutral">{summary.openBuys}</div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Kept Items</div>
+              <div className="info-card-val neutral">{summary.keptItems}</div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Value Coverage</div>
+              <div className="info-card-val neutral">{formatPercentValue(summary.currentValueCoveragePct)}</div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Unmatched Sell Revenue</div>
+              <div className="info-card-val neutral">{formatPlatinumValue(summary.unmatchedSellRevenue)}</div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Best Trade</div>
+              <div className="info-card-val neutral portfolio-inline-stat">
+                {summary.bestTradeItem ? `${summary.bestTradeItem} · ${formatPlatinumValue(summary.bestTradeProfit ?? 0)}` : '—'}
+              </div>
+            </div>
+            <div className="info-card">
+              <div className="info-card-label">Worst Trade</div>
+              <div className="info-card-val neutral portfolio-inline-stat">
+                {summary.worstTradeItem ? `${summary.worstTradeItem} · ${formatPlatinumValue(summary.worstTradeProfit ?? 0)}` : '—'}
+              </div>
+            </div>
+          </div>
+
+          {summary.notes.length > 0 ? (
+            <div className="chart-card portfolio-notes-card">
+              <div className="chart-header">Integrity Notes</div>
+              <div className="portfolio-notes-list">
+                {summary.notes.map((note) => (
+                  <span key={note} className="portfolio-note-pill">
+                    {note}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  );
+}
+
 export function PortfolioPage() {
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const tradePeriod = useAppStore((s) => s.tradePeriod);
-  const setTradePeriod = useAppStore((s) => s.setTradePeriod);
   const [portfolioTab, setPortfolioTab] = useState<'pnl' | 'log'>('pnl');
 
-  const s = mockPortfolioStats;
+  const handleRefreshTrades = async () => {
+    if (!tradeAccount?.name) {
+      return;
+    }
+
+    await getWfmProfileTradeLog(tradeAccount.name);
+  };
 
   return (
     <>
@@ -809,98 +1229,14 @@ export function PortfolioPage() {
         </div>
       </div>
       <div className="page-content">
-        {portfolioTab === 'log' ? <TradeLogTab username={tradeAccount?.name ?? null} /> : (
-          <>
-            <div className="period-bar">
-              <label>Period:</label>
-              {(['7d', '30d', 'all'] as const).map((p) => (
-                <button
-                  key={p}
-                  className={`period-btn${tradePeriod === p ? ' active' : ''}`}
-                  onClick={() => setTradePeriod(p)}
-                >
-                  {p === 'all' ? 'All Time' : p}
-                </button>
-              ))}
-              <div className="period-right">
-                <button className="act-btn" type="button">Refresh Trades</button>
-              </div>
-            </div>
-
-            <div className="plat-grid">
-              <div className="info-card">
-                <div className="info-card-label">Total Plat (All Time)</div>
-                <div className="info-card-val">{s.totalPlatAllTime.toFixed(2)} pt</div>
-              </div>
-              <div className="info-card">
-                <div className="info-card-label">Total Plat (7d)</div>
-                <div className="info-card-val">{s.totalPlat7d.toFixed(2)} pt</div>
-              </div>
-              <div className="info-card">
-                <div className="info-card-label">Total Plat (30d)</div>
-                <div className="info-card-val">{s.totalPlat30d.toFixed(2)} pt</div>
-              </div>
-            </div>
-
-            <div className="alloc-grid">
-              <div className="info-card">
-                <div className="info-card-label">Allocator Status</div>
-                <div className="info-card-val off" style={{ fontSize: 16 }}>Off</div>
-              </div>
-              <div className="info-card">
-                <div className="info-card-label">Allocator Allocated</div>
-                <div className="info-card-val neutral" style={{ fontSize: 16 }}>--</div>
-              </div>
-              <div className="info-card">
-                <div className="info-card-label">Allocator Expected Net</div>
-                <div className="info-card-val neutral" style={{ fontSize: 16 }}>--</div>
-              </div>
-            </div>
-
-            <div className="perf-grid">
-              <div className="perf-card">
-                <div className="perf-label">Profit</div>
-                <div className="perf-val green">{s.profit.toFixed(2)}<br/><span style={{ fontSize: 10, color: 'var(--text-muted)' }}>pt</span></div>
-              </div>
-              <div className="perf-card">
-                <div className="perf-label">Trades</div>
-                <div className="perf-val">{s.trades}</div>
-              </div>
-              <div className="perf-card">
-                <div className="perf-label">Win Rate</div>
-                <div className="perf-val blue">{s.winRate.toFixed(2)}%</div>
-              </div>
-              <div className="perf-card">
-                <div className="perf-label">Avg Margin</div>
-                <div className="perf-val blue">{s.avgMargin.toFixed(2)}%</div>
-              </div>
-              <div className="perf-card">
-                <div className="perf-label">Avg Hold</div>
-                <div className="perf-val">{s.avgHold.toFixed(2)}h</div>
-              </div>
-              <div className="perf-card">
-                <div className="perf-label">Plat/hr</div>
-                <div className="perf-val">{s.platPerHour.toFixed(2)}</div>
-              </div>
-              <div className="perf-card">
-                <div className="perf-label">Best Trade</div>
-                <div className="perf-val green" style={{ fontSize: 11, lineHeight: 1.3 }}>
-                  {s.bestTrade.item.slice(0, 10)}…<br/>{s.bestTrade.profit.toFixed(2)}pt
-                </div>
-              </div>
-              <div className="perf-card">
-                <div className="perf-label">Top Category</div>
-                <div className="perf-val" style={{ fontSize: 12, lineHeight: 1.3 }}>
-                  {s.topCategory.name}<br/><span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{s.topCategory.profit.toFixed(2)}pt</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="chart-grid">
-              <CumulativeProfitChart />
-              <ProfitPerTradeChart />
-            </div>
-          </>
+        {portfolioTab === 'log' ? (
+          <TradeLogTab username={tradeAccount?.name ?? null} />
+        ) : (
+          <PnlSummaryTab
+            username={tradeAccount?.name ?? null}
+            period={tradePeriod}
+            onRefreshTrades={handleRefreshTrades}
+          />
         )}
       </div>
     </>
