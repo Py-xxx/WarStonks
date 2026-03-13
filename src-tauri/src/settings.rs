@@ -171,6 +171,10 @@ fn load_settings_inner(app: &tauri::AppHandle) -> Result<AppSettings> {
     load_settings_from_path(&path)
 }
 
+pub(crate) fn load_settings_for_internal_use(app: &tauri::AppHandle) -> Result<AppSettings> {
+    load_settings_inner(app)
+}
+
 fn save_settings_inner(app: &tauri::AppHandle, settings: &AppSettings) -> Result<()> {
     let path = build_settings_path(app)?;
     save_settings_to_path(&path, settings)

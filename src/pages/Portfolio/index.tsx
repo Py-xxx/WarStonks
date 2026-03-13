@@ -1,5 +1,11 @@
-import { useEffect, useState } from 'react';
-import { getCachedWfmProfileTradeLog, getWfmProfileTradeLog, setWfmTradeLogKeepItem } from '../../lib/tauriClient';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  getCachedWfmProfileTradeLog,
+  getWfmProfileTradeLog,
+  migrateAlecaframeTradeLog,
+  setWfmTradeLogKeepItem,
+  updateTradeGroupAllocations,
+} from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -90,12 +96,126 @@ function formatMarginValue(value: number | null): string {
   return `${normalized}%`;
 }
 
+function buildDefaultMigrationDate(): string {
+  const baseline = new Date();
+  baseline.setDate(baseline.getDate() - 90);
+  return baseline.toISOString().slice(0, 10);
+}
+
+type TradeLogDisplayRow =
+  | { kind: 'single'; entry: PortfolioTradeLogEntry }
+  | {
+      kind: 'group';
+      groupId: string;
+      label: string;
+      totalPlatinum: number;
+      itemCount: number;
+      orderType: PortfolioTradeLogEntry['orderType'];
+      closedAt: string;
+      updatedAt: string;
+      children: PortfolioTradeLogEntry[];
+    };
+
+function buildTradeLogDisplayRows(entries: PortfolioTradeLogEntry[]): TradeLogDisplayRow[] {
+  const groupedEntries = new Map<string, PortfolioTradeLogEntry[]>();
+  for (const entry of entries) {
+    if (!entry.groupId) {
+      continue;
+    }
+
+    const group = groupedEntries.get(entry.groupId) ?? [];
+    group.push(entry);
+    groupedEntries.set(entry.groupId, group);
+  }
+
+  const rows: TradeLogDisplayRow[] = [];
+  const seenGroupIds = new Set<string>();
+
+  for (const entry of entries) {
+    if (!entry.groupId) {
+      rows.push({ kind: 'single', entry });
+      continue;
+    }
+
+    if (seenGroupIds.has(entry.groupId)) {
+      continue;
+    }
+    seenGroupIds.add(entry.groupId);
+
+    const children = (groupedEntries.get(entry.groupId) ?? [entry]).slice().sort((left, right) => {
+      const leftOrder = left.groupSortOrder ?? 0;
+      const rightOrder = right.groupSortOrder ?? 0;
+      return leftOrder - rightOrder || left.itemName.localeCompare(right.itemName);
+    });
+
+    rows.push({
+      kind: 'group',
+      groupId: entry.groupId,
+      label: entry.groupLabel ?? 'Multiple Item Trade',
+      totalPlatinum:
+        entry.groupTotalPlatinum ??
+        children.reduce(
+          (sum, child) => sum + (child.allocationTotalPlatinum ?? child.platinum),
+          0,
+        ),
+      itemCount: entry.groupItemCount ?? children.length,
+      orderType: entry.orderType,
+      closedAt: entry.closedAt,
+      updatedAt: entry.updatedAt,
+      children,
+    });
+  }
+
+  return rows;
+}
+
+function buildTradeGroupSummary(children: PortfolioTradeLogEntry[]): string {
+  if (children.length === 0) {
+    return 'No items in this trade';
+  }
+
+  const names = children.slice(0, 2).map((child) => child.itemName);
+  const suffix = children.length > 2 ? ` +${children.length - 2} more` : '';
+  return `${names.join(' • ')}${suffix}`;
+}
+
 function TradeLogTab({ username }: { username: string | null }) {
+  const appSettings = useAppStore((state) => state.appSettings);
   const [entries, setEntries] = useState<PortfolioTradeLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+  const [migrating, setMigrating] = useState(false);
+  const [savingAllocations, setSavingAllocations] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
+  const [migrateModalOpen, setMigrateModalOpen] = useState(false);
+  const [migrationBaselineDate, setMigrationBaselineDate] = useState(buildDefaultMigrationDate);
+  const [allocationGroupId, setAllocationGroupId] = useState<string | null>(null);
+  const [allocationDrafts, setAllocationDrafts] = useState<Record<string, string>>({});
+
+  const displayRows = useMemo(() => buildTradeLogDisplayRows(entries), [entries]);
+  const allocationGroup = useMemo(
+    () =>
+      displayRows.find(
+        (row): row is Extract<TradeLogDisplayRow, { kind: 'group' }> =>
+          row.kind === 'group' && row.groupId === allocationGroupId,
+      ) ?? null,
+    [allocationGroupId, displayRows],
+  );
+  const allocationTotal = allocationGroup
+    ? allocationGroup.children.reduce((sum, child) => {
+        const nextValue = Number.parseInt(allocationDrafts[child.id] ?? '', 10);
+        return sum + (Number.isFinite(nextValue) ? nextValue : 0);
+      }, 0)
+    : 0;
+  const allocationExpectedTotal = allocationGroup?.totalPlatinum ?? 0;
+  const allocationMatches = allocationGroup ? allocationTotal === allocationExpectedTotal : true;
+
+  const applyTradeLogState = (nextState: { entries: PortfolioTradeLogEntry[]; lastUpdatedAt: string | null }) => {
+    setEntries(nextState.entries);
+    setLastUpdatedAt(nextState.lastUpdatedAt);
+  };
 
   const handleRefresh = async () => {
     if (!username) {
@@ -108,8 +228,7 @@ function TradeLogTab({ username }: { username: string | null }) {
 
     try {
       const nextState = await getWfmProfileTradeLog(username);
-      setEntries(nextState.entries);
-      setLastUpdatedAt(nextState.lastUpdatedAt);
+      applyTradeLogState(nextState);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -127,12 +246,89 @@ function TradeLogTab({ username }: { username: string | null }) {
 
     try {
       const nextState = await setWfmTradeLogKeepItem(username, entry.id, !entry.keepItem);
-      setEntries(nextState.entries);
-      setLastUpdatedAt(nextState.lastUpdatedAt);
+      applyTradeLogState(nextState);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setUpdatingOrderId(null);
+    }
+  };
+
+  const handleToggleGroupExpanded = (groupId: string) => {
+    setExpandedGroupIds((current) =>
+      current.includes(groupId)
+        ? current.filter((value) => value !== groupId)
+        : [...current, groupId],
+    );
+  };
+
+  const handleOpenAllocationModal = (
+    row: Extract<TradeLogDisplayRow, { kind: 'group' }>,
+  ) => {
+    setAllocationGroupId(row.groupId);
+    setAllocationDrafts(
+      Object.fromEntries(
+        row.children.map((child) => [
+          child.id,
+          String(child.allocationTotalPlatinum ?? child.platinum),
+        ]),
+      ),
+    );
+  };
+
+  const handleMigrate = async () => {
+    if (!username) {
+      setErrorMessage('Connect your Warframe Market account in Trades first.');
+      return;
+    }
+
+    setMigrating(true);
+    setErrorMessage(null);
+
+    try {
+      const nextState = await migrateAlecaframeTradeLog(username, {
+        baselineDate: migrationBaselineDate,
+      });
+      applyTradeLogState(nextState);
+      setMigrateModalOpen(false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  const handleSaveAllocations = async () => {
+    if (!username || !allocationGroup) {
+      return;
+    }
+
+    if (!allocationMatches) {
+      setErrorMessage(
+        `Adjusted totals must add up to ${formatPlatinumValue(allocationExpectedTotal)}.`,
+      );
+      return;
+    }
+
+    setSavingAllocations(true);
+    setErrorMessage(null);
+
+    try {
+      const nextState = await updateTradeGroupAllocations(
+        username,
+        allocationGroup.groupId,
+        allocationGroup.children.map((child) => ({
+          orderId: child.id,
+          totalPlatinum: Number.parseInt(allocationDrafts[child.id] ?? '0', 10) || 0,
+        })),
+      );
+      applyTradeLogState(nextState);
+      setAllocationGroupId(null);
+      setAllocationDrafts({});
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingAllocations(false);
     }
   };
 
@@ -153,8 +349,7 @@ function TradeLogTab({ username }: { username: string | null }) {
       try {
         const cachedState = await getCachedWfmProfileTradeLog(username);
         if (!cancelled) {
-          setEntries(cachedState.entries);
-          setLastUpdatedAt(cachedState.lastUpdatedAt);
+          applyTradeLogState(cachedState);
         }
       } catch (error) {
         if (!cancelled) {
@@ -165,8 +360,7 @@ function TradeLogTab({ username }: { username: string | null }) {
       try {
         const nextState = await getWfmProfileTradeLog(username);
         if (!cancelled) {
-          setEntries(nextState.entries);
-          setLastUpdatedAt(nextState.lastUpdatedAt);
+          applyTradeLogState(nextState);
           setErrorMessage(null);
         }
       } catch (error) {
@@ -196,6 +390,18 @@ function TradeLogTab({ username }: { username: string | null }) {
             <span className="portfolio-log-updated">
               Last updated {formatShortLocalDateTime(lastUpdatedAt)}
             </span>
+          ) : null}
+          {appSettings.alecaframe.enabled && username ? (
+            <button
+              className="act-btn portfolio-secondary-btn"
+              type="button"
+              onClick={() => {
+                setMigrationBaselineDate(buildDefaultMigrationDate());
+                setMigrateModalOpen(true);
+              }}
+            >
+              Migrate
+            </button>
           ) : null}
           <button
             className="act-btn portfolio-refresh-btn"
@@ -243,63 +449,313 @@ function TradeLogTab({ username }: { username: string | null }) {
           </div>
 
           <div className="portfolio-log-list">
-            {entries.map((entry) => (
-              <div key={entry.id} className="portfolio-log-row">
-                <div className="portfolio-log-item">
-                  <span className="portfolio-log-thumb">
-                    {entry.imagePath ? (
-                      <img src={resolveWfmAssetUrl(entry.imagePath) ?? undefined} alt="" />
+            {displayRows.map((row) =>
+              row.kind === 'single' ? (
+                <div key={row.entry.id} className="portfolio-log-row">
+                  <div className="portfolio-log-item">
+                    <span className="portfolio-log-thumb">
+                      {row.entry.imagePath ? (
+                        <img src={resolveWfmAssetUrl(row.entry.imagePath) ?? undefined} alt="" />
+                      ) : (
+                        <span className="portfolio-log-thumb-fallback">{row.entry.itemName.charAt(0)}</span>
+                      )}
+                    </span>
+                    <div className="portfolio-log-item-copy">
+                      <span className="portfolio-log-item-name">{row.entry.itemName}</span>
+                      <span className="portfolio-log-item-slug">{row.entry.slug}</span>
+                    </div>
+                  </div>
+
+                  <span className={`badge ${buildTradeTypeClassName(row.entry.orderType)}`}>
+                    {renderTradeType(row.entry.orderType)}
+                  </span>
+                  <span className="portfolio-log-value">{formatPlatinumValue(row.entry.platinum)}</span>
+                  <span className="portfolio-log-value">{row.entry.quantity}</span>
+                  <span className="portfolio-log-value">{row.entry.rank ?? '—'}</span>
+                  <span className="portfolio-log-value">
+                    {row.entry.profit == null ? '—' : formatPlatinumValue(row.entry.profit)}
+                  </span>
+                  <span className="portfolio-log-value">{formatMarginValue(row.entry.margin)}</span>
+                  <span>
+                    {row.entry.status ? (
+                      <span className={`badge ${buildTradeStatusClassName(row.entry.status)}`}>{row.entry.status}</span>
                     ) : (
-                      <span className="portfolio-log-thumb-fallback">{entry.itemName.charAt(0)}</span>
+                      <span className="portfolio-log-value">—</span>
                     )}
                   </span>
-                  <div className="portfolio-log-item-copy">
-                    <span className="portfolio-log-item-name">{entry.itemName}</span>
-                    <span className="portfolio-log-item-slug">{entry.slug}</span>
-                  </div>
+                  <span className="portfolio-log-date">{formatShortLocalDateTime(row.entry.closedAt)}</span>
+                  <span className="portfolio-log-actions">
+                    {row.entry.orderType === 'buy' ? (
+                      <label className="portfolio-keep-toggle-wrap">
+                        <button
+                          className={`toggle portfolio-keep-toggle${row.entry.keepItem ? ' on' : ''}`}
+                          type="button"
+                          role="switch"
+                          aria-checked={row.entry.keepItem}
+                          aria-label={`Keep ${row.entry.itemName}`}
+                          onClick={() => void handleToggleKeepItem(row.entry)}
+                          disabled={updatingOrderId === row.entry.id}
+                        />
+                        <span>{updatingOrderId === row.entry.id ? 'Saving…' : 'Keep Item'}</span>
+                      </label>
+                    ) : (
+                      <span className="portfolio-log-value">—</span>
+                    )}
+                  </span>
                 </div>
-
-                <span className={`badge ${buildTradeTypeClassName(entry.orderType)}`}>
-                  {renderTradeType(entry.orderType)}
-                </span>
-                <span className="portfolio-log-value">{formatPlatinumValue(entry.platinum)}</span>
-                <span className="portfolio-log-value">{entry.quantity}</span>
-                <span className="portfolio-log-value">{entry.rank ?? '—'}</span>
-                <span className="portfolio-log-value">
-                  {entry.profit == null ? '—' : formatPlatinumValue(entry.profit)}
-                </span>
-                <span className="portfolio-log-value">{formatMarginValue(entry.margin)}</span>
-                <span>
-                  {entry.status ? (
-                    <span className={`badge ${buildTradeStatusClassName(entry.status)}`}>{entry.status}</span>
-                  ) : (
-                    <span className="portfolio-log-value">—</span>
-                  )}
-                </span>
-                <span className="portfolio-log-date">{formatShortLocalDateTime(entry.closedAt)}</span>
-                <span className="portfolio-log-actions">
-                  {entry.orderType === 'buy' ? (
-                    <label className="portfolio-keep-toggle-wrap">
+              ) : (
+                <div key={row.groupId} className="portfolio-log-group">
+                  <div className="portfolio-log-row portfolio-log-row-parent">
+                    <div className="portfolio-log-item">
                       <button
-                        className={`toggle portfolio-keep-toggle${entry.keepItem ? ' on' : ''}`}
+                        className="portfolio-log-expand-btn"
                         type="button"
-                        role="switch"
-                        aria-checked={entry.keepItem}
-                        aria-label={`Keep ${entry.itemName}`}
-                        onClick={() => void handleToggleKeepItem(entry)}
-                        disabled={updatingOrderId === entry.id}
-                      />
-                      <span>{updatingOrderId === entry.id ? 'Saving…' : 'Keep Item'}</span>
-                    </label>
-                  ) : (
+                        aria-label={
+                          expandedGroupIds.includes(row.groupId)
+                            ? `Collapse ${row.label}`
+                            : `Expand ${row.label}`
+                        }
+                        onClick={() => handleToggleGroupExpanded(row.groupId)}
+                      >
+                        {expandedGroupIds.includes(row.groupId) ? '−' : '+'}
+                      </button>
+                      <span className="portfolio-log-thumb">
+                        {row.children[0]?.imagePath ? (
+                          <img src={resolveWfmAssetUrl(row.children[0].imagePath) ?? undefined} alt="" />
+                        ) : (
+                          <span className="portfolio-log-thumb-fallback">M</span>
+                        )}
+                      </span>
+                      <div className="portfolio-log-item-copy">
+                        <span className="portfolio-log-item-name">{row.label}</span>
+                        <span className="portfolio-log-item-slug">
+                          {buildTradeGroupSummary(row.children)} · {row.itemCount} item{row.itemCount === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                    </div>
+                    <span className={`badge ${buildTradeTypeClassName(row.orderType)}`}>
+                      {renderTradeType(row.orderType)}
+                    </span>
+                    <span className="portfolio-log-value">{formatPlatinumValue(row.totalPlatinum)}</span>
                     <span className="portfolio-log-value">—</span>
-                  )}
-                </span>
-              </div>
-            ))}
+                    <span className="portfolio-log-value">—</span>
+                    <span className="portfolio-log-value">—</span>
+                    <span className="portfolio-log-value">—</span>
+                    <span className="portfolio-log-value">—</span>
+                    <span className="portfolio-log-date">{formatShortLocalDateTime(row.closedAt)}</span>
+                    <span className="portfolio-log-actions portfolio-log-actions-parent">
+                      <button
+                        className="act-btn portfolio-secondary-btn"
+                        type="button"
+                        onClick={() => handleOpenAllocationModal(row)}
+                      >
+                        Adjust Amounts
+                      </button>
+                    </span>
+                  </div>
+                  {expandedGroupIds.includes(row.groupId)
+                    ? row.children.map((child) => (
+                        <div key={child.id} className="portfolio-log-row portfolio-log-row-child">
+                          <div className="portfolio-log-item portfolio-log-item-child">
+                            <span className="portfolio-log-thumb">
+                              {child.imagePath ? (
+                                <img src={resolveWfmAssetUrl(child.imagePath) ?? undefined} alt="" />
+                              ) : (
+                                <span className="portfolio-log-thumb-fallback">{child.itemName.charAt(0)}</span>
+                              )}
+                            </span>
+                            <div className="portfolio-log-item-copy">
+                              <span className="portfolio-log-item-name">{child.itemName}</span>
+                              <span className="portfolio-log-item-slug">{child.slug}</span>
+                            </div>
+                          </div>
+                          <span className={`badge ${buildTradeTypeClassName(child.orderType)}`}>
+                            {renderTradeType(child.orderType)}
+                          </span>
+                          <span className="portfolio-log-value">{formatPlatinumValue(child.platinum)}</span>
+                          <span className="portfolio-log-value">{child.quantity}</span>
+                          <span className="portfolio-log-value">{child.rank ?? '—'}</span>
+                          <span className="portfolio-log-value">
+                            {child.profit == null ? '—' : formatPlatinumValue(child.profit)}
+                          </span>
+                          <span className="portfolio-log-value">{formatMarginValue(child.margin)}</span>
+                          <span>
+                            {child.status ? (
+                              <span className={`badge ${buildTradeStatusClassName(child.status)}`}>{child.status}</span>
+                            ) : (
+                              <span className="portfolio-log-value">—</span>
+                            )}
+                          </span>
+                          <span className="portfolio-log-date">{formatShortLocalDateTime(child.closedAt)}</span>
+                          <span className="portfolio-log-actions">
+                            {child.orderType === 'buy' ? (
+                              <label className="portfolio-keep-toggle-wrap">
+                                <button
+                                  className={`toggle portfolio-keep-toggle${child.keepItem ? ' on' : ''}`}
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={child.keepItem}
+                                  aria-label={`Keep ${child.itemName}`}
+                                  onClick={() => void handleToggleKeepItem(child)}
+                                  disabled={updatingOrderId === child.id}
+                                />
+                                <span>{updatingOrderId === child.id ? 'Saving…' : 'Keep Item'}</span>
+                              </label>
+                            ) : (
+                              <span className="portfolio-log-value">—</span>
+                            )}
+                          </span>
+                        </div>
+                      ))
+                    : null}
+                </div>
+              ),
+            )}
           </div>
         </div>
       )}
+
+      {migrateModalOpen ? (
+        <div className="modal-backdrop" onClick={() => setMigrateModalOpen(false)}>
+          <div
+            className="settings-modal portfolio-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Migrate Alecaframe trades"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div className="settings-modal-title">
+                <span className="card-label">Trade Log</span>
+                <h3>Migrate Alecaframe Trades</h3>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                aria-label="Close migrate trades dialog"
+                onClick={() => setMigrateModalOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <div className="settings-preview-grid">
+                <article className="settings-preview-card">
+                  <span className="settings-field-label">Purpose</span>
+                  <p className="settings-preview-value">
+                    Import missing buy and sell trades from Alecaframe without duplicating existing log rows.
+                  </p>
+                </article>
+                <article className="settings-preview-card">
+                  <span className="settings-field-label">Baseline Date</span>
+                  <input
+                    className="settings-text-input"
+                    type="date"
+                    value={migrationBaselineDate}
+                    onChange={(event) => setMigrationBaselineDate(event.target.value)}
+                  />
+                </article>
+              </div>
+              <p className="portfolio-modal-note">
+                Only trades from this day forward will be migrated. Existing rows with the same item, quantity, and a timestamp within one minute will be skipped.
+              </p>
+            </div>
+            <div className="settings-modal-actions">
+              <button className="period-btn" type="button" onClick={() => setMigrateModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                className="act-btn"
+                type="button"
+                onClick={() => void handleMigrate()}
+                disabled={migrating || !migrationBaselineDate}
+              >
+                {migrating ? 'Migrating…' : 'Migrate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {allocationGroup ? (
+        <div className="modal-backdrop" onClick={() => setAllocationGroupId(null)}>
+          <div
+            className="settings-modal portfolio-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Adjust grouped trade amounts"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div className="settings-modal-title">
+                <span className="card-label">Trade Log</span>
+                <h3>Adjust Amounts</h3>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                aria-label="Close adjust amounts dialog"
+                onClick={() => setAllocationGroupId(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <div className="portfolio-allocation-summary">
+                <span>Total trade value</span>
+                <strong>{formatPlatinumValue(allocationExpectedTotal)}</strong>
+              </div>
+              <div className="portfolio-allocation-list">
+                {allocationGroup.children.map((child) => (
+                  <div key={child.id} className="portfolio-allocation-row">
+                    <div className="portfolio-allocation-copy">
+                      <span className="portfolio-allocation-name">{child.itemName}</span>
+                      <span className="portfolio-allocation-meta">
+                        Qty {child.quantity}{child.rank != null ? ` · Rank ${child.rank}` : ''}
+                      </span>
+                    </div>
+                    <div className="portfolio-allocation-input-wrap">
+                      <input
+                        className="settings-text-input portfolio-allocation-input"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={allocationDrafts[child.id] ?? ''}
+                        onChange={(event) =>
+                          setAllocationDrafts((current) => ({
+                            ...current,
+                            [child.id]: event.target.value,
+                          }))
+                        }
+                      />
+                      <span className="portfolio-allocation-unit">pt</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className={`portfolio-allocation-summary${allocationMatches ? '' : ' error'}`}>
+                <span>Allocated total</span>
+                <strong>
+                  {formatPlatinumValue(allocationTotal)} / {formatPlatinumValue(allocationExpectedTotal)}
+                </strong>
+              </div>
+            </div>
+            <div className="settings-modal-actions">
+              <button className="period-btn" type="button" onClick={() => setAllocationGroupId(null)}>
+                Cancel
+              </button>
+              <button
+                className="act-btn"
+                type="button"
+                onClick={() => void handleSaveAllocations()}
+                disabled={savingAllocations || !allocationMatches}
+              >
+                {savingAllocations ? 'Saving…' : 'Save Amounts'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

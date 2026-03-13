@@ -12,6 +12,7 @@ import type {
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
   AppSettings,
+  AlecaframeTradeMigrationInput,
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
   ItemDetailSummary,
@@ -21,6 +22,7 @@ import type {
   TradeCreateListingInput,
   TradeOverview,
   PortfolioTradeLogState,
+  TradeGroupAllocationInput,
   TradeSetMapSummary,
   TradeSessionState,
   TradeSignInInput,
@@ -269,6 +271,28 @@ export async function setWfmTradeLogKeepItem(
     username,
     orderId,
     keepItem,
+  });
+}
+
+export async function migrateAlecaframeTradeLog(
+  username: string,
+  input: AlecaframeTradeMigrationInput,
+): Promise<PortfolioTradeLogState> {
+  return invoke<PortfolioTradeLogState>('migrate_alecaframe_trade_log', {
+    username,
+    input,
+  });
+}
+
+export async function updateTradeGroupAllocations(
+  username: string,
+  groupId: string,
+  allocations: TradeGroupAllocationInput[],
+): Promise<PortfolioTradeLogState> {
+  return invoke<PortfolioTradeLogState>('update_trade_group_allocations', {
+    username,
+    groupId,
+    allocations,
   });
 }
 

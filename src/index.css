@@ -3662,6 +3662,12 @@ body {
   align-items: center;
   gap: 6px;
 }
+.portfolio-secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 92px;
+}
 .portfolio-log-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -3687,6 +3693,9 @@ body {
 .portfolio-log-list {
   display: grid;
 }
+.portfolio-log-group {
+  display: grid;
+}
 .portfolio-log-row {
   padding: 12px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -3694,11 +3703,20 @@ body {
 .portfolio-log-row:last-child {
   border-bottom: none;
 }
+.portfolio-log-row-parent {
+  background: rgba(255, 255, 255, 0.01);
+}
+.portfolio-log-row-child {
+  background: rgba(255, 255, 255, 0.015);
+}
 .portfolio-log-item {
   display: flex;
   align-items: center;
   gap: 12px;
   min-width: 0;
+}
+.portfolio-log-item-child {
+  padding-left: 34px;
 }
 .portfolio-log-thumb,
 .portfolio-log-thumb-fallback {
@@ -3749,6 +3767,10 @@ body {
 .portfolio-log-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+}
+.portfolio-log-actions-parent {
+  gap: 8px;
 }
 .portfolio-keep-toggle-wrap {
   display: inline-flex;
@@ -3766,6 +3788,97 @@ body {
 }
 .portfolio-keep-toggle.on::after {
   background: #fff;
+}
+.portfolio-log-expand-btn,
+.modal-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.portfolio-log-expand-btn:hover,
+.modal-close:hover {
+  border-color: rgba(74, 158, 255, 0.4);
+  color: var(--text-primary);
+  background: rgba(74, 158, 255, 0.08);
+}
+.portfolio-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+.portfolio-modal-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+.portfolio-allocation-list {
+  display: grid;
+  gap: 10px;
+}
+.portfolio-allocation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.portfolio-allocation-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.portfolio-allocation-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.portfolio-allocation-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.portfolio-allocation-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.portfolio-allocation-input {
+  min-width: 0;
+}
+.portfolio-allocation-unit {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.portfolio-allocation-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.portfolio-allocation-summary strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.portfolio-allocation-summary.error {
+  border-color: rgba(255, 142, 142, 0.35);
+  background: rgba(255, 112, 112, 0.07);
 }
 .chart-header {
   padding: 10px 14px;

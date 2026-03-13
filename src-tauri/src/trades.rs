@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use crate::settings::load_settings_for_internal_use;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::blocking::Client;
 use reqwest::Method;
@@ -26,7 +27,9 @@ const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
-const TRADE_LOG_DERIVED_VERSION: i64 = 1;
+const TRADE_LOG_DERIVED_VERSION: i64 = 2;
+const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
+const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://warframe.market/socket-v2";
@@ -120,6 +123,7 @@ pub struct PortfolioTradeLogEntry {
     pub slug: String,
     pub image_path: Option<String>,
     pub order_type: String,
+    pub source: String,
     pub platinum: i64,
     pub quantity: i64,
     pub rank: Option<i64>,
@@ -129,6 +133,12 @@ pub struct PortfolioTradeLogEntry {
     pub margin: Option<f64>,
     pub status: Option<String>,
     pub keep_item: bool,
+    pub group_id: Option<String>,
+    pub group_label: Option<String>,
+    pub group_total_platinum: Option<i64>,
+    pub group_item_count: Option<i64>,
+    pub allocation_total_platinum: Option<i64>,
+    pub group_sort_order: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +146,19 @@ pub struct PortfolioTradeLogEntry {
 pub struct PortfolioTradeLogState {
     pub entries: Vec<PortfolioTradeLogEntry>,
     pub last_updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlecaframeTradeMigrationInput {
+    pub baseline_date: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeGroupAllocationInput {
+    pub order_id: String,
+    pub total_platinum: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,12 +301,19 @@ struct StoredTradeLogRecord {
     slug: String,
     image_path: Option<String>,
     order_type: String,
+    source: String,
     platinum: i64,
     quantity: i64,
     rank: Option<i64>,
     closed_at: String,
     updated_at: String,
     keep_item: bool,
+    group_id: Option<String>,
+    group_label: Option<String>,
+    group_total_platinum: Option<i64>,
+    group_item_count: Option<i64>,
+    allocation_total_platinum: Option<i64>,
+    group_sort_order: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +378,37 @@ struct CatalogTradeItemMeta {
     name: String,
     image_path: Option<String>,
     max_rank: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlecaframeTradeResponse {
+    #[serde(default)]
+    buy_trades: Vec<AlecaframeTradeRecord>,
+    #[serde(default)]
+    sell_trades: Vec<AlecaframeTradeRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlecaframeTradeRecord {
+    timestamp: String,
+    direction: String,
+    total_plat: Option<i64>,
+    #[serde(default)]
+    items_sent: Vec<AlecaframeTradeItemRecord>,
+    #[serde(default)]
+    items_received: Vec<AlecaframeTradeItemRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlecaframeTradeItemRecord {
+    name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    cnt: i64,
+    rank: i64,
 }
 
 fn now_utc() -> OffsetDateTime {
@@ -519,11 +580,18 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
               slug TEXT NOT NULL,
               image_path TEXT,
               order_type TEXT NOT NULL,
+              source TEXT NOT NULL DEFAULT 'wfm',
               platinum INTEGER NOT NULL,
               quantity INTEGER NOT NULL,
               rank INTEGER,
               closed_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
+              group_id TEXT,
+              group_label TEXT,
+              group_total_platinum INTEGER,
+              group_item_count INTEGER,
+              allocation_total_platinum INTEGER,
+              group_sort_order INTEGER NOT NULL DEFAULT 0,
               PRIMARY KEY (username, order_id)
             );
 
@@ -585,6 +653,50 @@ fn migrate_trades_cache_schema(connection: &Connection) -> Result<()> {
             .context("failed to add keep_item column to trade log cache")?;
     }
 
+    for (column, sql, error_label) in [
+        (
+            "source",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN source TEXT NOT NULL DEFAULT 'wfm'",
+            "failed to add source column to trade log cache",
+        ),
+        (
+            "group_id",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN group_id TEXT",
+            "failed to add group_id column to trade log cache",
+        ),
+        (
+            "group_label",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN group_label TEXT",
+            "failed to add group_label column to trade log cache",
+        ),
+        (
+            "group_total_platinum",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN group_total_platinum INTEGER",
+            "failed to add group_total_platinum column to trade log cache",
+        ),
+        (
+            "group_item_count",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN group_item_count INTEGER",
+            "failed to add group_item_count column to trade log cache",
+        ),
+        (
+            "allocation_total_platinum",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN allocation_total_platinum INTEGER",
+            "failed to add allocation_total_platinum column to trade log cache",
+        ),
+        (
+            "group_sort_order",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN group_sort_order INTEGER NOT NULL DEFAULT 0",
+            "failed to add group_sort_order column to trade log cache",
+        ),
+    ] {
+        if !columns.iter().any(|existing| existing == column) {
+            connection
+                .execute(sql, [])
+                .with_context(|| error_label.to_string())?;
+        }
+    }
+
     let mut derived_statement = connection
         .prepare("PRAGMA table_info(portfolio_trade_log_derived)")
         .context("failed to inspect derived trade log schema")?;
@@ -622,6 +734,17 @@ fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
 }
 
+fn parse_date_start_utc(value: &str) -> Result<OffsetDateTime> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("Select a baseline date for migration."));
+    }
+
+    let midnight = format!("{trimmed}T00:00:00Z");
+    OffsetDateTime::parse(&midnight, &Rfc3339)
+        .with_context(|| format!("failed to parse migration baseline date '{trimmed}'"))
+}
+
 fn extract_string(value: &Value, keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Some(candidate) = value.get(*key).and_then(Value::as_str) {
@@ -643,6 +766,29 @@ fn extract_i64(value: &Value, keys: &[&str]) -> Option<i64> {
     }
 
     None
+}
+
+fn normalize_alias_lookup_value(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn build_fallback_slug(value: &str) -> String {
+    value
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(value)
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 fn normalize_avatar_url(value: Option<String>) -> Option<String> {
@@ -766,6 +912,126 @@ fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSumma
     )
 }
 
+fn resolve_catalog_trade_item_by_alias(
+    connection: &Connection,
+    alias_value: &str,
+) -> Result<Option<CatalogTradeItemMeta>> {
+    let normalized = normalize_alias_lookup_value(alias_value);
+    connection
+        .query_row(
+            "
+            SELECT
+              items.item_id,
+              COALESCE(items.wfm_id, wfm_items.wfm_id),
+              COALESCE(items.wfm_slug, wfm_items.slug, ''),
+              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
+              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
+              COALESCE(wfm_items.max_rank, items.max_rank)
+            FROM item_aliases
+            JOIN items ON items.item_id = item_aliases.item_id
+            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
+            WHERE item_aliases.alias_value = ?1
+               OR item_aliases.normalized_alias_value = ?2
+            ORDER BY CASE
+              WHEN item_aliases.alias_value = ?1 THEN 0
+              WHEN item_aliases.normalized_alias_value = ?2 THEN 1
+              ELSE 2
+            END
+            LIMIT 1
+            ",
+            params![alias_value.trim(), normalized],
+            |row| {
+                Ok(CatalogTradeItemMeta {
+                    item_id: row.get(0)?,
+                    wfm_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    slug: row.get(2)?,
+                    name: row.get(3)?,
+                    image_path: row.get(4)?,
+                    max_rank: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .context("failed to resolve catalog item by alias")
+}
+
+fn fetch_alecaframe_trade_payload(app: &tauri::AppHandle) -> Result<AlecaframeTradeResponse> {
+    let settings = load_settings_for_internal_use(app)?;
+    let alecaframe = settings.alecaframe;
+    if !alecaframe.enabled {
+        return Err(anyhow!("Enable Alecaframe API in Settings first."));
+    }
+
+    let Some(public_link) = alecaframe.public_link else {
+        return Err(anyhow!("No Alecaframe public link is saved."));
+    };
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("failed to construct Alecaframe trade client")?;
+
+    client
+        .get(public_link)
+        .header("User-Agent", ALECAFRAME_USER_AGENT)
+        .header("Accept", "application/json")
+        .send()
+        .context("failed to request Alecaframe trade history")?
+        .error_for_status()
+        .context("Alecaframe trade history request failed")?
+        .json::<AlecaframeTradeResponse>()
+        .context("failed to parse Alecaframe trade history response")
+}
+
+fn is_platinum_trade_item(item: &AlecaframeTradeItemRecord) -> bool {
+    item.name == "/AF_Special/Platinum"
+}
+
+fn normalize_alecaframe_rank(rank: i64) -> Option<i64> {
+    (rank >= 0).then_some(rank)
+}
+
+fn allocated_row_totals(total_platinum: i64, unit_counts: &[i64]) -> Vec<i64> {
+    let total_units = unit_counts.iter().copied().map(|value| value.max(0)).sum::<i64>();
+    if total_units <= 0 {
+        return vec![0; unit_counts.len()];
+    }
+
+    let base = total_platinum.div_euclid(total_units);
+    let mut remainder = total_platinum.rem_euclid(total_units);
+    let mut allocations = Vec::with_capacity(unit_counts.len());
+
+    for units in unit_counts {
+        let normalized_units = (*units).max(0);
+        let extra = remainder.min(normalized_units);
+        allocations.push(base * normalized_units + extra);
+        remainder -= extra;
+    }
+
+    allocations
+}
+
+fn stable_trade_group_id(
+    username: &str,
+    direction: &str,
+    timestamp: &str,
+    total_platinum: i64,
+    item_keys: &[String],
+) -> String {
+    let seed = format!(
+        "{username}|{direction}|{timestamp}|{total_platinum}|{}",
+        item_keys.join("|")
+    );
+    let digest = sha2::Sha256::digest(seed.as_bytes());
+    format!("af-group-{}", hex::encode(&digest[..12]))
+}
+
+fn stable_trade_row_id(group_id: &str, sort_order: usize, item_key: &str) -> String {
+    let seed = format!("{group_id}|{sort_order}|{item_key}");
+    let digest = sha2::Sha256::digest(seed.as_bytes());
+    format!("af-trade-{}", hex::encode(&digest[..12]))
+}
+
 fn build_trade_log_entries_from_statistics(
     payload: WfmProfileStatisticsPayload,
 ) -> Vec<PortfolioTradeLogEntry> {
@@ -779,6 +1045,7 @@ fn build_trade_log_entries_from_statistics(
             slug: order.item.url_name,
             image_path: order.item.thumb.or(order.item.icon),
             order_type: order.order_type,
+            source: "wfm".to_string(),
             platinum: order.platinum,
             quantity: order.quantity,
             rank: order.mod_rank,
@@ -788,11 +1055,217 @@ fn build_trade_log_entries_from_statistics(
             margin: None,
             status: None,
             keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
         })
         .collect::<Vec<_>>();
 
     entries.sort_by(|left, right| right.closed_at.cmp(&left.closed_at));
     entries
+}
+
+fn prettify_alecaframe_name(value: &str) -> String {
+    value.trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(value)
+        .replace('_', " ")
+}
+
+fn find_duplicate_trade_record(
+    existing: &[StoredTradeLogRecord],
+    order_type: &str,
+    item_name: &str,
+    quantity: i64,
+    closed_at: &OffsetDateTime,
+) -> bool {
+    existing.iter().any(|record| {
+        if record.order_type != order_type || record.quantity != quantity {
+            return false;
+        }
+
+        if normalize_alias_lookup_value(&record.item_name) != normalize_alias_lookup_value(item_name) {
+            return false;
+        }
+
+        parse_timestamp(&record.closed_at)
+            .map(|existing_time| (existing_time - *closed_at).whole_seconds().abs() <= TRADE_TIME_DUPLICATE_WINDOW_SECONDS)
+            .unwrap_or(false)
+    })
+}
+
+fn build_alecaframe_trade_entries(
+    app: &tauri::AppHandle,
+    username: &str,
+    baseline_date: &str,
+    existing: &[StoredTradeLogRecord],
+) -> Result<Vec<PortfolioTradeLogEntry>> {
+    let baseline = parse_date_start_utc(baseline_date)?;
+    let payload = fetch_alecaframe_trade_payload(app)?;
+    let catalog = open_catalog_database(app)?;
+    let mut imported = Vec::new();
+
+    for trade in payload
+        .buy_trades
+        .into_iter()
+        .chain(payload.sell_trades.into_iter())
+    {
+        let order_type = match trade.direction.as_str() {
+            "buy" => "buy",
+            "sell" => "sell",
+            _ => continue,
+        };
+
+        let Some(closed_at) = parse_timestamp(&trade.timestamp) else {
+            continue;
+        };
+        if closed_at < baseline {
+            continue;
+        }
+
+        let items_sent = trade.items_sent;
+        let items_received = trade.items_received;
+        let total_platinum = trade.total_plat.unwrap_or_else(|| {
+            let platinum_items = if order_type == "buy" {
+                &items_sent
+            } else {
+                &items_received
+            };
+            platinum_items
+                .iter()
+                .filter(|item| is_platinum_trade_item(item))
+                .map(|item| item.cnt.max(0))
+                .sum::<i64>()
+        });
+
+        let trade_items = if order_type == "buy" {
+            items_received
+        } else {
+            items_sent
+        }
+        .into_iter()
+        .filter(|item| !is_platinum_trade_item(item))
+        .filter(|item| item.cnt > 0)
+        .collect::<Vec<_>>();
+
+        if trade_items.is_empty() {
+            continue;
+        }
+
+        if total_platinum <= 0 {
+            continue;
+        }
+
+        let preview_rows = trade_items
+            .iter()
+            .map(|item| {
+                let meta = resolve_catalog_trade_item_by_alias(&catalog, &item.name).ok().flatten();
+                let item_name = meta
+                    .as_ref()
+                    .map(|entry| entry.name.clone())
+                    .or_else(|| item.display_name.clone())
+                    .unwrap_or_else(|| prettify_alecaframe_name(&item.name));
+                (item_name, item.cnt.max(1))
+            })
+            .collect::<Vec<_>>();
+
+        let group_is_duplicate = if preview_rows.len() > 1 {
+            preview_rows.iter().all(|(item_name, quantity)| {
+                find_duplicate_trade_record(existing, order_type, item_name, *quantity, &closed_at)
+            })
+        } else {
+            preview_rows
+                .first()
+                .map(|(item_name, quantity)| {
+                    find_duplicate_trade_record(existing, order_type, item_name, *quantity, &closed_at)
+                })
+                .unwrap_or(false)
+        };
+
+        if group_is_duplicate {
+            continue;
+        }
+
+        let unit_counts = trade_items
+            .iter()
+            .map(|item| item.cnt.max(1))
+            .collect::<Vec<_>>();
+        let allocations = allocated_row_totals(total_platinum, &unit_counts);
+        let group_id = if trade_items.len() > 1 {
+            Some(stable_trade_group_id(
+                username,
+                order_type,
+                &trade.timestamp,
+                total_platinum,
+                &trade_items.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+            ))
+        } else {
+            None
+        };
+
+        for (index, item) in trade_items.into_iter().enumerate() {
+            let meta = resolve_catalog_trade_item_by_alias(&catalog, &item.name)?;
+            let item_name = meta
+                .as_ref()
+                .map(|entry| entry.name.clone())
+                .or(item.display_name.clone())
+                .unwrap_or_else(|| prettify_alecaframe_name(&item.name));
+            let quantity = item.cnt.max(1);
+            if group_id.is_none()
+                && find_duplicate_trade_record(existing, order_type, &item_name, quantity, &closed_at)
+            {
+                continue;
+            }
+
+            let slug = meta
+                .as_ref()
+                .map(|entry| entry.slug.clone())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| build_fallback_slug(&item_name));
+            let sort_order = index as i64;
+            let effective_group_id = group_id.clone();
+            let row_id = effective_group_id
+                .as_ref()
+                .map(|value| stable_trade_row_id(value, index, &item.name))
+                .unwrap_or_else(|| {
+                    stable_trade_row_id(
+                        &format!("af-single-{order_type}-{}", trade.timestamp),
+                        0,
+                        &item.name,
+                    )
+                });
+
+            imported.push(PortfolioTradeLogEntry {
+                id: row_id,
+                item_name,
+                slug,
+                image_path: meta.as_ref().and_then(|entry| entry.image_path.clone()),
+                order_type: order_type.to_string(),
+                source: "alecaframe".to_string(),
+                platinum: allocations[index],
+                quantity,
+                rank: normalize_alecaframe_rank(item.rank),
+                closed_at: trade.timestamp.clone(),
+                updated_at: trade.timestamp.clone(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
+                group_id: effective_group_id.clone(),
+                group_label: effective_group_id.as_ref().map(|_| "Multiple Item Trade".to_string()),
+                group_total_platinum: effective_group_id.as_ref().map(|_| total_platinum),
+                group_item_count: effective_group_id.as_ref().map(|_| preview_rows.len() as i64),
+                allocation_total_platinum: Some(allocations[index]),
+                group_sort_order: effective_group_id.as_ref().map(|_| sort_order),
+            });
+        }
+    }
+
+    Ok(imported)
 }
 
 fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLogEntry>> {
@@ -840,12 +1313,19 @@ fn load_stored_trade_log_records_inner(
               cache.slug,
               cache.image_path,
               cache.order_type,
+              cache.source,
               cache.platinum,
               cache.quantity,
               cache.rank,
               cache.closed_at,
               cache.updated_at,
-              COALESCE(overrides.keep_item, cache.keep_item, 0)
+              COALESCE(overrides.keep_item, cache.keep_item, 0),
+              cache.group_id,
+              cache.group_label,
+              cache.group_total_platinum,
+              cache.group_item_count,
+              cache.allocation_total_platinum,
+              cache.group_sort_order
             FROM portfolio_trade_log_cache AS cache
             LEFT JOIN portfolio_trade_log_overrides AS overrides
               ON overrides.username = cache.username
@@ -864,12 +1344,19 @@ fn load_stored_trade_log_records_inner(
                 slug: row.get(2)?,
                 image_path: row.get(3)?,
                 order_type: row.get(4)?,
-                platinum: row.get(5)?,
-                quantity: row.get(6)?,
-                rank: row.get(7)?,
-                closed_at: row.get(8)?,
-                updated_at: row.get(9)?,
-                keep_item: row.get::<_, i64>(10)? != 0,
+                source: row.get(5)?,
+                platinum: row.get(6)?,
+                quantity: row.get(7)?,
+                rank: row.get(8)?,
+                closed_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                keep_item: row.get::<_, i64>(11)? != 0,
+                group_id: row.get(12)?,
+                group_label: row.get(13)?,
+                group_total_platinum: row.get(14)?,
+                group_item_count: row.get(15)?,
+                allocation_total_platinum: row.get(16)?,
+                group_sort_order: row.get(17)?,
             })
         })
         .context("failed to read stored trade log rows")?
@@ -1290,28 +1777,45 @@ fn save_trade_log_rows_inner(
                   slug,
                   image_path,
                   order_type,
+                  source,
                   platinum,
                   quantity,
                   rank,
                   closed_at,
                   updated_at,
+                  group_id,
+                  group_label,
+                  group_total_platinum,
+                  group_item_count,
+                  allocation_total_platinum,
+                  group_sort_order,
                   keep_item
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, COALESCE(
-                  (SELECT keep_item
-                   FROM portfolio_trade_log_overrides
-                   WHERE username = ?1 AND order_id = ?2),
-                  0
-                ))
+                ) VALUES (
+                  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                  COALESCE(
+                    (SELECT keep_item
+                     FROM portfolio_trade_log_overrides
+                     WHERE username = ?1 AND order_id = ?2),
+                    ?19
+                  )
+                )
                 ON CONFLICT(username, order_id) DO UPDATE SET
                   item_name = excluded.item_name,
                   slug = excluded.slug,
                   image_path = excluded.image_path,
                   order_type = excluded.order_type,
+                  source = excluded.source,
                   platinum = excluded.platinum,
                   quantity = excluded.quantity,
                   rank = excluded.rank,
                   closed_at = excluded.closed_at,
-                  updated_at = excluded.updated_at
+                  updated_at = excluded.updated_at,
+                  group_id = excluded.group_id,
+                  group_label = excluded.group_label,
+                  group_total_platinum = excluded.group_total_platinum,
+                  group_item_count = excluded.group_item_count,
+                  allocation_total_platinum = excluded.allocation_total_platinum,
+                  group_sort_order = excluded.group_sort_order
                 ",
             )
             .context("failed to prepare trade log cache upsert")?;
@@ -1325,11 +1829,19 @@ fn save_trade_log_rows_inner(
                     entry.slug,
                     entry.image_path,
                     entry.order_type,
+                    entry.source,
                     entry.platinum,
                     entry.quantity,
                     entry.rank,
                     entry.closed_at,
                     entry.updated_at,
+                    entry.group_id,
+                    entry.group_label,
+                    entry.group_total_platinum,
+                    entry.group_item_count,
+                    entry.allocation_total_platinum,
+                    entry.group_sort_order.unwrap_or(0),
+                    if entry.keep_item { 1 } else { 0 },
                 ])
                 .context("failed to upsert cached trade log row")?;
         }
@@ -1419,6 +1931,29 @@ fn persist_derived_trade_log_entries_inner(
     Ok(())
 }
 
+fn record_total_platinum(record: &StoredTradeLogRecord) -> i64 {
+    record
+        .allocation_total_platinum
+        .unwrap_or(record.platinum.saturating_mul(record.quantity))
+}
+
+fn record_consumed_platinum(record: &StoredTradeLogRecord, quantity: i64) -> i64 {
+    let normalized_quantity = quantity.max(0);
+    if normalized_quantity <= 0 {
+        return 0;
+    }
+
+    if let Some(total) = record.allocation_total_platinum {
+        if record.quantity <= 0 {
+            return total;
+        }
+
+        return ((total * normalized_quantity) + (record.quantity / 2)) / record.quantity;
+    }
+
+    record.platinum.saturating_mul(normalized_quantity)
+}
+
 fn consume_matching_buy_lots(
     records: &[StoredTradeLogRecord],
     consumption: &mut HashMap<String, BuyConsumptionState>,
@@ -1458,7 +1993,7 @@ fn consume_matching_buy_lots(
         }
 
         matched_quantity += quantity_to_consume;
-        matched_cost += quantity_to_consume * record.platinum;
+        matched_cost += record_consumed_platinum(record, quantity_to_consume);
 
         if as_set {
             entry.sold_as_set_quantity += quantity_to_consume;
@@ -1569,7 +2104,7 @@ where
             matched_cost += flip_cost;
         }
 
-        let revenue = record.platinum * record.quantity;
+        let revenue = record_total_platinum(record);
         let profit = revenue - matched_cost;
         let margin = if matched_cost > 0 && matched_quantity == record.quantity {
             Some(((profit as f64) / (matched_cost as f64)) * 100.0)
@@ -1583,7 +2118,10 @@ where
             slug: record.slug.clone(),
             image_path: record.image_path.clone(),
             order_type: "sell".to_string(),
-            platinum: record.platinum,
+            source: record.source.clone(),
+            platinum: record
+                .allocation_total_platinum
+                .unwrap_or(record.platinum),
             quantity: record.quantity,
             rank: record.rank,
             closed_at: record.closed_at.clone(),
@@ -1592,6 +2130,12 @@ where
             margin,
             status: None,
             keep_item: false,
+            group_id: record.group_id.clone(),
+            group_label: record.group_label.clone(),
+            group_total_platinum: record.group_total_platinum,
+            group_item_count: record.group_item_count,
+            allocation_total_platinum: record.allocation_total_platinum,
+            group_sort_order: record.group_sort_order,
         });
     }
 
@@ -1617,7 +2161,10 @@ where
             slug: record.slug.clone(),
             image_path: record.image_path.clone(),
             order_type: "buy".to_string(),
-            platinum: record.platinum,
+            source: record.source.clone(),
+            platinum: record
+                .allocation_total_platinum
+                .unwrap_or(record.platinum),
             quantity: record.quantity,
             rank: record.rank,
             closed_at: record.closed_at.clone(),
@@ -1626,6 +2173,12 @@ where
             margin: None,
             status,
             keep_item: record.keep_item,
+            group_id: record.group_id.clone(),
+            group_label: record.group_label.clone(),
+            group_total_platinum: record.group_total_platinum,
+            group_item_count: record.group_item_count,
+            allocation_total_platinum: record.allocation_total_platinum,
+            group_sort_order: record.group_sort_order,
         });
     }
 
@@ -1664,6 +2217,7 @@ fn load_cached_trade_log_state_inner(
               cache.slug,
               cache.image_path,
               cache.order_type,
+              cache.source,
               cache.platinum,
               cache.quantity,
               cache.rank,
@@ -1672,7 +2226,13 @@ fn load_cached_trade_log_state_inner(
               derived.profit,
               derived.margin,
               derived.status,
-              COALESCE(overrides.keep_item, cache.keep_item, 0)
+              COALESCE(overrides.keep_item, cache.keep_item, 0),
+              cache.group_id,
+              cache.group_label,
+              cache.group_total_platinum,
+              cache.group_item_count,
+              cache.allocation_total_platinum,
+              cache.group_sort_order
             FROM portfolio_trade_log_cache AS cache
             LEFT JOIN portfolio_trade_log_overrides AS overrides
               ON overrides.username = cache.username
@@ -1694,15 +2254,22 @@ fn load_cached_trade_log_state_inner(
                 slug: row.get(2)?,
                 image_path: row.get(3)?,
                 order_type: row.get(4)?,
-                platinum: row.get(5)?,
-                quantity: row.get(6)?,
-                rank: row.get(7)?,
-                closed_at: row.get(8)?,
-                updated_at: row.get(9)?,
-                profit: row.get(10)?,
-                margin: row.get(11)?,
-                status: row.get(12)?,
-                keep_item: row.get::<_, i64>(13)? != 0,
+                source: row.get(5)?,
+                platinum: row.get(6)?,
+                quantity: row.get(7)?,
+                rank: row.get(8)?,
+                closed_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                profit: row.get(11)?,
+                margin: row.get(12)?,
+                status: row.get(13)?,
+                keep_item: row.get::<_, i64>(14)? != 0,
+                group_id: row.get(15)?,
+                group_label: row.get(16)?,
+                group_total_platinum: row.get(17)?,
+                group_item_count: row.get(18)?,
+                allocation_total_platinum: row.get(19)?,
+                group_sort_order: row.get(20)?,
             })
         })
         .context("failed to read cached derived trade log rows")?
@@ -1765,6 +2332,142 @@ fn set_trade_log_keep_item_inner(
             params![trimmed_username, trimmed_order_id, if keep_item { 1 } else { 0 }],
         )
         .context("failed to update trade log keep override")?;
+
+    reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
+}
+
+fn migrate_alecaframe_trade_log_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+    input: &AlecaframeTradeMigrationInput,
+) -> Result<PortfolioTradeLogState> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to migrate trade history."));
+    }
+
+    let mut connection = open_trades_cache_database(app)?;
+    let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
+    let imported = build_alecaframe_trade_entries(
+        app,
+        trimmed_username,
+        &input.baseline_date,
+        &existing,
+    )?;
+
+    if !imported.is_empty() {
+        save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
+    }
+
+    reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
+}
+
+fn update_trade_group_allocations_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+    group_id: &str,
+    allocations: &[TradeGroupAllocationInput],
+) -> Result<PortfolioTradeLogState> {
+    let trimmed_username = username.trim();
+    let trimmed_group_id = group_id.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!("Username is required to update grouped trade allocations."));
+    }
+    if trimmed_group_id.is_empty() {
+        return Err(anyhow!("Trade group id is required to update allocations."));
+    }
+    if allocations.is_empty() {
+        return Err(anyhow!("Provide at least one child trade allocation."));
+    }
+
+    let mut connection = open_trades_cache_database(app)?;
+    let existing_rows = {
+        let mut statement = connection
+            .prepare(
+                "
+                SELECT order_id, group_total_platinum
+                FROM portfolio_trade_log_cache
+                WHERE username = ?1
+                  AND group_id = ?2
+                ORDER BY group_sort_order ASC, order_id ASC
+                ",
+            )
+            .context("failed to prepare grouped trade allocation query")?;
+
+        let rows = statement
+            .query_map(params![trimmed_username, trimmed_group_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+            })
+            .context("failed to query grouped trade allocation rows")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to collect grouped trade allocation rows")?;
+
+        rows
+    };
+
+    if existing_rows.is_empty() {
+        return Err(anyhow!("The selected grouped trade could not be found."));
+    }
+
+    let expected_total = existing_rows
+        .first()
+        .and_then(|row| row.1)
+        .ok_or_else(|| anyhow!("The grouped trade is missing its total platinum value."))?;
+    let expected_ids = existing_rows
+        .iter()
+        .map(|row| row.0.as_str())
+        .collect::<Vec<_>>();
+
+    if expected_ids.len() != allocations.len()
+        || allocations
+            .iter()
+            .any(|allocation| !expected_ids.contains(&allocation.order_id.as_str()))
+    {
+        return Err(anyhow!("Allocation rows do not match the stored grouped trade items."));
+    }
+
+    let supplied_total = allocations
+        .iter()
+        .map(|allocation| allocation.total_platinum)
+        .sum::<i64>();
+    if supplied_total != expected_total {
+        return Err(anyhow!(
+            "Adjusted totals must add up to {expected_total} platinum."
+        ));
+    }
+    if allocations.iter().any(|allocation| allocation.total_platinum < 0) {
+        return Err(anyhow!("Adjusted trade totals cannot be negative."));
+    }
+
+    let transaction = connection
+        .transaction()
+        .context("failed to start grouped trade allocation transaction")?;
+    {
+        let mut update_statement = transaction
+            .prepare(
+                "
+                UPDATE portfolio_trade_log_cache
+                SET allocation_total_platinum = ?3,
+                    platinum = ?3
+                WHERE username = ?1
+                  AND order_id = ?2
+                ",
+            )
+            .context("failed to prepare grouped trade allocation update")?;
+
+        for allocation in allocations {
+            update_statement
+                .execute(params![
+                    trimmed_username,
+                    allocation.order_id,
+                    allocation.total_platinum,
+                ])
+                .context("failed to update grouped trade allocation")?;
+        }
+    }
+    transaction
+        .commit()
+        .context("failed to commit grouped trade allocation transaction")?;
 
     reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
 }
@@ -2386,6 +3089,35 @@ pub async fn set_wfm_trade_log_keep_item(
 }
 
 #[tauri::command]
+pub async fn migrate_alecaframe_trade_log(
+    app: tauri::AppHandle,
+    username: String,
+    input: AlecaframeTradeMigrationInput,
+) -> Result<PortfolioTradeLogState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        migrate_alecaframe_trade_log_inner(&app, username.trim(), &input)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_trade_group_allocations(
+    app: tauri::AppHandle,
+    username: String,
+    group_id: String,
+    allocations: Vec<TradeGroupAllocationInput>,
+) -> Result<PortfolioTradeLogState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        update_trade_group_allocations_inner(&app, username.trim(), group_id.trim(), &allocations)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn ensure_trade_set_map(
     app: tauri::AppHandle,
     api_version: Option<String>,
@@ -2579,6 +3311,7 @@ mod tests {
                 slug: "test_item".to_string(),
                 image_path: Some("items/images/en/test.png".to_string()),
                 order_type: "sell".to_string(),
+                source: "wfm".to_string(),
                 platinum: 25,
                 quantity: 2,
                 rank: None,
@@ -2588,6 +3321,12 @@ mod tests {
                 margin: None,
                 status: None,
                 keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
             },
             PortfolioTradeLogEntry {
                 id: "buy-1".to_string(),
@@ -2595,6 +3334,7 @@ mod tests {
                 slug: "test_item".to_string(),
                 image_path: Some("items/images/en/test.png".to_string()),
                 order_type: "buy".to_string(),
+                source: "wfm".to_string(),
                 platinum: 15,
                 quantity: 1,
                 rank: Some(2),
@@ -2604,6 +3344,12 @@ mod tests {
                 margin: None,
                 status: None,
                 keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
             },
         ];
 
@@ -2629,12 +3375,19 @@ mod tests {
                 slug: "wisp_prime_chassis".to_string(),
                 image_path: None,
                 order_type: "buy".to_string(),
+                source: "wfm".to_string(),
                 platinum: 20,
                 quantity: 1,
                 rank: None,
                 closed_at: "2026-03-10T08:00:00.000+00:00".to_string(),
                 updated_at: "2026-03-10T08:00:00.000+00:00".to_string(),
                 keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
             },
             StoredTradeLogRecord {
                 id: "buy-neuro".to_string(),
@@ -2642,12 +3395,19 @@ mod tests {
                 slug: "wisp_prime_neuroptics".to_string(),
                 image_path: None,
                 order_type: "buy".to_string(),
+                source: "wfm".to_string(),
                 platinum: 18,
                 quantity: 1,
                 rank: None,
                 closed_at: "2026-03-10T08:05:00.000+00:00".to_string(),
                 updated_at: "2026-03-10T08:05:00.000+00:00".to_string(),
                 keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
             },
             StoredTradeLogRecord {
                 id: "buy-systems".to_string(),
@@ -2655,12 +3415,19 @@ mod tests {
                 slug: "wisp_prime_systems".to_string(),
                 image_path: None,
                 order_type: "buy".to_string(),
+                source: "wfm".to_string(),
                 platinum: 22,
                 quantity: 1,
                 rank: None,
                 closed_at: "2026-03-10T08:10:00.000+00:00".to_string(),
                 updated_at: "2026-03-10T08:10:00.000+00:00".to_string(),
                 keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
             },
             StoredTradeLogRecord {
                 id: "sell-set".to_string(),
@@ -2668,12 +3435,19 @@ mod tests {
                 slug: "wisp_prime_set".to_string(),
                 image_path: None,
                 order_type: "sell".to_string(),
+                source: "wfm".to_string(),
                 platinum: 95,
                 quantity: 1,
                 rank: None,
                 closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
                 updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
                 keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
             },
         ];
 
