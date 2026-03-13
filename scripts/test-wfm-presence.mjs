@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import readline from 'node:readline/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const APP_ID = 'com.warstonks.app';
@@ -20,12 +21,15 @@ function parseArgs(argv) {
     session: null,
     token: null,
     deviceId: null,
+    email: null,
+    password: null,
     status: null,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     listenMs: DEFAULT_LISTEN_MS,
     cases: 'matrix',
     restore: false,
     raw: false,
+    saveSession: true,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -49,6 +53,16 @@ function parseArgs(argv) {
     }
     if (arg === '--device-id' && next) {
       args.deviceId = next;
+      index += 1;
+      continue;
+    }
+    if (arg === '--email' && next) {
+      args.email = next;
+      index += 1;
+      continue;
+    }
+    if (arg === '--password' && next) {
+      args.password = next;
       index += 1;
       continue;
     }
@@ -80,6 +94,10 @@ function parseArgs(argv) {
       args.raw = true;
       continue;
     }
+    if (arg === '--no-save-session') {
+      args.saveSession = false;
+      continue;
+    }
     if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -104,6 +122,8 @@ Options:
   --session <path>       Path to wfm-session.json
   --token <jwt>          Override token from session
   --device-id <id>       Override device id from session
+  --email <email>        Manual sign-in fallback email
+  --password <password>  Manual sign-in fallback password
   --endpoint <url>       Force one websocket endpoint instead of the test matrix
   --status <value>       Attempt a real status set (examples: online, invisible, in_game, ingame)
   --cases <name>         "matrix" (default), "read-only", or "single"
@@ -111,6 +131,7 @@ Options:
   --listen-ms <ms>       Extra listen time after sending status set (default: ${DEFAULT_LISTEN_MS})
   --restore              If --status is used, try to restore the original status afterward
   --raw                  Print full raw websocket frames
+  --no-save-session      Do not save a session file after manual sign-in
 
 Examples:
   pnpm test:wfm-presence
@@ -141,6 +162,245 @@ async function loadSession(args) {
     sessionPath,
     token: args.token ?? parsed.token,
     deviceId: args.deviceId ?? parsed.device_id ?? parsed.deviceId,
+  };
+}
+
+function generateDeviceId() {
+  return crypto.randomUUID().replaceAll('-', '');
+}
+
+async function promptLine(promptText) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    return (await rl.question(promptText)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptPassword(promptText) {
+  return await new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+
+    if (!stdin.isTTY || !stdout.isTTY) {
+      promptLine(promptText).then(resolve, reject);
+      return;
+    }
+
+    let value = '';
+    const onData = (chunk) => {
+      const text = chunk.toString('utf8');
+      for (const character of text) {
+        if (character === '\u0003') {
+          cleanup();
+          reject(new Error('Password entry cancelled.'));
+          return;
+        }
+        if (character === '\r' || character === '\n') {
+          stdout.write('\n');
+          cleanup();
+          resolve(value.trim());
+          return;
+        }
+        if (character === '\u007f') {
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+          }
+          continue;
+        }
+        value += character;
+      }
+    };
+
+    const cleanup = () => {
+      stdin.off('data', onData);
+      if (stdin.isTTY) {
+        stdin.setRawMode(false);
+      }
+      stdin.pause();
+    };
+
+    try {
+      stdout.write(promptText);
+      stdin.resume();
+      stdin.setRawMode(true);
+      stdin.on('data', onData);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
+function normalizeAvatarUrl(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const normalizedPath = trimmed.replace(/^\/+/, '');
+  if (normalizedPath.startsWith('user/avatar/')) {
+    return `https://warframe.market/static/assets/${normalizedPath}`;
+  }
+
+  return `https://warframe.market/${normalizedPath}`;
+}
+
+async function fetchProfile(token) {
+  const response = await fetch('https://api.warframe.market/v2/me', {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'User-Agent': 'warstonks-presence-test/1.0',
+      Language: 'en',
+      Platform: 'pc',
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`WFM profile request failed with status ${response.status}: ${(await response.text()).trim()}`);
+  }
+
+  const payload = await response.json();
+  const data = payload?.data ?? {};
+  const fetchedAt = new Date().toISOString();
+
+  const name = data.ingame_name ?? data.ingameName ?? data.name;
+  const userId = data.id;
+  if (!name || !userId) {
+    throw new Error('WFM profile response did not include an id and ingame name.');
+  }
+
+  return {
+    userId: String(userId),
+    name: String(name),
+    status: normalizeIncomingStatus(data.status ?? data.status_type ?? 'offline'),
+    platform: data.platform ?? null,
+    reputation: Number.isFinite(data.reputation) ? Number(data.reputation) : null,
+    avatarUrl: normalizeAvatarUrl(
+      data.avatar ??
+      data.avatar_url ??
+      data.avatarUrl ??
+      data.profile_image ??
+      data.profileImage ??
+      null,
+    ),
+    lastUpdatedAt: fetchedAt,
+  };
+}
+
+async function signInWithCredentials(email, password, deviceId) {
+  const response = await fetch('https://api.warframe.market/v1/auth/signin', {
+    method: 'POST',
+    headers: {
+      Authorization: 'JWT',
+      'User-Agent': 'warstonks-presence-test/1.0',
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      auth_type: 'header',
+      email,
+      password,
+      device_id: deviceId,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`WFM sign-in failed with status ${response.status}: ${(await response.text()).trim()}`);
+  }
+
+  const authHeader = response.headers.get('authorization');
+  if (!authHeader) {
+    throw new Error('WFM sign-in succeeded but did not return an Authorization header.');
+  }
+
+  const token = authHeader.replace(/^JWT\s+/i, '').replace(/^Bearer\s+/i, '').trim();
+  if (!token) {
+    throw new Error('WFM sign-in returned an empty token.');
+  }
+
+  const account = await fetchProfile(token);
+  return { token, deviceId, account };
+}
+
+async function saveSession(sessionPath, session) {
+  await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+  await fs.writeFile(
+    sessionPath,
+    JSON.stringify(
+      {
+        token: session.token,
+        deviceId: session.deviceId,
+        account: session.account,
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+}
+
+async function resolveSession(args) {
+  const sessionPath = args.session ?? getDefaultSessionPath();
+  const token = args.token?.trim() || null;
+  const deviceId = args.deviceId?.trim() || null;
+
+  if (token && deviceId) {
+    return {
+      sessionPath,
+      token,
+      deviceId,
+      account: null,
+      source: 'overrides',
+    };
+  }
+
+  try {
+    const loaded = await loadSession(args);
+    if (loaded.token && loaded.deviceId) {
+      return {
+        ...loaded,
+        account: null,
+        source: 'saved-session',
+      };
+    }
+  } catch (error) {
+    if (args.session || token || deviceId) {
+      throw error;
+    }
+  }
+
+  const email = args.email?.trim() || await promptLine('Warframe Market email: ');
+  const password = args.password?.trim() || await promptPassword('Warframe Market password: ');
+  if (!email || !password) {
+    throw new Error('Email and password are required for manual sign-in.');
+  }
+
+  const signedIn = await signInWithCredentials(email, password, deviceId || generateDeviceId());
+  if (args.saveSession) {
+    await saveSession(sessionPath, signedIn);
+  }
+
+  return {
+    sessionPath,
+    token: signedIn.token,
+    deviceId: signedIn.deviceId,
+    account: signedIn.account,
+    source: args.saveSession ? 'manual-sign-in-saved' : 'manual-sign-in',
   };
 }
 
@@ -402,14 +662,18 @@ async function runCase(testCase, session, args) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const session = await loadSession(args);
+  const session = await resolveSession(args);
 
   if (!session.token || !session.deviceId) {
     throw new Error('Missing token or device id. Provide --token and --device-id or ensure the saved session file is valid.');
   }
 
   console.log(`Using session: ${session.sessionPath ?? '(override only)'}`);
+  console.log(`Session source: ${session.source}`);
   console.log(`Device id: ${session.deviceId}`);
+  if (session.account?.name) {
+    console.log(`Signed in as: ${session.account.name}`);
+  }
   console.log(`Mode: ${args.cases}${args.status ? ` with status=${normalizeStatus(args.status)}` : ' (read-only if no --status)'}`);
 
   const cases = buildCases(args).filter((testCase) => testCase.endpoint);
