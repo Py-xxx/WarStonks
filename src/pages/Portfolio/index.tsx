@@ -1457,7 +1457,7 @@ function PnlSummaryTab({
           </span>
         </div>
       ) : summary ? (
-        <>
+        <div className="portfolio-summary-body">
           <div className="plat-grid portfolio-summary-grid">
             <div className="info-card">
               <div className="info-card-label">
@@ -1713,7 +1713,7 @@ function PnlSummaryTab({
               </div>
             </div>
           ) : null}
-        </>
+        </div>
       ) : null}
     </>
   );
