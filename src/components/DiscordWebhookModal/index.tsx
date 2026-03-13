@@ -29,6 +29,7 @@ export function DiscordWebhookModal() {
   const [enabled, setEnabled] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [watchlistFound, setWatchlistFound] = useState(true);
+  const [tradeDetected, setTradeDetected] = useState(true);
   const [worldstateOffline, setWorldstateOffline] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -40,6 +41,7 @@ export function DiscordWebhookModal() {
     setEnabled(appSettings.discordWebhook.enabled);
     setWebhookUrl(appSettings.discordWebhook.webhookUrl ?? '');
     setWatchlistFound(appSettings.discordWebhook.notifications.watchlistFound);
+    setTradeDetected(appSettings.discordWebhook.notifications.tradeDetected);
     setWorldstateOffline(appSettings.discordWebhook.notifications.worldstateOffline);
     setLocalError(null);
   }, [appSettings.discordWebhook, modalOpen]);
@@ -56,6 +58,7 @@ export function DiscordWebhookModal() {
         webhookUrl: webhookUrl.trim() || null,
         notifications: {
           watchlistFound,
+          tradeDetected,
           worldstateOffline,
         },
       });
@@ -140,6 +143,24 @@ export function DiscordWebhookModal() {
                   role="switch"
                   aria-checked={watchlistFound}
                   onClick={() => setWatchlistFound((current) => !current)}
+                >
+                  <span className="settings-toggle-track">
+                    <span className="settings-toggle-thumb" />
+                  </span>
+                </button>
+              </label>
+
+              <label className="settings-switch-row settings-switch-row-compact">
+                <span className="settings-field-copy">
+                  <span className="settings-field-label">New Trades Detected</span>
+                  <span className="settings-field-help">Notify when new buy or sell trades are detected.</span>
+                </span>
+                <button
+                  className={`settings-toggle${tradeDetected ? ' on' : ''}`}
+                  type="button"
+                  role="switch"
+                  aria-checked={tradeDetected}
+                  onClick={() => setTradeDetected((current) => !current)}
                 >
                   <span className="settings-toggle-track">
                     <span className="settings-toggle-thumb" />

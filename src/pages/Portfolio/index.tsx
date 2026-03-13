@@ -547,6 +547,32 @@ function TradeLogTab({ username }: { username: string | null }) {
     };
   }, [username]);
 
+  useEffect(() => {
+    if (!username) {
+      return;
+    }
+
+    let cancelled = false;
+    const intervalId = setInterval(() => {
+      void getCachedWfmProfileTradeLog(username)
+        .then((nextState) => {
+          if (!cancelled) {
+            applyTradeLogState(nextState);
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.error('[portfolio] failed to refresh cached trade log', error);
+          }
+        });
+    }, 4_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [username]);
+
   return (
     <>
       <div className="period-bar">

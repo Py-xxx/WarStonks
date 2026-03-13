@@ -22,6 +22,7 @@ import { useWorldStateMarketNews } from './hooks/useWorldStateMarketNews';
 import { useWorldStateVoidTrader } from './hooks/useWorldStateVoidTrader';
 import { useWorldStateActivities } from './hooks/useWorldStateActivities';
 import { useMarketTracking } from './hooks/useMarketTracking';
+import { useTradeDetection } from './hooks/useTradeDetection';
 
 function PageRouter() {
   const activePage = useAppStore((s) => s.activePage);
@@ -42,6 +43,7 @@ function PageRouter() {
 function AppShell() {
   useWatchlistScanner();
   useMarketTracking();
+  useTradeDetection();
   useIntegrationSettings();
   useWorldStateEvents();
   useWorldStateFissures();

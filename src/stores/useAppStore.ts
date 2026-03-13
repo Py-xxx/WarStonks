@@ -112,6 +112,7 @@ const defaultAppSettings: AppSettings = {
     webhookUrl: null,
     notifications: {
       watchlistFound: true,
+      tradeDetected: true,
       worldstateOffline: false,
     },
     lastValidatedAt: null,

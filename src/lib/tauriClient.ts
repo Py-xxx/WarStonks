@@ -26,6 +26,8 @@ import type {
   TradeOverview,
   PortfolioTradeLogState,
   TradeGroupAllocationInput,
+  TradeDetectionRefreshResult,
+  TradeDetectionRefreshInput,
   TradeSetMapSummary,
   TradeSessionState,
   TradeSignInInput,
@@ -270,6 +272,20 @@ export async function getWfmProfileTradeLog(
   username: string,
 ): Promise<PortfolioTradeLogState> {
   return invoke<PortfolioTradeLogState>('get_wfm_profile_trade_log', { username });
+}
+
+export async function refreshWfmTradeDetection(
+  username: string,
+  input: TradeDetectionRefreshInput,
+): Promise<TradeDetectionRefreshResult> {
+  return invoke<TradeDetectionRefreshResult>('refresh_wfm_trade_detection', { username, input });
+}
+
+export async function refreshAlecaframeTradeDetection(
+  username: string,
+  input: TradeDetectionRefreshInput,
+): Promise<TradeDetectionRefreshResult> {
+  return invoke<TradeDetectionRefreshResult>('refresh_alecaframe_trade_detection', { username, input });
 }
 
 export async function getCachedWfmProfileTradeLog(
