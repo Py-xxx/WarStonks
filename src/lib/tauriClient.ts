@@ -262,6 +262,12 @@ export async function signOutWfmTradeAccount(): Promise<void> {
   return invoke<void>('sign_out_wfm_trade_account');
 }
 
+export async function setWfmTradeStatus(
+  status: 'ingame' | 'online' | 'invisible',
+): Promise<TradeSessionState> {
+  return invoke<TradeSessionState>('set_wfm_trade_status', { status });
+}
+
 export async function getWfmTradeOverview(
   sellerMode: SellerMode,
 ): Promise<TradeOverview> {

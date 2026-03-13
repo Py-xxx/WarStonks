@@ -41,7 +41,7 @@ const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
 const ALECAFRAME_NOTIFICATION_DELAY_SECONDS: i64 = 90;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
-const WFM_WS_URL: &str = "wss://warframe.market/socket-v2";
+const WFM_WS_URL: &str = "wss://ws.warframe.market/socket";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
@@ -4877,6 +4877,102 @@ async fn fetch_current_trade_status_ws(token: &str, device_id: &str) -> Result<S
     .context("timed out while waiting for WFM presence state")?
 }
 
+fn normalize_status_set_request(status: &str) -> Result<&'static str> {
+    match status.trim().to_lowercase().as_str() {
+        "ingame" | "in_game" => Ok("in_game"),
+        "online" => Ok("online"),
+        "invisible" | "offline" => Ok("invisible"),
+        _ => Err(anyhow!("Unsupported presence state.")),
+    }
+}
+
+async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str) -> Result<String> {
+    let requested_status = normalize_status_set_request(status)?;
+    let mut ws_stream = connect_wfm_websocket(token, device_id).await?;
+    let mut authenticated = false;
+    let mut status_sent = false;
+
+    timeout(Duration::from_secs(10), async {
+        while let Some(message) = ws_stream.next().await {
+            let message = message.context("failed to read WFM websocket message")?;
+            let Message::Text(text) = message else {
+                continue;
+            };
+
+            let payload = serde_json::from_str::<WfmWsMessage>(&text)
+                .context("failed to parse WFM websocket payload")?;
+            let route = payload
+                .route
+                .split('|')
+                .nth(1)
+                .unwrap_or(payload.route.as_str())
+                .to_string();
+
+            if !authenticated {
+                if route == "cmd/auth/signIn:ok" {
+                    authenticated = true;
+                } else if route == "cmd/auth/signIn:error" {
+                    let reason = payload
+                        .payload
+                        .as_ref()
+                        .and_then(|value| value.get("reason"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("websocket authentication failed");
+                    return Err(anyhow!(reason.to_string()));
+                } else {
+                    continue;
+                }
+            }
+
+            if authenticated && !status_sent {
+                status_sent = true;
+                let status_message = WfmWsMessage {
+                    route: "@wfm|cmd/status/set".to_string(),
+                    payload: Some(json!({
+                        "status": requested_status,
+                    })),
+                    id: Some(uuid::Uuid::new_v4().to_string()),
+                    ref_id: None,
+                };
+
+                ws_stream
+                    .send(Message::Text(
+                        serde_json::to_string(&status_message)
+                            .context("failed to serialize websocket status message")?
+                            .into(),
+                    ))
+                    .await
+                    .context("failed to send websocket status message")?;
+                continue;
+            }
+
+            if route == "cmd/status/set:error" {
+                let reason = payload
+                    .payload
+                    .as_ref()
+                    .and_then(|value| value.get("reason"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("failed to update presence");
+                return Err(anyhow!(reason.to_string()));
+            }
+
+            if route == "event/status/set" || route == "cmd/status/set:ok" {
+                if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload) {
+                    return Ok(status);
+                }
+
+                if route == "cmd/status/set:ok" {
+                    return Ok(normalize_status_label(requested_status));
+                }
+            }
+        }
+
+        Err(anyhow!("presence update confirmation was not emitted by WFM"))
+    })
+    .await
+    .context("timed out while waiting for WFM presence update")?
+}
+
 fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     let client = shared_wfm_client()?;
     let trimmed_email = input.email.trim();
@@ -5346,6 +5442,39 @@ pub async fn sign_out_wfm_trade_account(app: tauri::AppHandle) -> Result<(), Str
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_wfm_trade_status(
+    app: tauri::AppHandle,
+    status: String,
+) -> Result<TradeSessionState, String> {
+    let mut session = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || ensure_authenticated_session(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error: anyhow::Error| error.to_string())?;
+
+    let next_status = set_current_trade_status_ws(&session.token, &session.device_id, &status)
+        .await
+        .map_err(|error| error.to_string())?;
+    session.account.status = next_status;
+
+    tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        let session = session.clone();
+        move || save_session(&app, &session)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error: anyhow::Error| error.to_string())?;
+
+    Ok(TradeSessionState {
+        connected: true,
+        account: Some(session.account),
+    })
 }
 
 #[tauri::command]

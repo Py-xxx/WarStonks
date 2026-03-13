@@ -12,6 +12,7 @@ import {
   getItemVariantsForMarket,
   getWfmTradeOverview,
   getWfmItemOrders,
+  setWfmTradeStatus,
   updateWfmBuyOrder,
   getWfmTopSellOrdersForVariant,
   getWfmTopSellOrders,
@@ -923,6 +924,7 @@ interface AppStore {
   loadTradeAccount: () => Promise<void>;
   signInTradeAccount: (input: TradeSignInInput) => Promise<void>;
   signOutTradeAccount: () => Promise<void>;
+  setTradeAccountStatus: (status: 'ingame' | 'online' | 'invisible') => Promise<void>;
   autoWatchlistBuyOrdersEnabled: boolean;
   setAutoWatchlistBuyOrdersEnabled: (enabled: boolean) => void;
   tradesSubTab: TradesSubTab;
@@ -2653,6 +2655,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await signOutWfmTradeAccount();
       set({
         tradeAccount: null,
+        tradeAccountLoading: false,
+        tradeAccountError: null,
+      });
+    } catch (error) {
+      set({
+        tradeAccountLoading: false,
+        tradeAccountError: toErrorMessage(error),
+      });
+      throw error;
+    }
+  },
+  setTradeAccountStatus: async (status) => {
+    set({ tradeAccountLoading: true, tradeAccountError: null });
+
+    try {
+      const sessionState = await setWfmTradeStatus(status);
+      set({
+        tradeAccount: sessionState.account,
         tradeAccountLoading: false,
         tradeAccountError: null,
       });
