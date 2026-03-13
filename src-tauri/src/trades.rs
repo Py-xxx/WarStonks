@@ -4850,13 +4850,17 @@ fn create_order_inner(
     build_trade_overview_inner(app, seller_mode)
 }
 
-fn update_sell_order_inner(
+fn update_order_inner(
     app: &tauri::AppHandle,
     input: &TradeUpdateListingInput,
+    order_type: &str,
     seller_mode: &str,
 ) -> Result<TradeOverview> {
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
+    if !matches!(order_type, "sell" | "buy") {
+        return Err(anyhow!("Unsupported order type."));
+    }
     if input.price <= 0 || input.quantity <= 0 {
         return Err(anyhow!(
             "Price and quantity must both be greater than zero."
@@ -4880,20 +4884,24 @@ fn update_sell_order_inner(
             Some(&session.token),
         )
         .json(&payload),
-        "update sell order",
+        &format!("update {order_type} order"),
     )?;
 
     build_trade_overview_inner(app, seller_mode)
 }
 
-fn close_sell_order_inner(
+fn close_order_inner(
     app: &tauri::AppHandle,
     order_id: &str,
     quantity: i64,
+    order_type: &str,
     seller_mode: &str,
 ) -> Result<TradeOverview> {
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
+    if !matches!(order_type, "sell" | "buy") {
+        return Err(anyhow!("Unsupported order type."));
+    }
     if quantity <= 0 {
         return Err(anyhow!("Quantity to close must be greater than zero."));
     }
@@ -4906,19 +4914,23 @@ fn close_sell_order_inner(
             Some(&session.token),
         )
         .json(&json!({ "quantity": quantity })),
-        "close sell order",
+        &format!("close {order_type} order"),
     )?;
 
     build_trade_overview_inner(app, seller_mode)
 }
 
-fn delete_sell_order_inner(
+fn delete_order_inner(
     app: &tauri::AppHandle,
     order_id: &str,
+    order_type: &str,
     seller_mode: &str,
 ) -> Result<TradeOverview> {
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
+    if !matches!(order_type, "sell" | "buy") {
+        return Err(anyhow!("Unsupported order type."));
+    }
 
     execute_wfm_request(
         send_wfm_request(
@@ -4927,7 +4939,7 @@ fn delete_sell_order_inner(
             format!("{WFM_API_BASE_URL_V2}/order/{order_id}"),
             Some(&session.token),
         ),
-        "delete sell order",
+        &format!("delete {order_type} order"),
     )?;
 
     build_trade_overview_inner(app, seller_mode)
@@ -5199,7 +5211,21 @@ pub async fn update_wfm_sell_order(
     seller_mode: String,
 ) -> Result<TradeOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        update_sell_order_inner(&app, &input, seller_mode.trim())
+        update_order_inner(&app, &input, "sell", seller_mode.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_wfm_buy_order(
+    app: tauri::AppHandle,
+    input: TradeUpdateListingInput,
+    seller_mode: String,
+) -> Result<TradeOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        update_order_inner(&app, &input, "buy", seller_mode.trim())
     })
     .await
     .map_err(|error| error.to_string())?
@@ -5214,7 +5240,22 @@ pub async fn close_wfm_sell_order(
     seller_mode: String,
 ) -> Result<TradeOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        close_sell_order_inner(&app, order_id.trim(), quantity, seller_mode.trim())
+        close_order_inner(&app, order_id.trim(), quantity, "sell", seller_mode.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn close_wfm_buy_order(
+    app: tauri::AppHandle,
+    order_id: String,
+    quantity: i64,
+    seller_mode: String,
+) -> Result<TradeOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        close_order_inner(&app, order_id.trim(), quantity, "buy", seller_mode.trim())
     })
     .await
     .map_err(|error| error.to_string())?
@@ -5228,7 +5269,21 @@ pub async fn delete_wfm_sell_order(
     seller_mode: String,
 ) -> Result<TradeOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        delete_sell_order_inner(&app, order_id.trim(), seller_mode.trim())
+        delete_order_inner(&app, order_id.trim(), "sell", seller_mode.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_wfm_buy_order(
+    app: tauri::AppHandle,
+    order_id: String,
+    seller_mode: String,
+) -> Result<TradeOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_order_inner(&app, order_id.trim(), "buy", seller_mode.trim())
     })
     .await
     .map_err(|error| error.to_string())?

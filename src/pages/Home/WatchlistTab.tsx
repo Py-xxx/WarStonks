@@ -1,7 +1,13 @@
+import { useState } from 'react';
+import { WatchlistPurchaseModal } from '../../components/WatchlistPurchaseModal';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
+import { copyWhisperMessage } from '../../lib/marketMessages';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { getWatchlistVisualState } from '../../lib/watchlist';
 import { useAppStore } from '../../stores/useAppStore';
+
+const COPY_RESET_DELAY_MS = 1800;
+const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
 
 function formatLastScan(lastUpdatedAt: string | null): string {
   if (!lastUpdatedAt) {
@@ -30,6 +36,12 @@ export function WatchlistTab() {
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
   const setSelected = useAppStore((state) => state.setSelectedWatchlist);
   const removeItem = useAppStore((state) => state.removeWatchlistItem);
+  const markWatchlistItemBought = useAppStore((state) => state.markWatchlistItemBought);
+  const [purchaseItemId, setPurchaseItemId] = useState<string | null>(null);
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [copiedWatchlistId, setCopiedWatchlistId] = useState<string | null>(null);
+  const purchaseItem = watchlist.find((item) => item.id === purchaseItemId) ?? null;
 
   return (
     <div className="wl-fullscreen">
@@ -113,16 +125,55 @@ export function WatchlistTab() {
                         {visualState.label}
                       </td>
                       <td>
-                        <button
-                          className="act-btn danger"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            removeItem(item.id);
-                          }}
-                        >
-                          Remove
-                        </button>
+                        <div className="watchlist-actions">
+                          <button
+                            className="act-btn"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPurchaseError(null);
+                              setPurchaseItemId(item.id);
+                            }}
+                          >
+                            Mark as bought
+                          </button>
+                          {visualState.tone === 'red' && item.currentSeller && item.currentPrice !== null ? (
+                            <button
+                              className="act-btn"
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void copyWhisperMessage(
+                                  { username: item.currentSeller!, platinum: item.currentPrice! },
+                                  item.displayName,
+                                )
+                                  .then(() => {
+                                    setCopiedWatchlistId(item.id);
+                                    window.setTimeout(() => {
+                                      setCopiedWatchlistId((current) =>
+                                        current === item.id ? null : current,
+                                      );
+                                    }, COPY_RESET_DELAY_MS);
+                                  })
+                                  .catch(() => {
+                                    setPurchaseError(COPY_ERROR_MESSAGE);
+                                  });
+                              }}
+                            >
+                              {copiedWatchlistId === item.id ? 'Copied' : 'Copy Message'}
+                            </button>
+                          ) : null}
+                          <button
+                            className="act-btn danger"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeItem(item.id);
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -135,6 +186,36 @@ export function WatchlistTab() {
           </>
         )}
       </div>
+
+      {purchaseItem ? (
+        <WatchlistPurchaseModal
+          itemName={purchaseItem.displayName}
+          defaultPrice={purchaseItem.targetPrice}
+          loading={purchaseLoading}
+          errorMessage={purchaseError}
+          onClose={() => {
+            if (purchaseLoading) {
+              return;
+            }
+            setPurchaseItemId(null);
+            setPurchaseError(null);
+          }}
+          onSubmit={(price) => {
+            setPurchaseLoading(true);
+            setPurchaseError(null);
+            void markWatchlistItemBought(purchaseItem.id, price)
+              .then(() => {
+                setPurchaseItemId(null);
+              })
+              .catch((error) => {
+                setPurchaseError(error instanceof Error ? error.message : String(error));
+              })
+              .finally(() => {
+                setPurchaseLoading(false);
+              });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

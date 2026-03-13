@@ -3,9 +3,11 @@ import {
   closeWfmSellOrder,
   createWfmBuyOrder,
   createWfmSellOrder,
+  deleteWfmBuyOrder,
   deleteWfmSellOrder,
   getWfmAutocompleteItems,
   getWfmTradeOverview,
+  updateWfmBuyOrder,
   updateWfmSellOrder,
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
@@ -421,6 +423,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const sellerMode = useAppStore((s) => s.sellerMode);
+  const autoWatchlistBuyOrdersEnabled = useAppStore((s) => s.autoWatchlistBuyOrdersEnabled);
+  const setAutoWatchlistBuyOrdersEnabled = useAppStore((s) => s.setAutoWatchlistBuyOrdersEnabled);
   const signOutTradeAccount = useAppStore((s) => s.signOutTradeAccount);
 
   const [overview, setOverview] = useState<TradeOverview | null>(null);
@@ -587,7 +591,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
               } satisfies TradeCreateListingInput,
               sellerMode,
             )
-          : await updateWfmSellOrder(
+          : await (listingModal.orderType === 'sell' ? updateWfmSellOrder : updateWfmBuyOrder)(
               {
                 orderId: listingModal.orderId ?? '',
                 price,
@@ -631,7 +635,10 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
 
   const handleDeleteOrder = async (orderId: string) => {
     try {
-      const nextOverview = await deleteWfmSellOrder(orderId, sellerMode);
+      const nextOverview =
+        listingType === 'sell'
+          ? await deleteWfmSellOrder(orderId, sellerMode)
+          : await deleteWfmBuyOrder(orderId, sellerMode);
       applyOverview(nextOverview);
     } catch (error) {
       setOverviewError(error instanceof Error ? error.message : String(error));
@@ -674,6 +681,17 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         <div className="trade-hero-actions">
           <button className="btn-primary" type="button" onClick={openCreateListing}>
             Create {listingType === 'sell' ? 'Sell' : 'Buy'} Order
+          </button>
+          <button
+            className={`trade-visibility-toggle${autoWatchlistBuyOrdersEnabled ? ' on' : ''}`}
+            type="button"
+            onClick={() => setAutoWatchlistBuyOrdersEnabled(!autoWatchlistBuyOrdersEnabled)}
+            title="Automatically create and manage a linked buy order for watchlist items"
+          >
+            <span className="trade-visibility-toggle-track" />
+            <span className="trade-visibility-toggle-copy">
+              Auto Watchlist Buy {autoWatchlistBuyOrdersEnabled ? 'On' : 'Off'}
+            </span>
           </button>
           <button className="btn-secondary" type="button" onClick={() => void handleDisconnect()}>
             Disconnect

@@ -28,6 +28,7 @@ export const mockWatchlist: WatchlistItem[] = [
     retryCount: 0,
     lastError: null,
     ignoredUserKeys: [],
+    linkedBuyOrderId: null,
   },
   {
     id: 'primed-flow',
@@ -56,6 +57,7 @@ export const mockWatchlist: WatchlistItem[] = [
     retryCount: 0,
     lastError: null,
     ignoredUserKeys: [],
+    linkedBuyOrderId: null,
   },
   {
     id: 'umbra-forma',
@@ -84,6 +86,7 @@ export const mockWatchlist: WatchlistItem[] = [
     retryCount: 0,
     lastError: null,
     ignoredUserKeys: [],
+    linkedBuyOrderId: null,
   },
 ];
 

@@ -2064,6 +2064,17 @@ body {
 .watchlist-status-red {
   color: var(--accent-red);
 }
+.watchlist-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.watchlist-actions .act-btn {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 10px;
+}
 .td-muted { color: var(--text-secondary) !important; }
 .td-green { color: var(--accent-green) !important; }
 .td-red   { color: var(--accent-red) !important; }
@@ -3842,10 +3853,18 @@ body {
 .trade-listing-modal {
   width: min(720px, calc(100vw - 32px));
 }
+.watchlist-purchase-modal {
+  width: min(460px, calc(100vw - 32px));
+}
 .trade-listing-modal-body {
   display: grid;
   gap: 14px;
   grid-template-columns: 1fr;
+}
+.watchlist-purchase-copy {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 .trade-listing-type-tabs {
   display: inline-grid;
@@ -3935,6 +3954,10 @@ body {
 .trade-visibility-toggle-copy {
   font-size: 12px;
   font-weight: 600;
+}
+.trade-hero-actions .trade-visibility-toggle {
+  min-width: 188px;
+  justify-content: space-between;
 }
 .trade-listing-autocomplete {
   min-height: 0;
