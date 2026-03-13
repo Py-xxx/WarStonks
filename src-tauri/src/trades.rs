@@ -150,6 +150,16 @@ pub struct PortfolioTradeLogEntry {
     pub group_item_count: Option<i64>,
     pub allocation_total_platinum: Option<i64>,
     pub group_sort_order: Option<i64>,
+    pub allocation_mode: Option<String>,
+    pub cost_basis_confidence: Option<String>,
+    pub cost_basis_label: Option<String>,
+    pub matched_cost: Option<i64>,
+    pub matched_quantity: Option<i64>,
+    pub matched_buy_count: i64,
+    pub matched_buy_rows: Vec<PortfolioMatchedBuyRow>,
+    pub set_component_rows: Vec<PortfolioSetComponentRow>,
+    pub profit_formula: Option<String>,
+    pub duplicate_risk: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +197,58 @@ pub struct PortfolioBreakdownRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PortfolioMatchedBuyRow {
+    pub order_id: String,
+    pub item_name: String,
+    pub slug: String,
+    pub quantity: i64,
+    pub consumed_cost: i64,
+    pub closed_at: String,
+    pub match_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioSetComponentRow {
+    pub slug: String,
+    pub name: String,
+    pub required_quantity: i64,
+    pub matched_quantity: i64,
+    pub missing_quantity: i64,
+    pub matched_cost: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioInventoryRow {
+    pub id: String,
+    pub item_name: String,
+    pub slug: String,
+    pub image_path: Option<String>,
+    pub quantity: i64,
+    pub rank: Option<i64>,
+    pub status: String,
+    pub cost_basis: i64,
+    pub estimated_value: i64,
+    pub unrealized_pnl: i64,
+    pub last_updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioAuditRow {
+    pub id: String,
+    pub item_name: String,
+    pub slug: String,
+    pub order_type: String,
+    pub source: String,
+    pub closed_at: String,
+    pub label: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PortfolioPnlSummary {
     pub period: String,
     pub last_updated_at: Option<String>,
@@ -211,10 +273,14 @@ pub struct PortfolioPnlSummary {
     pub flip_profit: i64,
     pub unmatched_sell_revenue: i64,
     pub partial_cost_basis_revenue: i64,
+    pub kept_inventory_value: i64,
+    pub partial_set_profit: i64,
     pub best_trade_item: Option<String>,
     pub best_trade_profit: Option<i64>,
     pub worst_trade_item: Option<String>,
     pub worst_trade_profit: Option<i64>,
+    pub inventory_rows: Vec<PortfolioInventoryRow>,
+    pub audit_rows: Vec<PortfolioAuditRow>,
     pub category_breakdown: Vec<PortfolioBreakdownRow>,
     pub source_breakdown: Vec<PortfolioBreakdownRow>,
     pub cumulative_profit_points: Vec<PortfolioPnlMetricPoint>,
@@ -230,8 +296,21 @@ struct PortfolioCatalogMeta {
 
 #[derive(Debug, Clone)]
 struct ConsumedBuyMatch {
+    order_id: String,
+    item_name: String,
+    slug: String,
     quantity: i64,
+    consumed_cost: i64,
     buy_closed_at: String,
+    match_kind: String,
+}
+
+#[derive(Debug, Clone)]
+struct DerivedSetComponentDetail {
+    slug: String,
+    required_quantity: i64,
+    matched_quantity: i64,
+    matched_cost: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -244,6 +323,7 @@ struct DerivedSellDetail {
     sold_as_set_quantity: i64,
     sold_as_set_cost: i64,
     matches: Vec<ConsumedBuyMatch>,
+    set_component_details: Vec<DerivedSetComponentDetail>,
 }
 
 #[derive(Debug, Clone)]
@@ -1406,6 +1486,16 @@ fn build_trade_log_entries_from_statistics(
             group_item_count: None,
             allocation_total_platinum: None,
             group_sort_order: None,
+            allocation_mode: None,
+            cost_basis_confidence: None,
+            cost_basis_label: None,
+            matched_cost: None,
+            matched_quantity: None,
+            matched_buy_count: 0,
+            matched_buy_rows: Vec::new(),
+            set_component_rows: Vec::new(),
+            profit_formula: None,
+            duplicate_risk: false,
         })
         .collect::<Vec<_>>();
 
@@ -2063,6 +2153,16 @@ fn build_alecaframe_trade_entries(
                     .map(|_| preview_rows.len() as i64),
                 allocation_total_platinum: Some(allocations[index]),
                 group_sort_order: effective_group_id.as_ref().map(|_| sort_order),
+                allocation_mode: effective_group_id.as_ref().map(|_| "auto".to_string()),
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
             });
         }
     }
@@ -2935,6 +3035,66 @@ fn record_total_platinum(record: &StoredTradeLogRecord) -> i64 {
         .unwrap_or(record.platinum.saturating_mul(record.quantity))
 }
 
+fn build_trade_allocation_mode(record: &StoredTradeLogRecord) -> Option<String> {
+    record.group_id.as_ref()?;
+    Some(if record.allocation_total_platinum.is_some() {
+        "manual".to_string()
+    } else {
+        "auto".to_string()
+    })
+}
+
+fn portfolio_display_name_from_slug(slug: &str) -> String {
+    slug.split('_')
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn build_cost_basis_confidence(
+    order_type: &str,
+    quantity: i64,
+    matched_quantity: i64,
+    matched_cost: i64,
+) -> (Option<String>, Option<String>) {
+    if order_type != "sell" {
+        return (None, None);
+    }
+
+    if matched_cost <= 0 || matched_quantity <= 0 {
+        return (Some("none".to_string()), Some("No Cost Basis".to_string()));
+    }
+
+    if matched_quantity >= quantity.max(1) {
+        return (Some("full".to_string()), Some("Full Cost Basis".to_string()));
+    }
+
+    (
+        Some("partial".to_string()),
+        Some("Partial Cost Basis".to_string()),
+    )
+}
+
+fn build_profit_formula(revenue: i64, matched_cost: i64, profit: i64) -> String {
+    format!(
+        "{} sell - {} matched cost = {} profit",
+        format_platinum_amount(revenue),
+        format_platinum_amount(matched_cost),
+        format_platinum_amount(profit)
+    )
+}
+
+fn format_platinum_amount(value: i64) -> String {
+    format!("{value}p")
+}
+
 fn build_portfolio_entry_from_stored_record(
     record: &StoredTradeLogRecord,
 ) -> PortfolioTradeLogEntry {
@@ -2960,6 +3120,16 @@ fn build_portfolio_entry_from_stored_record(
         group_item_count: record.group_item_count,
         allocation_total_platinum: record.allocation_total_platinum,
         group_sort_order: record.group_sort_order,
+        allocation_mode: build_trade_allocation_mode(record),
+        cost_basis_confidence: None,
+        cost_basis_label: None,
+        matched_cost: None,
+        matched_quantity: None,
+        matched_buy_count: 0,
+        matched_buy_rows: Vec::new(),
+        set_component_rows: Vec::new(),
+        profit_formula: None,
+        duplicate_risk: false,
     }
 }
 
@@ -3168,8 +3338,17 @@ fn consume_matching_buy_lots(
         }
 
         matches.push(ConsumedBuyMatch {
+            order_id: record.id.clone(),
+            item_name: record.item_name.clone(),
+            slug: record.slug.clone(),
             quantity: quantity_to_consume,
+            consumed_cost,
             buy_closed_at: record.closed_at.clone(),
+            match_kind: if as_set {
+                "sold_as_set".to_string()
+            } else {
+                "flip".to_string()
+            },
         });
     }
 
@@ -3182,9 +3361,9 @@ fn consume_set_component_buy_lots(
     components: &[TradeSetComponentRecord],
     sell_quantity: i64,
     sell_closed_at: &str,
-) -> (i64, i64, Vec<ConsumedBuyMatch>) {
+) -> (i64, i64, Vec<ConsumedBuyMatch>, Vec<DerivedSetComponentDetail>) {
     if components.is_empty() || sell_quantity <= 0 {
-        return (0, 0, Vec::new());
+        return (0, 0, Vec::new(), Vec::new());
     }
 
     let mut fully_supported_sets = sell_quantity;
@@ -3212,8 +3391,9 @@ fn consume_set_component_buy_lots(
 
     let mut total_cost = 0_i64;
     let mut all_matches = Vec::new();
+    let mut component_details = Vec::new();
     for component in components {
-        let (_, component_cost, component_matches) = consume_matching_buy_lots(
+        let (component_matched_quantity, component_cost, component_matches) = consume_matching_buy_lots(
             records,
             consumption,
             &component.component_slug,
@@ -3224,9 +3404,15 @@ fn consume_set_component_buy_lots(
         );
         total_cost += component_cost;
         all_matches.extend(component_matches);
+        component_details.push(DerivedSetComponentDetail {
+            slug: component.component_slug.clone(),
+            required_quantity: component.quantity_in_set * sell_quantity,
+            matched_quantity: component_matched_quantity,
+            matched_cost: component_cost,
+        });
     }
 
-    (fully_supported_sets.max(0), total_cost, all_matches)
+    (fully_supported_sets.max(0), total_cost, all_matches, component_details)
 }
 
 fn derive_trade_ledger_with_components<F>(
@@ -3253,7 +3439,7 @@ where
         if record.slug.ends_with("_set") {
             let components = load_components(&record.slug);
             if !components.is_empty() {
-                let (set_quantity, set_cost, set_matches) = consume_set_component_buy_lots(
+                let (set_quantity, set_cost, set_matches, component_details) = consume_set_component_buy_lots(
                     records,
                     &mut consumption,
                     &components,
@@ -3266,6 +3452,7 @@ where
                 detail.sold_as_set_quantity = set_quantity;
                 detail.sold_as_set_cost = set_cost;
                 detail.matches.extend(set_matches);
+                detail.set_component_details = component_details;
             }
         }
 
@@ -3293,6 +3480,34 @@ where
         } else {
             None
         };
+        let (cost_basis_confidence, cost_basis_label) =
+            build_cost_basis_confidence("sell", record.quantity, matched_quantity, matched_cost);
+        let profit_formula = Some(build_profit_formula(revenue, matched_cost, profit));
+        let matched_buy_rows = detail
+            .matches
+            .iter()
+            .map(|matched| PortfolioMatchedBuyRow {
+                order_id: matched.order_id.clone(),
+                item_name: matched.item_name.clone(),
+                slug: matched.slug.clone(),
+                quantity: matched.quantity,
+                consumed_cost: matched.consumed_cost,
+                closed_at: matched.buy_closed_at.clone(),
+                match_kind: matched.match_kind.clone(),
+            })
+            .collect::<Vec<_>>();
+        let set_component_rows = detail
+            .set_component_details
+            .iter()
+            .map(|component| PortfolioSetComponentRow {
+                slug: component.slug.clone(),
+                name: portfolio_display_name_from_slug(&component.slug),
+                required_quantity: component.required_quantity,
+                matched_quantity: component.matched_quantity,
+                missing_quantity: (component.required_quantity - component.matched_quantity).max(0),
+                matched_cost: component.matched_cost,
+            })
+            .collect::<Vec<_>>();
 
         derived.push(PortfolioTradeLogEntry {
             id: record.id.clone(),
@@ -3316,6 +3531,16 @@ where
             group_item_count: record.group_item_count,
             allocation_total_platinum: record.allocation_total_platinum,
             group_sort_order: record.group_sort_order,
+            allocation_mode: build_trade_allocation_mode(record),
+            cost_basis_confidence,
+            cost_basis_label,
+            matched_cost: Some(matched_cost),
+            matched_quantity: Some(matched_quantity),
+            matched_buy_count: matched_buy_rows.len() as i64,
+            matched_buy_rows,
+            set_component_rows,
+            profit_formula,
+            duplicate_risk: false,
         });
 
         detail.revenue = revenue;
@@ -3362,6 +3587,16 @@ where
             group_item_count: record.group_item_count,
             allocation_total_platinum: record.allocation_total_platinum,
             group_sort_order: record.group_sort_order,
+            allocation_mode: build_trade_allocation_mode(record),
+            cost_basis_confidence: None,
+            cost_basis_label: None,
+            matched_cost: None,
+            matched_quantity: None,
+            matched_buy_count: 0,
+            matched_buy_rows: Vec::new(),
+            set_component_rows: Vec::new(),
+            profit_formula: None,
+            duplicate_risk: false,
         });
     }
 
@@ -3372,6 +3607,28 @@ where
             .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| right.id.cmp(&left.id))
     });
+
+    for index in 0..derived.len() {
+        let Some(left_time) = parse_timestamp(&derived[index].closed_at) else {
+            continue;
+        };
+        let has_duplicate_risk = derived.iter().enumerate().any(|(other_index, other)| {
+            if other_index == index {
+                return false;
+            }
+            if other.order_type != derived[index].order_type
+                || other.item_name != derived[index].item_name
+                || other.quantity != derived[index].quantity
+            {
+                return false;
+            }
+            let Some(other_time) = parse_timestamp(&other.closed_at) else {
+                return false;
+            };
+            (left_time - other_time).whole_seconds().unsigned_abs() <= 60
+        });
+        derived[index].duplicate_risk = has_duplicate_risk;
+    }
 
     DerivedTradeLedger {
         entries: derived,
@@ -3399,78 +3656,13 @@ fn derive_trade_log_entries(
 }
 
 fn load_cached_trade_log_state_inner(
+    app: &tauri::AppHandle,
     connection: &Connection,
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
-    let trimmed_username = username.trim();
     let last_updated_at = load_trade_log_last_updated_at(connection, username)?;
-    let mut statement = connection
-        .prepare(
-            "
-            SELECT
-              cache.order_id,
-              cache.item_name,
-              cache.slug,
-              cache.image_path,
-              cache.order_type,
-              cache.source,
-              cache.platinum,
-              cache.quantity,
-              cache.rank,
-              cache.closed_at,
-              cache.updated_at,
-              derived.profit,
-              derived.margin,
-              derived.status,
-              COALESCE(overrides.keep_item, cache.keep_item, 0),
-              cache.group_id,
-              cache.group_label,
-              cache.group_total_platinum,
-              cache.group_item_count,
-              cache.allocation_total_platinum,
-              cache.group_sort_order
-            FROM portfolio_trade_log_cache AS cache
-            LEFT JOIN portfolio_trade_log_overrides AS overrides
-              ON overrides.username = cache.username
-             AND overrides.order_id = cache.order_id
-            LEFT JOIN portfolio_trade_log_derived AS derived
-              ON derived.username = cache.username
-             AND derived.order_id = cache.order_id
-            WHERE cache.username = ?1
-            ORDER BY cache.closed_at DESC, cache.updated_at DESC, cache.order_id DESC
-            ",
-        )
-        .context("failed to prepare cached derived trade log query")?;
-
-    let entries = statement
-        .query_map(params![trimmed_username], |row| {
-            Ok(PortfolioTradeLogEntry {
-                id: row.get(0)?,
-                item_name: row.get(1)?,
-                slug: row.get(2)?,
-                image_path: row.get(3)?,
-                order_type: row.get(4)?,
-                source: row.get(5)?,
-                platinum: row.get(6)?,
-                quantity: row.get(7)?,
-                rank: row.get(8)?,
-                closed_at: row.get(9)?,
-                updated_at: row.get(10)?,
-                profit: row.get(11)?,
-                margin: row.get(12)?,
-                status: row.get(13)?,
-                keep_item: row.get::<_, i64>(14)? != 0,
-                group_id: row.get(15)?,
-                group_label: row.get(16)?,
-                group_total_platinum: row.get(17)?,
-                group_item_count: row.get(18)?,
-                allocation_total_platinum: row.get(19)?,
-                group_sort_order: row.get(20)?,
-            })
-        })
-        .context("failed to read cached derived trade log rows")?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .context("failed to collect cached derived trade log rows")?;
+    let records = load_stored_trade_log_records_inner(connection, username)?;
+    let entries = derive_trade_log_entries(app, &records);
 
     Ok(PortfolioTradeLogState {
         entries,
@@ -3523,7 +3715,7 @@ fn reconcile_trade_log_state_inner(
     let records = load_stored_trade_log_records_inner(connection, username)?;
     let entries = derive_trade_log_entries(app, &records);
     persist_derived_trade_log_entries_inner(connection, username, &entries)?;
-    load_cached_trade_log_state_inner(connection, username)
+    load_cached_trade_log_state_inner(app, connection, username)
 }
 
 fn ensure_trade_log_state_inner(
@@ -3532,7 +3724,7 @@ fn ensure_trade_log_state_inner(
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
     if has_complete_derived_trade_log_state(connection, username)? {
-        return load_cached_trade_log_state_inner(connection, username);
+        return load_cached_trade_log_state_inner(app, connection, username);
     }
 
     reconcile_trade_log_state_inner(app, connection, username)
@@ -3901,6 +4093,7 @@ fn normalize_portfolio_pnl_period(value: &str) -> String {
     match value.trim() {
         "7d" => "7d".to_string(),
         "30d" => "30d".to_string(),
+        "90d" => "90d".to_string(),
         _ => "all".to_string(),
     }
 }
@@ -3909,6 +4102,7 @@ fn portfolio_pnl_cutoff(period: &str) -> Option<OffsetDateTime> {
     match period {
         "7d" => Some(now_utc() - time::Duration::days(7)),
         "30d" => Some(now_utc() - time::Duration::days(30)),
+        "90d" => Some(now_utc() - time::Duration::days(90)),
         _ => None,
     }
 }
@@ -4207,6 +4401,14 @@ fn build_portfolio_pnl_summary_inner(
     let mut open_buys = 0_i64;
     let mut kept_items = 0_i64;
     let mut current_value_covered_cost = 0_i64;
+    let mut kept_inventory_value = 0_i64;
+    let mut partial_set_profit = 0_i64;
+    let mut inventory_rows = Vec::<PortfolioInventoryRow>::new();
+    let mut audit_rows = Vec::<PortfolioAuditRow>::new();
+    let mut ambiguous_group_ids = HashSet::<String>::new();
+    let mut alecaframe_audit_ids = HashSet::<String>::new();
+    let mut duplicate_audit_ids = HashSet::<String>::new();
+    let mut unmatched_sell_audit_ids = HashSet::<String>::new();
 
     for record in &records {
         let Some(derived_entry) = derived_by_id.get(&record.id) else {
@@ -4241,10 +4443,31 @@ fn build_portfolio_pnl_summary_inner(
                     .unwrap_or(total_platinum);
                 unrealized_value += estimated_total;
                 unrealized_pnl += estimated_total - total_platinum;
+                if derived_entry.status.as_deref() == Some("Kept") {
+                    kept_inventory_value += estimated_total;
+                }
 
                 if maybe_estimate.is_some() {
                     current_value_covered_cost += total_platinum;
                 }
+
+                inventory_rows.push(PortfolioInventoryRow {
+                    id: record.id.clone(),
+                    item_name: record.item_name.clone(),
+                    slug: record.slug.clone(),
+                    image_path: record.image_path.clone(),
+                    quantity: record.quantity,
+                    rank: record.rank,
+                    status: if derived_entry.status.as_deref() == Some("Kept") {
+                        "kept".to_string()
+                    } else {
+                        "open".to_string()
+                    },
+                    cost_basis: total_platinum,
+                    estimated_value: estimated_total,
+                    unrealized_pnl: estimated_total - total_platinum,
+                    last_updated_at: record.updated_at.clone(),
+                });
             }
 
             if !record_matches_cutoff(record, cutoff) {
@@ -4273,20 +4496,40 @@ fn build_portfolio_pnl_summary_inner(
         }
         if let Some(margin) = derived_entry.margin {
             positive_margin_values.push(margin);
-            full_cost_basis_revenue += total_platinum;
         }
 
         let detail = derived_ledger.sell_details.get(&record.id);
         let matched_cost = detail.map(|value| value.matched_cost).unwrap_or(0);
-        if derived_entry.margin.is_none() && matched_cost > 0 {
-            partial_cost_basis_revenue += total_platinum;
+        match derived_entry.cost_basis_confidence.as_deref() {
+            Some("full") => {
+                full_cost_basis_revenue += total_platinum;
+            }
+            Some("partial") => {
+                partial_cost_basis_revenue += total_platinum;
+            }
+            _ => {}
         }
         if matched_cost <= 0 {
             unmatched_sell_revenue += total_platinum;
+            if unmatched_sell_audit_ids.insert(record.id.clone()) {
+                audit_rows.push(PortfolioAuditRow {
+                    id: record.id.clone(),
+                    item_name: record.item_name.clone(),
+                    slug: record.slug.clone(),
+                    order_type: record.order_type.clone(),
+                    source: record.source.clone(),
+                    closed_at: record.closed_at.clone(),
+                    label: "Unmatched Sell".to_string(),
+                    detail: "No local buy cost basis was matched for this sell yet.".to_string(),
+                });
+            }
         }
 
         let source_label = if detail.map(|value| value.sold_as_set_cost).unwrap_or(0) > 0 {
             sold_as_set_profit += profit;
+            if derived_entry.cost_basis_confidence.as_deref() == Some("partial") {
+                partial_set_profit += profit;
+            }
             "Sold As Set"
         } else if matched_cost > 0 {
             flip_profit += profit;
@@ -4357,6 +4600,56 @@ fn build_portfolio_pnl_summary_inner(
             closed_at: record.closed_at.clone(),
             profit,
         });
+
+        if derived_entry.duplicate_risk && duplicate_audit_ids.insert(record.id.clone()) {
+            audit_rows.push(PortfolioAuditRow {
+                id: record.id.clone(),
+                item_name: record.item_name.clone(),
+                slug: record.slug.clone(),
+                order_type: record.order_type.clone(),
+                source: record.source.clone(),
+                closed_at: record.closed_at.clone(),
+                label: "Duplicate Risk".to_string(),
+                detail:
+                    "Another trade with the same item, quantity, and nearly identical close time exists."
+                        .to_string(),
+            });
+        }
+
+        if record.source == "alecaframe" && alecaframe_audit_ids.insert(record.id.clone()) {
+            audit_rows.push(PortfolioAuditRow {
+                id: record.id.clone(),
+                item_name: record.item_name.clone(),
+                slug: record.slug.clone(),
+                order_type: record.order_type.clone(),
+                source: record.source.clone(),
+                closed_at: record.closed_at.clone(),
+                label: "Alecaframe Import".to_string(),
+                detail:
+                    "This row was imported from Alecaframe and merged into the permanent trade ledger."
+                        .to_string(),
+            });
+        }
+
+        if let Some(group_id) = record.group_id.as_ref() {
+            if ambiguous_group_ids.insert(group_id.clone()) {
+                audit_rows.push(PortfolioAuditRow {
+                    id: group_id.clone(),
+                    item_name: record
+                        .group_label
+                        .clone()
+                        .unwrap_or_else(|| "Grouped Trade".to_string()),
+                    slug: record.slug.clone(),
+                    order_type: record.order_type.clone(),
+                    source: record.source.clone(),
+                    closed_at: record.closed_at.clone(),
+                    label: "Ambiguous Group".to_string(),
+                    detail:
+                        "Grouped trade still contains multiple child items and may need allocation review."
+                            .to_string(),
+                });
+            }
+        }
     }
 
     let average_margin = average(&positive_margin_values);
@@ -4428,6 +4721,22 @@ fn build_portfolio_pnl_summary_inner(
         ));
     }
 
+    inventory_rows.sort_by(|left, right| {
+        right
+            .unrealized_pnl
+            .cmp(&left.unrealized_pnl)
+            .then_with(|| right.estimated_value.cmp(&left.estimated_value))
+            .then_with(|| left.item_name.cmp(&right.item_name))
+    });
+    audit_rows.sort_by(|left, right| {
+        right
+            .closed_at
+            .cmp(&left.closed_at)
+            .then_with(|| left.label.cmp(&right.label))
+            .then_with(|| left.item_name.cmp(&right.item_name))
+    });
+    audit_rows.truncate(40);
+
     Ok(PortfolioPnlSummary {
         period: normalized_period,
         last_updated_at,
@@ -4452,10 +4761,14 @@ fn build_portfolio_pnl_summary_inner(
         flip_profit,
         unmatched_sell_revenue,
         partial_cost_basis_revenue,
+        kept_inventory_value,
+        partial_set_profit,
         best_trade_item: best_trade.as_ref().map(|value| value.0.clone()),
         best_trade_profit: best_trade.as_ref().map(|value| value.1),
         worst_trade_item: worst_trade.as_ref().map(|value| value.0.clone()),
         worst_trade_profit: worst_trade.as_ref().map(|value| value.1),
+        inventory_rows,
+        audit_rows,
         category_breakdown: breakdown_rows_from_map(category_breakdown_map, 6),
         source_breakdown: breakdown_rows_from_map(source_breakdown_map, 6),
         cumulative_profit_points,
@@ -5494,6 +5807,16 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
             },
             PortfolioTradeLogEntry {
                 id: "buy-1".to_string(),
@@ -5517,6 +5840,16 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
             },
         ];
 
@@ -5947,6 +6280,16 @@ mod tests {
             group_item_count: None,
             allocation_total_platinum: None,
             group_sort_order: None,
+            allocation_mode: None,
+            cost_basis_confidence: None,
+            cost_basis_label: None,
+            matched_cost: None,
+            matched_quantity: None,
+            matched_buy_count: 0,
+            matched_buy_rows: Vec::new(),
+            set_component_rows: Vec::new(),
+            profit_formula: None,
+            duplicate_risk: false,
         }];
 
         let (persisted_entries, new_entries) =
