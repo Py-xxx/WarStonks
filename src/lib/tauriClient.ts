@@ -449,11 +449,13 @@ export async function getWfmItemOrders(
   slug: string,
   variantKey: string | null,
   sellerMode: SellerMode,
+  requestPriority?: 'instant' | 'high' | 'medium' | 'low' | 'background',
 ): Promise<WfmItemOrdersResponse> {
   return invoke<WfmItemOrdersResponse>('get_wfm_item_orders', {
     slug,
     variantKey,
     sellerMode,
+    requestPriority,
   });
 }
 

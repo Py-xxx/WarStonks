@@ -55,6 +55,7 @@ import {
 import {
   buildWatchlistUserKey,
   getWatchlistPollIntervalMs,
+  getWatchlistRequestPriority,
   getWatchlistRetryDelayMs,
   selectPreferredWatchlistOrder,
 } from '../lib/watchlist';
@@ -2150,7 +2151,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     try {
       const latestState = get();
-      const response = await getWfmItemOrders(item.slug, item.variantKey, latestState.sellerMode);
+      const response = await getWfmItemOrders(
+        item.slug,
+        item.variantKey,
+        latestState.sellerMode,
+        getWatchlistRequestPriority(item),
+      );
       if (!isLatestWatchlistRefresh(id, refreshGeneration)) {
         return { alertTriggered: false };
       }

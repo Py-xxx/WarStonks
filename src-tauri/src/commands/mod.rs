@@ -760,7 +760,7 @@ fn fetch_wfm_top_sell_orders_inner(
             .header("Language", WFM_LANGUAGE_HEADER)
             .header("Platform", WFM_PLATFORM_HEADER)
             .header("Crossplay", WFM_CROSSPLAY_HEADER),
-        RequestPriority::Medium,
+        RequestPriority::Instant,
         "request WFM item orders",
         Some(format!("orders:item:{trimmed_slug}")),
     )?;
