@@ -1884,11 +1884,10 @@ function AnalysisTab() {
       });
 
     void loadSelectedMarketAnalysis()
-      .then(() => {
+      .then((response) => {
         if (!isMounted) {
           return;
         }
-        const response = useAppStore.getState().selectedMarketAnalysis;
         if (!response) {
           return;
         }
