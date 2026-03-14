@@ -1,6 +1,9 @@
 import type { WatchlistItem, WfmTopSellOrder } from '../types';
 
-export const WATCHLIST_MIN_ITEM_SCAN_INTERVAL_MS = 10_500;
+export type WatchlistRequestPriority = 'background' | 'medium' | 'high';
+
+export const WATCHLIST_MIN_ITEM_SCAN_INTERVAL_MS = 15_000;
+export const WATCHLIST_HIGH_PRIORITY_AGE_MS = 30_000;
 export const WATCHLIST_SAFE_REQUESTS_PER_SECOND = 2;
 export const WATCHLIST_SCANNER_TICK_MS = Math.ceil(
   1000 / WATCHLIST_SAFE_REQUESTS_PER_SECOND,
@@ -28,6 +31,31 @@ export function getWatchlistPollIntervalMs(itemCount: number): number {
   );
 
   return Math.max(WATCHLIST_MIN_ITEM_SCAN_INTERVAL_MS, adaptiveInterval);
+}
+
+export function getWatchlistRequestPriority(
+  item: Pick<WatchlistItem, 'lastUpdatedAt'>,
+  nowMs: number = Date.now(),
+): WatchlistRequestPriority {
+  if (!item.lastUpdatedAt) {
+    return 'high';
+  }
+
+  const lastUpdatedMs = Date.parse(item.lastUpdatedAt);
+  if (Number.isNaN(lastUpdatedMs)) {
+    return 'high';
+  }
+
+  const ageMs = Math.max(0, nowMs - lastUpdatedMs);
+  if (ageMs >= WATCHLIST_HIGH_PRIORITY_AGE_MS) {
+    return 'high';
+  }
+
+  if (ageMs >= WATCHLIST_MIN_ITEM_SCAN_INTERVAL_MS) {
+    return 'medium';
+  }
+
+  return 'background';
 }
 
 export function getWatchlistRetryDelayMs(
@@ -61,19 +89,23 @@ export function selectNextWatchlistItemToScan(
   items: WatchlistItem[],
   nowMs: number = Date.now(),
 ): WatchlistItem | null {
-  let nextItem: WatchlistItem | null = null;
+  let nextDueItem: WatchlistItem | null = null;
+  let nextUpcomingItem: WatchlistItem | null = null;
 
   for (const item of items) {
-    if (item.nextScanAt > nowMs) {
+    if (item.nextScanAt <= nowMs) {
+      if (!nextDueItem || item.nextScanAt < nextDueItem.nextScanAt) {
+        nextDueItem = item;
+      }
       continue;
     }
 
-    if (!nextItem || item.nextScanAt < nextItem.nextScanAt) {
-      nextItem = item;
+    if (!nextUpcomingItem || item.nextScanAt < nextUpcomingItem.nextScanAt) {
+      nextUpcomingItem = item;
     }
   }
 
-  return nextItem;
+  return nextDueItem ?? nextUpcomingItem;
 }
 
 export function getWatchlistVisualState(item: WatchlistItem): {

@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 mod commands;
 mod item_catalog;
 mod market_observatory;
@@ -9,6 +11,14 @@ mod worldstate_cache;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            if let Ok(app_data_dir) = app.path().app_data_dir() {
+                crate::wfm_scheduler::configure_wfm_scheduler_debug_log(Some(
+                    app_data_dir.join("data").join("queueDebug.jsonl"),
+                ));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_shell_info,
             commands::get_app_version,

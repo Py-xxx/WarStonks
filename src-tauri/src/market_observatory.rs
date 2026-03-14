@@ -6041,7 +6041,7 @@ fn build_supply_context(
                                 &component.slug,
                                 "base",
                                 seller_mode,
-                                RequestPriority::Medium,
+                                RequestPriority::Instant,
                             )?;
                         (
                             snapshot.lowest_sell.map(round_platinum),
@@ -6055,7 +6055,7 @@ fn build_supply_context(
                             &component.slug,
                             "base",
                             seller_mode,
-                            RequestPriority::Medium,
+                            RequestPriority::Instant,
                         )?;
                     (
                         snapshot.lowest_sell.map(round_platinum),
@@ -6992,7 +6992,7 @@ fn build_item_analysis_inner(
     )?;
 
     let live_orders =
-        fetch_filtered_orders(&slug, &variant_key, &seller_mode, RequestPriority::Medium).ok();
+        fetch_filtered_orders(&slug, &variant_key, &seller_mode, RequestPriority::Instant).ok();
     let current_snapshot = live_orders
         .as_ref()
         .map(|entry| entry.3.clone())
@@ -7262,7 +7262,7 @@ fn build_item_analytics_inner(
         item_id,
         &slug,
         &variant_key,
-        RequestPriority::Medium,
+        RequestPriority::Instant,
     ) {
         if !statistics_cache_is_usable(
             &connection,
@@ -7404,16 +7404,19 @@ pub async fn get_wfm_item_orders(
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
+    request_priority: Option<String>,
 ) -> Result<WfmItemOrdersResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let variant_key = normalize_variant_key(variant_key.as_deref());
         let seller_mode = normalize_seller_mode(seller_mode.as_deref());
+        let request_priority =
+            RequestPriority::from_wire(request_priority.as_deref(), RequestPriority::Instant);
         let (api_version, sell_orders, buy_orders, snapshot) =
             fetch_filtered_orders(
                 &slug,
                 &variant_key,
                 &seller_mode,
-                RequestPriority::Medium,
+                request_priority,
             )?;
         Ok::<_, anyhow::Error>(WfmItemOrdersResponse {
             api_version,

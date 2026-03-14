@@ -1242,7 +1242,15 @@ fn execute_wfm_request(
     builder: reqwest::blocking::RequestBuilder,
     action_label: &str,
 ) -> Result<reqwest::blocking::Response> {
-    acquire_wfm_slot(RequestPriority::High, action_label);
+    execute_wfm_request_with_priority(builder, action_label, RequestPriority::High)
+}
+
+fn execute_wfm_request_with_priority(
+    builder: reqwest::blocking::RequestBuilder,
+    action_label: &str,
+    priority: RequestPriority,
+) -> Result<reqwest::blocking::Response> {
+    acquire_wfm_slot(priority, action_label);
     let response = builder
         .send()
         .with_context(|| format!("failed to {action_label}"))?;
@@ -1267,7 +1275,7 @@ fn execute_wfm_request(
 }
 
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
-    let response = execute_wfm_request(
+    let response = execute_wfm_request_with_priority(
         send_wfm_request(
             client,
             Method::GET,
@@ -1275,6 +1283,7 @@ fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSumma
             Some(token),
         ),
         "request WFM profile",
+        RequestPriority::Instant,
     )?;
 
     let payload = response
@@ -2342,7 +2351,10 @@ fn build_alecaframe_trade_entries(
     Ok(imported)
 }
 
-fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLogEntry>> {
+fn fetch_profile_trade_log_inner_with_priority(
+    username: &str,
+    priority: RequestPriority,
+) -> Result<Vec<PortfolioTradeLogEntry>> {
     let trimmed_username = username.trim();
     if trimmed_username.is_empty() {
         return Err(anyhow!("Username is required to load the trade log."));
@@ -2361,7 +2373,7 @@ fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLog
             .get(url.clone())
             .header("User-Agent", WFM_USER_AGENT)
             .header("Accept", "application/json"),
-        RequestPriority::High,
+        priority,
         "request WFM trade history",
         Some(format!("trade-history:{}", url)),
     )?;
@@ -2382,6 +2394,10 @@ fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLog
         .context("failed to parse WFM trade history response")?;
 
     Ok(build_trade_log_entries_from_statistics(payload.payload))
+}
+
+fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLogEntry>> {
+    fetch_profile_trade_log_inner_with_priority(username, RequestPriority::High)
 }
 
 fn load_stored_trade_log_records_inner(
@@ -4253,7 +4269,8 @@ fn refresh_trade_log_state_for_app(
 ) -> Result<PortfolioTradeLogState> {
     let mut connection = open_trades_cache_database(app)?;
     let existing = load_stored_trade_log_records_inner(&connection, username)?;
-    let fetched_entries = fetch_profile_trade_log_inner(username)?;
+    let fetched_entries =
+        fetch_profile_trade_log_inner_with_priority(username, RequestPriority::Instant)?;
     let (persisted_entries, _) = merge_wfm_trade_log_entries(&existing, &fetched_entries);
     save_trade_log_rows_inner(&mut connection, username, &persisted_entries)?;
     reconcile_trade_log_state_inner(app, &mut connection, username)
@@ -5423,7 +5440,7 @@ fn fetch_market_low_for_listing(
     seller_mode: &str,
     own_username: &str,
 ) -> Result<Option<i64>> {
-    let payload = execute_wfm_request(
+    let payload = execute_wfm_request_with_priority(
         send_wfm_request(
             client,
             Method::GET,
@@ -5431,6 +5448,7 @@ fn fetch_market_low_for_listing(
             None,
         ),
         "request market low",
+        RequestPriority::Instant,
     )?
     .json::<WfmOrdersItemResponse>()
     .context("failed to parse market low response")?;
@@ -5452,7 +5470,7 @@ fn fetch_market_low_for_listing(
 }
 
 fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
-    let response = execute_wfm_request(
+    let response = execute_wfm_request_with_priority(
         send_wfm_request(
             client,
             Method::GET,
@@ -5460,6 +5478,7 @@ fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
             Some(token),
         ),
         "load own orders",
+        RequestPriority::Instant,
     )?;
 
     let payload = response
