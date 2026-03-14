@@ -7652,7 +7652,7 @@ fn load_owned_relic_inventory_cache(
 }
 
 fn save_owned_relic_inventory_cache(
-    connection: &Connection,
+    connection: &mut Connection,
     rows: &[OwnedRelicCacheRow],
     updated_at: &str,
 ) -> Result<()> {
@@ -7716,10 +7716,10 @@ pub async fn refresh_owned_relic_inventory(
     app: tauri::AppHandle,
 ) -> Result<OwnedRelicInventoryCache, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = open_market_observatory_database(&app)?;
+        let mut connection = open_market_observatory_database(&app)?;
         let rows = fetch_owned_relic_inventory_rows(&app)?;
         let updated_at = format_timestamp(now_utc())?;
-        save_owned_relic_inventory_cache(&connection, &rows, &updated_at)?;
+        save_owned_relic_inventory_cache(&mut connection, &rows, &updated_at)?;
         load_owned_relic_inventory_cache(&app, &connection)
     })
     .await

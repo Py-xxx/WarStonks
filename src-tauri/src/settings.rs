@@ -1,4 +1,6 @@
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -571,12 +573,14 @@ fn decode_alecaframe_relic_inventory_payload(payload: &[u8]) -> Result<Vec<u8>> 
         let parsed = serde_json::from_slice::<serde_json::Value>(&trimmed)
             .context("failed to parse Alecaframe relic inventory JSON payload")?;
         if let Some(raw_string) = parsed.as_str() {
-            let decoded = base64::decode(raw_string.trim())
+            let decoded = BASE64_STANDARD
+                .decode(raw_string.trim())
                 .context("failed to decode Alecaframe relic inventory base64 payload")?;
             return Ok(decoded);
         }
         if let Some(raw_string) = parsed.get("rawBase64").and_then(|value| value.as_str()) {
-            let decoded = base64::decode(raw_string.trim())
+            let decoded = BASE64_STANDARD
+                .decode(raw_string.trim())
                 .context("failed to decode Alecaframe relic inventory base64 payload")?;
             return Ok(decoded);
         }
@@ -939,7 +943,7 @@ mod tests {
         payload.push(3);
         payload.extend_from_slice(b"A1 ");
         payload.extend_from_slice(&7u32.to_le_bytes());
-        let encoded = base64::encode(&payload);
+        let encoded = BASE64_STANDARD.encode(&payload);
         let wrapped = format!("\"{}\"", encoded);
 
         let decoded =
