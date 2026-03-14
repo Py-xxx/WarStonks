@@ -786,27 +786,6 @@ struct WfmOrdersApiResponse {
     data: Vec<WfmOrderRecord>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmSetApiResponse {
-    data: WfmSetData,
-}
-
-#[derive(Debug, Deserialize)]
-struct WfmSetData {
-    items: Vec<WfmSetItemRecord>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmSetItemRecord {
-    slug: String,
-    #[serde(default)]
-    set_root: Option<bool>,
-    #[serde(default)]
-    i18n: HashMap<String, WfmSetI18nRecord>,
-}
-
 #[derive(Debug, Clone)]
 struct SetRootCatalogRecord {
     item_id: i64,
@@ -851,17 +830,6 @@ struct ScannerPriceModel {
     liquidity_score: f64,
     sale_state: String,
     confidence_summary: MarketConfidenceSummary,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmSetI18nRecord {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    icon: Option<String>,
-    #[serde(default)]
-    thumb: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5182,30 +5150,6 @@ fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
     (now_utc() - fetched_at) < TimeDuration::days(SET_COMPOSITION_CACHE_RETENTION_DAYS)
 }
 
-fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
-    let client = shared_wfm_client()?;
-    let response = execute_wfm_bytes_request(
-        client
-            .get(format!("{WFM_API_BASE_URL_V2}/item/{slug}/set"))
-            .header("User-Agent", WFM_USER_AGENT)
-            .header("Language", WFM_LANGUAGE_HEADER)
-            .header("Platform", WFM_PLATFORM_HEADER)
-            .header("Crossplay", WFM_CROSSPLAY_HEADER),
-        RequestPriority::Low,
-        "request WFM set payload",
-        Some(format!("set-payload:{slug}")),
-        || false,
-    )?;
-    if response.status < 200 || response.status >= 300 {
-        return Err(extract_wfm_error_body("WFM set request", &response));
-    }
-
-    Ok(serde_json::from_slice::<WfmSetApiResponse>(&response.body)
-        .context("failed to parse WFM set response")?
-        .data
-        .items)
-}
-
 fn load_catalog_set_components(
     catalog_connection: &Connection,
     set_root: &SetRootCatalogRecord,
@@ -6008,96 +5952,66 @@ fn build_supply_context(
     item_id: i64,
     slug: &str,
     item_details: &ItemDetailSummary,
-    seller_mode: &str,
+    _seller_mode: &str,
 ) -> Result<ItemSupplyContext> {
     let looks_like_set =
         item_details.tags.iter().any(|tag| tag == "set") || item_details.name.ends_with(" Set");
 
     if looks_like_set {
-        let connection = open_catalog_database(app)?;
+        let catalog_connection = open_catalog_database(app)?;
+        let observatory_connection = open_market_observatory_database(app)?;
+        let set_root = SetRootCatalogRecord {
+            item_id,
+            slug: slug.to_string(),
+            name: item_details.name.clone(),
+            image_path: item_details.image_path.clone(),
+        };
+        let (cached_components, _) = ensure_set_components_cached(
+            &catalog_connection,
+            &observatory_connection,
+            &set_root,
+        )?;
         let mut components = Vec::new();
-        for component in fetch_wfm_set_items(slug)? {
-            if component.set_root == Some(true) || component.slug == slug {
-                continue;
-            }
-
-            let item_id = resolve_item_id_by_slug(&connection, &component.slug)?;
-            let name = component
-                .i18n
-                .get("en")
-                .and_then(|entry| entry.name.clone())
-                .unwrap_or_else(|| component.slug.replace('_', " "));
-            let image_path = component
-                .i18n
-                .get("en")
-                .and_then(|entry| entry.thumb.clone().or(entry.icon.clone()));
-
-            let (current_lowest_price, recommended_entry_price) = match item_id {
-                Some(component_item_id) => match build_item_analytics_inner(
-                    app.clone(),
-                    component_item_id,
-                    component.slug.clone(),
-                    Some("base".to_string()),
-                    Some(seller_mode.to_string()),
-                    Some("48h".to_string()),
-                    Some("1h".to_string()),
-                ) {
-                    Ok(component_analytics) => (
-                        component_analytics
-                            .current_snapshot
-                            .as_ref()
-                            .and_then(|entry| entry.lowest_sell)
-                            .map(round_platinum),
-                        component_analytics
-                            .entry_exit_zone_overview
-                            .entry_zone_low
-                            .map(round_platinum)
-                            .or_else(|| {
-                                component_analytics
-                                    .current_snapshot
-                                    .as_ref()
-                                    .and_then(|entry| entry.lowest_sell)
-                                    .map(round_platinum)
-                            }),
-                    ),
-                    Err(_) => {
-                        let (_, _, _, snapshot) =
-                            fetch_filtered_orders(
-                                &component.slug,
-                                "base",
-                                seller_mode,
-                                RequestPriority::Instant,
-                            )?;
-                        (
-                            snapshot.lowest_sell.map(round_platinum),
-                            snapshot.lowest_sell.map(round_platinum),
-                        )
-                    }
-                },
-                None => {
-                    let (_, _, _, snapshot) =
-                        fetch_filtered_orders(
-                            &component.slug,
-                            "base",
-                            seller_mode,
-                            RequestPriority::Instant,
-                        )?;
-                    (
-                        snapshot.lowest_sell.map(round_platinum),
-                        snapshot.lowest_sell.map(round_platinum),
+        for component in cached_components {
+            let model = component
+                .component_item_id
+                .map(|component_item_id| {
+                    build_statistics_price_model(
+                        &observatory_connection,
+                        component_item_id,
+                        "base",
                     )
-                }
-            };
+                })
+                .transpose()?
+                .flatten();
+            let current_lowest_price = model
+                .as_ref()
+                .and_then(|entry| entry.current_stats_price);
+            let recommended_entry_price = model
+                .as_ref()
+                .and_then(|entry| entry.recommended_entry_price.or(entry.current_stats_price));
 
             components.push(SetComponentAnalysisEntry {
-                item_id,
-                slug: component.slug,
-                name,
-                image_path,
+                item_id: component.component_item_id,
+                slug: component.component_slug,
+                name: component.component_name,
+                image_path: component.component_image_path,
                 current_lowest_price,
                 recommended_entry_price,
                 variant_key: "base".to_string(),
                 variant_label: "Base Market".to_string(),
+            });
+        }
+
+        if components.is_empty() {
+            return Ok(ItemSupplyContext {
+                mode: "none".to_string(),
+                components: Vec::new(),
+                drop_sources: Vec::new(),
+                confidence_summary: build_confidence_summary(
+                    "low",
+                    vec!["No cached set components".to_string()],
+                ),
             });
         }
         let confidence_summary = build_supply_confidence("set-components", &components, &[]);
