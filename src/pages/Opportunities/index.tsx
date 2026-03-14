@@ -95,15 +95,6 @@ function isPlannerCatalogCandidate(item: WfmAutocompleteItem): boolean {
   return true;
 }
 
-function normalizePlannerSlug(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '');
-}
-
 function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): string {
   if (
     component.recommendedEntryLow !== null &&
@@ -352,16 +343,6 @@ export function OpportunitiesPage() {
     }
 
     let cancelled = false;
-    const timeoutId = window.setTimeout(() => {
-      if (cancelled) {
-        return;
-      }
-      setCatalogLoading(false);
-      if (fallbackCatalog.length === 0) {
-        setCatalogError('No local component catalog found. You can still add items manually.');
-      }
-    }, 4000);
-
     setCatalogLoading(true);
     setCatalogError(null);
 
@@ -380,9 +361,6 @@ export function OpportunitiesPage() {
           }))
           .sort((left, right) => left.name.localeCompare(right.name));
         setFallbackCatalog(catalog);
-        if (catalog.length) {
-          setCatalogError(null);
-        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -393,12 +371,10 @@ export function OpportunitiesPage() {
         if (!cancelled) {
           setCatalogLoading(false);
         }
-        window.clearTimeout(timeoutId);
       });
 
     return () => {
       cancelled = true;
-      window.clearTimeout(timeoutId);
     };
   }, [activeTab, catalogLoading, fallbackCatalog.length, scannerResponse]);
 
@@ -539,31 +515,6 @@ export function OpportunitiesPage() {
   const addOwnedComponent = async (item: PlannerCatalogItem) => {
     const currentQuantity = ownedMap.get(item.slug) ?? 0;
     await upsertOwnedItem(item, currentQuantity + 1);
-    setComponentQuery('');
-  };
-
-  const addManualOwnedComponent = async () => {
-    const name = componentQuery.trim();
-    if (!name) {
-      return;
-    }
-
-    const slug = normalizePlannerSlug(name);
-    if (!slug) {
-      setErrorMessage('Enter a valid component name before adding it.');
-      return;
-    }
-
-    const currentQuantity = ownedMap.get(slug) ?? 0;
-    await upsertOwnedItem(
-      {
-        itemId: null,
-        slug,
-        name,
-        imagePath: null,
-      },
-      currentQuantity + 1,
-    );
     setComponentQuery('');
   };
 
@@ -751,9 +702,10 @@ export function OpportunitiesPage() {
                       id="planner-component-search"
                       className="top-search-input set-planner-search-input"
                       type="text"
-                      placeholder={plannerCatalog.length ? 'Search prime components or type a name' : 'Type a prime component name'}
+                      placeholder={plannerCatalog.length ? 'Search prime components' : 'Loading catalog…'}
                       value={componentQuery}
                       onChange={(event) => setComponentQuery(event.target.value)}
+                      disabled={!plannerCatalog.length}
                     />
                     {plannerCatalog.length ? (
                       <div className="set-planner-suggestions">
@@ -778,17 +730,6 @@ export function OpportunitiesPage() {
                           : catalogError ?? 'Component catalog is not available yet.'}
                       </div>
                     )}
-                    {componentQuery.trim() ? (
-                      <button
-                        type="button"
-                        className="btn-sm set-planner-add-custom"
-                        onClick={() => {
-                          void addManualOwnedComponent();
-                        }}
-                      >
-                        Add "{componentQuery.trim()}"
-                      </button>
-                    ) : null}
                   </div>
 
                   <div className="set-planner-owned-list">
