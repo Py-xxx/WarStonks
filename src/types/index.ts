@@ -148,17 +148,6 @@ export interface TradeUpdateListingInput {
   visible: boolean;
 }
 
-export interface PortfolioTrade {
-  id: string;
-  item: string;
-  buyPrice: number;
-  sellPrice: number;
-  profit: number;
-  date: string;
-  category: string;
-  holdHours: number;
-}
-
 export interface PortfolioTradeLogEntry {
   id: string;
   itemName: string;
@@ -1198,24 +1187,6 @@ export interface QuickViewSelection {
   apiVersion: string | null;
   loading: boolean;
   errorMessage: string | null;
-}
-
-export interface QuickViewData {
-  item: string;
-  entry: number;
-  exit: number;
-  volume: number;
-  spread: number;
-  trend: number;
-  efficiency: number;
-  score: number;
-  sparkline: number[];
-}
-
-export interface AnalysisBar {
-  label: string;
-  value: number;
-  color: 'green' | 'amber' | 'red';
 }
 
 export interface PersistedWorldStateCacheEntry {

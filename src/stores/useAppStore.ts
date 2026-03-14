@@ -894,7 +894,6 @@ interface AppStore {
   handleDetectedTradeBuys: (buys: TradeDetectedBuy[]) => Promise<void>;
   dismissAlert: (id: string) => void;
   clearAllAlerts: () => void;
-  markAlertBought: (id: string) => void;
   markAlertNoResponse: (id: string) => void;
   dismissSystemAlert: (id: string) => void;
   clearAllSystemAlerts: () => void;
@@ -2042,7 +2041,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       alerts: state.alerts.filter((alert) => alert.id !== id),
     })),
   clearAllAlerts: () => set({ alerts: [] }),
-  markAlertBought: (_id) => undefined,
   markAlertNoResponse: (id) =>
     set((state) => {
       const alert = state.alerts.find((entry) => entry.id === id);
