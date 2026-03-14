@@ -6267,7 +6267,7 @@ fn resolve_relic_catalog_entry(
         .unwrap_or(false);
 
     if has_relic_columns {
-        return catalog_connection
+        let lookup = catalog_connection
             .query_row(
                 "SELECT item_id, slug, name, preferred_image
                  FROM items
@@ -6284,11 +6284,21 @@ fn resolve_relic_catalog_entry(
                     })
                 },
             )
-            .optional()
-            .with_context(|| format!("failed to resolve relic catalog entry for {tier} {code}"))
+            .optional();
+
+        return match lookup {
+            Ok(entry) => Ok(entry),
+            Err(error) => {
+                eprintln!(
+                    "Relic catalog lookup failed for {} {}: {}",
+                    tier, code, error
+                );
+                Ok(None)
+            }
+        };
     } else {
         let fallback_name = format!("{tier} {code} Relic");
-        catalog_connection
+        let lookup = catalog_connection
             .query_row(
                 "SELECT item_id, slug, name, preferred_image
                  FROM items
@@ -6304,8 +6314,18 @@ fn resolve_relic_catalog_entry(
                     })
                 },
             )
-            .optional()
-            .with_context(|| format!("failed to resolve relic catalog entry for {tier} {code}"))
+            .optional();
+
+        match lookup {
+            Ok(entry) => Ok(entry),
+            Err(error) => {
+                eprintln!(
+                    "Relic catalog lookup failed for {} {}: {}",
+                    tier, code, error
+                );
+                Ok(None)
+            }
+        }
     }
 }
 
