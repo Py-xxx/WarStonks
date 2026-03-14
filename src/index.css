@@ -4247,6 +4247,12 @@ body {
   top: calc(100% + 8px);
   bottom: auto;
 }
+.info-hint-tooltip.left {
+  top: 0;
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 8px);
+}
 .info-hint:hover .info-hint-tooltip,
 .info-hint:focus-visible .info-hint-tooltip {
   opacity: 1;
