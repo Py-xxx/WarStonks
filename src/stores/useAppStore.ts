@@ -107,6 +107,7 @@ let worldStateMarketNewsRefreshPromise: Promise<void> | null = null;
 let worldStateInvasionsRefreshPromise: Promise<void> | null = null;
 let worldStateSyndicateMissionsRefreshPromise: Promise<void> | null = null;
 let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
+let tradeAccountLoadPromise: Promise<void> | null = null;
 const watchlistRefreshGenerations = new Map<string, number>();
 
 const defaultAppSettings: AppSettings = {
@@ -2648,40 +2649,54 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tradeAccountLoading: false,
   tradeAccountError: null,
   loadTradeAccount: async () => {
-    set({ tradeAccountLoading: true, tradeAccountError: null });
-
-    try {
-      const sessionState = await getWfmTradeSessionState();
-      let nextWatchlist = get().watchlist;
-      let nextSelectedWatchlistId = get().selectedWatchlistId;
-
-      if (sessionState.account) {
-        try {
-          const overview = await getWfmTradeOverview(get().sellerMode);
-          nextWatchlist = mergeWatchlistWithTradeBuyOrders(nextWatchlist, overview.buyOrders);
-          if (!nextSelectedWatchlistId || !nextWatchlist.some((item) => item.id === nextSelectedWatchlistId)) {
-            nextSelectedWatchlistId = nextWatchlist[0]?.id ?? null;
-          }
-          writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
-        } catch (error) {
-          console.error('[watchlist] failed to hydrate from active buy orders', error);
-        }
-      }
-
-      set({
-        tradeAccount: sessionState.account,
-        watchlist: nextWatchlist,
-        selectedWatchlistId: nextSelectedWatchlistId,
-        tradeAccountLoading: false,
-        tradeAccountError: null,
-      });
-    } catch (error) {
-      set({
-        tradeAccount: null,
-        tradeAccountLoading: false,
-        tradeAccountError: toErrorMessage(error),
-      });
+    if (tradeAccountLoadPromise) {
+      return tradeAccountLoadPromise;
     }
+
+    const loadPromise = (async () => {
+      set({ tradeAccountLoading: true, tradeAccountError: null });
+
+      try {
+        const sessionState = await getWfmTradeSessionState();
+        let nextWatchlist = get().watchlist;
+        let nextSelectedWatchlistId = get().selectedWatchlistId;
+
+        if (sessionState.account) {
+          try {
+            const overview = await getWfmTradeOverview(get().sellerMode);
+            nextWatchlist = mergeWatchlistWithTradeBuyOrders(nextWatchlist, overview.buyOrders);
+            if (
+              !nextSelectedWatchlistId
+              || !nextWatchlist.some((item) => item.id === nextSelectedWatchlistId)
+            ) {
+              nextSelectedWatchlistId = nextWatchlist[0]?.id ?? null;
+            }
+            writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
+          } catch (error) {
+            console.error('[watchlist] failed to hydrate from active buy orders', error);
+          }
+        }
+
+        set({
+          tradeAccount: sessionState.account,
+          watchlist: nextWatchlist,
+          selectedWatchlistId: nextSelectedWatchlistId,
+          tradeAccountLoading: false,
+          tradeAccountError: null,
+        });
+      } catch (error) {
+        set({
+          tradeAccount: null,
+          tradeAccountLoading: false,
+          tradeAccountError: toErrorMessage(error),
+        });
+      } finally {
+        tradeAccountLoadPromise = null;
+      }
+    })();
+
+    tradeAccountLoadPromise = loadPromise;
+    return loadPromise;
   },
   signInTradeAccount: async (input) => {
     set({ tradeAccountLoading: true, tradeAccountError: null });
