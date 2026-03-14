@@ -78,6 +78,14 @@ function formatPlat(value: number | null | undefined): string {
   return `${Math.round(value)}p`;
 }
 
+function formatPlatDecimal(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  return `${(Math.round(value * 10) / 10).toFixed(1)}p`;
+}
+
 function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return '—';
@@ -1210,7 +1218,7 @@ export function OpportunitiesPage() {
                               ×{row.ownedCount}
                             </span>
                             <span className="farm-now-cell farm-now-cell-profit">
-                              {formatPlat(row.expectedProfit)}
+                              {formatPlatDecimal(row.expectedProfit)}
                             </span>
                             <span className="farm-now-cell farm-now-cell-action">{expanded ? '−' : '+'}</span>
                           </div>
