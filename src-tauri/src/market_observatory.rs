@@ -6252,25 +6252,61 @@ fn resolve_relic_catalog_entry(
     relic_tier: &str,
     relic_code: &str,
 ) -> Result<Option<RelicCatalogEntry>> {
-    catalog_connection
-        .query_row(
-            "SELECT item_id, slug, name, preferred_image
-             FROM items
-             WHERE LOWER(relic_tier) = LOWER(?1)
-               AND relic_code = ?2
-             LIMIT 1",
-            params![relic_tier, relic_code],
-            |row| {
-                Ok(RelicCatalogEntry {
-                    item_id: row.get(0)?,
-                    slug: row.get(1)?,
-                    name: row.get(2)?,
-                    image_path: row.get::<_, Option<String>>(3)?,
-                })
-            },
-        )
-        .optional()
-        .context("failed to resolve relic catalog entry")
+    let tier = relic_tier.trim();
+    let code = relic_code.trim();
+
+    let has_relic_columns = catalog_connection
+        .prepare("PRAGMA table_info(items)")
+        .and_then(|mut statement| {
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.iter().any(|column| column == "relic_tier")
+                && rows.iter().any(|column| column == "relic_code"))
+        })
+        .unwrap_or(false);
+
+    if has_relic_columns {
+        return catalog_connection
+            .query_row(
+                "SELECT item_id, slug, name, preferred_image
+                 FROM items
+                 WHERE relic_tier = ?1 COLLATE NOCASE
+                   AND relic_code = ?2 COLLATE NOCASE
+                 LIMIT 1",
+                params![tier, code],
+                |row| {
+                    Ok(RelicCatalogEntry {
+                        item_id: row.get(0)?,
+                        slug: row.get(1)?,
+                        name: row.get(2)?,
+                        image_path: row.get::<_, Option<String>>(3)?,
+                    })
+                },
+            )
+            .optional()
+            .with_context(|| format!("failed to resolve relic catalog entry for {tier} {code}"))
+    } else {
+        let fallback_name = format!("{tier} {code} Relic");
+        catalog_connection
+            .query_row(
+                "SELECT item_id, slug, name, preferred_image
+                 FROM items
+                 WHERE name = ?1 COLLATE NOCASE
+                 LIMIT 1",
+                params![fallback_name],
+                |row| {
+                    Ok(RelicCatalogEntry {
+                        item_id: row.get(0)?,
+                        slug: row.get(1)?,
+                        name: row.get(2)?,
+                        image_path: row.get::<_, Option<String>>(3)?,
+                    })
+                },
+            )
+            .optional()
+            .with_context(|| format!("failed to resolve relic catalog entry for {tier} {code}"))
+    }
 }
 
 fn relic_tier_sort_order(value: &str) -> i64 {
