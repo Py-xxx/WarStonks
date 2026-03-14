@@ -4879,7 +4879,7 @@ async fn fetch_current_trade_status_ws(token: &str, device_id: &str) -> Result<S
 
 fn normalize_status_set_request(status: &str) -> Result<&'static str> {
     match status.trim().to_lowercase().as_str() {
-        "ingame" | "in_game" => Ok("in_game"),
+        "ingame" | "in_game" => Ok("ingame"),
         "online" => Ok("online"),
         "invisible" | "offline" => Ok("invisible"),
         _ => Err(anyhow!("Unsupported presence state.")),
@@ -5758,7 +5758,8 @@ mod tests {
         derive_trade_log_entries_with_components, initialize_trades_cache_schema,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         merge_wfm_trade_log_entries, normalize_alecaframe_trade_payload, normalize_avatar_url,
-        parse_status_from_payload, save_trade_log_rows_inner, AlecaframeRawTradeRecord,
+        normalize_status_set_request, parse_status_from_payload, save_trade_log_rows_inner,
+        AlecaframeRawTradeRecord,
         AlecaframeTradeItemRecord, AlecaframeTradeResponse, PortfolioTradeLogEntry,
         StoredTradeLogRecord, TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
@@ -5794,6 +5795,17 @@ mod tests {
         assert_eq!(
             parse_status_from_payload(&json!({ "status": "invisible" })).as_deref(),
             Some("offline")
+        );
+    }
+
+    #[test]
+    fn normalizes_presence_write_request_values() {
+        assert_eq!(normalize_status_set_request("ingame").ok(), Some("ingame"));
+        assert_eq!(normalize_status_set_request("in_game").ok(), Some("ingame"));
+        assert_eq!(normalize_status_set_request("online").ok(), Some("online"));
+        assert_eq!(
+            normalize_status_set_request("invisible").ok(),
+            Some("invisible")
         );
     }
 
