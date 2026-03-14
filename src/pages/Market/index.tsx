@@ -533,59 +533,53 @@ function StaticAnalyticsChart({
       <div className="card-header">
         <div className="market-chart-header">
           <div className="market-chart-header-copy">
-            <span className="panel-title-eyebrow">Live Market Graph</span>
-            <span className="card-label">Item Price History</span>
+            <span className="panel-title-eyebrow">Price Chart</span>
+            <span className="card-label">{itemName}</span>
           </div>
-          <div className="market-chart-header-tools">
-            <span className="market-chart-item-pill">Selected item: {itemName}</span>
-            <div className="market-chart-select-row">
-              <label className="market-toolbar-group">
-                <span className="market-toolbar-label">Domain</span>
-                <select
-                  className="market-variant-select"
-                  value={domain}
-                  onChange={(event) => onDomainChange(event.target.value as ChartDomainKey)}
-                >
-                  {DOMAIN_OPTIONS.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="market-toolbar-group">
-                <span className="market-toolbar-label">Bucket</span>
-                <select
-                  className="market-variant-select"
-                  value={bucket}
-                  onChange={(event) => onBucketChange(event.target.value as ChartBucketKey)}
-                >
-                  {bucketOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="market-toolbar-group">
-                <span className="market-toolbar-label">Graph Type</span>
-                <div className="market-chart-mode-row">
-                  <button
-                    className={`market-mode-chip${chartMode === 'line' ? ' active' : ''}`}
-                    type="button"
-                    onClick={() => setChartMode('line')}
-                  >
-                    Line
-                  </button>
-                  <button
-                    className={`market-mode-chip${chartMode === 'candlestick' ? ' active' : ''}`}
-                    type="button"
-                    onClick={() => setChartMode('candlestick')}
-                  >
-                    Candles
-                  </button>
-                </div>
-              </div>
+          <div className="market-chart-select-row">
+            <label className="market-toolbar-group">
+              <span className="market-toolbar-label">Range</span>
+              <select
+                className="market-variant-select"
+                value={domain}
+                onChange={(event) => onDomainChange(event.target.value as ChartDomainKey)}
+              >
+                {DOMAIN_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="market-toolbar-group">
+              <span className="market-toolbar-label">Bucket</span>
+              <select
+                className="market-variant-select"
+                value={bucket}
+                onChange={(event) => onBucketChange(event.target.value as ChartBucketKey)}
+              >
+                {bucketOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="market-chart-mode-row">
+              <button
+                className={`market-mode-chip${chartMode === 'line' ? ' active' : ''}`}
+                type="button"
+                onClick={() => setChartMode('line')}
+              >
+                Line
+              </button>
+              <button
+                className={`market-mode-chip${chartMode === 'candlestick' ? ' active' : ''}`}
+                type="button"
+                onClick={() => setChartMode('candlestick')}
+              >
+                Candles
+              </button>
             </div>
           </div>
         </div>
@@ -594,9 +588,6 @@ function StaticAnalyticsChart({
         <div className="market-chart-card">
           <div className="market-chart-toolbar">
             <div className="market-chart-toolbar-copy">
-              <span className="market-chart-note">
-                WFM statistics history with local observatory snapshots filling recent live context.
-              </span>
               <div className="market-chart-ohlc-row">
                 <span>O {formatPrice(latestPoint?.open ?? null)}</span>
                 <span>H {formatPrice(latestPoint?.high ?? null)}</span>
@@ -872,11 +863,9 @@ function StaticAnalyticsChart({
           </div>
 
           <div className="market-chart-legend market-chart-footer">
-            <span>Bucket: {bucket}</span>
-            <span>Points: {points.length}</span>
-            <span>Latest median: {formatPrice(points[points.length - 1]?.median ?? null)}</span>
-            <span>Latest lowest: {formatPrice(points[points.length - 1]?.lowest ?? null)}</span>
-            <span>Latest volume: {formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
+            <span>Median {formatPrice(points[points.length - 1]?.median ?? null)}</span>
+            <span>Lowest {formatPrice(points[points.length - 1]?.lowest ?? null)}</span>
+            <span>Volume {formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
           </div>
         </div>
         <PanelOverlay

@@ -8,10 +8,15 @@ export function AlertsTab() {
     <div className="wl-fullscreen">
       <div className="panel-title-row">
         <span className="panel-title-eyebrow">Alerts</span>
-        <span className="badge badge-blue">{alerts.length} active</span>
       </div>
 
       <div className="card">
+        <div className="card-header">
+          <span className="card-label">Active Alerts</span>
+          <span className={`badge ${alerts.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
+            {alerts.length} active
+          </span>
+        </div>
         <div className="card-body">
           <AlertsPanel />
         </div>

@@ -434,7 +434,6 @@ export function OpportunitiesPage() {
   const addOwnedComponent = async (item: PlannerCatalogItem) => {
     const currentQuantity = ownedMap.get(item.slug) ?? 0;
     await upsertOwnedItem(item, currentQuantity + 1);
-    setComponentQuery('');
   };
 
   const updateOwnedQuantityByDelta = async (item: SetCompletionOwnedItem, delta: number) => {
@@ -515,7 +514,7 @@ export function OpportunitiesPage() {
             No opportunities found — try adjusting strategy filters
           </div>
         ) : (
-          <div className={`set-planner-layout${drawerOpen ? '' : ' drawer-collapsed'}`}>
+          <div className={`set-planner-layout${drawerOpen ? ' drawer-open' : ''}`}>
             <section className="market-panel set-planner-main-panel">
               <div className="set-planner-header">
                 <div>
@@ -525,15 +524,6 @@ export function OpportunitiesPage() {
                     Uses your owned prime parts plus the cached Arbitrage scan to estimate the remaining
                     investment and completion profit for one set at a time.
                   </p>
-                </div>
-                <div className="set-planner-header-actions">
-                  <button
-                    type="button"
-                    className="btn-secondary set-planner-drawer-toggle"
-                    onClick={() => setDrawerOpen((current) => !current)}
-                  >
-                    {drawerOpen ? 'Hide Owned Parts' : 'Show Owned Parts'}
-                  </button>
                 </div>
               </div>
 
@@ -595,11 +585,13 @@ export function OpportunitiesPage() {
               )}
             </section>
 
-            <aside className={`market-panel set-planner-drawer${drawerOpen ? '' : ' is-collapsed'}`}>
+            <aside className={`market-panel set-planner-drawer${drawerOpen ? ' is-open' : ''}`}>
               <div className="set-planner-drawer-header">
                 <div>
                   <span className="panel-title-eyebrow">Owned Inventory</span>
-                  <h3>Prime Parts</h3>
+                  {!drawerOpen && ownedItems.length > 0 && (
+                    <span className="set-planner-drawer-count">{ownedItems.length} {ownedItems.length === 1 ? 'part' : 'parts'}</span>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -607,25 +599,60 @@ export function OpportunitiesPage() {
                   onClick={() => setDrawerOpen((current) => !current)}
                   aria-label={drawerOpen ? 'Collapse owned parts drawer' : 'Expand owned parts drawer'}
                 >
-                  {drawerOpen ? '→' : '←'}
+                  {drawerOpen ? '✕' : '☰'}
                 </button>
               </div>
 
-              {drawerOpen ? (
-                <>
-                  <div className="set-planner-add-card">
+              {!drawerOpen ? (
+                <div className="set-planner-mini-grid">
+                  {ownedItems.length === 0 ? (
+                    <span className="set-planner-mini-empty">No parts added yet</span>
+                  ) : (
+                    ownedItems.map((item) => {
+                      const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                      return (
+                        <div key={item.slug} className="set-planner-mini-item">
+                          <span className="set-planner-mini-thumb">
+                            {imageUrl ? (
+                              <img src={imageUrl} alt="" loading="lazy" />
+                            ) : (
+                              <span>{item.name.slice(0, 1)}</span>
+                            )}
+                          </span>
+                          <span className="set-planner-mini-name" title={item.name}>{item.name}</span>
+                          <span className="set-planner-mini-qty">×{item.quantity}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              ) : (
+                <div className="set-planner-drawer-body">
+                  <div className="set-planner-drawer-search-col">
                     <label className="watchlist-add-label" htmlFor="planner-component-search">
                       Add owned component
                     </label>
-                    <input
-                      id="planner-component-search"
-                      className="top-search-input set-planner-search-input"
-                      type="text"
-                      placeholder={plannerCatalog.length ? 'Search set components' : 'Run scan to unlock components'}
-                      value={componentQuery}
-                      onChange={(event) => setComponentQuery(event.target.value)}
-                      disabled={!plannerCatalog.length}
-                    />
+                    <div className="set-planner-search-wrap">
+                      <input
+                        id="planner-component-search"
+                        className="set-planner-search-input"
+                        type="text"
+                        placeholder={plannerCatalog.length ? 'Search set components…' : 'Run scan to unlock components'}
+                        value={componentQuery}
+                        onChange={(event) => setComponentQuery(event.target.value)}
+                        disabled={!plannerCatalog.length}
+                      />
+                      {componentQuery ? (
+                        <button
+                          type="button"
+                          className="set-planner-search-clear"
+                          onClick={() => setComponentQuery('')}
+                          aria-label="Clear search"
+                        >
+                          ✕
+                        </button>
+                      ) : null}
+                    </div>
                     {plannerCatalog.length ? (
                       <div className="set-planner-suggestions">
                         {filteredSuggestions.map((item) => (
@@ -633,9 +660,7 @@ export function OpportunitiesPage() {
                             key={item.slug}
                             type="button"
                             className="set-planner-suggestion"
-                            onClick={() => {
-                              void addOwnedComponent(item);
-                            }}
+                            onClick={() => { void addOwnedComponent(item); }}
                           >
                             <span className="set-planner-suggestion-name">{item.name}</span>
                             <span className="set-planner-suggestion-action">Add</span>
@@ -643,65 +668,63 @@ export function OpportunitiesPage() {
                         ))}
                       </div>
                     ) : (
-                      <div className="watchlist-form-note">
-                        Arbitrage cache not available yet.
-                      </div>
+                      <div className="watchlist-form-note">Arbitrage cache not available yet.</div>
                     )}
                   </div>
 
-                  <div className="set-planner-owned-list">
-                    {ownedItems.length ? (
-                      ownedItems.map((item) => {
-                        const imageUrl = resolveWfmAssetUrl(item.imagePath);
-                        return (
-                          <div key={item.slug} className="set-planner-owned-row">
-                            <div className="set-planner-owned-main">
-                              <span className="set-planner-owned-thumb">
-                                {imageUrl ? (
-                                  <img src={imageUrl} alt="" loading="lazy" />
-                                ) : (
-                                  <span>{item.name.slice(0, 1)}</span>
-                                )}
-                              </span>
-                              <div className="set-planner-owned-copy">
-                                <strong>{item.name}</strong>
-                                <span>{item.quantity} owned</span>
+                  <div className="set-planner-drawer-divider" aria-hidden="true" />
+
+                  <div className="set-planner-drawer-owned-col">
+                    <span className="watchlist-add-label">
+                      {ownedItems.length} {ownedItems.length === 1 ? 'part' : 'parts'} owned
+                    </span>
+                    {ownedItems.length === 0 ? (
+                      <div className="watchlist-form-note">No owned prime parts added yet.</div>
+                    ) : (
+                      <div className="set-planner-owned-grid">
+                        {ownedItems.map((item) => {
+                          const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                          return (
+                            <div key={item.slug} className="set-planner-owned-card">
+                              <div className="set-planner-owned-card-main">
+                                <span className="set-planner-owned-thumb">
+                                  {imageUrl ? (
+                                    <img src={imageUrl} alt="" loading="lazy" />
+                                  ) : (
+                                    <span>{item.name.slice(0, 1)}</span>
+                                  )}
+                                </span>
+                                <span className="set-planner-owned-card-name" title={item.name}>
+                                  {item.name}
+                                </span>
+                              </div>
+                              <div className="set-planner-owned-actions">
+                                <button
+                                  type="button"
+                                  className="set-planner-qty-button"
+                                  disabled={savingSlug === item.slug}
+                                  onClick={() => { void updateOwnedQuantityByDelta(item, -1); }}
+                                >
+                                  −
+                                </button>
+                                <span className="set-planner-qty-value">{item.quantity}</span>
+                                <button
+                                  type="button"
+                                  className="set-planner-qty-button"
+                                  disabled={savingSlug === item.slug}
+                                  onClick={() => { void updateOwnedQuantityByDelta(item, 1); }}
+                                >
+                                  +
+                                </button>
                               </div>
                             </div>
-                            <div className="set-planner-owned-actions">
-                              <button
-                                type="button"
-                                className="set-planner-qty-button"
-                                disabled={savingSlug === item.slug}
-                                onClick={() => {
-                                  void updateOwnedQuantityByDelta(item, -1);
-                                }}
-                              >
-                                −
-                              </button>
-                              <span className="set-planner-qty-value">{item.quantity}</span>
-                              <button
-                                type="button"
-                                className="set-planner-qty-button"
-                                disabled={savingSlug === item.slug}
-                                onClick={() => {
-                                  void updateOwnedQuantityByDelta(item, 1);
-                                }}
-                              >
-                                +
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="watchlist-form-note">
-                        No owned prime parts added yet.
+                          );
+                        })}
                       </div>
                     )}
                   </div>
-                </>
-              ) : null}
+                </div>
+              )}
             </aside>
           </div>
         )}

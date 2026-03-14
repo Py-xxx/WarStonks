@@ -829,9 +829,9 @@ pub async fn get_wfm_top_sell_orders(
     tauri::async_runtime::spawn_blocking(move || {
         fetch_wfm_top_sell_orders_inner(slug, variant_key, seller_mode)
     })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
