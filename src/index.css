@@ -477,6 +477,17 @@
   margin-bottom: 14px;
 }
 
+.owned-relics-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.owned-relics-updated {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .owned-relics-header h3 {
   margin: 4px 0 6px;
   font-size: 20px;
