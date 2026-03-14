@@ -13,11 +13,16 @@ import type {
   ArbitrageScannerResponse,
   ArbitrageScannerSetEntry,
   OwnedRelicEntry,
+  RelicRefinementChanceProfile,
+  RelicRoiDropEntry,
+  RelicRoiEntry,
+  RelicRoiRefinementSummary,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
 } from '../../types';
 
 type OppTab = 'opportunities' | 'farm-now' | 'set-planner' | 'owned-relics';
+type FarmNowTab = 'part-profit' | 'set-completion';
 
 const RELIC_REFINEMENT_COLUMNS = [
   { key: 'intact', label: 'Intact' },
@@ -42,6 +47,19 @@ type PlannerSetEntry = {
   completionProfit: number | null;
   completionRoiPct: number | null;
   components: PlannerComponentState[];
+};
+
+type FarmNowRelicRow = {
+  relic: RelicRoiEntry;
+  refinementKey: string;
+  refinementLabel: string;
+  expectedProfit: number | null;
+  bestDropSlug: string | null;
+  drops: Array<{
+    drop: RelicRoiDropEntry;
+    chance: number | null;
+    expectedValue: number | null;
+  }>;
 };
 
 type PlannerCatalogItem = {
@@ -76,6 +94,31 @@ function confidenceTone(level: string): string {
     default:
       return 'blue';
   }
+}
+
+function chanceForRefinement(
+  chanceProfile: RelicRefinementChanceProfile,
+  refinementKey: string,
+): number | null {
+  switch (refinementKey) {
+    case 'exceptional':
+      return chanceProfile.exceptional;
+    case 'flawless':
+      return chanceProfile.flawless;
+    case 'radiant':
+      return chanceProfile.radiant;
+    default:
+      return chanceProfile.intact;
+  }
+}
+
+function formatChance(value: number | null): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded}%`;
 }
 
 function relicRarityTone(rarity: string | null): string {
@@ -264,6 +307,11 @@ function SetPlannerRow({
 
 export function OpportunitiesPage() {
   const [activeTab, setActiveTab] = useState<OppTab>('set-planner');
+  const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
+  const [farmNowScan, setFarmNowScan] = useState<ArbitrageScannerResponse | null>(null);
+  const [farmNowLoading, setFarmNowLoading] = useState(false);
+  const [farmNowError, setFarmNowError] = useState<string | null>(null);
+  const [expandedFarmRelicKey, setExpandedFarmRelicKey] = useState<string | null>(null);
   const [scannerResponse, setScannerResponse] = useState<ArbitrageScannerResponse | null>(null);
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -325,6 +373,42 @@ export function OpportunitiesPage() {
     };
 
     void loadPlannerState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'farm-now') {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadFarmNow = async () => {
+      setFarmNowLoading(true);
+      setFarmNowError(null);
+
+      try {
+        const scannerState = await getArbitrageScannerState();
+        if (cancelled) {
+          return;
+        }
+        setFarmNowScan(scannerState.latestScan);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setFarmNowError(toErrorMessage(error));
+      } finally {
+        if (!cancelled) {
+          setFarmNowLoading(false);
+        }
+      }
+    };
+
+    void loadFarmNow();
 
     return () => {
       cancelled = true;
@@ -462,6 +546,60 @@ export function OpportunitiesPage() {
     });
   }, [ownedMap, scannerResponse]);
 
+  const farmNowRelics = useMemo<FarmNowRelicRow[]>(() => {
+    const relics = farmNowScan?.relicRoiResults ?? [];
+    const rows: FarmNowRelicRow[] = [];
+
+    for (const relic of relics) {
+      for (const refinement of relic.refinements) {
+        let expectedProfit = 0;
+        let hasContribution = false;
+        let bestDropSlug: string | null = null;
+        let bestValue = -1;
+
+        const drops = relic.drops.map((drop) => {
+          const chance = chanceForRefinement(drop.chanceProfile, refinement.refinementKey);
+          const exitPrice = drop.recommendedExitPrice;
+          const expectedValue =
+            chance !== null && exitPrice !== null ? (chance / 100) * exitPrice : null;
+
+          if (expectedValue !== null) {
+            hasContribution = true;
+            expectedProfit += expectedValue;
+            if (expectedValue > bestValue) {
+              bestValue = expectedValue;
+              bestDropSlug = drop.slug;
+            }
+          }
+
+          return {
+            drop,
+            chance,
+            expectedValue,
+          };
+        });
+
+        rows.push({
+          relic,
+          refinementKey: refinement.refinementKey,
+          refinementLabel: refinement.refinementLabel,
+          expectedProfit: hasContribution ? expectedProfit : null,
+          bestDropSlug,
+          drops,
+        });
+      }
+    }
+
+    return rows.sort((left, right) => {
+      const leftProfit = left.expectedProfit ?? Number.NEGATIVE_INFINITY;
+      const rightProfit = right.expectedProfit ?? Number.NEGATIVE_INFINITY;
+      if (rightProfit !== leftProfit) {
+        return rightProfit - leftProfit;
+      }
+      return left.relic.name.localeCompare(right.relic.name);
+    });
+  }, [farmNowScan]);
+
   const filteredSuggestions = useMemo(() => {
     const normalizedQuery = componentQuery.trim().toLowerCase();
     if (!normalizedQuery) {
@@ -549,6 +687,7 @@ export function OpportunitiesPage() {
   };
 
   const noScanAvailable = !loading && !(scannerResponse?.results?.length);
+  const noFarmScan = !farmNowLoading && !(farmNowScan?.relicRoiResults?.length);
 
   return (
     <>
@@ -905,6 +1044,160 @@ export function OpportunitiesPage() {
                                 })}
                               </div>
                             )}
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+        ) : activeTab === 'farm-now' ? (
+          <div className="farm-now-layout">
+            <section className="market-panel farm-now-panel">
+              <div className="farm-now-header">
+                <div>
+                  <span className="panel-title-eyebrow">What To Farm Now</span>
+                  <h3>Relic Profit Planner</h3>
+                  <p>
+                    Uses the cached Relic ROI scan to rank relics by expected part profit for each
+                    refinement. No buy cost is assumed, so profit equals expected value per relic.
+                  </p>
+                </div>
+                <div className="farm-now-tabs">
+                  <button
+                    type="button"
+                    className={`farm-now-tab-button${farmNowTab === 'part-profit' ? ' is-active' : ''}`}
+                    onClick={() => setFarmNowTab('part-profit')}
+                  >
+                    For Part Profit
+                  </button>
+                  <button
+                    type="button"
+                    className={`farm-now-tab-button${farmNowTab === 'set-completion' ? ' is-active' : ''}`}
+                    onClick={() => setFarmNowTab('set-completion')}
+                  >
+                    For Set Completion
+                  </button>
+                </div>
+              </div>
+
+              {farmNowError ? <div className="scanner-inline-error">{farmNowError}</div> : null}
+
+              {farmNowTab === 'set-completion' ? (
+                <div className="opportunities-placeholder">Set completion farming is coming next.</div>
+              ) : farmNowLoading ? (
+                <div className="opportunities-placeholder">Loading relic profitability…</div>
+              ) : noFarmScan ? (
+                <div className="set-planner-empty">
+                  <div>
+                    <span className="panel-title-eyebrow">Scanner Cache Required</span>
+                    <h3>Run a Relic ROI scan first</h3>
+                    <p>
+                      This view uses the cached Relic ROI data from the Arbitrage scanner. Run a scan
+                      in Scanners, then return here to see refinement-level profit.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setActivePage('scanners')}
+                  >
+                    Open Scanners
+                  </button>
+                </div>
+              ) : farmNowRelics.length === 0 ? (
+                <div className="opportunities-placeholder">No relic profitability rows available.</div>
+              ) : (
+                <div className="farm-now-list">
+                  <div className="farm-now-header-row">
+                    <span className="farm-now-header-label">Relic</span>
+                    <span className="farm-now-header-label">Refinement</span>
+                    <span className="farm-now-header-label farm-now-header-value">Profit / Relic</span>
+                    <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
+                  </div>
+
+                  {farmNowRelics.map((row) => {
+                    const relicKey = `${row.relic.slug}:${row.refinementKey}`;
+                    const expanded = expandedFarmRelicKey === relicKey;
+                    const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
+                    return (
+                      <article key={relicKey} className={`farm-now-row${expanded ? ' is-expanded' : ''}`}>
+                        <button
+                          type="button"
+                          className="farm-now-row-button"
+                          onClick={() =>
+                            setExpandedFarmRelicKey((current) =>
+                              current === relicKey ? null : relicKey,
+                            )
+                          }
+                        >
+                          <div className="farm-now-row-main">
+                            <div className="farm-now-cell farm-now-cell-name">
+                              <span className="farm-now-thumb">
+                                {imageUrl ? (
+                                  <img src={imageUrl} alt="" loading="lazy" />
+                                ) : (
+                                  <span>{row.relic.name.slice(0, 1)}</span>
+                                )}
+                              </span>
+                              <div className="farm-now-copy">
+                                <strong>{row.relic.name}</strong>
+                                <span className="farm-now-subtitle">{row.relic.dropCount} drops</span>
+                              </div>
+                            </div>
+                            <span className="farm-now-cell farm-now-cell-refinement">
+                              <span className="market-panel-badge tone-blue">{row.refinementLabel}</span>
+                            </span>
+                            <span className="farm-now-cell farm-now-cell-profit">
+                              {formatPlat(row.expectedProfit)}
+                            </span>
+                            <span className="farm-now-cell farm-now-cell-action">{expanded ? '−' : '+'}</span>
+                          </div>
+                        </button>
+
+                        {expanded ? (
+                          <div className="farm-now-row-body">
+                            <div className="farm-now-drop-grid">
+                              {row.drops.map((entry) => {
+                                const drop = entry.drop;
+                                const dropImage = resolveWfmAssetUrl(drop.imagePath);
+                                const tone = relicRarityTone(drop.rarity);
+                                const isBest = row.bestDropSlug === drop.slug;
+                                return (
+                                  <div
+                                    key={`${relicKey}-${drop.slug}`}
+                                    className={`farm-now-drop-card${isBest ? ' is-best' : ''}`}
+                                  >
+                                    <span className="farm-now-drop-thumb">
+                                      {dropImage ? (
+                                        <img src={dropImage} alt="" loading="lazy" />
+                                      ) : (
+                                        <span>{drop.name.slice(0, 1)}</span>
+                                      )}
+                                    </span>
+                                    <div className="farm-now-drop-copy">
+                                      <span className="farm-now-drop-name">{drop.name}</span>
+                                      <div className="farm-now-drop-meta">
+                                        <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
+                                          {drop.rarity ?? 'Unknown'}
+                                        </span>
+                                        <span className="farm-now-drop-stat">
+                                          {formatChance(entry.chance)}
+                                        </span>
+                                        <span className="farm-now-drop-stat">
+                                          Exit {formatPlat(drop.recommendedExitPrice)}
+                                        </span>
+                                        {isBest ? (
+                                          <span className="market-panel-badge tone-green">Top pick</span>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         ) : null}
                       </article>
