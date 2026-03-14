@@ -802,8 +802,6 @@ struct WfmSetItemRecord {
     #[serde(default)]
     set_root: Option<bool>,
     #[serde(default)]
-    quantity_in_set: Option<i64>,
-    #[serde(default)]
     i18n: HashMap<String, WfmSetI18nRecord>,
 }
 

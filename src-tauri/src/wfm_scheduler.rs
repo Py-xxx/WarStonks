@@ -28,7 +28,6 @@ impl RequestPriority {
 #[derive(Debug, Clone)]
 struct RequestTicket {
     id: u64,
-    priority: RequestPriority,
     #[allow(dead_code)]
     label: String,
     #[allow(dead_code)]
@@ -68,7 +67,6 @@ pub fn acquire_wfm_slot(priority: RequestPriority, label: &str) {
     state.next_id = state.next_id.wrapping_add(1);
     let ticket = RequestTicket {
         id: ticket_id,
-        priority,
         label: label.to_string(),
         enqueued_at: Instant::now(),
     };
