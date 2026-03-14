@@ -23,12 +23,25 @@ const RefreshIcon = () => (
 
 const PORTFOLIO_TOOLTIP_TOP_CLEARANCE_PX = 120;
 
-function InfoHint({ text }: { text: string }) {
+type InfoHintPlacement = 'auto' | 'bottom' | 'left';
+
+function InfoHint({
+  text,
+  placement = 'auto',
+}: {
+  text: string;
+  placement?: InfoHintPlacement;
+}) {
   const hintRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
   const [expandDownward, setExpandDownward] = useState(false);
 
   const updatePlacement = () => {
+    if (placement !== 'auto') {
+      setExpandDownward(placement === 'bottom');
+      return;
+    }
+
     const hintRect = hintRef.current?.getBoundingClientRect();
     const tooltipRect = tooltipRef.current?.getBoundingClientRect();
     if (!hintRect || !tooltipRect) {
@@ -55,7 +68,7 @@ function InfoHint({ text }: { text: string }) {
       <span className="info-hint-glyph" aria-hidden="true">i</span>
       <span
         ref={tooltipRef}
-        className={`info-hint-tooltip${expandDownward ? ' bottom' : ''}`}
+        className={`info-hint-tooltip${placement === 'left' ? ' left' : expandDownward ? ' bottom' : ''}`}
       >
         {text}
       </span>
@@ -215,6 +228,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
       <PortfolioPanelHeader
         title="Profit Per Trade"
         info="Each bar is one closed sell row. Positive values are green, negative values are red."
+        infoPlacement="left"
       />
       <div className="chart-body portfolio-chart-body">
         {points.length === 0 ? (
@@ -471,14 +485,16 @@ function buildTradeGroupSummary(children: PortfolioTradeLogEntry[]): string {
 function PortfolioPanelHeader({
   title,
   info,
+  infoPlacement = 'auto',
 }: {
   title: string;
   info: string;
+  infoPlacement?: InfoHintPlacement;
 }) {
   return (
     <div className="chart-header portfolio-panel-header">
       <span>{title}</span>
-      <InfoHint text={info} />
+      <InfoHint text={info} placement={infoPlacement} />
     </div>
   );
 }
@@ -1372,7 +1388,10 @@ function PnlSummaryTab({
             <div className="info-card">
               <div className="info-card-label">
                 Realized Profit
-                <InfoHint text="Profit from closed sell trades in the selected period, using the local matched cost basis when available." />
+                <InfoHint
+                  text="Profit from closed sell trades in the selected period, using the local matched cost basis when available."
+                  placement="bottom"
+                />
               </div>
               <div className={`info-card-val${summary.realizedProfit >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.realizedProfit)}
@@ -1386,7 +1405,10 @@ function PnlSummaryTab({
             <div className="info-card">
               <div className="info-card-label">
                 Unrealized Value
-                <InfoHint text="Estimated current value of open and kept inventory, using the latest local market estimate when available." />
+                <InfoHint
+                  text="Estimated current value of open and kept inventory, using the latest local market estimate when available."
+                  placement="bottom"
+                />
               </div>
               <div className="info-card-val neutral">{formatPlatinumValue(summary.unrealizedValue)}</div>
               <div className="portfolio-card-footnote">
@@ -1398,7 +1420,10 @@ function PnlSummaryTab({
             <div className="info-card">
               <div className="info-card-label">
                 Total P&amp;L
-                <InfoHint text="Realized profit plus unrealized P&L. This is the broadest portfolio view and inherits confidence from both realized and unrealized coverage." />
+                <InfoHint
+                  text="Realized profit plus unrealized P&L. This is the broadest portfolio view and inherits confidence from both realized and unrealized coverage."
+                  placement="bottom"
+                />
               </div>
               <div className={`info-card-val${summary.totalPnl >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.totalPnl)}
@@ -1494,6 +1519,7 @@ function PnlSummaryTab({
               <PortfolioPanelHeader
                 title="Category Breakdown"
                 info="Realized profit grouped by item family using the local item catalog classification."
+                infoPlacement="left"
               />
               <div className="portfolio-breakdown-list">
                 {summary.categoryBreakdown.length === 0 ? (
@@ -1557,6 +1583,7 @@ function PnlSummaryTab({
               <PortfolioPanelHeader
                 title="Integrity Notes"
                 info="Summary notes explaining where the local trade ledger or market valuation still has limited coverage."
+                infoPlacement="left"
               />
               <div className="portfolio-notes-list">
                 {summary.notes.map((note) => (
