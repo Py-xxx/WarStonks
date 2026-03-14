@@ -3608,28 +3608,6 @@ where
             .then_with(|| right.id.cmp(&left.id))
     });
 
-    for index in 0..derived.len() {
-        let Some(left_time) = parse_timestamp(&derived[index].closed_at) else {
-            continue;
-        };
-        let has_duplicate_risk = derived.iter().enumerate().any(|(other_index, other)| {
-            if other_index == index {
-                return false;
-            }
-            if other.order_type != derived[index].order_type
-                || other.item_name != derived[index].item_name
-                || other.quantity != derived[index].quantity
-            {
-                return false;
-            }
-            let Some(other_time) = parse_timestamp(&other.closed_at) else {
-                return false;
-            };
-            (left_time - other_time).whole_seconds().unsigned_abs() <= 60
-        });
-        derived[index].duplicate_risk = has_duplicate_risk;
-    }
-
     DerivedTradeLedger {
         entries: derived,
         sell_details,
@@ -4407,7 +4385,6 @@ fn build_portfolio_pnl_summary_inner(
     let mut audit_rows = Vec::<PortfolioAuditRow>::new();
     let mut ambiguous_group_ids = HashSet::<String>::new();
     let mut alecaframe_audit_ids = HashSet::<String>::new();
-    let mut duplicate_audit_ids = HashSet::<String>::new();
     let mut unmatched_sell_audit_ids = HashSet::<String>::new();
 
     for record in &records {
@@ -4600,21 +4577,6 @@ fn build_portfolio_pnl_summary_inner(
             closed_at: record.closed_at.clone(),
             profit,
         });
-
-        if derived_entry.duplicate_risk && duplicate_audit_ids.insert(record.id.clone()) {
-            audit_rows.push(PortfolioAuditRow {
-                id: record.id.clone(),
-                item_name: record.item_name.clone(),
-                slug: record.slug.clone(),
-                order_type: record.order_type.clone(),
-                source: record.source.clone(),
-                closed_at: record.closed_at.clone(),
-                label: "Duplicate Risk".to_string(),
-                detail:
-                    "Another trade with the same item, quantity, and nearly identical close time exists."
-                        .to_string(),
-            });
-        }
 
         if record.source == "alecaframe" && alecaframe_audit_ids.insert(record.id.clone()) {
             audit_rows.push(PortfolioAuditRow {

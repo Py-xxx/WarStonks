@@ -294,19 +294,6 @@ function buildTradeStatusClassName(status: string | null): string {
   }
 }
 
-function buildCostBasisClassName(confidence: PortfolioTradeLogEntry['costBasisConfidence']): string {
-  switch (confidence) {
-    case 'full':
-      return 'badge-green';
-    case 'partial':
-      return 'badge-amber';
-    case 'none':
-      return 'badge-red';
-    default:
-      return 'badge';
-  }
-}
-
 function formatMarginValue(value: number | null): string {
   if (value == null || !Number.isFinite(value)) {
     return '—';
@@ -352,7 +339,6 @@ function downloadTradeLogCsv(entries: PortfolioTradeLogEntry[]) {
       'Profit',
       'MarginPct',
       'Status',
-      'CostBasisLabel',
       'ClosedAt',
       'UpdatedAt',
       'GroupId',
@@ -369,7 +355,6 @@ function downloadTradeLogCsv(entries: PortfolioTradeLogEntry[]) {
       entry.profit == null ? '' : String(entry.profit),
       entry.margin == null ? '' : entry.margin.toFixed(2),
       entry.status ?? '',
-      entry.costBasisLabel ?? '',
       entry.closedAt,
       entry.updatedAt,
       entry.groupId ?? '',
@@ -961,12 +946,6 @@ function TradeLogTab({ username }: { username: string | null }) {
                             <span className="portfolio-log-item-slug">{row.entry.slug}</span>
                             <div className="portfolio-row-badges">
                               <span className="badge">{row.entry.source === 'wfm' ? 'WFM' : 'Alecaframe'}</span>
-                              {row.entry.costBasisLabel ? (
-                                <span className={`badge ${buildCostBasisClassName(row.entry.costBasisConfidence)}`}>
-                                  {row.entry.costBasisLabel}
-                                </span>
-                              ) : null}
-                              {row.entry.duplicateRisk ? <span className="badge badge-amber">Duplicate Risk</span> : null}
                             </div>
                           </div>
                         </div>
@@ -1066,11 +1045,6 @@ function TradeLogTab({ username }: { username: string | null }) {
                                     <span className="portfolio-log-item-name">{child.itemName}</span>
                                     <span className="portfolio-log-item-slug">{child.slug}</span>
                                     <div className="portfolio-row-badges">
-                                      {child.costBasisLabel ? (
-                                        <span className={`badge ${buildCostBasisClassName(child.costBasisConfidence)}`}>
-                                          {child.costBasisLabel}
-                                        </span>
-                                      ) : null}
                                       {child.allocationMode ? <span className="badge">{child.allocationMode === 'manual' ? 'Manual' : 'Auto'}</span> : null}
                                     </div>
                                   </div>
