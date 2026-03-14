@@ -44,8 +44,6 @@ const ALECAFRAME_NOTIFICATION_DELAY_SECONDS: i64 = 90;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://ws.warframe.market/socket";
-const WFM_LANGUAGE_HEADER: &str = "en";
-const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_USER_AGENT: &str = "warstonks/3.0.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -494,27 +492,6 @@ struct WfmProfileClosedOrderItem {
 struct WfmProfileClosedOrderItemName {
     #[serde(rename = "item_name")]
     item_name: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmTradeSetApiResponse {
-    data: WfmTradeSetData,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct WfmTradeSetData {
-    items: Vec<WfmTradeSetItemRecord>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmTradeSetItemRecord {
-    slug: String,
-    #[serde(default)]
-    set_root: Option<bool>,
-    #[serde(default)]
-    quantity_in_set: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1205,8 +1182,6 @@ fn send_wfm_request(
     let builder = client
         .request(method, url)
         .header("User-Agent", WFM_USER_AGENT)
-        .header("Language", WFM_LANGUAGE_HEADER)
-        .header("Platform", WFM_PLATFORM_HEADER)
         .header("Accept", "application/json");
 
     if let Some(token) = token {
@@ -2736,32 +2711,47 @@ fn persist_trade_set_component_cache(
     Ok(())
 }
 
-fn fetch_wfm_trade_set_components(set_slug: &str) -> Result<Vec<TradeSetComponentRecord>> {
-    let client = shared_wfm_client()?;
-    let response = execute_wfm_request(
-        client
-            .get(format!("{WFM_API_BASE_URL_V2}/item/{set_slug}/set"))
-            .header("User-Agent", WFM_USER_AGENT)
-            .header("Language", WFM_LANGUAGE_HEADER)
-            .header("Platform", WFM_PLATFORM_HEADER)
-            .header("Accept", "application/json"),
-        "request WFM set components",
-    )?;
-    let fetched_at = format_timestamp(now_utc())?;
+fn load_trade_set_components_from_catalog(
+    catalog_connection: &Connection,
+    set_slug: &str,
+) -> Result<Vec<TradeSetComponentRecord>> {
+    let set_item_id = catalog_connection
+        .query_row(
+            "SELECT item_id
+             FROM items
+             WHERE wfm_slug = ?1 OR preferred_slug = ?1
+             LIMIT 1",
+            params![set_slug],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .context("failed to resolve set item id for catalog component lookup")?;
 
-    Ok(response
-        .json::<WfmTradeSetApiResponse>()
-        .context("failed to parse WFM trade set response")?
-        .data
-        .items
-        .into_iter()
-        .filter(|item| item.set_root != Some(true) && item.slug != set_slug)
-        .map(|item| TradeSetComponentRecord {
-            component_slug: item.slug,
-            quantity_in_set: item.quantity_in_set.unwrap_or(1).max(1),
-            fetched_at: fetched_at.clone(),
-        })
-        .collect())
+    let Some(set_item_id) = set_item_id else {
+        return Ok(Vec::new());
+    };
+
+    let fetched_at = format_timestamp(now_utc())?;
+    let mut statement = catalog_connection.prepare(
+        "
+        SELECT component_slug, quantity_in_set
+        FROM wfstat_item_components
+        WHERE component_item_id = ?1
+        ORDER BY component_slug ASC
+        ",
+    )?;
+    let rows = statement
+        .query_map(params![set_item_id], |row| {
+            Ok(TradeSetComponentRecord {
+                component_slug: row.get(0)?,
+                quantity_in_set: row.get::<_, i64>(1)?.max(1),
+                fetched_at: fetched_at.clone(),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect catalog set components")?;
+
+    Ok(rows)
 }
 
 fn list_trade_set_roots_from_catalog(connection: &Connection) -> Result<Vec<TradeSetRootRecord>> {
@@ -2926,7 +2916,7 @@ fn build_trade_set_map_inner(
     let mut sets = Vec::with_capacity(set_roots.len());
 
     for set_root in &set_roots {
-        let components = fetch_wfm_trade_set_components(&set_root.slug)?
+        let components = load_trade_set_components_from_catalog(&catalog_connection, &set_root.slug)?
             .into_iter()
             .map(|component| TradeSetMapComponentRecord {
                 slug: component.component_slug,
@@ -3009,12 +2999,7 @@ fn load_trade_set_components_for_slug(
         }
     }
 
-    let fetched = fetch_wfm_trade_set_components(set_slug)?;
-    if !fetched.is_empty() {
-        persist_trade_set_component_cache(&cache_connection, set_slug, &fetched)?;
-    }
-
-    Ok(fetched)
+    Ok(Vec::new())
 }
 
 fn save_trade_log_rows_inner(
