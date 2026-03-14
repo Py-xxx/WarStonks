@@ -331,7 +331,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         .map(|value| value != current_version)
         .unwrap_or(false);
     if version_mismatch {
-        purge_app_data_cache(&app, &paths)?;
+        purge_app_data_cache(&paths)?;
     }
     let now = iso_timestamp_now();
     let schema = reference_sql();
@@ -2883,11 +2883,7 @@ fn resolve_version_file_path(app: &AppHandle) -> Result<PathBuf> {
         .path()
         .app_data_dir()
         .context("failed to resolve the app data directory")?;
-    let fallback = app_data_dir.join("version.txt");
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
-    Ok(exe_dir.unwrap_or(app_data_dir).join("version.txt"))
+    Ok(app_data_dir.join("version.txt"))
 }
 
 fn read_installed_version(app: &AppHandle) -> Option<String> {
@@ -2904,45 +2900,36 @@ fn read_installed_version(app: &AppHandle) -> Option<String> {
 fn write_installed_version(app: &AppHandle, version: String) -> Result<()> {
     let target = resolve_version_file_path(app)?;
     if let Some(parent) = target.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if fs::write(&target, version.as_bytes()).is_ok() {
-        return Ok(());
-    }
-
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve the app data directory")?;
-    let fallback = app_data_dir.join("version.txt");
-    if let Some(parent) = fallback.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    fs::write(&fallback, version.as_bytes())
-        .with_context(|| format!("failed to write {}", fallback.display()))
+    fs::write(&target, version.as_bytes())
+        .with_context(|| format!("failed to write {}", target.display()))
 }
 
-fn purge_app_data_cache(app: &AppHandle, paths: &AppPaths) -> Result<()> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve the app data directory")?;
-    let _ = fs::remove_file(&paths.db_path);
-    let _ = fs::remove_file(&paths.wfm_file_path);
-    let _ = fs::remove_file(&paths.wfstat_file_path);
-    let _ = fs::remove_file(app_data_dir.join("market_observatory.sqlite"));
-    let _ = fs::remove_file(app_data_dir.join("data").join("wfm-set-map.json"));
-    let _ = fs::remove_file(
-        app_data_dir
-            .join("worldstate")
-            .join("cache.json"),
-    );
-    let _ = fs::remove_file(
-        app_data_dir
-            .join("trades")
-            .join("trades-cache.sqlite"),
-    );
+fn purge_app_data_cache(paths: &AppPaths) -> Result<()> {
+    if paths.data_dir.exists() {
+        for entry in fs::read_dir(&paths.data_dir)
+            .with_context(|| format!("failed to read {}", paths.data_dir.display()))?
+        {
+            let entry = entry.with_context(|| {
+                format!("failed to enumerate {}", paths.data_dir.display())
+            })?;
+            let path = entry.path();
+            let metadata = entry
+                .metadata()
+                .with_context(|| format!("failed to stat {}", path.display()))?;
+            if metadata.is_dir() {
+                fs::remove_dir_all(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+            } else {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+            }
+        }
+    }
+    fs::create_dir_all(&paths.data_dir)
+        .with_context(|| format!("failed to create {}", paths.data_dir.display()))?;
     Ok(())
 }
 
