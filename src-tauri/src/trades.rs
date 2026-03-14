@@ -39,6 +39,7 @@ const PORTFOLIO_PNL_CHART_BUCKET_LIMIT: usize = 90;
 const PORTFOLIO_PROFIT_POINT_LIMIT: usize = 12;
 const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
+const WFM_TRADE_LOG_LOCK_DAYS: i64 = 80;
 const ALECAFRAME_NOTIFICATION_DELAY_SECONDS: i64 = 90;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
@@ -357,12 +358,22 @@ pub struct TradeDetectionRefreshResult {
     pub last_updated_at: Option<String>,
     pub skipped: bool,
     pub message: Option<String>,
+    pub detected_buys: Vec<DetectedTradeBuy>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeDetectionRefreshInput {
     pub session_started_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedTradeBuy {
+    pub slug: String,
+    pub rank: Option<i64>,
+    pub quantity: i64,
+    pub platinum: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1065,6 +1076,15 @@ fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
 }
 
+fn trade_record_is_before_cutoff(
+    record: &StoredTradeLogRecord,
+    cutoff: OffsetDateTime,
+) -> bool {
+    parse_timestamp(&record.closed_at)
+        .map(|closed_at| closed_at < cutoff)
+        .unwrap_or(false)
+}
+
 fn parse_date_start_utc(value: &str) -> Result<OffsetDateTime> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1529,7 +1549,7 @@ fn build_trade_log_entries_from_statistics(
             item_name: order.item.en.item_name,
             slug: order.item.url_name,
             image_path: order.item.thumb.or(order.item.icon),
-            order_type: order.order_type,
+            order_type: order.order_type.to_lowercase(),
             source: "wfm".to_string(),
             platinum: order.platinum,
             quantity: order.quantity,
@@ -1603,6 +1623,25 @@ fn build_trade_notification_fingerprint(
     )
 }
 
+fn build_trade_owned_sync_key(record: &StoredTradeLogRecord) -> String {
+    let total_platinum = record
+        .allocation_total_platinum
+        .unwrap_or(record.platinum.saturating_mul(record.quantity.max(1)));
+    let items = [DiscordTradeNotificationItem {
+        item_name: record.item_name.clone(),
+        quantity: record.quantity.max(1),
+        rank: record.rank,
+        image_path: record.image_path.clone(),
+    }];
+
+    build_trade_notification_fingerprint(
+        &record.order_type,
+        total_platinum,
+        &record.closed_at,
+        &items,
+    )
+}
+
 fn build_trade_notification_items_from_entry(
     entry: &PortfolioTradeLogEntry,
 ) -> Vec<DiscordTradeNotificationItem> {
@@ -1614,44 +1653,90 @@ fn build_trade_notification_items_from_entry(
     }]
 }
 
-fn build_trade_notification_candidates_for_wfm(
-    entries: &[PortfolioTradeLogEntry],
-) -> Vec<TradeNotificationCandidate> {
-    entries
-        .iter()
-        .map(|entry| {
-            let items = build_trade_notification_items_from_entry(entry);
-            let total_platinum = entry
-                .allocation_total_platinum
-                .unwrap_or(entry.platinum.saturating_mul(entry.quantity.max(1)));
-            let summary_label = format!(
-                "{} {} x{} for {}p",
-                if entry.order_type == "buy" {
-                    "Bought"
-                } else {
-                    "Sold"
-                },
-                entry.item_name,
-                entry.quantity.max(1),
-                total_platinum
-            );
+fn build_trade_notification_items_for_wfm_entry(
+    app: &tauri::AppHandle,
+    entry: &PortfolioTradeLogEntry,
+) -> Result<Vec<DiscordTradeNotificationItem>> {
+    if !entry.slug.ends_with("_set") {
+        return Ok(build_trade_notification_items_from_entry(entry));
+    }
 
-            TradeNotificationCandidate {
-                fingerprint: build_trade_notification_fingerprint(
-                    &entry.order_type,
-                    total_platinum,
-                    &entry.closed_at,
-                    &items,
-                ),
-                source: "wfm".to_string(),
-                order_type: entry.order_type.clone(),
+    let mut components = load_trade_set_components_for_slug(app, &entry.slug)?;
+    if components.is_empty() {
+        components = load_trade_set_components_from_map(app, &entry.slug)?;
+    }
+    if components.is_empty() {
+        return Ok(build_trade_notification_items_from_entry(entry));
+    }
+
+    let catalog = open_catalog_database(app)?;
+    let trade_quantity = entry.quantity.max(1);
+    let mut items = Vec::new();
+
+    for component in components {
+        let meta = resolve_catalog_trade_item_by_slug(&catalog, &component.component_slug)?;
+        let name = meta
+            .as_ref()
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| component.component_slug.clone());
+        let image_path = meta.and_then(|entry| entry.image_path);
+        let quantity = component.quantity_in_set.max(1).saturating_mul(trade_quantity);
+
+        items.push(DiscordTradeNotificationItem {
+            item_name: name,
+            quantity,
+            rank: None,
+            image_path,
+        });
+    }
+
+    if items.is_empty() {
+        return Ok(build_trade_notification_items_from_entry(entry));
+    }
+
+    Ok(items)
+}
+
+fn build_trade_notification_candidates_for_wfm(
+    app: &tauri::AppHandle,
+    entries: &[PortfolioTradeLogEntry],
+) -> Result<Vec<TradeNotificationCandidate>> {
+    let mut candidates = Vec::with_capacity(entries.len());
+
+    for entry in entries {
+        let items = build_trade_notification_items_for_wfm_entry(app, entry)?;
+        let total_platinum = entry
+            .allocation_total_platinum
+            .unwrap_or(entry.platinum.saturating_mul(entry.quantity.max(1)));
+        let summary_label = format!(
+            "{} {} x{} for {}p",
+            if entry.order_type == "buy" {
+                "Bought"
+            } else {
+                "Sold"
+            },
+            entry.item_name,
+            entry.quantity.max(1),
+            total_platinum
+        );
+
+        candidates.push(TradeNotificationCandidate {
+            fingerprint: build_trade_notification_fingerprint(
+                &entry.order_type,
                 total_platinum,
-                closed_at: entry.closed_at.clone(),
-                summary_label,
-                items,
-            }
-        })
-        .collect()
+                &entry.closed_at,
+                &items,
+            ),
+            source: "wfm".to_string(),
+            order_type: entry.order_type.clone(),
+            total_platinum,
+            closed_at: entry.closed_at.clone(),
+            summary_label,
+            items,
+        });
+    }
+
+    Ok(candidates)
 }
 
 fn build_trade_notification_candidates_for_alecaframe(
@@ -2016,6 +2101,7 @@ fn collapse_grouped_trade_sets(
             continue;
         }
 
+        let keep_item = group.iter().any(|entry| entry.keep_item);
         collapsed.push(StoredTradeLogRecord {
             id: format!("af-set-{group_id}"),
             item_name: matched_set.name,
@@ -2028,7 +2114,7 @@ fn collapse_grouped_trade_sets(
             rank: None,
             closed_at: group[0].closed_at.clone(),
             updated_at: group[0].updated_at.clone(),
-            keep_item: false,
+            keep_item,
             group_id: None,
             group_label: None,
             group_total_platinum: None,
@@ -2465,6 +2551,29 @@ fn trade_record_matches_existing_duplicate(
     )
 }
 
+fn append_unique_trade_entries(
+    existing: &[PortfolioTradeLogEntry],
+    incoming: &[PortfolioTradeLogEntry],
+) -> Vec<PortfolioTradeLogEntry> {
+    let existing_records = existing
+        .iter()
+        .map(build_stored_trade_record_from_entry)
+        .collect::<Vec<_>>();
+    let mut combined = existing.to_vec();
+
+    for entry in incoming {
+        if existing_records.iter().any(|record| record.id == entry.id) {
+            continue;
+        }
+        if trade_record_matches_existing_duplicate(&existing_records, entry) {
+            continue;
+        }
+        combined.push(entry.clone());
+    }
+
+    combined
+}
+
 fn merge_wfm_trade_log_entries(
     existing: &[StoredTradeLogRecord],
     fetched_entries: &[PortfolioTradeLogEntry],
@@ -2706,6 +2815,46 @@ fn load_trade_set_map_file(path: &Path) -> Result<Option<TradeSetMapFile>> {
     let file = serde_json::from_str::<TradeSetMapFile>(&raw)
         .with_context(|| format!("failed to parse trade set map at {}", path.display()))?;
     Ok(Some(file))
+}
+
+fn map_trade_set_components_from_file(
+    set_map: &TradeSetMapFile,
+    set_slug: &str,
+) -> Vec<TradeSetComponentRecord> {
+    let target_slug = set_slug.trim();
+    if target_slug.is_empty() {
+        return Vec::new();
+    }
+
+    let Some(set_record) = set_map
+        .sets
+        .iter()
+        .find(|record| record.slug == target_slug)
+    else {
+        return Vec::new();
+    };
+
+    set_record
+        .components
+        .iter()
+        .map(|component| TradeSetComponentRecord {
+            component_slug: component.slug.clone(),
+            quantity_in_set: component.quantity_in_set.max(1),
+            fetched_at: set_map.generated_at.clone(),
+        })
+        .collect()
+}
+
+fn load_trade_set_components_from_map(
+    app: &tauri::AppHandle,
+    set_slug: &str,
+) -> Result<Vec<TradeSetComponentRecord>> {
+    let map_path = build_trade_set_map_path(app)?;
+    let Some(file) = load_trade_set_map_file(&map_path)? else {
+        return Ok(Vec::new());
+    };
+
+    Ok(map_trade_set_components_from_file(&file, set_slug))
 }
 
 fn save_trade_set_map_file(path: &Path, file: &TradeSetMapFile) -> Result<()> {
@@ -3253,7 +3402,6 @@ fn normalize_trade_entries_for_owned_component_sync(
 fn build_owned_set_component_deltas_for_entries(
     app: &tauri::AppHandle,
     entries: &[PortfolioTradeLogEntry],
-    source: &str,
 ) -> Result<Vec<OwnedSetComponentDelta>> {
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -3265,19 +3413,24 @@ fn build_owned_set_component_deltas_for_entries(
     let mut deltas = Vec::new();
 
     for record in normalized_records {
-        if record.order_type == "buy" && record.keep_item {
+        let normalized_order_type = record.order_type.trim().to_lowercase();
+        if normalized_order_type == "buy" && record.keep_item {
             continue;
         }
 
-        let direction = match record.order_type.as_str() {
+        let direction = match normalized_order_type.as_str() {
             "buy" => 1_i64,
             "sell" => -1_i64,
             _ => continue,
         };
         let trade_quantity = record.quantity.max(1);
+        let trade_sync_key = build_trade_owned_sync_key(&record);
 
         if record.slug.ends_with("_set") {
-            let components = load_trade_set_components_for_slug(app, &record.slug)?;
+            let mut components = load_trade_set_components_for_slug(app, &record.slug)?;
+            if components.is_empty() {
+                components = load_trade_set_components_from_map(app, &record.slug)?;
+            }
             for component in components {
                 let Some(meta) =
                     resolve_catalog_trade_item_by_slug(&catalog, &component.component_slug)?
@@ -3292,10 +3445,7 @@ fn build_owned_set_component_deltas_for_entries(
                 }
 
                 deltas.push(OwnedSetComponentDelta {
-                    sync_key: format!(
-                        "trade-owned:{source}:{}:{}",
-                        record.id, component.component_slug
-                    ),
+                    sync_key: format!("trade-owned:{trade_sync_key}:{}", component.component_slug),
                     item_id: meta.item_id,
                     slug: meta.slug,
                     name: meta.name,
@@ -3319,7 +3469,7 @@ fn build_owned_set_component_deltas_for_entries(
         }
 
         deltas.push(OwnedSetComponentDelta {
-            sync_key: format!("trade-owned:{source}:{}:{}", record.id, record.slug),
+            sync_key: format!("trade-owned:{trade_sync_key}:{}", record.slug),
             item_id: meta.item_id,
             slug: meta.slug,
             name: meta.name,
@@ -3801,8 +3951,7 @@ fn set_trade_log_keep_item_inner(
         .context("failed to update trade log keep override")?;
 
     let next_state = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
-    let owned_part_deltas =
-        build_owned_set_component_deltas_for_entries(app, &next_state.entries, "trade-log")?;
+    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &next_state.entries)?;
     replace_owned_set_component_deltas(app, &owned_part_deltas)?;
     Ok(next_state)
 }
@@ -3957,7 +4106,37 @@ fn force_trade_log_resync_inner(
     }
 
     let mut connection = open_trades_cache_database(app)?;
-    let _ = normalize_grouped_trade_sets_inner(app, &mut connection, trimmed_username)?;
+    let existing_records = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
+    let mut fetched_entries = fetch_profile_trade_log_inner(trimmed_username)?;
+
+    let settings = load_settings_for_internal_use(app)?;
+    if settings.alecaframe.enabled && settings.alecaframe.public_link.is_some() {
+        if let Some(baseline_date) =
+            load_alecaframe_trade_baseline_date_inner(&connection, trimmed_username)?
+        {
+            let existing_records = fetched_entries
+                .iter()
+                .map(build_stored_trade_record_from_entry)
+                .collect::<Vec<_>>();
+            let imported =
+                build_alecaframe_trade_entries(app, trimmed_username, &baseline_date, &existing_records)?;
+            if !imported.is_empty() {
+                fetched_entries = append_unique_trade_entries(&fetched_entries, &imported);
+            }
+        }
+    }
+
+    let cutoff = now_utc() - time::Duration::days(WFM_TRADE_LOG_LOCK_DAYS);
+    let locked_entries = existing_records
+        .iter()
+        .filter(|record| trade_record_is_before_cutoff(record, cutoff))
+        .map(build_portfolio_entry_from_stored_record)
+        .collect::<Vec<_>>();
+    if !locked_entries.is_empty() {
+        fetched_entries = append_unique_trade_entries(&fetched_entries, &locked_entries);
+    }
+
+    replace_trade_log_rows_inner(&mut connection, trimmed_username, &fetched_entries)?;
     reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
 }
 
@@ -4010,6 +4189,7 @@ fn refresh_wfm_trade_detection_inner(
             last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
             skipped: false,
             message: Some("No trade history rows were returned.".to_string()),
+            detected_buys: Vec::new(),
         });
     }
 
@@ -4021,20 +4201,21 @@ fn refresh_wfm_trade_detection_inner(
             last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
             skipped: false,
             message: None,
+            detected_buys: Vec::new(),
         });
     }
 
     let last_updated_at =
         save_trade_log_rows_inner(&mut connection, trimmed_username, &persisted_entries)?;
     let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
-    let owned_part_deltas =
-        build_owned_set_component_deltas_for_entries(app, &new_entries, "wfm-detect")?;
+    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &new_entries)?;
     apply_owned_set_component_deltas(app, &owned_part_deltas)?;
+    let wfm_candidates = build_trade_notification_candidates_for_wfm(app, &new_entries)?;
     let notification_count = send_trade_notification_candidates_inner(
         app,
         &connection,
         trimmed_username,
-        &build_trade_notification_candidates_for_wfm(&new_entries),
+        &wfm_candidates,
         "wfm",
         session_started_at.as_ref(),
     )?;
@@ -4046,6 +4227,7 @@ fn refresh_wfm_trade_detection_inner(
         last_updated_at: Some(last_updated_at),
         skipped: false,
         message: None,
+        detected_buys: Vec::new(),
     })
 }
 
@@ -4068,6 +4250,7 @@ fn refresh_alecaframe_trade_detection_inner(
             last_updated_at: None,
             skipped: true,
             message: Some("Alecaframe is not enabled.".to_string()),
+            detected_buys: Vec::new(),
         });
     }
 
@@ -4086,6 +4269,7 @@ fn refresh_alecaframe_trade_detection_inner(
             last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
             skipped: true,
             message: Some("No Alecaframe migration baseline has been saved yet.".to_string()),
+            detected_buys: Vec::new(),
         });
     };
 
@@ -4100,13 +4284,13 @@ fn refresh_alecaframe_trade_detection_inner(
             last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
             skipped: false,
             message: None,
+            detected_buys: Vec::new(),
         });
     }
 
     let last_updated_at = save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
     let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
-    let owned_part_deltas =
-        build_owned_set_component_deltas_for_entries(app, &imported, "alecaframe-detect")?;
+    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &imported)?;
     apply_owned_set_component_deltas(app, &owned_part_deltas)?;
     let notification_count = send_trade_notification_candidates_inner(
         app,
@@ -4124,6 +4308,16 @@ fn refresh_alecaframe_trade_detection_inner(
         last_updated_at: Some(last_updated_at),
         skipped: false,
         message: None,
+        detected_buys: imported
+            .iter()
+            .filter(|entry| entry.order_type == "buy")
+            .map(|entry| DetectedTradeBuy {
+                slug: entry.slug.clone(),
+                rank: entry.rank,
+                quantity: entry.quantity.max(1),
+                platinum: entry.platinum,
+            })
+            .collect(),
     })
 }
 
@@ -5890,7 +6084,7 @@ mod tests {
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         merge_wfm_trade_log_entries, normalize_alecaframe_trade_payload, normalize_avatar_url,
         normalize_status_set_request, parse_status_from_payload, save_trade_log_rows_inner,
-        AlecaframeRawTradeRecord,
+        trade_record_is_before_cutoff, AlecaframeRawTradeRecord,
         AlecaframeTradeItemRecord, AlecaframeTradeResponse, PortfolioTradeLogEntry,
         StoredTradeLogRecord, TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
@@ -5898,6 +6092,8 @@ mod tests {
     use crate::settings::DiscordTradeNotificationItem;
     use rusqlite::Connection;
     use serde_json::json;
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
 
     #[test]
     fn normalizes_relative_avatar_path_to_static_assets_host() {
@@ -5938,6 +6134,39 @@ mod tests {
             normalize_status_set_request("invisible").ok(),
             Some("invisible")
         );
+    }
+
+    #[test]
+    fn locks_trade_records_older_than_cutoff() {
+        let cutoff = OffsetDateTime::parse("2026-03-01T00:00:00Z", &Rfc3339).expect("cutoff");
+        let old_record = StoredTradeLogRecord {
+            id: "old-1".to_string(),
+            item_name: "Old Item".to_string(),
+            slug: "old_item".to_string(),
+            image_path: None,
+            order_type: "sell".to_string(),
+            source: "wfm".to_string(),
+            platinum: 50,
+            quantity: 1,
+            rank: None,
+            closed_at: "2026-02-01T00:00:00Z".to_string(),
+            updated_at: "2026-02-01T00:00:00Z".to_string(),
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+        };
+        let recent_record = StoredTradeLogRecord {
+            closed_at: "2026-03-05T00:00:00Z".to_string(),
+            updated_at: "2026-03-05T00:00:00Z".to_string(),
+            ..old_record.clone()
+        };
+
+        assert!(trade_record_is_before_cutoff(&old_record, cutoff));
+        assert!(!trade_record_is_before_cutoff(&recent_record, cutoff));
     }
 
     #[test]
@@ -6346,7 +6575,7 @@ mod tests {
                 rank: None,
                 closed_at: "2026-03-10T09:00:00.000+00:00".to_string(),
                 updated_at: "2026-03-10T09:00:00.000+00:00".to_string(),
-                keep_item: false,
+                keep_item: true,
                 group_id: Some("group-1".to_string()),
                 group_label: Some("Multiple Item Trade".to_string()),
                 group_total_platinum: Some(68),
@@ -6396,6 +6625,7 @@ mod tests {
         assert_eq!(collapsed[0].quantity, 1);
         assert_eq!(collapsed[0].allocation_total_platinum, Some(68));
         assert!(collapsed[0].group_id.is_none());
+        assert!(collapsed[0].keep_item);
     }
 
     #[test]
@@ -6513,6 +6743,339 @@ mod tests {
         );
 
         assert_eq!(fingerprint, same_trade_fingerprint);
+    }
+
+    #[test]
+    fn map_trade_set_components_from_file_returns_components() {
+        let set_map = TradeSetMapFile {
+            api_version: Some("0.0.0".to_string()),
+            generated_at: "2026-03-10T09:00:00Z".to_string(),
+            sets: vec![TradeSetMapSetRecord {
+                slug: "wisp_prime_set".to_string(),
+                name: "Wisp Prime Set".to_string(),
+                image_path: None,
+                components: vec![
+                    TradeSetMapComponentRecord {
+                        slug: "wisp_prime_blueprint".to_string(),
+                        quantity_in_set: 1,
+                    },
+                    TradeSetMapComponentRecord {
+                        slug: "wisp_prime_chassis".to_string(),
+                        quantity_in_set: 2,
+                    },
+                ],
+            }],
+        };
+
+        let components = map_trade_set_components_from_file(&set_map, "wisp_prime_set");
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].component_slug, "wisp_prime_blueprint");
+        assert_eq!(components[0].quantity_in_set, 1);
+        assert_eq!(components[1].component_slug, "wisp_prime_chassis");
+        assert_eq!(components[1].quantity_in_set, 2);
+        assert_eq!(components[0].fetched_at, "2026-03-10T09:00:00Z");
+    }
+
+    #[test]
+    fn owned_component_sync_key_is_source_agnostic() {
+        let base_record = StoredTradeLogRecord {
+            id: "wfm-trade-1".to_string(),
+            item_name: "Wisp Prime Set".to_string(),
+            slug: "wisp_prime_set".to_string(),
+            image_path: None,
+            order_type: "sell".to_string(),
+            source: "wfm".to_string(),
+            platinum: 68,
+            quantity: 1,
+            rank: None,
+            closed_at: "2026-03-10T09:00:10Z".to_string(),
+            updated_at: "2026-03-10T09:00:10Z".to_string(),
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+        };
+
+        let mut other_record = base_record.clone();
+        other_record.id = "af-trade-1".to_string();
+        other_record.source = "alecaframe".to_string();
+        other_record.closed_at = "2026-03-10T09:00:40Z".to_string();
+        other_record.updated_at = "2026-03-10T09:00:40Z".to_string();
+
+        let left = build_trade_owned_sync_key(&base_record);
+        let right = build_trade_owned_sync_key(&other_record);
+
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn force_resync_retains_keep_overrides() {
+        let mut connection = Connection::open_in_memory().expect("in-memory trades cache");
+        initialize_trades_cache_schema(&connection).expect("schema");
+
+        let username = "qtpyth";
+        let initial_entries = vec![PortfolioTradeLogEntry {
+            id: "trade-1".to_string(),
+            item_name: "Wisp Prime Chassis Blueprint".to_string(),
+            slug: "wisp_prime_chassis_blueprint".to_string(),
+            image_path: None,
+            order_type: "buy".to_string(),
+            source: "wfm".to_string(),
+            platinum: 20,
+            quantity: 1,
+            rank: None,
+            closed_at: "2026-03-10T09:00:00Z".to_string(),
+            updated_at: "2026-03-10T09:00:00Z".to_string(),
+            profit: None,
+            margin: None,
+            status: None,
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+            allocation_mode: None,
+            cost_basis_confidence: None,
+            cost_basis_label: None,
+            matched_cost: None,
+            matched_quantity: None,
+            matched_buy_count: 0,
+            matched_buy_rows: Vec::new(),
+            set_component_rows: Vec::new(),
+            profit_formula: None,
+            duplicate_risk: false,
+        }];
+
+        save_trade_log_rows_inner(&mut connection, username, &initial_entries)
+            .expect("save initial trade log");
+        connection
+            .execute(
+                "
+                INSERT INTO portfolio_trade_log_overrides (username, order_id, keep_item)
+                VALUES (?1, ?2, ?3)
+                ",
+                params![username, "trade-1", 1],
+            )
+            .expect("seed keep override");
+        connection
+            .execute(
+                "
+                INSERT INTO portfolio_trade_log_overrides (username, order_id, keep_item)
+                VALUES (?1, ?2, ?3)
+                ",
+                params![username, "trade-2", 1],
+            )
+            .expect("seed stale override");
+
+        let refreshed_entries = vec![
+            PortfolioTradeLogEntry {
+                id: "trade-1".to_string(),
+                item_name: "Wisp Prime Chassis Blueprint".to_string(),
+                slug: "wisp_prime_chassis_blueprint".to_string(),
+                image_path: None,
+                order_type: "buy".to_string(),
+                source: "wfm".to_string(),
+                platinum: 20,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:00Z".to_string(),
+                updated_at: "2026-03-10T09:00:00Z".to_string(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
+                allocation_mode: None,
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
+            },
+            PortfolioTradeLogEntry {
+                id: "trade-3".to_string(),
+                item_name: "Wisp Prime Neuroptics Blueprint".to_string(),
+                slug: "wisp_prime_neuroptics_blueprint".to_string(),
+                image_path: None,
+                order_type: "buy".to_string(),
+                source: "wfm".to_string(),
+                platinum: 25,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T10:00:00Z".to_string(),
+                updated_at: "2026-03-10T10:00:00Z".to_string(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
+                allocation_mode: None,
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
+            },
+        ];
+
+        replace_trade_log_rows_inner(&mut connection, username, &refreshed_entries)
+            .expect("replace trade log rows");
+
+        let records = load_stored_trade_log_records_inner(&connection, username)
+            .expect("load refreshed trade log");
+        let trade_1 = records
+            .iter()
+            .find(|record| record.id == "trade-1")
+            .expect("trade-1");
+        assert!(trade_1.keep_item);
+        assert!(records.iter().any(|record| record.id == "trade-3"));
+
+        let override_count: i64 = connection
+            .query_row(
+                "
+                SELECT COUNT(*)
+                FROM portfolio_trade_log_overrides
+                WHERE username = ?1 AND order_id = ?2
+                ",
+                params![username, "trade-2"],
+                |row| row.get(0),
+            )
+            .expect("override lookup");
+        assert_eq!(override_count, 0);
+    }
+
+    #[test]
+    fn append_unique_trade_entries_skips_duplicates() {
+        let existing = vec![PortfolioTradeLogEntry {
+            id: "trade-1".to_string(),
+            item_name: "Wisp Prime Set".to_string(),
+            slug: "wisp_prime_set".to_string(),
+            image_path: None,
+            order_type: "sell".to_string(),
+            source: "wfm".to_string(),
+            platinum: 68,
+            quantity: 1,
+            rank: None,
+            closed_at: "2026-03-10T09:00:20Z".to_string(),
+            updated_at: "2026-03-10T09:00:20Z".to_string(),
+            profit: None,
+            margin: None,
+            status: None,
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+            allocation_mode: None,
+            cost_basis_confidence: None,
+            cost_basis_label: None,
+            matched_cost: None,
+            matched_quantity: None,
+            matched_buy_count: 0,
+            matched_buy_rows: Vec::new(),
+            set_component_rows: Vec::new(),
+            profit_formula: None,
+            duplicate_risk: false,
+        }];
+
+        let incoming = vec![
+            PortfolioTradeLogEntry {
+                id: "trade-2".to_string(),
+                item_name: "Wisp Prime Set".to_string(),
+                slug: "wisp_prime_set".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                source: "alecaframe".to_string(),
+                platinum: 68,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:00:45Z".to_string(),
+                updated_at: "2026-03-10T09:00:45Z".to_string(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
+                allocation_mode: None,
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
+            },
+            PortfolioTradeLogEntry {
+                id: "trade-3".to_string(),
+                item_name: "Wisp Prime Chassis Blueprint".to_string(),
+                slug: "wisp_prime_chassis_blueprint".to_string(),
+                image_path: None,
+                order_type: "sell".to_string(),
+                source: "alecaframe".to_string(),
+                platinum: 34,
+                quantity: 1,
+                rank: None,
+                closed_at: "2026-03-10T09:02:00Z".to_string(),
+                updated_at: "2026-03-10T09:02:00Z".to_string(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
+                group_id: None,
+                group_label: None,
+                group_total_platinum: None,
+                group_item_count: None,
+                allocation_total_platinum: None,
+                group_sort_order: None,
+                allocation_mode: None,
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
+            },
+        ];
+
+        let combined = append_unique_trade_entries(&existing, &incoming);
+        assert_eq!(combined.len(), 2);
+        assert!(combined.iter().any(|entry| entry.id == "trade-1"));
+        assert!(combined.iter().any(|entry| entry.id == "trade-3"));
     }
 
     #[test]
