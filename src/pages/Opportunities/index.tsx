@@ -54,6 +54,7 @@ type FarmNowRelicRow = {
   refinementKey: string;
   refinementLabel: string;
   expectedProfit: number | null;
+  ownedCount: number;
   bestDropSlug: string | null;
   drops: Array<{
     drop: RelicRoiDropEntry;
@@ -119,6 +120,21 @@ function formatChance(value: number | null): string {
 
   const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
   return `${rounded}%`;
+}
+
+function parseRelicTierCode(name: string): { tier: string; code: string } | null {
+  const tokens = name.trim().split(/\s+/);
+  if (tokens.length < 2) {
+    return null;
+  }
+
+  const tier = tokens[0];
+  const code = tokens[1];
+  if (!tier || !code) {
+    return null;
+  }
+
+  return { tier, code };
 }
 
 function relicRarityTone(rarity: string | null): string {
@@ -312,6 +328,8 @@ export function OpportunitiesPage() {
   const [farmNowLoading, setFarmNowLoading] = useState(false);
   const [farmNowError, setFarmNowError] = useState<string | null>(null);
   const [expandedFarmRelicKey, setExpandedFarmRelicKey] = useState<string | null>(null);
+  const [farmNowOwnedRelics, setFarmNowOwnedRelics] = useState<OwnedRelicEntry[]>([]);
+  const [farmNowOwnedRelicsLoading, setFarmNowOwnedRelicsLoading] = useState(false);
   const [scannerResponse, setScannerResponse] = useState<ArbitrageScannerResponse | null>(null);
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -414,6 +432,40 @@ export function OpportunitiesPage() {
       cancelled = true;
     };
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'farm-now') {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadFarmNowOwnedRelics = async () => {
+      if (farmNowOwnedRelicsLoading || farmNowOwnedRelics.length > 0) {
+        return;
+      }
+
+      setFarmNowOwnedRelicsLoading(true);
+      try {
+        const relics = await getOwnedRelicInventory();
+        if (!cancelled) {
+          setFarmNowOwnedRelics(relics);
+        }
+      } catch {
+        // Silent: owned relics are optional for farm now calculations.
+      } finally {
+        if (!cancelled) {
+          setFarmNowOwnedRelicsLoading(false);
+        }
+      }
+    };
+
+    void loadFarmNowOwnedRelics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, farmNowOwnedRelics.length, farmNowOwnedRelicsLoading]);
 
   const loadOwnedRelics = async (force = false) => {
     if (ownedRelicsLoading) {
@@ -548,10 +600,24 @@ export function OpportunitiesPage() {
 
   const farmNowRelics = useMemo<FarmNowRelicRow[]>(() => {
     const relics = farmNowScan?.relicRoiResults ?? [];
+    const ownedMap = new Map<string, OwnedRelicEntry>();
+    for (const relic of farmNowOwnedRelics) {
+      ownedMap.set(`${relic.tier}:${relic.code}`, relic);
+    }
     const rows: FarmNowRelicRow[] = [];
 
     for (const relic of relics) {
+      const parsed = parseRelicTierCode(relic.name);
+      const ownedEntry = parsed ? ownedMap.get(`${parsed.tier}:${parsed.code}`) : undefined;
+
       for (const refinement of relic.refinements) {
+        const ownedCount = ownedEntry
+          ? ownedEntry.counts[refinement.refinementKey as keyof OwnedRelicEntry['counts']] ?? 0
+          : 0;
+        if (!ownedCount) {
+          continue;
+        }
+
         let expectedProfit = 0;
         let hasContribution = false;
         let bestDropSlug: string | null = null;
@@ -584,6 +650,7 @@ export function OpportunitiesPage() {
           refinementKey: refinement.refinementKey,
           refinementLabel: refinement.refinementLabel,
           expectedProfit: hasContribution ? expectedProfit : null,
+          ownedCount,
           bestDropSlug,
           drops,
         });
@@ -596,9 +663,12 @@ export function OpportunitiesPage() {
       if (rightProfit !== leftProfit) {
         return rightProfit - leftProfit;
       }
+      if (right.ownedCount !== left.ownedCount) {
+        return right.ownedCount - left.ownedCount;
+      }
       return left.relic.name.localeCompare(right.relic.name);
     });
-  }, [farmNowScan]);
+  }, [farmNowOwnedRelics, farmNowScan]);
 
   const filteredSuggestions = useMemo(() => {
     const normalizedQuery = componentQuery.trim().toLowerCase();
@@ -1107,13 +1177,25 @@ export function OpportunitiesPage() {
                     Open Scanners
                   </button>
                 </div>
+              ) : farmNowOwnedRelics.length === 0 ? (
+                <div className="set-planner-empty">
+                  <div>
+                    <span className="panel-title-eyebrow">Owned Relics Required</span>
+                    <h3>No owned relics detected</h3>
+                    <p>
+                      This view ranks relics you already own by refinement. Make sure Alecaframe
+                      inventory is available in Owned Relics, then return here.
+                    </p>
+                  </div>
+                </div>
               ) : farmNowRelics.length === 0 ? (
-                <div className="opportunities-placeholder">No relic profitability rows available.</div>
+                <div className="opportunities-placeholder">No owned relic refinements available.</div>
               ) : (
                 <div className="farm-now-list">
                   <div className="farm-now-header-row">
                     <span className="farm-now-header-label">Relic</span>
                     <span className="farm-now-header-label">Refinement</span>
+                    <span className="farm-now-header-label">Owned</span>
                     <span className="farm-now-header-label farm-now-header-value">Profit / Relic</span>
                     <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                   </div>
@@ -1149,6 +1231,9 @@ export function OpportunitiesPage() {
                             </div>
                             <span className="farm-now-cell farm-now-cell-refinement">
                               <span className="market-panel-badge tone-blue">{row.refinementLabel}</span>
+                            </span>
+                            <span className="farm-now-cell farm-now-cell-owned">
+                              ×{row.ownedCount}
                             </span>
                             <span className="farm-now-cell farm-now-cell-profit">
                               {formatPlat(row.expectedProfit)}

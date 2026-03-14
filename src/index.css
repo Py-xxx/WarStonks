@@ -552,7 +552,7 @@
 .farm-now-header-row,
 .farm-now-row-main {
   display: grid;
-  grid-template-columns: minmax(240px, 1.5fr) minmax(140px, 0.6fr) minmax(120px, 0.5fr) 24px;
+  grid-template-columns: minmax(240px, 1.5fr) minmax(140px, 0.6fr) minmax(90px, 0.4fr) minmax(120px, 0.5fr) 24px;
   align-items: center;
   gap: 12px;
 }
@@ -654,6 +654,12 @@
   font-weight: 700;
   color: var(--text-primary);
   text-align: right;
+}
+
+.farm-now-cell-owned {
+  justify-content: flex-start;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 
 .farm-now-cell-action {
