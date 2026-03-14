@@ -14,7 +14,7 @@ pub fn run() {
         .setup(|app| {
             if let Ok(app_data_dir) = app.path().app_data_dir() {
                 crate::wfm_scheduler::configure_wfm_scheduler_debug_log(Some(
-                    app_data_dir.join("data").join("queueDebug.jsonl"),
+                    app_data_dir.join("log").join("queueDebug.jsonl"),
                 ));
             }
             Ok(())
