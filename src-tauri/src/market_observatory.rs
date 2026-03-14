@@ -11,6 +11,8 @@ use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
+use crate::settings;
+
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
@@ -31,6 +33,14 @@ const RELIC_REFINEMENT_INTACT: &str = "intact";
 const RELIC_REFINEMENT_EXCEPTIONAL: &str = "exceptional";
 const RELIC_REFINEMENT_FLAWLESS: &str = "flawless";
 const RELIC_REFINEMENT_RADIANT: &str = "radiant";
+
+#[derive(Debug, Clone)]
+struct RelicCatalogEntry {
+    item_id: i64,
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -627,6 +637,39 @@ pub struct RelicRoiEntry {
     pub note: String,
     pub refinements: Vec<RelicRoiRefinementSummary>,
     pub drops: Vec<RelicRoiDropEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedRelicRefinementCounts {
+    pub intact: u32,
+    pub exceptional: u32,
+    pub flawless: u32,
+    pub radiant: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedRelicDropEntry {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub rarity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedRelicEntry {
+    pub relic_item_id: Option<i64>,
+    pub slug: Option<String>,
+    pub name: String,
+    pub tier: String,
+    pub code: String,
+    pub image_path: Option<String>,
+    pub counts: OwnedRelicRefinementCounts,
+    pub drops: Vec<OwnedRelicDropEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6204,6 +6247,43 @@ fn load_relic_reward_profiles(
     Ok(reward_map.into_values().collect())
 }
 
+fn resolve_relic_catalog_entry(
+    catalog_connection: &Connection,
+    relic_tier: &str,
+    relic_code: &str,
+) -> Result<Option<RelicCatalogEntry>> {
+    catalog_connection
+        .query_row(
+            "SELECT item_id, slug, name, preferred_image
+             FROM items
+             WHERE LOWER(relic_tier) = LOWER(?1)
+               AND relic_code = ?2
+             LIMIT 1",
+            params![relic_tier, relic_code],
+            |row| {
+                Ok(RelicCatalogEntry {
+                    item_id: row.get(0)?,
+                    slug: row.get(1)?,
+                    name: row.get(2)?,
+                    image_path: row.get::<_, Option<String>>(3)?,
+                })
+            },
+        )
+        .optional()
+        .context("failed to resolve relic catalog entry")
+}
+
+fn relic_tier_sort_order(value: &str) -> i64 {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "lith" => 0,
+        "meso" => 1,
+        "neo" => 2,
+        "axi" => 3,
+        "requiem" => 4,
+        _ => 9,
+    }
+}
+
 fn build_relic_roi_score(
     net_profit: Option<f64>,
     roi_pct: Option<f64>,
@@ -7321,6 +7401,115 @@ pub async fn set_set_completion_owned_item_quantity(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())
+}
+
+fn build_owned_relic_entries(
+    app: &tauri::AppHandle,
+) -> Result<Vec<OwnedRelicEntry>> {
+    let settings = settings::load_settings_inner(app)?;
+    if !settings.alecaframe.enabled {
+        return Err(anyhow!("Enable Alecaframe API in Settings first."));
+    }
+
+    let public_link = settings
+        .alecaframe
+        .public_link
+        .ok_or_else(|| anyhow!("No Alecaframe public link is saved."))?;
+    let public_token = settings::extract_public_token(&public_link)
+        .ok_or_else(|| anyhow!("Could not extract a public token from the Alecaframe link."))?;
+    let inventory = settings::fetch_alecaframe_relic_inventory(&public_token)?;
+
+    let mut aggregates = BTreeMap::<(String, String), OwnedRelicRefinementCounts>::new();
+    for entry in inventory {
+        let key = (entry.tier.clone(), entry.code.clone());
+        let counts = aggregates.entry(key).or_insert_with(|| OwnedRelicRefinementCounts {
+            intact: 0,
+            exceptional: 0,
+            flawless: 0,
+            radiant: 0,
+            total: 0,
+        });
+
+        match entry.refinement.as_str() {
+            RELIC_REFINEMENT_INTACT => counts.intact += entry.count,
+            RELIC_REFINEMENT_EXCEPTIONAL => counts.exceptional += entry.count,
+            RELIC_REFINEMENT_FLAWLESS => counts.flawless += entry.count,
+            RELIC_REFINEMENT_RADIANT => counts.radiant += entry.count,
+            _ => {
+                return Err(anyhow!(
+                    "Unsupported relic refinement value: {}",
+                    entry.refinement
+                ));
+            }
+        }
+    }
+
+    let catalog_connection = open_catalog_database(app)?;
+    let mut results = Vec::new();
+    for ((tier, code), mut counts) in aggregates {
+        counts.total = counts
+            .intact
+            .saturating_add(counts.exceptional)
+            .saturating_add(counts.flawless)
+            .saturating_add(counts.radiant);
+
+        let catalog_entry = resolve_relic_catalog_entry(&catalog_connection, &tier, &code)?;
+        let (relic_item_id, slug, name, image_path) = match catalog_entry {
+            Some(entry) => (
+                Some(entry.item_id),
+                Some(entry.slug),
+                entry.name,
+                entry.image_path,
+            ),
+            None => (None, None, format!("{tier} {code} Relic"), None),
+        };
+
+        let drops = if let Some(item_id) = relic_item_id {
+            load_relic_reward_profiles(&catalog_connection, item_id)?
+                .into_iter()
+                .map(|drop| OwnedRelicDropEntry {
+                    item_id: drop.item_id,
+                    slug: drop.slug,
+                    name: drop.name,
+                    image_path: drop.image_path,
+                    rarity: drop.rarity,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        results.push(OwnedRelicEntry {
+            relic_item_id,
+            slug,
+            name,
+            tier,
+            code,
+            image_path,
+            counts,
+            drops,
+        });
+    }
+
+    results.sort_by(|left, right| {
+        let tier_cmp = relic_tier_sort_order(&left.tier).cmp(&relic_tier_sort_order(&right.tier));
+        if tier_cmp != Ordering::Equal {
+            return tier_cmp;
+        }
+        left.code.cmp(&right.code)
+    });
+
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn get_owned_relic_inventory(
+    app: tauri::AppHandle,
+) -> Result<Vec<OwnedRelicEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || build_owned_relic_entries(&app))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

@@ -327,10 +327,18 @@ export interface TradeDetectionRefreshResult {
   lastUpdatedAt: string | null;
   skipped: boolean;
   message: string | null;
+  detectedBuys?: TradeDetectedBuy[];
 }
 
 export interface TradeDetectionRefreshInput {
   sessionStartedAt: string | null;
+}
+
+export interface TradeDetectedBuy {
+  slug: string;
+  rank: number | null;
+  quantity: number;
+  platinum: number;
 }
 
 export interface WfstatEventRewardCountedItem {
@@ -1148,6 +1156,33 @@ export interface SetCompletionOwnedItem {
   imagePath: string | null;
   quantity: number;
   updatedAt: string;
+}
+
+export interface OwnedRelicRefinementCounts {
+  intact: number;
+  exceptional: number;
+  flawless: number;
+  radiant: number;
+  total: number;
+}
+
+export interface OwnedRelicDropEntry {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  rarity: string | null;
+}
+
+export interface OwnedRelicEntry {
+  relicItemId: number | null;
+  slug: string | null;
+  name: string;
+  tier: string;
+  code: string;
+  imagePath: string | null;
+  counts: OwnedRelicRefinementCounts;
+  drops: OwnedRelicDropEntry[];
 }
 
 export interface QuickViewSelection {
