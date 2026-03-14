@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { WatchlistPurchaseModal } from '../../components/WatchlistPurchaseModal';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
+import { formatElapsedTime } from '../../lib/dateTime';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { getWatchlistVisualState } from '../../lib/watchlist';
@@ -8,28 +9,6 @@ import { useAppStore } from '../../stores/useAppStore';
 
 const COPY_RESET_DELAY_MS = 1800;
 const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
-
-function formatLastScan(lastUpdatedAt: string | null): string {
-  if (!lastUpdatedAt) {
-    return 'Pending';
-  }
-
-  const elapsedSeconds = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(lastUpdatedAt).getTime()) / 1000),
-  );
-
-  if (elapsedSeconds < 60) {
-    return `${elapsedSeconds}s ago`;
-  }
-
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m ago`;
-  }
-
-  return `${Math.floor(elapsedMinutes / 60)}h ago`;
-}
 
 export function WatchlistTab() {
   const watchlist = useAppStore((state) => state.watchlist);
@@ -120,7 +99,7 @@ export function WatchlistTab() {
                       <td>{item.currentSeller ?? '—'}</td>
                       <td>{item.currentQuantity ?? '—'}</td>
                       <td>{hasRank ? item.currentRank : '—'}</td>
-                      <td className="td-muted">{formatLastScan(item.lastUpdatedAt)}</td>
+                      <td className="td-muted">Refreshed {formatElapsedTime(item.lastUpdatedAt)}</td>
                       <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
                         {visualState.label}
                       </td>

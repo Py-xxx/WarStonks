@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { WatchlistPurchaseModal } from '../../components/WatchlistPurchaseModal';
+import { formatElapsedTime, formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
-import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -181,7 +181,12 @@ function WatchlistCard() {
                     }`}
                     style={{ cursor: 'pointer' }}
                   >
-                    <td>{item.displayName}</td>
+                    <td>
+                      <div className="wl-item-cell">
+                        <span>{item.displayName}</span>
+                        <span className="td-muted">Refreshed {formatElapsedTime(item.lastUpdatedAt)}</span>
+                      </div>
+                    </td>
                     <td className="td-muted">{item.targetPrice} pt</td>
                     <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
                     <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
