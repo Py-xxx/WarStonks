@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   getArbitrageScannerState,
   getSetCompletionOwnedItems,
+  getWfmAutocompleteItems,
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -66,6 +67,32 @@ function confidenceTone(level: string): string {
     default:
       return 'blue';
   }
+}
+
+function isPlannerCatalogCandidate(item: WfmAutocompleteItem): boolean {
+  const family = item.itemFamily?.toLowerCase() ?? '';
+  const name = item.name.toLowerCase();
+
+  if (family) {
+    if (family.includes('set')) {
+      return false;
+    }
+    if (family.includes('prime')) {
+      return true;
+    }
+    if (family.includes('component')) {
+      return true;
+    }
+  }
+
+  if (!name.includes('prime')) {
+    return false;
+  }
+  if (name.endsWith(' set')) {
+    return false;
+  }
+
+  return true;
 }
 
 function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): string {
@@ -242,6 +269,9 @@ export function OpportunitiesPage() {
   const [activeTab, setActiveTab] = useState<OppTab>('set-planner');
   const [scannerResponse, setScannerResponse] = useState<ArbitrageScannerResponse | null>(null);
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
+  const [fallbackCatalog, setFallbackCatalog] = useState<PlannerCatalogItem[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -301,7 +331,58 @@ export function OpportunitiesPage() {
     };
   }, [activeTab]);
 
+  useEffect(() => {
+    if (activeTab !== 'set-planner') {
+      return;
+    }
+    if ((scannerResponse?.results?.length ?? 0) > 0) {
+      return;
+    }
+    if (fallbackCatalog.length > 0 || catalogLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    setCatalogLoading(true);
+    setCatalogError(null);
+
+    getWfmAutocompleteItems()
+      .then((items) => {
+        if (cancelled) {
+          return;
+        }
+        const catalog = items
+          .filter(isPlannerCatalogCandidate)
+          .map((item) => ({
+            itemId: item.itemId,
+            slug: item.slug,
+            name: item.name,
+            imagePath: item.imagePath,
+          }))
+          .sort((left, right) => left.name.localeCompare(right.name));
+        setFallbackCatalog(catalog);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setCatalogError(toErrorMessage(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCatalogLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, catalogLoading, fallbackCatalog.length, scannerResponse]);
+
   const plannerCatalog = useMemo<PlannerCatalogItem[]>(() => {
+    if (!(scannerResponse?.results?.length ?? 0)) {
+      return fallbackCatalog;
+    }
+
     const bySlug = new Map<string, PlannerCatalogItem>();
     for (const setEntry of scannerResponse?.results ?? []) {
       for (const component of setEntry.components) {
@@ -317,7 +398,7 @@ export function OpportunitiesPage() {
     }
 
     return [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }, [scannerResponse]);
+  }, [fallbackCatalog, scannerResponse]);
 
   const ownedMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -547,8 +628,8 @@ export function OpportunitiesPage() {
                     <span className="panel-title-eyebrow">Scanner Cache Required</span>
                     <h3>Run an Arbitrage scan first</h3>
                     <p>
-                      Set Completion Planner reuses the cached component pricing from Arbitrage. Run the
-                      scan once, then come back here to plan missing parts and completion profit.
+                      You can still add or edit owned parts now. Run the scan when you want completion
+                      pricing and profit projections to appear.
                     </p>
                   </div>
                   <button
@@ -621,7 +702,7 @@ export function OpportunitiesPage() {
                       id="planner-component-search"
                       className="top-search-input set-planner-search-input"
                       type="text"
-                      placeholder={plannerCatalog.length ? 'Search set components' : 'Run scan to unlock components'}
+                      placeholder={plannerCatalog.length ? 'Search prime components' : 'Loading catalog…'}
                       value={componentQuery}
                       onChange={(event) => setComponentQuery(event.target.value)}
                       disabled={!plannerCatalog.length}
@@ -644,7 +725,9 @@ export function OpportunitiesPage() {
                       </div>
                     ) : (
                       <div className="watchlist-form-note">
-                        Arbitrage cache not available yet.
+                        {catalogLoading
+                          ? 'Loading local component catalog…'
+                          : catalogError ?? 'Component catalog is not available yet.'}
                       </div>
                     )}
                   </div>
