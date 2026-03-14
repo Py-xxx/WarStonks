@@ -18,7 +18,6 @@ import type {
   RelicRefinementChanceProfile,
   RelicRoiDropEntry,
   RelicRoiEntry,
-  RelicRoiRefinementSummary,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
 } from '../../types';
