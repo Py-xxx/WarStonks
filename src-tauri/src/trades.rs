@@ -26,7 +26,10 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::wfm_scheduler::{acquire_wfm_slot, RequestPriority};
+use crate::wfm_scheduler::{
+    acquire_wfm_slot, execute_coalesced_wfm_request, record_wfm_response, RequestPriority,
+    WfmHttpResponse,
+};
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
@@ -1203,6 +1206,38 @@ fn send_wfm_request(
     }
 }
 
+fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn execute_wfm_bytes_request(
+    builder: reqwest::blocking::RequestBuilder,
+    priority: RequestPriority,
+    action_label: &str,
+    coalesce_key: Option<String>,
+) -> Result<WfmHttpResponse> {
+    execute_coalesced_wfm_request(priority, action_label, coalesce_key, || false, || {
+        let response = builder
+            .send()
+            .with_context(|| format!("failed to {action_label}"))?;
+        let status = response.status();
+        let retry_after = parse_retry_after_seconds(response.headers());
+        let body = response
+            .bytes()
+            .with_context(|| format!("failed to read {action_label} response body"))?
+            .to_vec();
+        Ok(WfmHttpResponse {
+            status: status.as_u16(),
+            body,
+            retry_after,
+        })
+    })
+}
+
 fn execute_wfm_request(
     builder: reqwest::blocking::RequestBuilder,
     action_label: &str,
@@ -1211,6 +1246,9 @@ fn execute_wfm_request(
     let response = builder
         .send()
         .with_context(|| format!("failed to {action_label}"))?;
+
+    let retry_after = parse_retry_after_seconds(response.headers());
+    record_wfm_response(response.status().as_u16(), retry_after, action_label);
 
     if response.status().is_success() {
         return Ok(response);
@@ -2318,15 +2356,30 @@ fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLog
         .push(trimmed_username)
         .push("statistics");
 
-    let payload = execute_wfm_request(
+    let response = execute_wfm_bytes_request(
         client
-            .get(url)
+            .get(url.clone())
             .header("User-Agent", WFM_USER_AGENT)
             .header("Accept", "application/json"),
+        RequestPriority::High,
         "request WFM trade history",
-    )?
-    .json::<WfmProfileStatisticsResponse>()
-    .context("failed to parse WFM trade history response")?;
+        Some(format!("trade-history:{}", url)),
+    )?;
+    if response.status < 200 || response.status >= 300 {
+        let body = String::from_utf8_lossy(&response.body);
+        let trimmed = body.trim();
+        return Err(if trimmed.is_empty() {
+            anyhow!("request WFM trade history failed with status {}", response.status)
+        } else {
+            anyhow!(
+                "request WFM trade history failed with status {}: {}",
+                response.status,
+                trimmed
+            )
+        });
+    }
+    let payload = serde_json::from_slice::<WfmProfileStatisticsResponse>(&response.body)
+        .context("failed to parse WFM trade history response")?;
 
     Ok(build_trade_log_entries_from_statistics(payload.payload))
 }
