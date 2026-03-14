@@ -1185,6 +1185,11 @@ export interface OwnedRelicEntry {
   drops: OwnedRelicDropEntry[];
 }
 
+export interface OwnedRelicInventoryCache {
+  entries: OwnedRelicEntry[];
+  updatedAt: string | null;
+}
+
 export interface QuickViewSelection {
   selectedItem: WfmAutocompleteItem | null;
   sellOrders: WfmTopSellOrder[];

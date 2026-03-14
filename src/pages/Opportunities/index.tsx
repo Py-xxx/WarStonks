@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   getArbitrageScannerState,
-  getOwnedRelicInventory,
+  getOwnedRelicInventoryCache,
+  refreshOwnedRelicInventory,
   getSetCompletionOwnedItems,
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
@@ -463,10 +464,12 @@ export function OpportunitiesPage() {
     setOwnedRelicsError(null);
 
     try {
-      const relics = await getOwnedRelicInventory();
-      setOwnedRelics(relics);
+      const cache = force
+        ? await refreshOwnedRelicInventory()
+        : await getOwnedRelicInventoryCache();
+      setOwnedRelics(cache.entries);
       setOwnedRelicsLoaded(true);
-      setOwnedRelicsUpdatedAt(new Date().toISOString());
+      setOwnedRelicsUpdatedAt(cache.updatedAt);
     } catch (error) {
       setOwnedRelicsError(toErrorMessage(error));
     } finally {
@@ -1218,14 +1221,32 @@ export function OpportunitiesPage() {
                 </div>
               ) : ownedRelicsLoading ? (
                 <div className="opportunities-placeholder">Loading owned relic inventory…</div>
+              ) : ownedRelicsLoaded && !ownedRelicsUpdatedAt ? (
+                <div className="set-planner-empty">
+                  <div>
+                    <span className="panel-title-eyebrow">Owned Relics Required</span>
+                    <h3>Load relic inventory first</h3>
+                    <p>
+                      This view requires a cached relic inventory. Open Owned Relics and press Refresh
+                      to load your inventory, then return here.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setActiveTab('owned-relics')}
+                  >
+                    Open Owned Relics
+                  </button>
+                </div>
               ) : ownedRelics.length === 0 ? (
                 <div className="set-planner-empty">
                   <div>
                     <span className="panel-title-eyebrow">Owned Relics Required</span>
                     <h3>No owned relics detected</h3>
                     <p>
-                      This view ranks relics you already own by refinement. Make sure Alecaframe
-                      inventory is available in Owned Relics, then return here.
+                      Alecaframe returned an empty relic inventory. Make sure your public link is
+                      correct, then refresh in Owned Relics.
                     </p>
                   </div>
                 </div>
