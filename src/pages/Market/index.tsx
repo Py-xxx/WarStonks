@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import {
-  ensureMarketTracking,
   getItemAnalytics,
   getItemDetailSummary,
   openExternalUrl,
@@ -1491,23 +1490,14 @@ function AnalyticsTab() {
     setAnalytics(null);
     setRevealedPanels(createRevealState(ANALYTICS_PANEL_SEQUENCE));
 
-    void ensureMarketTracking(
+    void getItemAnalytics(
       selectedItem.itemId,
       selectedItem.slug,
       selectedMarketVariantKey,
       sellerMode,
-      'analytics',
+      chartDomain,
+      chartBucket,
     )
-      .then(() =>
-        getItemAnalytics(
-          selectedItem.itemId,
-          selectedItem.slug,
-          selectedMarketVariantKey,
-          sellerMode,
-          chartDomain,
-          chartBucket,
-        ),
-      )
       .then((response) => {
         if (!isMounted) {
           return;

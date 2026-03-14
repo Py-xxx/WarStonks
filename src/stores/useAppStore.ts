@@ -2601,13 +2601,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
 
     try {
-      await ensureMarketTracking(
-        selectedItem.itemId,
-        selectedItem.slug,
-        selectedVariantKey,
-        sellerMode,
-        'analytics',
-      );
       const analysis = await getItemAnalysis(
         selectedItem.itemId,
         selectedItem.slug,
