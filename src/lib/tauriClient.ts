@@ -33,6 +33,7 @@ import type {
   TradeSignInInput,
   TradeUpdateListingInput,
   SetCompletionOwnedItem,
+  OwnedRelicEntry,
   PersistedWorldStateCacheEntry,
   SellerMode,
   WfmDetailedOrder,
@@ -570,6 +571,10 @@ export async function setSetCompletionOwnedItemQuantity(input: {
     imagePath: input.imagePath,
     quantity: input.quantity,
   });
+}
+
+export async function getOwnedRelicInventory(): Promise<OwnedRelicEntry[]> {
+  return invoke<OwnedRelicEntry[]>('get_owned_relic_inventory');
 }
 
 export async function startArbitrageScanner(): Promise<boolean> {

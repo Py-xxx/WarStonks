@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   getArbitrageScannerState,
+  getOwnedRelicInventory,
   getSetCompletionOwnedItems,
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
@@ -10,11 +11,19 @@ import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerResponse,
   ArbitrageScannerSetEntry,
+  OwnedRelicEntry,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
 } from '../../types';
 
 type OppTab = 'opportunities' | 'farm-now' | 'set-planner' | 'owned-relics';
+
+const RELIC_REFINEMENT_COLUMNS = [
+  { key: 'intact', label: 'Intact' },
+  { key: 'exceptional', label: 'Exceptional' },
+  { key: 'flawless', label: 'Flawless' },
+  { key: 'radiant', label: 'Radiant' },
+] as const;
 
 type PlannerComponentState = {
   component: ArbitrageScannerComponentEntry;
@@ -66,6 +75,20 @@ function confidenceTone(level: string): string {
     default:
       return 'blue';
   }
+}
+
+function relicRarityTone(rarity: string | null): string {
+  const normalized = rarity?.toLowerCase() ?? '';
+  if (normalized.includes('rare')) {
+    return 'rare';
+  }
+  if (normalized.includes('uncommon')) {
+    return 'uncommon';
+  }
+  if (normalized.includes('common')) {
+    return 'common';
+  }
+  return 'unknown';
 }
 
 function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): string {
@@ -244,7 +267,11 @@ export function OpportunitiesPage() {
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [ownedRelics, setOwnedRelics] = useState<OwnedRelicEntry[]>([]);
+  const [ownedRelicsLoading, setOwnedRelicsLoading] = useState(false);
+  const [ownedRelicsError, setOwnedRelicsError] = useState<string | null>(null);
+  const [expandedRelicKey, setExpandedRelicKey] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [expandedSetSlug, setExpandedSetSlug] = useState<string | null>(null);
   const [componentQuery, setComponentQuery] = useState('');
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
@@ -295,6 +322,42 @@ export function OpportunitiesPage() {
     };
 
     void loadPlannerState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'owned-relics') {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadOwnedRelics = async () => {
+      setOwnedRelicsLoading(true);
+      setOwnedRelicsError(null);
+
+      try {
+        const relics = await getOwnedRelicInventory();
+        if (cancelled) {
+          return;
+        }
+        setOwnedRelics(relics);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setOwnedRelicsError(toErrorMessage(error));
+      } finally {
+        if (!cancelled) {
+          setOwnedRelicsLoading(false);
+        }
+      }
+    };
+
+    void loadOwnedRelics();
 
     return () => {
       cancelled = true;
@@ -509,11 +572,7 @@ export function OpportunitiesPage() {
       </div>
 
       <div className="page-content">
-        {activeTab !== 'set-planner' ? (
-          <div className="opportunities-placeholder">
-            No opportunities found — try adjusting strategy filters
-          </div>
-        ) : (
+        {activeTab === 'set-planner' ? (
           <div className={`set-planner-layout${drawerOpen ? ' drawer-open' : ''}`}>
             <section className="market-panel set-planner-main-panel">
               <div className="set-planner-header">
@@ -726,6 +785,124 @@ export function OpportunitiesPage() {
                 </div>
               )}
             </aside>
+          </div>
+        ) : activeTab === 'owned-relics' ? (
+          <div className="owned-relics-layout">
+            <section className="market-panel owned-relics-panel">
+              <div className="owned-relics-header">
+                <div>
+                  <span className="panel-title-eyebrow">Owned Relics</span>
+                  <h3>Relic Inventory</h3>
+                  <p>
+                    Pulls your Alecaframe relic inventory and breaks down counts by refinement.
+                    Expand a relic to see its possible rewards and rarities.
+                  </p>
+                </div>
+              </div>
+
+              {ownedRelicsError ? <div className="scanner-inline-error">{ownedRelicsError}</div> : null}
+
+              {ownedRelicsLoading ? (
+                <div className="opportunities-placeholder">Loading relic inventory…</div>
+              ) : ownedRelics.length === 0 ? (
+                <div className="set-planner-empty">
+                  <div>
+                    <span className="panel-title-eyebrow">No Relics Found</span>
+                    <h3>Inventory is empty</h3>
+                    <p>
+                      Alecaframe did not report any relics for this account. Double-check your
+                      public link in Settings and try again.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="owned-relics-table">
+                  <div className="owned-relics-header-row">
+                    <span className="owned-relics-header-label">Relic</span>
+                    <span className="owned-relics-header-label">Total</span>
+                    {RELIC_REFINEMENT_COLUMNS.map((column) => (
+                      <span key={column.key} className="owned-relics-header-label">
+                        {column.label}
+                      </span>
+                    ))}
+                    <span className="owned-relics-header-label owned-relics-header-action" aria-hidden="true" />
+                  </div>
+
+                  {ownedRelics.map((relic) => {
+                    const relicKey = `${relic.tier}:${relic.code}`;
+                    const expanded = expandedRelicKey === relicKey;
+                    const imageUrl = resolveWfmAssetUrl(relic.imagePath);
+                    return (
+                      <article key={relicKey} className={`owned-relics-row${expanded ? ' is-expanded' : ''}`}>
+                        <button
+                          type="button"
+                          className="owned-relics-row-button"
+                          onClick={() => setExpandedRelicKey((current) => (current === relicKey ? null : relicKey))}
+                        >
+                          <div className="owned-relics-row-main">
+                            <div className="owned-relics-cell owned-relics-cell-name">
+                              <span className="owned-relics-thumb">
+                                {imageUrl ? (
+                                  <img src={imageUrl} alt="" loading="lazy" />
+                                ) : (
+                                  <span>{relic.name.slice(0, 1)}</span>
+                                )}
+                              </span>
+                              <div className="owned-relics-copy">
+                                <strong>{relic.name}</strong>
+                                <span className="owned-relics-subtitle">{relic.tier} {relic.code}</span>
+                              </div>
+                            </div>
+                            <span className="owned-relics-cell owned-relics-count">{relic.counts.total}</span>
+                            <span className="owned-relics-cell owned-relics-count">{relic.counts.intact}</span>
+                            <span className="owned-relics-cell owned-relics-count">{relic.counts.exceptional}</span>
+                            <span className="owned-relics-cell owned-relics-count">{relic.counts.flawless}</span>
+                            <span className="owned-relics-cell owned-relics-count">{relic.counts.radiant}</span>
+                            <span className="owned-relics-cell owned-relics-action">{expanded ? '−' : '+'}</span>
+                          </div>
+                        </button>
+
+                        {expanded ? (
+                          <div className="owned-relics-row-body">
+                            {relic.drops.length === 0 ? (
+                              <div className="owned-relics-empty">No drop data available for this relic.</div>
+                            ) : (
+                              <div className="owned-relics-drop-grid">
+                                {relic.drops.map((drop) => {
+                                  const dropImage = resolveWfmAssetUrl(drop.imagePath);
+                                  const tone = relicRarityTone(drop.rarity);
+                                  return (
+                                    <div key={`${relicKey}-${drop.slug}`} className="owned-relics-drop-card">
+                                      <span className="owned-relics-drop-thumb">
+                                        {dropImage ? (
+                                          <img src={dropImage} alt="" loading="lazy" />
+                                        ) : (
+                                          <span>{drop.name.slice(0, 1)}</span>
+                                        )}
+                                      </span>
+                                      <div className="owned-relics-drop-copy">
+                                        <span className="owned-relics-drop-name">{drop.name}</span>
+                                        <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
+                                          {drop.rarity ?? 'Unknown'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+        ) : (
+          <div className="opportunities-placeholder">
+            No opportunities found — try adjusting strategy filters
           </div>
         )}
       </div>

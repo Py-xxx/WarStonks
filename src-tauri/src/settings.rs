@@ -13,6 +13,7 @@ const SETTINGS_DIR_NAME: &str = "settings";
 const SETTINGS_FILE_NAME: &str = "integrations.json";
 const ALECAFRAME_BASE_URL: &str = "https://stats.alecaframe.com";
 const ALECAFRAME_PUBLIC_STATS_PATH: &str = "/api/stats/public";
+const ALECAFRAME_RELIC_INVENTORY_PATH: &str = "/api/stats/public/getRelicInventory";
 const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
 
@@ -143,6 +144,14 @@ pub struct DiscordTradeDetectedNotificationInput {
     pub items: Vec<DiscordTradeNotificationItem>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AlecaframeRelicInventoryEntry {
+    pub tier: String,
+    pub code: String,
+    pub refinement: String,
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AlecaframePublicStatsResponse {
@@ -232,7 +241,7 @@ fn save_settings_to_path(path: &Path, settings: &AppSettings) -> Result<()> {
         .with_context(|| format!("failed to write settings file at {}", path.display()))
 }
 
-fn load_settings_inner(app: &tauri::AppHandle) -> Result<AppSettings> {
+pub(crate) fn load_settings_inner(app: &tauri::AppHandle) -> Result<AppSettings> {
     let path = build_settings_path(app)?;
     load_settings_from_path(&path)
 }
@@ -299,10 +308,14 @@ fn build_wfm_asset_url(asset_path: Option<&str>) -> Option<String> {
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         return Some(trimmed.to_string());
     }
-    Some(format!(
-        "https://warframe.market/static/assets/{}",
-        trimmed.trim_start_matches('/')
-    ))
+    let normalized_path = trimmed.trim_start_matches('/');
+    if normalized_path.starts_with("user/avatar/") {
+        return Some(format!(
+            "https://warframe.market/static/assets/{normalized_path}"
+        ));
+    }
+
+    Some(format!("https://warframe.market/{normalized_path}"))
 }
 
 fn build_discord_test_payload() -> serde_json::Value {
@@ -410,7 +423,7 @@ fn build_trade_detected_payload(
     })
 }
 
-fn extract_public_token(value: &str) -> Option<String> {
+pub(crate) fn extract_public_token(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return None;
@@ -447,11 +460,15 @@ fn build_public_link(public_token: &str) -> String {
     url.to_string()
 }
 
-fn fetch_public_stats(public_token: &str) -> Result<AlecaframePublicStatsResponse> {
-    let client = Client::builder()
+fn build_alecaframe_client() -> Result<Client> {
+    Client::builder()
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
         .build()
-        .context("failed to construct Alecaframe client")?;
+        .context("failed to construct Alecaframe client")
+}
+
+fn fetch_public_stats(public_token: &str) -> Result<AlecaframePublicStatsResponse> {
+    let client = build_alecaframe_client()?;
 
     client
         .get(format!(
@@ -466,6 +483,96 @@ fn fetch_public_stats(public_token: &str) -> Result<AlecaframePublicStatsRespons
         .context("Alecaframe public stats request failed")?
         .json::<AlecaframePublicStatsResponse>()
         .context("failed to parse Alecaframe public stats response")
+}
+
+fn relic_tier_label(value: u8) -> Result<&'static str> {
+    match value {
+        0 => Ok("Lith"),
+        1 => Ok("Meso"),
+        2 => Ok("Neo"),
+        3 => Ok("Axi"),
+        4 => Ok("Requiem"),
+        _ => Err(anyhow!("Unknown relic tier value: {value}")),
+    }
+}
+
+fn relic_refinement_key(value: u8) -> Result<&'static str> {
+    match value {
+        0 => Ok("intact"),
+        1 | 4 => Ok("exceptional"),
+        2 | 5 => Ok("flawless"),
+        3 | 6 => Ok("radiant"),
+        _ => Err(anyhow!("Unknown relic refinement value: {value}")),
+    }
+}
+
+fn parse_alecaframe_relic_inventory(payload: &[u8]) -> Result<Vec<AlecaframeRelicInventoryEntry>> {
+    if payload.len() < 4 {
+        return Err(anyhow!(
+            "Alecaframe relic inventory payload is too short to read the entry count."
+        ));
+    }
+
+    let entry_count = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+    let expected_len = 4usize.saturating_add(entry_count.saturating_mul(9));
+    if payload.len() < expected_len {
+        return Err(anyhow!(
+            "Alecaframe relic inventory payload is incomplete (expected at least {expected_len} bytes)."
+        ));
+    }
+
+    let mut entries = Vec::with_capacity(entry_count);
+    let mut offset = 4;
+    for _ in 0..entry_count {
+        let relic_type = payload[offset];
+        let refinement = payload[offset + 1];
+        let code_slice = &payload[offset + 2..offset + 5];
+        let count = u32::from_le_bytes([
+            payload[offset + 5],
+            payload[offset + 6],
+            payload[offset + 7],
+            payload[offset + 8],
+        ]);
+        offset += 9;
+
+        let code = String::from_utf8_lossy(code_slice)
+            .trim_matches('\u{0}')
+            .trim()
+            .to_string();
+        if code.is_empty() {
+            return Err(anyhow!("Alecaframe relic inventory entry has an empty relic code."));
+        }
+
+        entries.push(AlecaframeRelicInventoryEntry {
+            tier: relic_tier_label(relic_type)?.to_string(),
+            code,
+            refinement: relic_refinement_key(refinement)?.to_string(),
+            count,
+        });
+    }
+
+    Ok(entries)
+}
+
+pub(crate) fn fetch_alecaframe_relic_inventory(
+    public_token: &str,
+) -> Result<Vec<AlecaframeRelicInventoryEntry>> {
+    let client = build_alecaframe_client()?;
+    let response = client
+        .get(format!(
+            "{ALECAFRAME_BASE_URL}{ALECAFRAME_RELIC_INVENTORY_PATH}"
+        ))
+        .query(&[("publicToken", public_token)])
+        .header("User-Agent", ALECAFRAME_USER_AGENT)
+        .header("Accept", "application/octet-stream")
+        .send()
+        .context("failed to request Alecaframe relic inventory")?
+        .error_for_status()
+        .context("Alecaframe relic inventory request failed")?;
+    let payload = response
+        .bytes()
+        .context("failed to read Alecaframe relic inventory payload")?;
+    parse_alecaframe_relic_inventory(payload.as_ref())
 }
 
 fn validate_public_link_inner(public_link: String) -> Result<AlecaframeValidationResult> {
@@ -663,9 +770,10 @@ pub fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapshot, St
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_public_token, load_settings_from_path, map_currency_balance, save_settings_to_path,
-        select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings, AppSettings,
-        DiscordWebhookNotificationSettings, DiscordWebhookSettings,
+        extract_public_token, load_settings_from_path, map_currency_balance,
+        parse_alecaframe_relic_inventory, save_settings_to_path, select_latest_data_point,
+        AlecaframeDataPoint, AlecaframeSettings, AppSettings, DiscordWebhookNotificationSettings,
+        DiscordWebhookSettings,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -760,5 +868,31 @@ mod tests {
             loaded.alecaframe.username_when_public,
             settings.alecaframe.username_when_public
         );
+    }
+
+    #[test]
+    fn parses_alecaframe_relic_inventory_payload() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u32.to_le_bytes());
+        payload.push(0);
+        payload.push(0);
+        payload.extend_from_slice(b"D7 ");
+        payload.extend_from_slice(&3u32.to_le_bytes());
+        payload.push(2);
+        payload.push(4);
+        payload.extend_from_slice(b"G1\0");
+        payload.extend_from_slice(&12u32.to_le_bytes());
+
+        let entries = parse_alecaframe_relic_inventory(&payload).expect("parse relic inventory");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].tier, "Lith");
+        assert_eq!(entries[0].code, "D7");
+        assert_eq!(entries[0].refinement, "intact");
+        assert_eq!(entries[0].count, 3);
+        assert_eq!(entries[1].tier, "Neo");
+        assert_eq!(entries[1].code, "G1");
+        assert_eq!(entries[1].refinement, "exceptional");
+        assert_eq!(entries[1].count, 12);
     }
 }

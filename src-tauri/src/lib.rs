@@ -28,6 +28,7 @@ pub fn run() {
             market_observatory::get_arbitrage_scanner_state,
             market_observatory::get_set_completion_owned_items,
             market_observatory::set_set_completion_owned_item_quantity,
+            market_observatory::get_owned_relic_inventory,
             market_observatory::start_arbitrage_scanner,
             market_observatory::stop_arbitrage_scanner,
             trades::get_wfm_trade_session_state,
