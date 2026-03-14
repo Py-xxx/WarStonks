@@ -55,6 +55,7 @@ type FarmNowRelicRow = {
   refinementKey: string;
   refinementLabel: string;
   expectedProfit: number | null;
+  platPerHour: number | null;
   ownedCount: number;
   bestDropSlug: string | null;
   drops: Array<{
@@ -633,6 +634,7 @@ export function OpportunitiesPage() {
           refinementKey: refinement.refinementKey,
           refinementLabel: refinement.refinementLabel,
           expectedProfit: hasContribution ? expectedProfit : null,
+          platPerHour: hasContribution ? expectedProfit * 12 : null,
           ownedCount,
           bestDropSlug,
           drops,
@@ -1183,7 +1185,7 @@ export function OpportunitiesPage() {
                       <span className="panel-title-eyebrow">Top pick</span>
                       <strong>{row.relic.name}</strong>
                       <span className="farm-now-top-meta">
-                        {row.refinementLabel} · {formatPlatDecimal(row.expectedProfit)} · x{row.ownedCount}
+                        {row.refinementLabel} · {formatPlatDecimal(row.expectedProfit)} · {formatPlatDecimal(row.platPerHour)}/hr · x{row.ownedCount}
                       </span>
                     </div>
                   ))}
@@ -1236,6 +1238,7 @@ export function OpportunitiesPage() {
                     <span className="farm-now-header-label">Refinement</span>
                     <span className="farm-now-header-label">Owned</span>
                     <span className="farm-now-header-label farm-now-header-value">Profit / Relic</span>
+                    <span className="farm-now-header-label farm-now-header-value">Plat / Hour</span>
                     <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                   </div>
 
@@ -1276,6 +1279,9 @@ export function OpportunitiesPage() {
                             </span>
                             <span className="farm-now-cell farm-now-cell-profit">
                               {formatPlatDecimal(row.expectedProfit)}
+                            </span>
+                            <span className="farm-now-cell farm-now-cell-profit">
+                              {formatPlatDecimal(row.platPerHour)}
                             </span>
                             <span className="farm-now-cell farm-now-cell-action">{expanded ? '−' : '+'}</span>
                           </div>
