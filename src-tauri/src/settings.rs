@@ -554,6 +554,40 @@ fn parse_alecaframe_relic_inventory(payload: &[u8]) -> Result<Vec<AlecaframeReli
     Ok(entries)
 }
 
+fn decode_alecaframe_relic_inventory_payload(payload: &[u8]) -> Result<Vec<u8>> {
+    let trimmed = payload
+        .iter()
+        .skip_while(|byte| byte.is_ascii_whitespace())
+        .copied()
+        .collect::<Vec<u8>>();
+
+    if trimmed.is_empty() {
+        return Err(anyhow!(
+            "Alecaframe relic inventory payload was empty."
+        ));
+    }
+
+    if trimmed[0] == b'{' || trimmed[0] == b'[' || trimmed[0] == b'"' {
+        let parsed = serde_json::from_slice::<serde_json::Value>(&trimmed)
+            .context("failed to parse Alecaframe relic inventory JSON payload")?;
+        if let Some(raw_string) = parsed.as_str() {
+            let decoded = base64::decode(raw_string.trim())
+                .context("failed to decode Alecaframe relic inventory base64 payload")?;
+            return Ok(decoded);
+        }
+        if let Some(raw_string) = parsed.get("rawBase64").and_then(|value| value.as_str()) {
+            let decoded = base64::decode(raw_string.trim())
+                .context("failed to decode Alecaframe relic inventory base64 payload")?;
+            return Ok(decoded);
+        }
+        return Err(anyhow!(
+            "Alecaframe relic inventory JSON payload did not contain a base64 inventory string."
+        ));
+    }
+
+    Ok(payload.to_vec())
+}
+
 pub(crate) fn fetch_alecaframe_relic_inventory(
     public_token: &str,
 ) -> Result<Vec<AlecaframeRelicInventoryEntry>> {
@@ -572,7 +606,8 @@ pub(crate) fn fetch_alecaframe_relic_inventory(
     let payload = response
         .bytes()
         .context("failed to read Alecaframe relic inventory payload")?;
-    parse_alecaframe_relic_inventory(payload.as_ref())
+    let decoded = decode_alecaframe_relic_inventory_payload(payload.as_ref())?;
+    parse_alecaframe_relic_inventory(&decoded)
 }
 
 fn validate_public_link_inner(public_link: String) -> Result<AlecaframeValidationResult> {
@@ -771,9 +806,9 @@ pub fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapshot, St
 mod tests {
     use super::{
         extract_public_token, load_settings_from_path, map_currency_balance,
-        parse_alecaframe_relic_inventory, save_settings_to_path, select_latest_data_point,
-        AlecaframeDataPoint, AlecaframeSettings, AppSettings, DiscordWebhookNotificationSettings,
-        DiscordWebhookSettings,
+        decode_alecaframe_relic_inventory_payload, parse_alecaframe_relic_inventory,
+        save_settings_to_path, select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings,
+        AppSettings, DiscordWebhookNotificationSettings, DiscordWebhookSettings,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -894,5 +929,27 @@ mod tests {
         assert_eq!(entries[1].code, "G1");
         assert_eq!(entries[1].refinement, "exceptional");
         assert_eq!(entries[1].count, 12);
+    }
+
+    #[test]
+    fn decodes_base64_wrapped_relic_payloads() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.push(1);
+        payload.push(3);
+        payload.extend_from_slice(b"A1 ");
+        payload.extend_from_slice(&7u32.to_le_bytes());
+        let encoded = base64::encode(&payload);
+        let wrapped = format!("\"{}\"", encoded);
+
+        let decoded =
+            decode_alecaframe_relic_inventory_payload(wrapped.as_bytes()).expect("decode payload");
+        let entries = parse_alecaframe_relic_inventory(&decoded).expect("parse inventory");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tier, "Meso");
+        assert_eq!(entries[0].code, "A1");
+        assert_eq!(entries[0].refinement, "radiant");
+        assert_eq!(entries[0].count, 7);
     }
 }
