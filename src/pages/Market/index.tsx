@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
+import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import {
   ensureMarketTracking,
   getItemAnalytics,
@@ -437,6 +437,7 @@ function StaticAnalyticsChart({
 }) {
   const [chartMode, setChartMode] = useState<ChartMode>('line');
   const [seriesToggles, setSeriesToggles] = useState<Record<ChartSeriesKey, boolean>>(DEFAULT_SERIES_TOGGLES);
+  const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
 
   const bucketOptions = BUCKET_OPTIONS_BY_DOMAIN[domain];
   const points = buildChartPoints(analytics?.chartPoints ?? []);
@@ -483,12 +484,48 @@ function StaticAnalyticsChart({
     minValue,
     maxValue,
   );
+  const activePointIndex =
+    hoveredPointIndex !== null && hoveredPointIndex >= 0 && hoveredPointIndex < points.length
+      ? hoveredPointIndex
+      : null;
+  const activePoint = activePointIndex !== null ? points[activePointIndex] : null;
+  const activePointX =
+    activePointIndex !== null
+      ? points.length === 1
+        ? plotWidth / 2
+        : (activePointIndex / (points.length - 1)) * plotWidth
+      : null;
+
+  useEffect(() => {
+    if (hoveredPointIndex !== null && hoveredPointIndex >= points.length) {
+      setHoveredPointIndex(null);
+    }
+  }, [hoveredPointIndex, points.length]);
 
   function toggleSeries(key: ChartSeriesKey) {
     setSeriesToggles((current) => ({
       ...current,
       [key]: !current[key],
     }));
+  }
+
+  function handleChartPointerMove(event: ReactMouseEvent<SVGSVGElement>) {
+    if (points.length === 0) {
+      return;
+    }
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width <= 0) {
+      return;
+    }
+
+    const ratio = clampNumber((event.clientX - bounds.left) / bounds.width, 0, 1);
+    const nextIndex = points.length === 1 ? 0 : Math.round(ratio * (points.length - 1));
+    setHoveredPointIndex(nextIndex);
+  }
+
+  function handleChartPointerLeave() {
+    setHoveredPointIndex(null);
   }
 
   return (
@@ -598,183 +635,239 @@ function StaticAnalyticsChart({
             ) : points.length === 0 ? (
               <div className="market-chart-status">No chart history is available for the selected item and variant.</div>
             ) : (
-              <svg
-                className="market-chart-svg"
-                viewBox={`0 0 ${plotWidth} ${totalPlotHeight + xAxisHeight}`}
-                preserveAspectRatio="none"
-                aria-label="Market price graph"
-              >
-                {Array.from({ length: 5 }, (_, index) => {
-                  const y = (index / 4) * pricePlotHeight;
-                  return (
-                    <line
-                      key={`h-${index}`}
-                      className="market-chart-gridline"
-                      x1="0"
-                      y1={y}
-                      x2={plotWidth}
-                      y2={y}
-                    />
-                  );
-                })}
-                {Array.from({ length: Math.min(points.length, 6) }, (_, index) => {
-                  const x = points.length <= 1 ? plotWidth / 2 : (index / Math.max(1, Math.min(points.length, 6) - 1)) * plotWidth;
-                  return (
-                    <line
-                      key={`v-${index}`}
-                      className="market-chart-gridline market-chart-gridline-vertical"
-                      x1={x}
-                      y1="0"
-                      x2={x}
-                      y2={totalPlotHeight}
-                    />
-                  );
-                })}
-                <line
-                  className="market-chart-gridline market-chart-divider"
-                  x1="0"
-                  y1={volumeTop - 8}
-                  x2={plotWidth}
-                  y2={volumeTop - 8}
-                />
-
-                {seriesToggles.entryZone && entryBand ? (
-                  <rect
-                    className="market-chart-band market-chart-band-entry"
-                    x="0"
-                    y={entryBand.y}
-                    width={plotWidth}
-                    height={entryBand.height}
-                    rx="8"
-                  />
+              <div className="market-chart-plot-wrap">
+                {activePoint ? (
+                  <div className="market-chart-hover-card">
+                    <div className="market-chart-hover-header">
+                      <span className="market-chart-hover-label">Hovered Bucket</span>
+                      <span className="market-chart-hover-time">{formatChartTimestamp(activePoint.timestamp, domain)}</span>
+                    </div>
+                    <div className="market-chart-hover-grid">
+                      <span>Open {formatPrice(activePoint.open)}</span>
+                      <span>High {formatPrice(activePoint.high)}</span>
+                      <span>Low {formatPrice(activePoint.low)}</span>
+                      <span>Close {formatPrice(activePoint.close)}</span>
+                      <span>Median {formatPrice(activePoint.median)}</span>
+                      <span>Lowest {formatPrice(activePoint.lowest)}</span>
+                      <span>Average {formatPrice(activePoint.average)}</span>
+                      <span>SMA {formatPrice(activePoint.movingAverage)}</span>
+                      <span>Entry {formatPrice(activePoint.entryZone)}</span>
+                      <span>Exit {formatPrice(activePoint.exitZone)}</span>
+                      <span>Volume {formatNumber(activePoint.volume, 0)}</span>
+                    </div>
+                  </div>
                 ) : null}
-                {seriesToggles.exitZone && exitBand ? (
-                  <rect
-                    className="market-chart-band market-chart-band-exit"
-                    x="0"
-                    y={exitBand.y}
-                    width={plotWidth}
-                    height={exitBand.height}
-                    rx="8"
-                  />
-                ) : null}
-
-                {chartMode === 'candlestick'
-                  ? points.map((point, index) => {
-                      if (
-                        point.open === null ||
-                        point.close === null ||
-                        point.low === null ||
-                        point.high === null
-                      ) {
-                        return null;
-                      }
-
-                      const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length - 1);
-                      const candleWidth = Math.max(6, Math.min(22, step * 0.45));
-                      const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
-                      const openY = renderChartY(point.open, pricePlotHeight, minValue, maxValue);
-                      const closeY = renderChartY(point.close, pricePlotHeight, minValue, maxValue);
-                      const highY = renderChartY(point.high, pricePlotHeight, minValue, maxValue);
-                      const lowY = renderChartY(point.low, pricePlotHeight, minValue, maxValue);
-                      const bodyY = Math.min(openY, closeY);
-                      const bodyHeight = Math.max(3, Math.abs(closeY - openY));
-                      const isUp = point.close >= point.open;
-
-                      return (
-                        <g key={point.timestamp}>
-                          <line
-                            className={`market-candle-wick${isUp ? ' is-up' : ' is-down'}`}
-                            x1={x}
-                            y1={highY}
-                            x2={x}
-                            y2={lowY}
-                          />
-                          <rect
-                            className={`market-candle-body${isUp ? ' is-up' : ' is-down'}`}
-                            x={x - candleWidth / 2}
-                            y={bodyY}
-                            width={candleWidth}
-                            height={bodyHeight}
-                            rx="2"
-                          />
-                        </g>
-                      );
-                    })
-                  : null}
-
-                {visibleLineSeries.map((series) => (
-                  <path
-                    key={series.key}
-                    className={`market-chart-line market-chart-line-${series.colorClass}`}
-                    d={buildSeriesPath(points, series.key, plotWidth, pricePlotHeight, minValue, maxValue)}
-                  />
-                ))}
-
-                {visibleSeries
-                  .filter((series) => series.key === 'median' || series.key === 'lowest')
-                  .flatMap((series) =>
-                    points.map((point, index) => {
-                      const value = point[series.key];
-                      if (value === null) {
-                        return null;
-                      }
-                      const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
-                      const y = renderChartY(value, pricePlotHeight, minValue, maxValue);
-                      return (
-                        <circle
-                          key={`${series.key}-${point.timestamp}`}
-                          className={`market-chart-marker market-chart-marker-${series.colorClass}`}
-                          cx={x}
-                          cy={y}
-                          r="3.5"
-                        />
-                      );
-                    }),
-                  )}
-
-                {points.map((point, index) => {
-                  const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length);
-                  const width = Math.max(8, Math.min(24, step * 0.7));
-                  const x = points.length === 1 ? (plotWidth - width) / 2 : (index / points.length) * plotWidth + (step - width) / 2;
-                  const height = Math.max(4, (point.volume / Math.max(volumeMax, 1)) * volumePlotHeight);
-                  const isUp =
-                    point.close !== null && point.open !== null ? point.close >= point.open : point.volume > 0;
-
-                  return (
-                    <rect
-                      key={`volume-${point.timestamp}`}
-                      className={`market-volume-bar${isUp ? ' is-up' : ' is-down'}`}
-                      x={x}
-                      y={totalPlotHeight - height}
-                      width={width}
-                      height={height}
-                      rx="3"
-                    />
-                  );
-                })}
-
-                {points
-                  .filter((_, index) => index % Math.max(1, Math.ceil(points.length / 6)) === 0 || index === points.length - 1)
-                  .map((point, labelIndex, source) => {
-                    const dataIndex = points.findIndex((entry) => entry.timestamp === point.timestamp);
-                    const x = points.length === 1 ? plotWidth / 2 : (dataIndex / (points.length - 1)) * plotWidth;
-                    const anchor =
-                      labelIndex === 0 ? 'start' : labelIndex === source.length - 1 ? 'end' : 'middle';
-
+                <svg
+                  className="market-chart-svg"
+                  viewBox={`0 0 ${plotWidth} ${totalPlotHeight + xAxisHeight}`}
+                  preserveAspectRatio="none"
+                  aria-label="Market price graph"
+                  onMouseMove={handleChartPointerMove}
+                  onMouseLeave={handleChartPointerLeave}
+                >
+                  {Array.from({ length: 5 }, (_, index) => {
+                    const y = (index / 4) * pricePlotHeight;
                     return (
-                      <text
-                        key={`x-${point.timestamp}`}
-                        className="market-chart-axis-label"
-                        x={x}
-                        y={totalPlotHeight + 18}
-                        textAnchor={anchor}
-                      >
-                        {formatChartTimestamp(point.timestamp, domain)}
-                      </text>
+                      <line
+                        key={`h-${index}`}
+                        className="market-chart-gridline"
+                        x1="0"
+                        y1={y}
+                        x2={plotWidth}
+                        y2={y}
+                      />
                     );
                   })}
-              </svg>
+                  {Array.from({ length: Math.min(points.length, 6) }, (_, index) => {
+                    const x = points.length <= 1 ? plotWidth / 2 : (index / Math.max(1, Math.min(points.length, 6) - 1)) * plotWidth;
+                    return (
+                      <line
+                        key={`v-${index}`}
+                        className="market-chart-gridline market-chart-gridline-vertical"
+                        x1={x}
+                        y1="0"
+                        x2={x}
+                        y2={totalPlotHeight}
+                      />
+                    );
+                  })}
+                  <line
+                    className="market-chart-gridline market-chart-divider"
+                    x1="0"
+                    y1={volumeTop - 8}
+                    x2={plotWidth}
+                    y2={volumeTop - 8}
+                  />
+
+                  {seriesToggles.entryZone && entryBand ? (
+                    <rect
+                      className="market-chart-band market-chart-band-entry"
+                      x="0"
+                      y={entryBand.y}
+                      width={plotWidth}
+                      height={entryBand.height}
+                      rx="8"
+                    />
+                  ) : null}
+                  {seriesToggles.exitZone && exitBand ? (
+                    <rect
+                      className="market-chart-band market-chart-band-exit"
+                      x="0"
+                      y={exitBand.y}
+                      width={plotWidth}
+                      height={exitBand.height}
+                      rx="8"
+                    />
+                  ) : null}
+
+                  {activePointX !== null ? (
+                    <line
+                      className="market-chart-hover-line"
+                      x1={activePointX}
+                      y1="0"
+                      x2={activePointX}
+                      y2={totalPlotHeight}
+                    />
+                  ) : null}
+
+                  {chartMode === 'candlestick'
+                    ? points.map((point, index) => {
+                        if (
+                          point.open === null ||
+                          point.close === null ||
+                          point.low === null ||
+                          point.high === null
+                        ) {
+                          return null;
+                        }
+
+                        const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length - 1);
+                        const candleWidth = Math.max(6, Math.min(22, step * 0.45));
+                        const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
+                        const openY = renderChartY(point.open, pricePlotHeight, minValue, maxValue);
+                        const closeY = renderChartY(point.close, pricePlotHeight, minValue, maxValue);
+                        const highY = renderChartY(point.high, pricePlotHeight, minValue, maxValue);
+                        const lowY = renderChartY(point.low, pricePlotHeight, minValue, maxValue);
+                        const bodyY = Math.min(openY, closeY);
+                        const bodyHeight = Math.max(3, Math.abs(closeY - openY));
+                        const isUp = point.close >= point.open;
+
+                        return (
+                          <g key={point.timestamp}>
+                            <line
+                              className={`market-candle-wick${isUp ? ' is-up' : ' is-down'}${activePointIndex === index ? ' is-active' : ''}`}
+                              x1={x}
+                              y1={highY}
+                              x2={x}
+                              y2={lowY}
+                            />
+                            <rect
+                              className={`market-candle-body${isUp ? ' is-up' : ' is-down'}${activePointIndex === index ? ' is-active' : ''}`}
+                              x={x - candleWidth / 2}
+                              y={bodyY}
+                              width={candleWidth}
+                              height={bodyHeight}
+                              rx="2"
+                            />
+                          </g>
+                        );
+                      })
+                    : null}
+
+                  {visibleLineSeries.map((series) => (
+                    <path
+                      key={series.key}
+                      className={`market-chart-line market-chart-line-${series.colorClass}`}
+                      d={buildSeriesPath(points, series.key, plotWidth, pricePlotHeight, minValue, maxValue)}
+                    />
+                  ))}
+
+                  {visibleSeries
+                    .filter((series) => series.key === 'median' || series.key === 'lowest')
+                    .flatMap((series) =>
+                      points.map((point, index) => {
+                        const value = point[series.key];
+                        if (value === null) {
+                          return null;
+                        }
+                        const x = points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth;
+                        const y = renderChartY(value, pricePlotHeight, minValue, maxValue);
+                        return (
+                          <circle
+                            key={`${series.key}-${point.timestamp}`}
+                            className={`market-chart-marker market-chart-marker-${series.colorClass}${activePointIndex === index ? ' is-active' : ''}`}
+                            cx={x}
+                            cy={y}
+                            r={activePointIndex === index ? '5.25' : '3.5'}
+                          />
+                        );
+                      }),
+                    )}
+
+                  {visibleLineSeries
+                    .filter((series) => series.key !== 'median' && series.key !== 'lowest')
+                    .map((series) => {
+                      if (activePoint === null) {
+                        return null;
+                      }
+                      const value = activePoint[series.key];
+                      if (value === null || activePointX === null) {
+                        return null;
+                      }
+                      return (
+                        <circle
+                          key={`active-${series.key}-${activePoint.timestamp}`}
+                          className={`market-chart-active-marker market-chart-marker-${series.colorClass}`}
+                          cx={activePointX}
+                          cy={renderChartY(value, pricePlotHeight, minValue, maxValue)}
+                          r="4.25"
+                        />
+                      );
+                    })}
+
+                  {points.map((point, index) => {
+                    const step = points.length === 1 ? plotWidth : plotWidth / Math.max(1, points.length);
+                    const width = Math.max(8, Math.min(24, step * 0.7));
+                    const x = points.length === 1 ? (plotWidth - width) / 2 : (index / points.length) * plotWidth + (step - width) / 2;
+                    const height = Math.max(4, (point.volume / Math.max(volumeMax, 1)) * volumePlotHeight);
+                    const isUp =
+                      point.close !== null && point.open !== null ? point.close >= point.open : point.volume > 0;
+
+                    return (
+                      <rect
+                        key={`volume-${point.timestamp}`}
+                        className={`market-volume-bar${isUp ? ' is-up' : ' is-down'}${activePointIndex === index ? ' is-active' : ''}`}
+                        x={x}
+                        y={totalPlotHeight - height}
+                        width={width}
+                        height={height}
+                        rx="3"
+                      />
+                    );
+                  })}
+
+                  {points
+                    .filter((_, index) => index % Math.max(1, Math.ceil(points.length / 6)) === 0 || index === points.length - 1)
+                    .map((point, labelIndex, source) => {
+                      const dataIndex = points.findIndex((entry) => entry.timestamp === point.timestamp);
+                      const x = points.length === 1 ? plotWidth / 2 : (dataIndex / (points.length - 1)) * plotWidth;
+                      const anchor =
+                        labelIndex === 0 ? 'start' : labelIndex === source.length - 1 ? 'end' : 'middle';
+
+                      return (
+                        <text
+                          key={`x-${point.timestamp}`}
+                          className="market-chart-axis-label"
+                          x={x}
+                          y={totalPlotHeight + 18}
+                          textAnchor={anchor}
+                        >
+                          {formatChartTimestamp(point.timestamp, domain)}
+                        </text>
+                      );
+                    })}
+                </svg>
+              </div>
             )}
           </div>
 
