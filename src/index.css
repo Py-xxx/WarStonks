@@ -3608,6 +3608,12 @@ body {
   display: grid;
   gap: 10px;
 }
+.trade-auth-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-secondary);
+}
 .trade-auth-actions {
   display: flex;
   justify-content: flex-end;

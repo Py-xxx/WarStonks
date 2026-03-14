@@ -30,6 +30,7 @@ const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
+const TRADES_CREDENTIALS_FILE_NAME: &str = "wfm-credentials.json";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
@@ -104,6 +105,8 @@ pub struct TradeOverview {
 pub struct TradeSignInInput {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub stay_logged_in: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -368,6 +371,14 @@ struct StoredTradeSession {
     token: String,
     device_id: String,
     account: TradeAccountSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredTradeCredentials {
+    email: String,
+    password: String,
+    saved_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,6 +706,16 @@ fn build_trades_session_path(app: &tauri::AppHandle) -> Result<PathBuf> {
         .join(TRADES_SESSION_FILE_NAME))
 }
 
+fn build_trades_credentials_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve app data directory")?;
+    Ok(app_data_dir
+        .join(TRADES_DIR_NAME)
+        .join(TRADES_CREDENTIALS_FILE_NAME))
+}
+
 fn build_item_catalog_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     let app_data_dir = app
         .path()
@@ -761,6 +782,45 @@ fn clear_session_path(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_file(path)
             .with_context(|| format!("failed to remove trade session at {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn load_trade_credentials(app: &tauri::AppHandle) -> Result<Option<StoredTradeCredentials>> {
+    let path = build_trades_credentials_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read trade credentials at {}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let creds = serde_json::from_str::<StoredTradeCredentials>(&raw)
+        .with_context(|| format!("failed to parse trade credentials at {}", path.display()))?;
+    Ok(Some(creds))
+}
+
+fn save_trade_credentials(app: &tauri::AppHandle, creds: &StoredTradeCredentials) -> Result<()> {
+    let path = build_trades_credentials_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create trades directory {}", parent.display()))?;
+    }
+
+    let serialized =
+        serde_json::to_string_pretty(creds).context("failed to serialize trade credentials")?;
+    fs::write(&path, serialized)
+        .with_context(|| format!("failed to write trade credentials at {}", path.display()))
+}
+
+fn clear_trade_credentials(app: &tauri::AppHandle) -> Result<()> {
+    let path = build_trades_credentials_path(app)?;
+    if path.exists() {
+        fs::remove_file(&path)
+            .with_context(|| format!("failed to remove trade credentials at {}", path.display()))?;
     }
     Ok(())
 }
@@ -5376,8 +5436,15 @@ pub async fn sign_in_wfm_trade_account(
     app: tauri::AppHandle,
     input: TradeSignInInput,
 ) -> Result<TradeSessionState, String> {
+    let should_persist_credentials = input.stay_logged_in;
+    let credentials = StoredTradeCredentials {
+        email: input.email.trim().to_string(),
+        password: input.password.trim().to_string(),
+        saved_at: format_timestamp(now_utc()).map_err(|error| error.to_string())?,
+    };
     let mut session = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
+        let input = input.clone();
         move || {
             let session = sign_in_inner(&input)?;
             save_session(&app, &session)?;
@@ -5400,6 +5467,17 @@ pub async fn sign_in_wfm_trade_account(
         .map_err(|error: anyhow::Error| error.to_string())?;
     }
 
+    if should_persist_credentials {
+        tauri::async_runtime::spawn_blocking({
+            let app = app.clone();
+            let credentials = credentials.clone();
+            move || save_trade_credentials(&app, &credentials)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error: anyhow::Error| error.to_string())?;
+    }
+
     Ok(TradeSessionState {
         connected: true,
         account: Some(session.account),
@@ -5408,10 +5486,101 @@ pub async fn sign_in_wfm_trade_account(
 
 #[tauri::command]
 pub async fn sign_out_wfm_trade_account(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || clear_session(&app))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        clear_session(&app)?;
+        clear_trade_credentials(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn try_auto_sign_in_wfm_trade_account(
+    app: tauri::AppHandle,
+) -> Result<TradeSessionState, String> {
+    let maybe_session = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || ensure_authenticated_session(&app)
+    })
+    .await
+    .map_err(|error| error.to_string());
+
+    if let Ok(Ok(mut session)) = maybe_session {
+        if let Ok(status) =
+            fetch_current_trade_status_ws(&session.token, &session.device_id).await
+        {
+            session.account.status = status;
+            let _ = tauri::async_runtime::spawn_blocking({
+                let app = app.clone();
+                let session = session.clone();
+                move || save_session(&app, &session)
+            })
+            .await;
+        }
+
+        return Ok(TradeSessionState {
+            connected: true,
+            account: Some(session.account),
+        });
+    }
+
+    let maybe_creds = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || load_trade_credentials(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error: anyhow::Error| error.to_string())?;
+
+    let Some(creds) = maybe_creds else {
+        return Ok(TradeSessionState {
+            connected: false,
+            account: None,
+        });
+    };
+
+    let input = TradeSignInInput {
+        email: creds.email.clone(),
+        password: creds.password.clone(),
+        stay_logged_in: true,
+    };
+
+    let mut session = match tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        let input = input.clone();
+        move || {
+            let session = sign_in_inner(&input)?;
+            save_session(&app, &session)?;
+            Ok::<StoredTradeSession, anyhow::Error>(session)
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())
+    {
+        Ok(Ok(session)) => session,
+        _ => {
+            return Ok(TradeSessionState {
+                connected: false,
+                account: None,
+            });
+        }
+    };
+
+    if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
+        session.account.status = status;
+        let _ = tauri::async_runtime::spawn_blocking({
+            let app = app.clone();
+            let session = session.clone();
+            move || save_session(&app, &session)
+        })
+        .await;
+    }
+
+    Ok(TradeSessionState {
+        connected: true,
+        account: Some(session.account),
+    })
 }
 
 #[tauri::command]
