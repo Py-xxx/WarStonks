@@ -2731,20 +2731,39 @@ fn load_trade_set_components_from_catalog(
         return Ok(Vec::new());
     };
 
+    let set_unique_name = catalog_connection
+        .query_row(
+            "SELECT primary_wfstat_unique_name
+             FROM items
+             WHERE item_id = ?1
+             LIMIT 1",
+            params![set_item_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .context("failed to resolve set wfstat unique name for catalog component lookup")?
+        .flatten();
+    let Some(set_unique_name) = set_unique_name else {
+        return Ok(Vec::new());
+    };
+
     let fetched_at = format_timestamp(now_utc())?;
     let mut statement = catalog_connection.prepare(
         "
-        SELECT component_slug, quantity_in_set
-        FROM wfstat_item_components
-        WHERE component_item_id = ?1
-        ORDER BY component_slug ASC
+        SELECT
+          COALESCE(ci.wfm_slug, ci.preferred_slug) AS component_slug,
+          c.component_index
+        FROM wfstat_item_components c
+        JOIN items ci ON ci.item_id = c.component_item_id
+        WHERE c.wfstat_unique_name = ?1
+        ORDER BY c.component_index ASC, component_slug ASC
         ",
     )?;
     let rows = statement
-        .query_map(params![set_item_id], |row| {
+        .query_map(params![set_unique_name], |row| {
             Ok(TradeSetComponentRecord {
                 component_slug: row.get(0)?,
-                quantity_in_set: row.get::<_, i64>(1)?.max(1),
+                quantity_in_set: 1,
                 fetched_at: fetched_at.clone(),
             })
         })?
