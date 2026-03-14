@@ -69,6 +69,8 @@ impl Default for DiscordWebhookNotificationSettings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default)]
+    pub warstonks_version: Option<String>,
     pub alecaframe: AlecaframeSettings,
     pub discord_webhook: DiscordWebhookSettings,
 }
@@ -237,8 +239,10 @@ fn save_settings_to_path(path: &Path, settings: &AppSettings) -> Result<()> {
         })?;
     }
 
+    let mut updated = settings.clone();
+    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
     let serialized =
-        serde_json::to_string_pretty(settings).context("failed to serialize app settings")?;
+        serde_json::to_string_pretty(&updated).context("failed to serialize app settings")?;
     fs::write(path, serialized)
         .with_context(|| format!("failed to write settings file at {}", path.display()))
 }
@@ -878,6 +882,7 @@ mod tests {
     fn settings_round_trip_uses_json_file() {
         let path = temp_settings_path();
         let settings = AppSettings {
+            warstonks_version: None,
             alecaframe: AlecaframeSettings {
                 enabled: true,
                 public_link: Some(

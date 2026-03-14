@@ -4411,6 +4411,7 @@ name = "warstonks"
 version = "3.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "futures-util",
  "hex",
  "regex",
