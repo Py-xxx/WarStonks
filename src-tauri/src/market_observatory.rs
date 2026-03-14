@@ -12,7 +12,9 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::settings;
-use crate::wfm_scheduler::{acquire_wfm_slot, RequestPriority};
+use crate::wfm_scheduler::{
+    execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse,
+};
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
@@ -1289,6 +1291,55 @@ fn shared_wfm_client() -> Result<Client> {
     }
 }
 
+fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn execute_wfm_bytes_request<C>(
+    builder: reqwest::blocking::RequestBuilder,
+    priority: RequestPriority,
+    action_label: &str,
+    coalesce_key: Option<String>,
+    mut is_cancelled: C,
+) -> Result<WfmHttpResponse>
+where
+    C: FnMut() -> bool,
+{
+    execute_coalesced_wfm_request(priority, action_label, coalesce_key, || is_cancelled(), || {
+        let response = builder
+            .send()
+            .with_context(|| format!("failed to {action_label}"))?;
+        let status = response.status();
+        let retry_after = parse_retry_after_seconds(response.headers());
+        let body = response
+            .bytes()
+            .with_context(|| format!("failed to read {action_label} response body"))?
+            .to_vec();
+        Ok(WfmHttpResponse {
+            status: status.as_u16(),
+            body,
+            retry_after,
+        })
+    })
+}
+
+fn extract_wfm_error_body(action_label: &str, response: &WfmHttpResponse) -> anyhow::Error {
+    let body = String::from_utf8_lossy(&response.body);
+    let trimmed = body.trim();
+    anyhow!(if trimmed.is_empty() {
+        format!("{action_label} failed with status {}", response.status)
+    } else {
+        format!(
+            "{action_label} failed with status {}: {}",
+            response.status, trimmed
+        )
+    })
+}
+
 fn normalize_variant_key(value: Option<&str>) -> String {
     let trimmed = value.unwrap_or("base").trim();
     if trimmed.is_empty() {
@@ -1472,27 +1523,53 @@ fn insert_statistics_rows_for_domain(
     Ok(())
 }
 
-fn fetch_and_cache_statistics(
+fn fetch_and_cache_statistics_with_cancel<C>(
     connection: &Connection,
     item_id: i64,
     slug: &str,
     variant_key: &str,
     priority: RequestPriority,
-) -> Result<()> {
+    mut is_cancelled: C,
+) -> Result<()>
+where
+    C: FnMut() -> bool,
+{
+    fetch_and_cache_statistics_impl(connection, item_id, slug, variant_key, priority, || {
+        is_cancelled()
+    })
+}
+
+fn fetch_and_cache_statistics_impl<C>(
+    connection: &Connection,
+    item_id: i64,
+    slug: &str,
+    variant_key: &str,
+    priority: RequestPriority,
+    mut is_cancelled: C,
+) -> Result<()>
+where
+    C: FnMut() -> bool,
+{
     let client = shared_wfm_client()?;
-    acquire_wfm_slot(priority, "request WFM statistics");
-    let response = client
-        .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/statistics"))
-        .header("User-Agent", WFM_USER_AGENT)
-        .header("Language", WFM_LANGUAGE_HEADER)
-        .header("Platform", WFM_PLATFORM_HEADER)
-        .header("Crossplay", WFM_CROSSPLAY_HEADER)
-        .send()
-        .context("failed to request WFM statistics")?
-        .error_for_status()
-        .context("WFM statistics request failed")?;
-    let payload = response
-        .json::<WfmStatisticsApiResponse>()
+    let response = execute_wfm_bytes_request(
+        client
+            .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/statistics"))
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Language", WFM_LANGUAGE_HEADER)
+            .header("Platform", WFM_PLATFORM_HEADER)
+            .header("Crossplay", WFM_CROSSPLAY_HEADER),
+        priority,
+        "request WFM statistics",
+        Some(format!("statistics:{slug}")),
+        || is_cancelled(),
+    )?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_error_body(
+            "WFM statistics request",
+            &response,
+        ));
+    }
+    let payload = serde_json::from_slice::<WfmStatisticsApiResponse>(&response.body)
         .context("failed to parse WFM statistics response")?;
 
     let fetched_at = format_timestamp(now_utc())?;
@@ -1544,6 +1621,16 @@ fn fetch_and_cache_statistics(
     }
 
     Ok(())
+}
+
+fn fetch_and_cache_statistics(
+    connection: &Connection,
+    item_id: i64,
+    slug: &str,
+    variant_key: &str,
+    priority: RequestPriority,
+) -> Result<()> {
+    fetch_and_cache_statistics_impl(connection, item_id, slug, variant_key, priority, || false)
 }
 
 fn statistics_cache_is_usable(
@@ -1805,12 +1892,13 @@ fn ensure_statistics_cached_for_scan(
         return Ok(false);
     }
 
-    if let Err(error) = fetch_and_cache_statistics(
+    if let Err(error) = fetch_and_cache_statistics_with_cancel(
         connection,
         item_id,
         slug,
         variant_key,
         RequestPriority::Low,
+        || arbitrage_scanner_stop_requested(connection).unwrap_or(false),
     ) {
         if statistics_cache_is_usable(
             connection,
@@ -2369,31 +2457,38 @@ fn build_market_snapshot(
     }
 }
 
-fn fetch_filtered_orders(
+fn fetch_filtered_orders_with_cancel<C>(
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
     priority: RequestPriority,
+    mut is_cancelled: C,
 ) -> Result<(
     Option<String>,
     Vec<WfmDetailedOrder>,
     Vec<WfmDetailedOrder>,
     MarketSnapshot,
-)> {
+)>
+where
+    C: FnMut() -> bool,
+{
     let client = shared_wfm_client()?;
-    acquire_wfm_slot(priority, "request WFM orders");
-    let response = client
-        .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
-        .header("User-Agent", WFM_USER_AGENT)
-        .header("Language", WFM_LANGUAGE_HEADER)
-        .header("Platform", WFM_PLATFORM_HEADER)
-        .header("Crossplay", WFM_CROSSPLAY_HEADER)
-        .send()
-        .context("failed to request WFM orders")?
-        .error_for_status()
-        .context("WFM orders request failed")?;
-    let payload = response
-        .json::<WfmOrdersApiResponse>()
+    let response = execute_wfm_bytes_request(
+        client
+            .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Language", WFM_LANGUAGE_HEADER)
+            .header("Platform", WFM_PLATFORM_HEADER)
+            .header("Crossplay", WFM_CROSSPLAY_HEADER),
+        priority,
+        "request WFM orders",
+        Some(format!("orders:{slug}")),
+        || is_cancelled(),
+    )?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_error_body("WFM orders request", &response));
+    }
+    let payload = serde_json::from_slice::<WfmOrdersApiResponse>(&response.body)
         .context("failed to parse WFM orders response")?;
 
     let mut sell_orders = Vec::new();
@@ -2432,6 +2527,20 @@ fn fetch_filtered_orders(
     let captured_at = format_timestamp(now_utc())?;
     let snapshot = build_market_snapshot(&captured_at, &sell_orders, &buy_orders);
     Ok((payload.api_version, sell_orders, buy_orders, snapshot))
+}
+
+fn fetch_filtered_orders(
+    slug: &str,
+    variant_key: &str,
+    seller_mode: &str,
+    priority: RequestPriority,
+) -> Result<(
+    Option<String>,
+    Vec<WfmDetailedOrder>,
+    Vec<WfmDetailedOrder>,
+    MarketSnapshot,
+)> {
+    fetch_filtered_orders_with_cancel(slug, variant_key, seller_mode, priority, || false)
 }
 
 fn persist_snapshot(
@@ -5050,20 +5159,23 @@ fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
 
 fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
     let client = shared_wfm_client()?;
-    acquire_wfm_slot(RequestPriority::Low, "request WFM set payload");
-    let response = client
-        .get(format!("{WFM_API_BASE_URL_V2}/item/{slug}/set"))
-        .header("User-Agent", WFM_USER_AGENT)
-        .header("Language", WFM_LANGUAGE_HEADER)
-        .header("Platform", WFM_PLATFORM_HEADER)
-        .header("Crossplay", WFM_CROSSPLAY_HEADER)
-        .send()
-        .context("failed to request WFM set payload")?
-        .error_for_status()
-        .context("WFM set request failed")?;
+    let response = execute_wfm_bytes_request(
+        client
+            .get(format!("{WFM_API_BASE_URL_V2}/item/{slug}/set"))
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Language", WFM_LANGUAGE_HEADER)
+            .header("Platform", WFM_PLATFORM_HEADER)
+            .header("Crossplay", WFM_CROSSPLAY_HEADER),
+        RequestPriority::Low,
+        "request WFM set payload",
+        Some(format!("set-payload:{slug}")),
+        || false,
+    )?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_error_body("WFM set request", &response));
+    }
 
-    Ok(response
-        .json::<WfmSetApiResponse>()
+    Ok(serde_json::from_slice::<WfmSetApiResponse>(&response.body)
         .context("failed to parse WFM set response")?
         .data
         .items)

@@ -9,7 +9,10 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::item_catalog;
-use crate::wfm_scheduler::{acquire_wfm_slot, RequestPriority};
+use crate::wfm_scheduler::{
+    execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse, WfmSchedulerSnapshot,
+    wfm_scheduler_snapshot,
+};
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const WFM_API_BASE_URL: &str = "https://api.warframe.market/v2";
@@ -194,6 +197,11 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[tauri::command]
+pub fn get_wfm_scheduler_snapshot() -> WfmSchedulerSnapshot {
+    wfm_scheduler_snapshot()
+}
+
 fn validate_external_url(url: &str) -> Result<&str, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -241,6 +249,38 @@ fn shared_wfm_client() -> Result<Client, String> {
         Ok(client) => Ok(client.clone()),
         Err(error) => Err(error.clone()),
     }
+}
+
+fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn execute_wfm_bytes_request(
+    builder: reqwest::blocking::RequestBuilder,
+    priority: RequestPriority,
+    action_label: &str,
+    coalesce_key: Option<String>,
+) -> Result<WfmHttpResponse> {
+    execute_coalesced_wfm_request(priority, action_label, coalesce_key, || false, || {
+        let response = builder
+            .send()
+            .with_context(|| format!("failed to {action_label}"))?;
+        let status = response.status();
+        let retry_after = parse_retry_after_seconds(response.headers());
+        let body = response
+            .bytes()
+            .with_context(|| format!("failed to read {action_label} response body"))?
+            .to_vec();
+        Ok(WfmHttpResponse {
+            status: status.as_u16(),
+            body,
+            retry_after,
+        })
+    })
 }
 
 fn fetch_wfstat_array(endpoint: &str, label: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -713,19 +753,30 @@ fn fetch_wfm_top_sell_orders_inner(
     }
 
     let client = shared_wfm_client().map_err(anyhow::Error::msg)?;
-    acquire_wfm_slot(RequestPriority::Medium, "request WFM item orders");
-    let response = client
-        .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}"))
-        .header("User-Agent", WFM_USER_AGENT)
-        .header("Language", WFM_LANGUAGE_HEADER)
-        .header("Platform", WFM_PLATFORM_HEADER)
-        .header("Crossplay", WFM_CROSSPLAY_HEADER)
-        .send()
-        .context("failed to request WFM item orders")?
-        .error_for_status()
-        .context("WFM item orders request failed")?;
-    let payload = response
-        .json::<WfmOrdersApiResponse>()
+    let response = execute_wfm_bytes_request(
+        client
+            .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}"))
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Language", WFM_LANGUAGE_HEADER)
+            .header("Platform", WFM_PLATFORM_HEADER)
+            .header("Crossplay", WFM_CROSSPLAY_HEADER),
+        RequestPriority::Medium,
+        "request WFM item orders",
+        Some(format!("orders:item:{trimmed_slug}")),
+    )?;
+    if response.status < 200 || response.status >= 300 {
+        let body = String::from_utf8_lossy(&response.body);
+        let trimmed = body.trim();
+        return Err(anyhow::anyhow!(if trimmed.is_empty() {
+            format!("WFM item orders request failed with status {}", response.status)
+        } else {
+            format!(
+                "WFM item orders request failed with status {}: {}",
+                response.status, trimmed
+            )
+        }));
+    }
+    let payload = serde_json::from_slice::<WfmOrdersApiResponse>(&response.body)
         .context("failed to parse WFM item orders response JSON")?;
 
     Ok(normalize_top_sell_orders(

@@ -106,6 +106,7 @@ let worldStateMarketNewsRefreshPromise: Promise<void> | null = null;
 let worldStateInvasionsRefreshPromise: Promise<void> | null = null;
 let worldStateSyndicateMissionsRefreshPromise: Promise<void> | null = null;
 let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
+const watchlistRefreshGenerations = new Map<string, number>();
 
 const defaultAppSettings: AppSettings = {
   alecaframe: {
@@ -168,6 +169,16 @@ interface CachedWorldStateSnapshot<T> {
   payload: T;
   fetchedAt: string;
   nextRefreshAt: string | null;
+}
+
+function beginWatchlistRefresh(id: string): number {
+  const nextGeneration = (watchlistRefreshGenerations.get(id) ?? 0) + 1;
+  watchlistRefreshGenerations.set(id, nextGeneration);
+  return nextGeneration;
+}
+
+function isLatestWatchlistRefresh(id: string, generation: number): boolean {
+  return watchlistRefreshGenerations.get(id) === generation;
 }
 
 function buildMarketAnalysisCacheKey(
@@ -1938,6 +1949,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   removeWatchlistItem: (id) => {
     const state = get();
+    watchlistRefreshGenerations.delete(id);
     const itemToRemove = state.watchlist.find((item) => item.id === id);
     if (itemToRemove) {
       void stopMarketTracking(
@@ -2134,17 +2146,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!item) {
       return { alertTriggered: false };
     }
+    const refreshGeneration = beginWatchlistRefresh(id);
 
     try {
       const latestState = get();
       const response = await getWfmItemOrders(item.slug, item.variantKey, latestState.sellerMode);
-      const latestItem = latestState.watchlist.find((entry) => entry.id === id);
+      if (!isLatestWatchlistRefresh(id, refreshGeneration)) {
+        return { alertTriggered: false };
+      }
+
+      const resolvedState = get();
+      const latestItem = resolvedState.watchlist.find((entry) => entry.id === id);
       if (!latestItem) {
         return { alertTriggered: false };
       }
 
       const nextScanAt =
-        Date.now() + getWatchlistPollIntervalMs(Math.max(latestState.watchlist.length, 1));
+        Date.now() + getWatchlistPollIntervalMs(Math.max(resolvedState.watchlist.length, 1));
       const candidateOrders = response.sellOrders.map((order) => ({
         orderId: order.orderId,
         platinum: order.platinum,
@@ -2160,7 +2178,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         latestItem.ignoredUserKeys,
       );
       const updatedItem = applyWatchlistOrder(latestItem, preferredOrder, nextScanAt);
-      const existingAlert = latestState.alerts.find(
+      const existingAlert = resolvedState.alerts.find(
         (alert) => alert.watchlistId === latestItem.id,
       );
       const nextAlert =
@@ -2171,19 +2189,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
         nextAlert !== null &&
         (!existingAlert || existingAlert.orderId !== nextAlert.orderId);
 
-      set((state) => ({
-        watchlist: state.watchlist.map((entry) =>
-          entry.id === latestItem.id ? updatedItem : entry,
-        ),
-        alerts: nextAlert
-          ? [
-              nextAlert,
-              ...state.alerts.filter((alert) => alert.watchlistId !== latestItem.id),
-            ]
-          : state.alerts.filter((alert) => alert.watchlistId !== latestItem.id),
-      }));
+      if (!isLatestWatchlistRefresh(id, refreshGeneration)) {
+        return { alertTriggered: false };
+      }
 
-      if (nextAlert && alertTriggered) {
+      set((state) => {
+        if (!isLatestWatchlistRefresh(id, refreshGeneration)) {
+          return state;
+        }
+
+        return {
+          watchlist: state.watchlist.map((entry) =>
+            entry.id === latestItem.id ? updatedItem : entry,
+          ),
+          alerts: nextAlert
+            ? [
+                nextAlert,
+                ...state.alerts.filter((alert) => alert.watchlistId !== latestItem.id),
+              ]
+            : state.alerts.filter((alert) => alert.watchlistId !== latestItem.id),
+        };
+      });
+
+      if (nextAlert && alertTriggered && isLatestWatchlistRefresh(id, refreshGeneration)) {
         void sendWatchlistFoundDiscordNotification({
           itemName: nextAlert.itemName,
           itemSlug: nextAlert.itemSlug,
@@ -2202,6 +2230,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
       return { alertTriggered };
     } catch (error) {
+      if (!isLatestWatchlistRefresh(id, refreshGeneration)) {
+        return { alertTriggered: false };
+      }
+
       const latestState = get();
       const latestItem = latestState.watchlist.find((entry) => entry.id === id);
       if (!latestItem) {
@@ -2214,18 +2246,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
         Math.max(latestState.watchlist.length, 1),
       );
 
-      set((state) => ({
-        watchlist: state.watchlist.map((entry) =>
-          entry.id === latestItem.id
-            ? {
-                ...entry,
-                retryCount: nextRetryCount,
-                nextScanAt: Date.now() + retryDelayMs,
-                lastError: toErrorMessage(error),
-              }
-            : entry,
-        ),
-      }));
+      set((state) => {
+        if (!isLatestWatchlistRefresh(id, refreshGeneration)) {
+          return state;
+        }
+
+        return {
+          watchlist: state.watchlist.map((entry) =>
+            entry.id === latestItem.id
+              ? {
+                  ...entry,
+                  retryCount: nextRetryCount,
+                  nextScanAt: Date.now() + retryDelayMs,
+                  lastError: toErrorMessage(error),
+                }
+              : entry,
+          ),
+        };
+      });
 
       return { alertTriggered: false };
     }
