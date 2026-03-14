@@ -6,6 +6,7 @@ import {
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   ArbitrageScannerComponentEntry,
@@ -271,6 +272,8 @@ export function OpportunitiesPage() {
   const [ownedRelicsLoading, setOwnedRelicsLoading] = useState(false);
   const [ownedRelicsError, setOwnedRelicsError] = useState<string | null>(null);
   const [expandedRelicKey, setExpandedRelicKey] = useState<string | null>(null);
+  const [ownedRelicsLoaded, setOwnedRelicsLoaded] = useState(false);
+  const [ownedRelicsUpdatedAt, setOwnedRelicsUpdatedAt] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [expandedSetSlug, setExpandedSetSlug] = useState<string | null>(null);
   const [componentQuery, setComponentQuery] = useState('');
@@ -328,40 +331,35 @@ export function OpportunitiesPage() {
     };
   }, [activeTab]);
 
+  const loadOwnedRelics = async (force = false) => {
+    if (ownedRelicsLoading) {
+      return;
+    }
+    if (!force && ownedRelicsLoaded) {
+      return;
+    }
+
+    setOwnedRelicsLoading(true);
+    setOwnedRelicsError(null);
+
+    try {
+      const relics = await getOwnedRelicInventory();
+      setOwnedRelics(relics);
+      setOwnedRelicsLoaded(true);
+      setOwnedRelicsUpdatedAt(new Date().toISOString());
+    } catch (error) {
+      setOwnedRelicsError(toErrorMessage(error));
+    } finally {
+      setOwnedRelicsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab !== 'owned-relics') {
       return;
     }
 
-    let cancelled = false;
-
-    const loadOwnedRelics = async () => {
-      setOwnedRelicsLoading(true);
-      setOwnedRelicsError(null);
-
-      try {
-        const relics = await getOwnedRelicInventory();
-        if (cancelled) {
-          return;
-        }
-        setOwnedRelics(relics);
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        setOwnedRelicsError(toErrorMessage(error));
-      } finally {
-        if (!cancelled) {
-          setOwnedRelicsLoading(false);
-        }
-      }
-    };
-
     void loadOwnedRelics();
-
-    return () => {
-      cancelled = true;
-    };
   }, [activeTab]);
 
   const plannerCatalog = useMemo<PlannerCatalogItem[]>(() => {
@@ -797,6 +795,22 @@ export function OpportunitiesPage() {
                     Pulls your Alecaframe relic inventory and breaks down counts by refinement.
                     Expand a relic to see its possible rewards and rarities.
                   </p>
+                </div>
+                <div className="owned-relics-actions">
+                  {ownedRelicsUpdatedAt ? (
+                    <span className="owned-relics-updated">
+                      Updated {formatShortLocalDateTime(ownedRelicsUpdatedAt)}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="market-refresh-button"
+                    onClick={() => { void loadOwnedRelics(true); }}
+                    disabled={ownedRelicsLoading}
+                    aria-label="Refresh owned relic inventory"
+                  >
+                    ↻
+                  </button>
                 </div>
               </div>
 
