@@ -2754,18 +2754,19 @@ fn get_tracking_seller_mode(
         .unwrap_or_else(|| "ingame".to_string()))
 }
 
-fn capture_tracking_snapshot(
+fn capture_tracking_snapshot_with_priority(
     connection: &Connection,
     item_id: i64,
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
+    priority: RequestPriority,
 ) -> Result<MarketSnapshot> {
     let (_, sell_orders, buy_orders, snapshot) = fetch_filtered_orders(
         slug,
         variant_key,
         seller_mode,
-        RequestPriority::Medium,
+        priority,
     )?;
     persist_snapshot(
         connection,
@@ -2789,6 +2790,23 @@ fn capture_tracking_snapshot(
     )?;
     let _ = (sell_orders, buy_orders);
     Ok(snapshot)
+}
+
+fn capture_tracking_snapshot(
+    connection: &Connection,
+    item_id: i64,
+    slug: &str,
+    variant_key: &str,
+    seller_mode: &str,
+) -> Result<MarketSnapshot> {
+    capture_tracking_snapshot_with_priority(
+        connection,
+        item_id,
+        slug,
+        variant_key,
+        seller_mode,
+        RequestPriority::Medium,
+    )
 }
 
 fn resolve_variants_from_catalog(
@@ -2935,7 +2953,14 @@ fn maybe_capture_fresh_snapshot(
         }
     }
 
-    capture_tracking_snapshot(connection, item_id, slug, variant_key, seller_mode)
+    capture_tracking_snapshot_with_priority(
+        connection,
+        item_id,
+        slug,
+        variant_key,
+        seller_mode,
+        RequestPriority::Instant,
+    )
 }
 
 fn aggregate_weighted(values: impl Iterator<Item = (Option<f64>, f64)>) -> Option<f64> {
@@ -7460,7 +7485,14 @@ pub async fn ensure_market_tracking(
             None,
         )?;
         let snapshot =
-            capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode)?;
+            capture_tracking_snapshot_with_priority(
+                &connection,
+                item_id,
+                &slug,
+                &variant_key,
+                &seller_mode,
+                RequestPriority::Instant,
+            )?;
         Ok::<_, anyhow::Error>(snapshot)
     })
     .await
