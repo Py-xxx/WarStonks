@@ -562,19 +562,6 @@ function downloadTradeLogCsv(entries: PortfolioTradeLogEntry[]) {
   URL.revokeObjectURL(url);
 }
 
-function buildSummaryConfidenceLabel(coveragePct: number): {
-  label: string;
-  className: string;
-} {
-  if (coveragePct >= 90) {
-    return { label: 'High confidence', className: 'badge-green' };
-  }
-  if (coveragePct >= 60) {
-    return { label: 'Medium confidence', className: 'badge-amber' };
-  }
-  return { label: 'Low confidence', className: 'badge-red' };
-}
-
 type TradeLogDisplayRow =
   | { kind: 'single'; entry: PortfolioTradeLogEntry }
   | {
@@ -1555,11 +1542,6 @@ function PnlSummaryTab({
               <div className={`info-card-val${summary.realizedProfit >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.realizedProfit)}
               </div>
-              <div className="portfolio-card-footnote">
-                <span className={`badge ${buildSummaryConfidenceLabel(summary.costBasisCoveragePct).className}`}>
-                  {buildSummaryConfidenceLabel(summary.costBasisCoveragePct).label}
-                </span>
-              </div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
@@ -1570,37 +1552,17 @@ function PnlSummaryTab({
                 />
               </div>
               <div className="info-card-val neutral">{formatPlatinumValue(summary.unrealizedValue)}</div>
-              <div className="portfolio-card-footnote">
-                <span className={`badge ${buildSummaryConfidenceLabel(summary.currentValueCoveragePct).className}`}>
-                  {buildSummaryConfidenceLabel(summary.currentValueCoveragePct).label}
-                </span>
-              </div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
                 Total P&amp;L
                 <InfoHint
-                  text="Realized profit plus unrealized P&L. This is the broadest portfolio view and inherits confidence from both realized and unrealized coverage."
+                  text="Realized profit plus unrealized P&L. This is the broadest portfolio view across closed and open positions."
                   placement="bottom"
                 />
               </div>
               <div className={`info-card-val${summary.totalPnl >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.totalPnl)}
-              </div>
-              <div className="portfolio-card-footnote">
-                <span
-                  className={`badge ${
-                    buildSummaryConfidenceLabel(
-                      Math.min(summary.costBasisCoveragePct, summary.currentValueCoveragePct),
-                    ).className
-                  }`}
-                >
-                  {
-                    buildSummaryConfidenceLabel(
-                      Math.min(summary.costBasisCoveragePct, summary.currentValueCoveragePct),
-                    ).label
-                  }
-                </span>
               </div>
             </div>
             <div className="info-card">
@@ -1640,10 +1602,6 @@ function PnlSummaryTab({
             <div className="perf-card">
               <div className="perf-label">Set Profit <InfoHint text="Profit from set sells using matched component buys as the cost basis." /></div>
               <div className="perf-val green">{formatPlatinumValue(summary.soldAsSetProfit)}</div>
-            </div>
-            <div className="perf-card">
-              <div className="perf-label">Cost Basis Coverage <InfoHint text="How much of sell revenue has a local cost basis behind it. Partial basis contributes at half weight." /></div>
-              <div className="perf-val">{formatPercentValue(summary.costBasisCoveragePct)}</div>
             </div>
           </div>
 
@@ -1706,10 +1664,6 @@ function PnlSummaryTab({
             <div className="info-card">
               <div className="info-card-label">Kept Items <InfoHint text="Buys explicitly marked Keep Item. These are excluded from flip and set matching." /></div>
               <div className="info-card-val neutral">{summary.keptItems}</div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">Value Coverage <InfoHint text="How much of open exposure currently has a local cached market estimate behind it." /></div>
-              <div className="info-card-val neutral">{formatPercentValue(summary.currentValueCoveragePct)}</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">Unmatched Sell Revenue <InfoHint text="Sell revenue with no local buy cost basis match. This is the least trustworthy portion of realized profit." /></div>
