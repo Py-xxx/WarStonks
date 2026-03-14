@@ -2756,6 +2756,7 @@ fn load_trade_set_components_from_catalog(
         FROM wfstat_item_components c
         JOIN items ci ON ci.item_id = c.component_item_id
         WHERE c.wfstat_unique_name = ?1
+          AND (ci.wfm_slug IS NOT NULL OR ci.preferred_slug IS NOT NULL)
         ORDER BY c.component_index ASC, component_slug ASC
         ",
     )?;
