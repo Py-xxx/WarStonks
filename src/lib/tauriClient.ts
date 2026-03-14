@@ -258,6 +258,10 @@ export async function signInWfmTradeAccount(
   return invoke<TradeSessionState>('sign_in_wfm_trade_account', { input });
 }
 
+export async function tryAutoSignInWfmTradeAccount(): Promise<TradeSessionState> {
+  return invoke<TradeSessionState>('try_auto_sign_in_wfm_trade_account');
+}
+
 export async function signOutWfmTradeAccount(): Promise<void> {
   return invoke<void>('sign_out_wfm_trade_account');
 }

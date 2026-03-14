@@ -334,6 +334,7 @@ function SignInPanel() {
   const signInTradeAccount = useAppStore((s) => s.signInTradeAccount);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [stayLoggedIn, setStayLoggedIn] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
@@ -346,7 +347,11 @@ function SignInPanel() {
 
     setLocalError(null);
     try {
-      await signInTradeAccount({ email: trimmedEmail, password: trimmedPassword });
+      await signInTradeAccount({
+        email: trimmedEmail,
+        password: trimmedPassword,
+        stayLoggedIn,
+      });
     } catch {
       // Store error is surfaced below.
     }
@@ -393,6 +398,18 @@ function SignInPanel() {
               }
             }}
           />
+        </div>
+
+        <div className="trade-auth-options">
+          <div className="toggle-wrap">
+            <button
+              className={`toggle${stayLoggedIn ? ' on' : ''}`}
+              type="button"
+              aria-pressed={stayLoggedIn}
+              onClick={() => setStayLoggedIn((current) => !current)}
+            />
+            <span>Stay Logged In</span>
+          </div>
         </div>
 
         {localError || tradeAccountError ? (

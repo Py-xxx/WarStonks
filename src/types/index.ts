@@ -129,6 +129,7 @@ export interface TradeOverview {
 export interface TradeSignInInput {
   email: string;
   password: string;
+  stayLoggedIn?: boolean;
 }
 
 export interface TradeCreateListingInput {

@@ -32,6 +32,7 @@ pub fn run() {
             market_observatory::stop_arbitrage_scanner,
             trades::get_wfm_trade_session_state,
             trades::sign_in_wfm_trade_account,
+            trades::try_auto_sign_in_wfm_trade_account,
             trades::sign_out_wfm_trade_account,
             trades::set_wfm_trade_status,
             trades::get_wfm_trade_overview,

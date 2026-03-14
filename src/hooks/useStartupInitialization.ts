@@ -4,6 +4,7 @@ import {
   initializeAppCatalogOnce,
   isTauriRuntime,
   listenToStartupProgress,
+  tryAutoSignInWfmTradeAccount,
   type StartupProgress,
   type StartupSummary,
 } from '../lib/tauriClient';
@@ -80,6 +81,7 @@ export function useStartupInitialization(): StartupState {
     (state) => state.refreshWorldStateSyndicateMissions,
   );
   const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
+  const loadTradeAccount = useAppStore((state) => state.loadTradeAccount);
 
   useEffect(() => {
     activeAttemptRef.current += 1;
@@ -160,6 +162,29 @@ export function useStartupInitialization(): StartupState {
         }));
 
         await ensureTradeSetMap(nextSummary.currentWfmApiVersion);
+        if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+          return;
+        }
+
+        const tradeSessionProgress: StartupProgress = {
+          stageKey: 'trade-session',
+          stageLabel: 'Checking trade session',
+          statusText: 'Checking saved Warframe Market session and credentials.',
+          progressValue: 0.89,
+        };
+
+        setProgress((current) => ({
+          ...current,
+          ...tradeSessionProgress,
+          progressValue: Math.max(current.progressValue, tradeSessionProgress.progressValue),
+        }));
+
+        await tryAutoSignInWfmTradeAccount();
+        if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+          return;
+        }
+
+        await loadTradeAccount();
         if (!isMounted || activeAttemptRef.current !== currentAttempt) {
           return;
         }
@@ -368,6 +393,7 @@ export function useStartupInitialization(): StartupState {
     refreshWorldStateSortie,
     refreshWorldStateSyndicateMissions,
     refreshWorldStateVoidTrader,
+    loadTradeAccount,
   ]);
 
   return {
