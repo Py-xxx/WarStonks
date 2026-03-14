@@ -51,7 +51,7 @@ export function HomePage() {
               type="button"
               onClick={() => setSellerMode('ingame-online')}
             >
-              Ingame + Online
+              Ingame & Online
             </button>
           </div>
           <div className="toggle-wrap">

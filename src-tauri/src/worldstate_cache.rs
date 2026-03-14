@@ -100,10 +100,8 @@ mod tests {
 
     #[test]
     fn worldstate_cache_round_trip_uses_json_file() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "warstonks-worldstate-cache-{}",
-            std::process::id()
-        ));
+        let temp_dir =
+            std::env::temp_dir().join(format!("warstonks-worldstate-cache-{}", std::process::id()));
         let cache_path = temp_dir.join("cache.json");
 
         if temp_dir.exists() {
