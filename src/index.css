@@ -103,6 +103,10 @@
   overflow-y: auto;
 }
 
+.set-planner-add-custom {
+  align-self: flex-start;
+}
+
 .set-planner-suggestion {
   display: flex;
   align-items: center;
