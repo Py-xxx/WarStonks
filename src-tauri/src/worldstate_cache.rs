@@ -18,6 +18,15 @@ pub struct WorldStateCacheEntry {
 
 type WorldStateCacheMap = HashMap<String, WorldStateCacheEntry>;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorldStateCacheFile {
+    #[serde(default)]
+    warstonks_version: Option<String>,
+    #[serde(default)]
+    entries: WorldStateCacheMap,
+}
+
 fn build_worldstate_cache_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     let app_data_dir = app
         .path()
@@ -39,6 +48,10 @@ fn load_cache_from_path(path: &Path) -> Result<WorldStateCacheMap> {
         return Ok(WorldStateCacheMap::new());
     }
 
+    if let Ok(file) = serde_json::from_str::<WorldStateCacheFile>(&raw) {
+        return Ok(file.entries);
+    }
+
     serde_json::from_str::<WorldStateCacheMap>(&raw)
         .with_context(|| format!("failed to parse worldstate cache at {}", path.display()))
 }
@@ -53,8 +66,12 @@ fn save_cache_to_path(path: &Path, cache: &WorldStateCacheMap) -> Result<()> {
         })?;
     }
 
+    let file = WorldStateCacheFile {
+        warstonks_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        entries: cache.clone(),
+    };
     let serialized =
-        serde_json::to_string_pretty(cache).context("failed to serialize worldstate cache")?;
+        serde_json::to_string_pretty(&file).context("failed to serialize worldstate cache")?;
     fs::write(path, serialized)
         .with_context(|| format!("failed to write worldstate cache at {}", path.display()))
 }

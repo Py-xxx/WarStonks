@@ -12,6 +12,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::settings;
+use crate::wfm_scheduler::{acquire_wfm_slot, RequestPriority};
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
@@ -1478,8 +1479,10 @@ fn fetch_and_cache_statistics(
     item_id: i64,
     slug: &str,
     variant_key: &str,
+    priority: RequestPriority,
 ) -> Result<()> {
     let client = shared_wfm_client()?;
+    acquire_wfm_slot(priority, "request WFM statistics");
     let response = client
         .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/statistics"))
         .header("User-Agent", WFM_USER_AGENT)
@@ -1804,7 +1807,13 @@ fn ensure_statistics_cached_for_scan(
         return Ok(false);
     }
 
-    if let Err(error) = fetch_and_cache_statistics(connection, item_id, slug, variant_key) {
+    if let Err(error) = fetch_and_cache_statistics(
+        connection,
+        item_id,
+        slug,
+        variant_key,
+        RequestPriority::Low,
+    ) {
         if statistics_cache_is_usable(
             connection,
             item_id,
@@ -2366,6 +2375,7 @@ fn fetch_filtered_orders(
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
+    priority: RequestPriority,
 ) -> Result<(
     Option<String>,
     Vec<WfmDetailedOrder>,
@@ -2373,6 +2383,7 @@ fn fetch_filtered_orders(
     MarketSnapshot,
 )> {
     let client = shared_wfm_client()?;
+    acquire_wfm_slot(priority, "request WFM orders");
     let response = client
         .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
         .header("User-Agent", WFM_USER_AGENT)
@@ -2643,8 +2654,12 @@ fn capture_tracking_snapshot(
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<MarketSnapshot> {
-    let (_, sell_orders, buy_orders, snapshot) =
-        fetch_filtered_orders(slug, variant_key, seller_mode)?;
+    let (_, sell_orders, buy_orders, snapshot) = fetch_filtered_orders(
+        slug,
+        variant_key,
+        seller_mode,
+        RequestPriority::Medium,
+    )?;
     persist_snapshot(
         connection,
         item_id,
@@ -5037,6 +5052,7 @@ fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
 
 fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
     let client = shared_wfm_client()?;
+    acquire_wfm_slot(RequestPriority::Low, "request WFM set payload");
     let response = client
         .get(format!("{WFM_API_BASE_URL_V2}/item/{slug}/set"))
         .header("User-Agent", WFM_USER_AGENT)
@@ -5053,6 +5069,88 @@ fn fetch_wfm_set_items(slug: &str) -> Result<Vec<WfmSetItemRecord>> {
         .context("failed to parse WFM set response")?
         .data
         .items)
+}
+
+fn load_catalog_set_components(
+    catalog_connection: &Connection,
+    set_root: &SetRootCatalogRecord,
+    fetched_at: &str,
+) -> Result<Vec<CachedSetComponentRecord>> {
+    let set_unique_name = catalog_connection
+        .query_row(
+            "SELECT primary_wfstat_unique_name
+             FROM items
+             WHERE item_id = ?1
+             LIMIT 1",
+            params![set_root.item_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+
+    let Some(set_unique_name) = set_unique_name else {
+        return Ok(Vec::new());
+    };
+
+    let mut statement = catalog_connection.prepare(
+        "
+        SELECT
+          ci.item_id,
+          COALESCE(ci.wfm_slug, ci.preferred_slug) AS component_slug,
+          COALESCE(
+            ci.preferred_name,
+            ci.canonical_name,
+            ci.wfstat_name,
+            ci.wfm_slug
+          ) AS component_name,
+          COALESCE(ci.preferred_image, w.thumb, w.icon) AS component_image_path,
+          c.item_count,
+          c.raw_json,
+          c.component_index
+        FROM wfstat_item_components c
+        JOIN items ci ON ci.item_id = c.component_item_id
+        LEFT JOIN wfm_items w ON w.item_id = ci.item_id
+        WHERE c.wfstat_unique_name = ?1
+          AND (ci.wfm_slug IS NOT NULL OR ci.preferred_slug IS NOT NULL)
+        ORDER BY c.component_index ASC, component_slug ASC
+        ",
+    )?;
+
+    let rows = statement.query_map(params![set_unique_name], |row| {
+        let raw_json: Option<String> = row.get(5)?;
+        let quantity_from_raw = raw_json
+            .as_deref()
+            .and_then(extract_component_quantity_from_raw);
+        let quantity_in_set = row
+            .get::<_, Option<i64>>(4)?
+            .or(quantity_from_raw)
+            .unwrap_or(1)
+            .max(1);
+        Ok(CachedSetComponentRecord {
+            set_item_id: set_root.item_id,
+            set_slug: set_root.slug.clone(),
+            set_name: set_root.name.clone(),
+            set_image_path: set_root.image_path.clone(),
+            component_item_id: row.get::<_, i64>(0).ok(),
+            component_slug: row.get(1)?,
+            component_name: row.get(2)?,
+            component_image_path: row.get(3)?,
+            quantity_in_set,
+            sort_order: row.get(6)?,
+            fetched_at: fetched_at.to_string(),
+        })
+    })?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn extract_component_quantity_from_raw(raw_json: &str) -> Option<i64> {
+    let payload = serde_json::from_str::<serde_json::Value>(raw_json).ok()?;
+    payload
+        .get("itemCount")
+        .and_then(serde_json::Value::as_i64)
+        .or_else(|| payload.get("count").and_then(serde_json::Value::as_i64))
 }
 
 fn persist_set_component_cache(
@@ -5112,43 +5210,7 @@ fn ensure_set_components_cached(
     }
 
     let fetched_at = format_timestamp(now_utc())?;
-    let fetched_items = match fetch_wfm_set_items(&set_root.slug) {
-        Ok(items) => items,
-        Err(error) if !cached.is_empty() => return Ok((cached, false)),
-        Err(error) => return Err(error),
-    };
-    let mut components = Vec::new();
-
-    for (index, component) in fetched_items.into_iter().enumerate() {
-        if component.set_root == Some(true) || component.slug == set_root.slug {
-            continue;
-        }
-
-        let component_name = component
-            .i18n
-            .get("en")
-            .and_then(|entry| entry.name.clone())
-            .unwrap_or_else(|| component.slug.replace('_', " "));
-        let component_image_path = component
-            .i18n
-            .get("en")
-            .and_then(|entry| entry.thumb.clone().or(entry.icon.clone()));
-        let component_item_id = resolve_item_id_by_slug(catalog_connection, &component.slug)?;
-
-        components.push(CachedSetComponentRecord {
-            set_item_id: set_root.item_id,
-            set_slug: set_root.slug.clone(),
-            set_name: set_root.name.clone(),
-            set_image_path: set_root.image_path.clone(),
-            component_item_id,
-            component_slug: component.slug,
-            component_name,
-            component_image_path,
-            quantity_in_set: component.quantity_in_set.unwrap_or(1).max(1),
-            sort_order: index as i64,
-            fetched_at: fetched_at.clone(),
-        });
-    }
+    let components = load_catalog_set_components(catalog_connection, set_root, &fetched_at)?;
 
     persist_set_component_cache(observatory_connection, set_root, &components)?;
     Ok((components, true))
@@ -5865,7 +5927,12 @@ fn build_supply_context(
                     ),
                     Err(_) => {
                         let (_, _, _, snapshot) =
-                            fetch_filtered_orders(&component.slug, "base", seller_mode)?;
+                            fetch_filtered_orders(
+                                &component.slug,
+                                "base",
+                                seller_mode,
+                                RequestPriority::Medium,
+                            )?;
                         (
                             snapshot.lowest_sell.map(round_platinum),
                             snapshot.lowest_sell.map(round_platinum),
@@ -5874,7 +5941,12 @@ fn build_supply_context(
                 },
                 None => {
                     let (_, _, _, snapshot) =
-                        fetch_filtered_orders(&component.slug, "base", seller_mode)?;
+                        fetch_filtered_orders(
+                            &component.slug,
+                            "base",
+                            seller_mode,
+                            RequestPriority::Medium,
+                        )?;
                     (
                         snapshot.lowest_sell.map(round_platinum),
                         snapshot.lowest_sell.map(round_platinum),
@@ -6809,7 +6881,8 @@ fn build_item_analysis_inner(
         Some("1h".to_string()),
     )?;
 
-    let live_orders = fetch_filtered_orders(&slug, &variant_key, &seller_mode).ok();
+    let live_orders =
+        fetch_filtered_orders(&slug, &variant_key, &seller_mode, RequestPriority::Medium).ok();
     let current_snapshot = live_orders
         .as_ref()
         .map(|entry| entry.3.clone())
@@ -7074,7 +7147,13 @@ fn build_item_analytics_inner(
     let variant_label = derive_variant_label(&variant_key);
     let connection = open_market_observatory_database(&app)?;
 
-    if let Err(error) = fetch_and_cache_statistics(&connection, item_id, &slug, &variant_key) {
+    if let Err(error) = fetch_and_cache_statistics(
+        &connection,
+        item_id,
+        &slug,
+        &variant_key,
+        RequestPriority::Medium,
+    ) {
         if !statistics_cache_is_usable(
             &connection,
             item_id,
@@ -7220,7 +7299,12 @@ pub async fn get_wfm_item_orders(
         let variant_key = normalize_variant_key(variant_key.as_deref());
         let seller_mode = normalize_seller_mode(seller_mode.as_deref());
         let (api_version, sell_orders, buy_orders, snapshot) =
-            fetch_filtered_orders(&slug, &variant_key, &seller_mode)?;
+            fetch_filtered_orders(
+                &slug,
+                &variant_key,
+                &seller_mode,
+                RequestPriority::Medium,
+            )?;
         Ok::<_, anyhow::Error>(WfmItemOrdersResponse {
             api_version,
             slug,

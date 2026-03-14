@@ -324,6 +324,15 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
     );
 
     let paths = resolve_app_paths(&app)?;
+    let current_version = current_app_version();
+    let previous_version = read_installed_version(&app);
+    let version_mismatch = previous_version
+        .as_deref()
+        .map(|value| value != current_version)
+        .unwrap_or(false);
+    if version_mismatch {
+        purge_app_data_cache(&app, &paths)?;
+    }
     let now = iso_timestamp_now();
     let schema = reference_sql();
     let alias_seed = parse_manual_alias_seed()?;
@@ -351,12 +360,13 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
     let mut connection = open_database(&paths.db_path)?;
     apply_reference_schema(&connection, schema.sql)?;
 
-    let should_refresh = should_refresh_catalog(
-        &connection,
-        &wfm_meta,
-        &schema.checksum,
-        &alias_seed_checksum,
-    )?;
+    let should_refresh = version_mismatch
+        || should_refresh_catalog(
+            &connection,
+            &wfm_meta,
+            &schema.checksum,
+            &alias_seed_checksum,
+        )?;
 
     if !should_refresh {
         emit_progress(
@@ -367,6 +377,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             1.0,
         );
 
+        let _ = write_installed_version(&app, current_version);
         return Ok(StartupSummary {
             ready: true,
             refreshed: false,
@@ -435,6 +446,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         1.0,
     );
 
+    let _ = write_installed_version(&app, current_version);
     Ok(summary)
 }
 
@@ -1686,6 +1698,8 @@ fn insert_wfstat_component_record(
         .copied()
         .ok_or_else(|| anyhow!("missing parent item_id for {}", parent_record.unique_name))?;
     let component_source_record_key = wfstat_component_source_record_key(component);
+    let item_count = get_i64_any(&component.raw, "itemCount")
+        .or_else(|| get_i64_any(&component.raw, "count"));
 
     tx.execute(
         "INSERT INTO wfstat_item_components (
@@ -1759,7 +1773,7 @@ fn insert_wfstat_component_record(
             get_i64_any(&component.raw, "masteryReq"),
             get_i64_any(&component.raw, "ducats"),
             get_i64_any(&component.raw, "primeSellingPrice"),
-            get_i64_any(&component.raw, "itemCount"),
+            item_count,
             get_string(&component.raw, "noise"),
             get_string(&component.raw, "trigger"),
             serde_json::to_string(&component.raw)?,
@@ -2858,6 +2872,78 @@ fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths> {
         wfstat_file_path: data_dir.join(WFSTAT_DATA_FILE),
         data_dir,
     })
+}
+
+fn current_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+fn resolve_version_file_path(app: &AppHandle) -> Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve the app data directory")?;
+    let fallback = app_data_dir.join("version.txt");
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    Ok(exe_dir.unwrap_or(app_data_dir).join("version.txt"))
+}
+
+fn read_installed_version(app: &AppHandle) -> Option<String> {
+    let path = resolve_version_file_path(app).ok()?;
+    let raw = fs::read_to_string(path).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn write_installed_version(app: &AppHandle, version: String) -> Result<()> {
+    let target = resolve_version_file_path(app)?;
+    if let Some(parent) = target.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::write(&target, version.as_bytes()).is_ok() {
+        return Ok(());
+    }
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve the app data directory")?;
+    let fallback = app_data_dir.join("version.txt");
+    if let Some(parent) = fallback.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&fallback, version.as_bytes())
+        .with_context(|| format!("failed to write {}", fallback.display()))
+}
+
+fn purge_app_data_cache(app: &AppHandle, paths: &AppPaths) -> Result<()> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve the app data directory")?;
+    let _ = fs::remove_file(&paths.db_path);
+    let _ = fs::remove_file(&paths.wfm_file_path);
+    let _ = fs::remove_file(&paths.wfstat_file_path);
+    let _ = fs::remove_file(app_data_dir.join("market_observatory.sqlite"));
+    let _ = fs::remove_file(app_data_dir.join("data").join("wfm-set-map.json"));
+    let _ = fs::remove_file(
+        app_data_dir
+            .join("worldstate")
+            .join("cache.json"),
+    );
+    let _ = fs::remove_file(
+        app_data_dir
+            .join("trades")
+            .join("trades-cache.sqlite"),
+    );
+    Ok(())
 }
 
 fn build_wfm_meta(

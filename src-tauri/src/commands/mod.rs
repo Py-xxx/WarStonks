@@ -9,6 +9,7 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::item_catalog;
+use crate::wfm_scheduler::{acquire_wfm_slot, RequestPriority};
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const WFM_API_BASE_URL: &str = "https://api.warframe.market/v2";
@@ -712,6 +713,7 @@ fn fetch_wfm_top_sell_orders_inner(
     }
 
     let client = shared_wfm_client().map_err(anyhow::Error::msg)?;
+    acquire_wfm_slot(RequestPriority::Medium, "request WFM item orders");
     let response = client
         .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}"))
         .header("User-Agent", WFM_USER_AGENT)

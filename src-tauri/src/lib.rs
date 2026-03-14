@@ -3,6 +3,7 @@ mod item_catalog;
 mod market_observatory;
 mod settings;
 mod trades;
+mod wfm_scheduler;
 mod worldstate_cache;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

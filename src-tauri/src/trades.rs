@@ -26,6 +26,8 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::wfm_scheduler::{acquire_wfm_slot, RequestPriority};
+
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
@@ -377,6 +379,8 @@ pub struct DetectedTradeBuy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredTradeSession {
+    #[serde(default)]
+    warstonks_version: Option<String>,
     token: String,
     device_id: String,
     account: TradeAccountSummary,
@@ -385,6 +389,8 @@ struct StoredTradeSession {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredTradeCredentials {
+    #[serde(default)]
+    warstonks_version: Option<String>,
     email: String,
     password: String,
     saved_at: String,
@@ -537,6 +543,8 @@ struct TradeNotificationCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TradeSetMapFile {
+    #[serde(default)]
+    warstonks_version: Option<String>,
     api_version: Option<String>,
     generated_at: String,
     sets: Vec<TradeSetMapSetRecord>,
@@ -760,8 +768,10 @@ fn save_session_to_path(path: &Path, session: &StoredTradeSession) -> Result<()>
             .with_context(|| format!("failed to create trades directory {}", parent.display()))?;
     }
 
+    let mut updated = session.clone();
+    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
     let serialized =
-        serde_json::to_string_pretty(session).context("failed to serialize trade session")?;
+        serde_json::to_string_pretty(&updated).context("failed to serialize trade session")?;
     fs::write(path, serialized)
         .with_context(|| format!("failed to write trade session at {}", path.display()))
 }
@@ -798,8 +808,10 @@ fn save_trade_credentials(app: &tauri::AppHandle, creds: &StoredTradeCredentials
             .with_context(|| format!("failed to create trades directory {}", parent.display()))?;
     }
 
-    let serialized =
-        serde_json::to_string_pretty(creds).context("failed to serialize trade credentials")?;
+    let mut updated = creds.clone();
+    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    let serialized = serde_json::to_string_pretty(&updated)
+        .context("failed to serialize trade credentials")?;
     fs::write(&path, serialized)
         .with_context(|| format!("failed to write trade credentials at {}", path.display()))
 }
@@ -1195,6 +1207,7 @@ fn execute_wfm_request(
     builder: reqwest::blocking::RequestBuilder,
     action_label: &str,
 ) -> Result<reqwest::blocking::Response> {
+    acquire_wfm_slot(RequestPriority::High, action_label);
     let response = builder
         .send()
         .with_context(|| format!("failed to {action_label}"))?;
@@ -2752,6 +2765,8 @@ fn load_trade_set_components_from_catalog(
         "
         SELECT
           COALESCE(ci.wfm_slug, ci.preferred_slug) AS component_slug,
+          c.item_count,
+          c.raw_json,
           c.component_index
         FROM wfstat_item_components c
         JOIN items ci ON ci.item_id = c.component_item_id
@@ -2762,9 +2777,18 @@ fn load_trade_set_components_from_catalog(
     )?;
     let rows = statement
         .query_map(params![set_unique_name], |row| {
+            let raw_json: Option<String> = row.get(2)?;
+            let quantity_from_raw = raw_json
+                .as_deref()
+                .and_then(extract_component_quantity_from_raw);
+            let quantity_in_set = row
+                .get::<_, Option<i64>>(1)?
+                .or(quantity_from_raw)
+                .unwrap_or(1)
+                .max(1);
             Ok(TradeSetComponentRecord {
                 component_slug: row.get(0)?,
-                quantity_in_set: 1,
+                quantity_in_set,
                 fetched_at: fetched_at.clone(),
             })
         })?
@@ -2772,6 +2796,14 @@ fn load_trade_set_components_from_catalog(
         .context("failed to collect catalog set components")?;
 
     Ok(rows)
+}
+
+fn extract_component_quantity_from_raw(raw_json: &str) -> Option<i64> {
+    let payload = serde_json::from_str::<serde_json::Value>(raw_json).ok()?;
+    payload
+        .get("itemCount")
+        .and_then(serde_json::Value::as_i64)
+        .or_else(|| payload.get("count").and_then(serde_json::Value::as_i64))
 }
 
 fn list_trade_set_roots_from_catalog(connection: &Connection) -> Result<Vec<TradeSetRootRecord>> {
@@ -2877,7 +2909,9 @@ fn save_trade_set_map_file(path: &Path, file: &TradeSetMapFile) -> Result<()> {
         })?;
     }
 
-    let raw = serde_json::to_string_pretty(file).context("failed to serialize trade set map")?;
+    let mut updated = file.clone();
+    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    let raw = serde_json::to_string_pretty(&updated).context("failed to serialize trade set map")?;
     fs::write(path, raw)
         .with_context(|| format!("failed to write trade set map at {}", path.display()))
 }
@@ -2953,6 +2987,7 @@ fn build_trade_set_map_inner(
     }
 
     let set_map = TradeSetMapFile {
+        warstonks_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         api_version: version_key.map(str::to_string),
         generated_at: generated_at.clone(),
         sets,
@@ -5249,6 +5284,7 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     let account = fetch_me_with_token(&client, &jwt)?;
 
     Ok(StoredTradeSession {
+        warstonks_version: None,
         token: jwt,
         device_id,
         account,
@@ -5637,6 +5673,7 @@ pub async fn sign_in_wfm_trade_account(
 ) -> Result<TradeSessionState, String> {
     let should_persist_credentials = input.stay_logged_in;
     let credentials = StoredTradeCredentials {
+        warstonks_version: None,
         email: input.email.trim().to_string(),
         password: input.password.trim().to_string(),
         saved_at: format_timestamp(now_utc()).map_err(|error| error.to_string())?,
@@ -6753,6 +6790,7 @@ mod tests {
     #[test]
     fn map_trade_set_components_from_file_returns_components() {
         let set_map = TradeSetMapFile {
+            warstonks_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             api_version: Some("0.0.0".to_string()),
             generated_at: "2026-03-10T09:00:00Z".to_string(),
             sets: vec![TradeSetMapSetRecord {
