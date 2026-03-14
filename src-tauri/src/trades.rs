@@ -436,34 +436,6 @@ struct WfmOwnOrder {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmOrdersItemResponse {
-    data: Vec<WfmOrderWithUser>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmOrderWithUser {
-    #[serde(rename = "type")]
-    order_type: String,
-    platinum: i64,
-    #[serde(default)]
-    rank: Option<i64>,
-    #[serde(default)]
-    visible: Option<bool>,
-    user: WfmOrderUser,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmOrderUser {
-    #[serde(default)]
-    ingame_name: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct WfmProfileStatisticsResponse {
     payload: WfmProfileStatisticsPayload,
 }
@@ -672,13 +644,6 @@ fn normalize_status_label(value: &str) -> String {
         "online" => "online".to_string(),
         "invisible" => "offline".to_string(),
         _ => "offline".to_string(),
-    }
-}
-
-fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
-    match seller_mode {
-        "ingame-online" => matches!(status, Some("ingame" | "in_game" | "online")),
-        _ => matches!(status, Some("ingame" | "in_game")),
     }
 }
 
@@ -5433,42 +5398,6 @@ fn resolve_catalog_trade_item_meta(
         .context("failed to resolve catalog item")
 }
 
-fn fetch_market_low_for_listing(
-    client: &Client,
-    slug: &str,
-    rank: Option<i64>,
-    seller_mode: &str,
-    own_username: &str,
-) -> Result<Option<i64>> {
-    let payload = execute_wfm_request_with_priority(
-        send_wfm_request(
-            client,
-            Method::GET,
-            format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"),
-            None,
-        ),
-        "request market low",
-        RequestPriority::Instant,
-    )?
-    .json::<WfmOrdersItemResponse>()
-    .context("failed to parse market low response")?;
-
-    let own_name = own_username.trim().to_lowercase();
-
-    Ok(payload
-        .data
-        .into_iter()
-        .filter(|order| order.order_type == "sell")
-        .filter(|order| order.visible.unwrap_or(true))
-        .filter(|order| seller_mode_allows_status(order.user.status.as_deref(), seller_mode))
-        .filter(|order| order.rank == rank)
-        .filter_map(|order| {
-            let username = order.user.ingame_name?;
-            (username.trim().to_lowercase() != own_name).then_some(order.platinum)
-        })
-        .min())
-}
-
 fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
     let response = execute_wfm_request_with_priority(
         send_wfm_request(
@@ -5488,13 +5417,10 @@ fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
     Ok(payload.data)
 }
 
-fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Result<TradeOverview> {
+fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
     let session = ensure_authenticated_session(app)?;
-    let client = shared_wfm_client()?;
     let connection = open_catalog_database(app)?;
-    let orders = fetch_my_orders(&client, &session.token)?;
-
-    let mut market_low_cache = HashMap::<(String, Option<i64>), Option<i64>>::new();
+    let orders = fetch_my_orders(&shared_wfm_client()?, &session.token)?;
     let mut sell_orders = Vec::new();
     let mut buy_orders = Vec::new();
 
@@ -5504,22 +5430,6 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
     {
         let Some(meta) = resolve_catalog_trade_item_meta(&connection, &order.item_id)? else {
             continue;
-        };
-
-        let cache_key = (meta.slug.clone(), order.rank);
-        let market_low = if let Some(cached) = market_low_cache.get(&cache_key) {
-            *cached
-        } else {
-            let fetched = fetch_market_low_for_listing(
-                &client,
-                &meta.slug,
-                order.rank,
-                seller_mode,
-                &session.account.name,
-            )
-            .unwrap_or(None);
-            market_low_cache.insert(cache_key, fetched);
-            fetched
         };
 
         let trade_order = TradeSellOrder {
@@ -5534,8 +5444,8 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, seller_mode: &str) -> Resu
             max_rank: meta.max_rank,
             quantity: order.quantity,
             your_price: order.platinum,
-            market_low,
-            price_gap: market_low.map(|value| order.platinum - value),
+            market_low: None,
+            price_gap: None,
             visible: order.visible.unwrap_or(true),
             updated_at: order.updated_at,
             health_score: None,
