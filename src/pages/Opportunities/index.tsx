@@ -11,6 +11,7 @@ import { useAppStore } from '../../stores/useAppStore';
 import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerResponse,
+  ArbitrageScannerState,
   ArbitrageScannerSetEntry,
   OwnedRelicEntry,
   RelicRefinementChanceProfile,
@@ -333,6 +334,7 @@ export function OpportunitiesPage() {
   const [activeTab, setActiveTab] = useState<OppTab>('set-planner');
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
   const [farmNowScan, setFarmNowScan] = useState<ArbitrageScannerResponse | null>(null);
+  const [farmNowScanState, setFarmNowScanState] = useState<ArbitrageScannerState | null>(null);
   const [farmNowLoading, setFarmNowLoading] = useState(false);
   const [farmNowError, setFarmNowError] = useState<string | null>(null);
   const [expandedFarmRelicKey, setExpandedFarmRelicKey] = useState<string | null>(null);
@@ -420,6 +422,7 @@ export function OpportunitiesPage() {
           return;
         }
         setFarmNowScan(scannerState.latestScan);
+        setFarmNowScanState(scannerState);
       } catch (error) {
         if (cancelled) {
           return;
@@ -649,6 +652,14 @@ export function OpportunitiesPage() {
       return left.relic.name.localeCompare(right.relic.name);
     });
   }, [ownedRelics, farmNowScan]);
+
+  const farmNowTopRelics = useMemo(() => farmNowRelics.slice(0, 3), [farmNowRelics]);
+  const ownedRelicTotal = useMemo(
+    () =>
+      ownedRelics.reduce((sum, relic) => sum + (relic.counts?.total ?? 0), 0),
+    [ownedRelics],
+  );
+  const farmNowLastScan = farmNowScanState?.progress.lastCompletedAt ?? farmNowScan?.computedAt ?? null;
 
   const filteredSuggestions = useMemo(() => {
     const normalizedQuery = componentQuery.trim().toLowerCase();
@@ -1132,6 +1143,52 @@ export function OpportunitiesPage() {
                   </button>
                 </div>
               </div>
+
+              <div className="farm-now-summary">
+                <div className="farm-now-summary-main">
+                  <div className="farm-now-metrics">
+                    <span className="market-panel-badge tone-blue">
+                      Relics scanned {farmNowScan?.scannedRelicCount ?? 0}
+                    </span>
+                    <span className="market-panel-badge tone-blue">
+                      Profit rows {farmNowRelics.length}
+                    </span>
+                    <span className="market-panel-badge tone-green">
+                      Owned relics {ownedRelics.length} ({ownedRelicTotal})
+                    </span>
+                  </div>
+                  <div className="farm-now-meta">
+                    {farmNowLastScan ? (
+                      <span>Last scan {formatShortLocalDateTime(farmNowLastScan)}</span>
+                    ) : (
+                      <span>No scan data yet</span>
+                    )}
+                  </div>
+                </div>
+                <div className="farm-now-summary-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setActivePage('scanners')}
+                  >
+                    Run Scan
+                  </button>
+                </div>
+              </div>
+
+              {farmNowTopRelics.length > 0 ? (
+                <div className="farm-now-toplist">
+                  {farmNowTopRelics.map((row) => (
+                    <div key={`${row.relic.slug}-${row.refinementKey}`} className="farm-now-top-card">
+                      <span className="panel-title-eyebrow">Top pick</span>
+                      <strong>{row.relic.name}</strong>
+                      <span className="farm-now-top-meta">
+                        {row.refinementLabel} · {formatPlatDecimal(row.expectedProfit)} · x{row.ownedCount}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
 
               {farmNowError ? <div className="scanner-inline-error">{farmNowError}</div> : null}
 
