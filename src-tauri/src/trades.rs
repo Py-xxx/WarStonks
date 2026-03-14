@@ -2941,6 +2941,7 @@ fn build_trade_set_map_inner(
     api_version: Option<&str>,
 ) -> Result<TradeSetMapSummary> {
     let map_path = build_trade_set_map_path(app)?;
+    let app_version = env!("CARGO_PKG_VERSION");
     let version_key = api_version
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
@@ -2951,7 +2952,12 @@ fn build_trade_set_map_inner(
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        if existing_version == version_key {
+        let existing_app_version = existing
+            .warstonks_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if existing_version == version_key && existing_app_version == Some(app_version) {
             let cache_connection = open_trades_cache_database(app)?;
             persist_trade_set_map_into_cache(&cache_connection, &existing)?;
             return Ok(TradeSetMapSummary {
