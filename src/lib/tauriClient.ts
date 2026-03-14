@@ -33,7 +33,7 @@ import type {
   TradeSignInInput,
   TradeUpdateListingInput,
   SetCompletionOwnedItem,
-  OwnedRelicEntry,
+  OwnedRelicInventoryCache,
   PersistedWorldStateCacheEntry,
   SellerMode,
   WfmDetailedOrder,
@@ -573,8 +573,12 @@ export async function setSetCompletionOwnedItemQuantity(input: {
   });
 }
 
-export async function getOwnedRelicInventory(): Promise<OwnedRelicEntry[]> {
-  return invoke<OwnedRelicEntry[]>('get_owned_relic_inventory');
+export async function getOwnedRelicInventoryCache(): Promise<OwnedRelicInventoryCache> {
+  return invoke<OwnedRelicInventoryCache>('get_owned_relic_inventory_cache');
+}
+
+export async function refreshOwnedRelicInventory(): Promise<OwnedRelicInventoryCache> {
+  return invoke<OwnedRelicInventoryCache>('refresh_owned_relic_inventory');
 }
 
 export async function startArbitrageScanner(): Promise<boolean> {

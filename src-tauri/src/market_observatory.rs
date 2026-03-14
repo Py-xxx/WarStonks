@@ -674,6 +674,13 @@ pub struct OwnedRelicEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OwnedRelicInventoryCache {
+    pub entries: Vec<OwnedRelicEntry>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArbitrageScannerResponse {
     pub computed_at: String,
     pub scanned_set_count: usize,
@@ -1135,6 +1142,23 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           sort_order INTEGER NOT NULL,
           fetched_at TEXT NOT NULL,
           PRIMARY KEY (set_slug, component_slug)
+        );
+
+        CREATE TABLE IF NOT EXISTS owned_relic_inventory_cache (
+          relic_tier TEXT NOT NULL,
+          relic_code TEXT NOT NULL,
+          intact_count INTEGER NOT NULL DEFAULT 0,
+          exceptional_count INTEGER NOT NULL DEFAULT 0,
+          flawless_count INTEGER NOT NULL DEFAULT 0,
+          radiant_count INTEGER NOT NULL DEFAULT 0,
+          total_count INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (relic_tier, relic_code)
+        );
+
+        CREATE TABLE IF NOT EXISTS owned_relic_inventory_meta (
+          cache_key TEXT PRIMARY KEY,
+          updated_at TEXT NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_set_component_cache_set_slug
@@ -7470,9 +7494,16 @@ pub async fn set_set_completion_owned_item_quantity(
     .map_err(|error| error.to_string())
 }
 
-fn build_owned_relic_entries(
+#[derive(Debug, Clone)]
+struct OwnedRelicCacheRow {
+    tier: String,
+    code: String,
+    counts: OwnedRelicRefinementCounts,
+}
+
+fn fetch_owned_relic_inventory_rows(
     app: &tauri::AppHandle,
-) -> Result<Vec<OwnedRelicEntry>> {
+) -> Result<Vec<OwnedRelicCacheRow>> {
     let settings = settings::load_settings_inner(app)?;
     if !settings.alecaframe.enabled {
         return Err(anyhow!("Enable Alecaframe API in Settings first."));
@@ -7511,16 +7542,75 @@ fn build_owned_relic_entries(
         }
     }
 
-    let catalog_connection = open_catalog_database(app)?;
-    let mut results = Vec::new();
+    let mut rows = Vec::new();
     for ((tier, code), mut counts) in aggregates {
         counts.total = counts
             .intact
             .saturating_add(counts.exceptional)
             .saturating_add(counts.flawless)
             .saturating_add(counts.radiant);
+        rows.push(OwnedRelicCacheRow { tier, code, counts });
+    }
 
-        let catalog_entry = resolve_relic_catalog_entry(&catalog_connection, &tier, &code)?;
+    rows.sort_by(|left, right| {
+        let tier_cmp =
+            relic_tier_sort_order(&left.tier).cmp(&relic_tier_sort_order(&right.tier));
+        if tier_cmp != Ordering::Equal {
+            return tier_cmp;
+        }
+        left.code.cmp(&right.code)
+    });
+
+    Ok(rows)
+}
+
+fn load_owned_relic_inventory_cache(
+    app: &tauri::AppHandle,
+    connection: &Connection,
+) -> Result<OwnedRelicInventoryCache> {
+    let updated_at = connection
+        .query_row(
+            "SELECT updated_at
+             FROM owned_relic_inventory_meta
+             WHERE cache_key = 'owned_relic_inventory'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load owned relic inventory cache timestamp")?;
+
+    let mut statement = connection.prepare(
+        "SELECT relic_tier,
+                relic_code,
+                intact_count,
+                exceptional_count,
+                flawless_count,
+                radiant_count,
+                total_count
+         FROM owned_relic_inventory_cache
+         ORDER BY relic_tier ASC, relic_code ASC",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(OwnedRelicCacheRow {
+                tier: row.get(0)?,
+                code: row.get(1)?,
+                counts: OwnedRelicRefinementCounts {
+                    intact: row.get::<_, i64>(2)?.max(0) as u32,
+                    exceptional: row.get::<_, i64>(3)?.max(0) as u32,
+                    flawless: row.get::<_, i64>(4)?.max(0) as u32,
+                    radiant: row.get::<_, i64>(5)?.max(0) as u32,
+                    total: row.get::<_, i64>(6)?.max(0) as u32,
+                },
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to read owned relic inventory cache")?;
+
+    let catalog_connection = open_catalog_database(app)?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let catalog_entry = resolve_relic_catalog_entry(&catalog_connection, &row.tier, &row.code)?;
         let (relic_item_id, slug, name, image_path) = match catalog_entry {
             Some(entry) => (
                 Some(entry.item_id),
@@ -7528,7 +7618,7 @@ fn build_owned_relic_entries(
                 entry.name,
                 entry.image_path,
             ),
-            None => (None, None, format!("{tier} {code} Relic"), None),
+            None => (None, None, format!("{} {} Relic", row.tier, row.code), None),
         };
 
         let drops = if let Some(item_id) = relic_item_id {
@@ -7546,37 +7636,95 @@ fn build_owned_relic_entries(
             Vec::new()
         };
 
-        results.push(OwnedRelicEntry {
+        entries.push(OwnedRelicEntry {
             relic_item_id,
             slug,
             name,
-            tier,
-            code,
+            tier: row.tier,
+            code: row.code,
             image_path,
-            counts,
+            counts: row.counts,
             drops,
         });
     }
 
-    results.sort_by(|left, right| {
-        let tier_cmp = relic_tier_sort_order(&left.tier).cmp(&relic_tier_sort_order(&right.tier));
-        if tier_cmp != Ordering::Equal {
-            return tier_cmp;
-        }
-        left.code.cmp(&right.code)
-    });
+    Ok(OwnedRelicInventoryCache { entries, updated_at })
+}
 
-    Ok(results)
+fn save_owned_relic_inventory_cache(
+    connection: &Connection,
+    rows: &[OwnedRelicCacheRow],
+    updated_at: &str,
+) -> Result<()> {
+    let transaction = connection
+        .transaction()
+        .context("failed to start owned relic cache transaction")?;
+    transaction
+        .execute("DELETE FROM owned_relic_inventory_cache", [])
+        .context("failed to clear owned relic cache")?;
+    {
+        let mut insert = transaction.prepare(
+            "INSERT INTO owned_relic_inventory_cache (
+              relic_tier,
+              relic_code,
+              intact_count,
+              exceptional_count,
+              flawless_count,
+              radiant_count,
+              total_count,
+              updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        for row in rows {
+            insert.execute(params![
+                row.tier,
+                row.code,
+                row.counts.intact as i64,
+                row.counts.exceptional as i64,
+                row.counts.flawless as i64,
+                row.counts.radiant as i64,
+                row.counts.total as i64,
+                updated_at,
+            ])?;
+        }
+    }
+    transaction.execute(
+        "INSERT INTO owned_relic_inventory_meta (cache_key, updated_at)
+         VALUES ('owned_relic_inventory', ?1)
+         ON CONFLICT(cache_key) DO UPDATE SET updated_at = excluded.updated_at",
+        params![updated_at],
+    )?;
+    transaction.commit().context("failed to save owned relic cache")?;
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn get_owned_relic_inventory(
+pub async fn get_owned_relic_inventory_cache(
     app: tauri::AppHandle,
-) -> Result<Vec<OwnedRelicEntry>, String> {
-    tauri::async_runtime::spawn_blocking(move || build_owned_relic_entries(&app))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+) -> Result<OwnedRelicInventoryCache, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)?;
+        load_owned_relic_inventory_cache(&app, &connection)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn refresh_owned_relic_inventory(
+    app: tauri::AppHandle,
+) -> Result<OwnedRelicInventoryCache, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)?;
+        let rows = fetch_owned_relic_inventory_rows(&app)?;
+        let updated_at = format_timestamp(now_utc())?;
+        save_owned_relic_inventory_cache(&connection, &rows, &updated_at)?;
+        load_owned_relic_inventory_cache(&app, &connection)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
