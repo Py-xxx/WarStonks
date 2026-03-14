@@ -6269,10 +6269,15 @@ fn resolve_relic_catalog_entry(
     if has_relic_columns {
         let lookup = catalog_connection
             .query_row(
-                "SELECT item_id, slug, name, preferred_image
-                 FROM items
-                 WHERE relic_tier = ?1 COLLATE NOCASE
-                   AND relic_code = ?2 COLLATE NOCASE
+                "SELECT
+                   i.item_id,
+                   i.wfm_slug,
+                   COALESCE(i.preferred_name, i.canonical_name, i.wfm_slug),
+                   COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path
+                 FROM items i
+                 LEFT JOIN wfm_items w ON w.item_id = i.item_id
+                 WHERE i.relic_tier = ?1 COLLATE NOCASE
+                   AND i.relic_code = ?2 COLLATE NOCASE
                  LIMIT 1",
                 params![tier, code],
                 |row| {
@@ -6300,9 +6305,15 @@ fn resolve_relic_catalog_entry(
         let fallback_name = format!("{tier} {code} Relic");
         let lookup = catalog_connection
             .query_row(
-                "SELECT item_id, slug, name, preferred_image
-                 FROM items
-                 WHERE name = ?1 COLLATE NOCASE
+                "SELECT
+                   i.item_id,
+                   i.wfm_slug,
+                   COALESCE(i.preferred_name, i.canonical_name, i.wfm_slug),
+                   COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path
+                 FROM items i
+                 LEFT JOIN wfm_items w ON w.item_id = i.item_id
+                 WHERE i.preferred_name = ?1 COLLATE NOCASE
+                    OR i.canonical_name = ?1 COLLATE NOCASE
                  LIMIT 1",
                 params![fallback_name],
                 |row| {
