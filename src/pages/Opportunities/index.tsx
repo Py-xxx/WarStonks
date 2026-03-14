@@ -328,8 +328,6 @@ export function OpportunitiesPage() {
   const [farmNowLoading, setFarmNowLoading] = useState(false);
   const [farmNowError, setFarmNowError] = useState<string | null>(null);
   const [expandedFarmRelicKey, setExpandedFarmRelicKey] = useState<string | null>(null);
-  const [farmNowOwnedRelics, setFarmNowOwnedRelics] = useState<OwnedRelicEntry[]>([]);
-  const [farmNowOwnedRelicsLoading, setFarmNowOwnedRelicsLoading] = useState(false);
   const [scannerResponse, setScannerResponse] = useState<ArbitrageScannerResponse | null>(null);
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -438,34 +436,8 @@ export function OpportunitiesPage() {
       return;
     }
 
-    let cancelled = false;
-
-    const loadFarmNowOwnedRelics = async () => {
-      if (farmNowOwnedRelicsLoading || farmNowOwnedRelics.length > 0) {
-        return;
-      }
-
-      setFarmNowOwnedRelicsLoading(true);
-      try {
-        const relics = await getOwnedRelicInventory();
-        if (!cancelled) {
-          setFarmNowOwnedRelics(relics);
-        }
-      } catch {
-        // Silent: owned relics are optional for farm now calculations.
-      } finally {
-        if (!cancelled) {
-          setFarmNowOwnedRelicsLoading(false);
-        }
-      }
-    };
-
-    void loadFarmNowOwnedRelics();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, farmNowOwnedRelics.length, farmNowOwnedRelicsLoading]);
+    void loadOwnedRelics();
+  }, [activeTab]);
 
   const loadOwnedRelics = async (force = false) => {
     if (ownedRelicsLoading) {
@@ -601,7 +573,7 @@ export function OpportunitiesPage() {
   const farmNowRelics = useMemo<FarmNowRelicRow[]>(() => {
     const relics = farmNowScan?.relicRoiResults ?? [];
     const ownedMap = new Map<string, OwnedRelicEntry>();
-    for (const relic of farmNowOwnedRelics) {
+    for (const relic of ownedRelics) {
       ownedMap.set(`${relic.tier}:${relic.code}`, relic);
     }
     const rows: FarmNowRelicRow[] = [];
@@ -668,7 +640,7 @@ export function OpportunitiesPage() {
       }
       return left.relic.name.localeCompare(right.relic.name);
     });
-  }, [farmNowOwnedRelics, farmNowScan]);
+  }, [ownedRelics, farmNowScan]);
 
   const filteredSuggestions = useMemo(() => {
     const normalizedQuery = componentQuery.trim().toLowerCase();
@@ -1177,7 +1149,9 @@ export function OpportunitiesPage() {
                     Open Scanners
                   </button>
                 </div>
-              ) : farmNowOwnedRelics.length === 0 ? (
+              ) : ownedRelicsLoading ? (
+                <div className="opportunities-placeholder">Loading owned relic inventory…</div>
+              ) : ownedRelics.length === 0 ? (
                 <div className="set-planner-empty">
                   <div>
                     <span className="panel-title-eyebrow">Owned Relics Required</span>
