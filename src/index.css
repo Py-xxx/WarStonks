@@ -543,6 +543,68 @@
   background: rgba(17, 28, 46, 0.92);
 }
 
+.farm-now-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(108, 174, 255, 0.16);
+  background: rgba(10, 16, 28, 0.6);
+  margin-bottom: 16px;
+}
+
+.farm-now-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.farm-now-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.farm-now-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.farm-now-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.farm-now-toplist {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.farm-now-top-card {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(11, 18, 32, 0.8);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.farm-now-top-card strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.farm-now-top-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .farm-now-list {
   display: flex;
   flex-direction: column;
