@@ -88,6 +88,7 @@ import type {
   DiscordWebhookSettingsInput,
   ItemAnalysisResponse,
   MarketVariant,
+  TradeDetectedBuy,
   WalletSnapshot,
   WfmAutocompleteItem,
   WfmTopSellOrder,
@@ -672,7 +673,7 @@ function buildWatchlistUpdateState(
           nextAlert,
           ...currentState.alerts.filter((alert) => alert.watchlistId !== nextItem.id),
         ]
-      : currentState.alerts,
+      : currentState.alerts.filter((alert) => alert.watchlistId !== nextItem.id),
     selectedWatchlistId: existingItem?.id ?? nextItem.id,
     watchlistTargetInput: '',
     watchlistFormError: null,
@@ -890,6 +891,7 @@ interface AppStore {
   ) => void;
   removeWatchlistItem: (id: string) => void;
   markWatchlistItemBought: (id: string, price: number) => Promise<void>;
+  handleDetectedTradeBuys: (buys: TradeDetectedBuy[]) => Promise<void>;
   dismissAlert: (id: string) => void;
   clearAllAlerts: () => void;
   markAlertBought: (id: string) => void;
@@ -2006,6 +2008,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     get().removeWatchlistItem(id);
   },
+  handleDetectedTradeBuys: async (buys) => {
+    if (!buys.length) {
+      return;
+    }
+
+    const processed = new Set<string>();
+    for (const buy of buys) {
+      const latestState = get();
+      const pricePerUnit = Math.max(1, Math.round(buy.platinum / Math.max(1, buy.quantity)));
+      const matches = latestState.watchlist.filter((entry) => {
+        if (entry.slug !== buy.slug) {
+          return false;
+        }
+        return deriveVariantRankFromKey(entry.variantKey) === buy.rank;
+      });
+
+      for (const match of matches) {
+        if (processed.has(match.id)) {
+          continue;
+        }
+        try {
+          await get().markWatchlistItemBought(match.id, pricePerUnit);
+          processed.add(match.id);
+        } catch (error) {
+          console.error('[watchlist] failed to auto-handle detected buy', error);
+        }
+      }
+    }
+  },
   dismissAlert: (id) =>
     set((state) => ({
       alerts: state.alerts.filter((alert) => alert.id !== id),
@@ -2151,7 +2182,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
               nextAlert,
               ...state.alerts.filter((alert) => alert.watchlistId !== latestItem.id),
             ]
-          : state.alerts,
+          : state.alerts.filter((alert) => alert.watchlistId !== latestItem.id),
       }));
 
       if (nextAlert && alertTriggered) {

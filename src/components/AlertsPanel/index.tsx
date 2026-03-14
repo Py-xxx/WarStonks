@@ -37,17 +37,15 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const markAlertNoResponse = useAppStore((state) => state.markAlertNoResponse);
   const markWatchlistItemBought = useAppStore((state) => state.markWatchlistItemBought);
   const retryWorldStateSystemAlert = useAppStore((state) => state.retryWorldStateSystemAlert);
-  const [purchaseAlertId, setPurchaseAlertId] = useState<string | null>(null);
+  const [purchaseModal, setPurchaseModal] = useState<{
+    watchlistId: string;
+    itemName: string;
+    defaultPrice: number;
+  } | null>(null);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
 
   const totalAlerts = alerts.length + systemAlerts.length;
-  const purchaseAlert = purchaseAlertId
-    ? alerts.find((alert) => alert.id === purchaseAlertId) ?? null
-    : null;
-  const purchaseWatchlistItem = purchaseAlert
-    ? watchlist.find((item) => item.id === purchaseAlert.watchlistId) ?? null
-    : null;
 
   if (totalAlerts === 0) {
     return (
@@ -184,8 +182,15 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       className="act-btn"
                       type="button"
                       onClick={() => {
+                        const watchlistItem = watchlist.find(
+                          (item) => item.id === alert.watchlistId,
+                        );
                         setPurchaseError(null);
-                        setPurchaseAlertId(alert.id);
+                        setPurchaseModal({
+                          watchlistId: alert.watchlistId,
+                          itemName: alert.itemName,
+                          defaultPrice: watchlistItem?.targetPrice ?? alert.price,
+                        });
                       }}
                     >
                       Mark as bought
@@ -213,25 +218,25 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         </div>
       ) : null}
 
-      {purchaseAlert && purchaseWatchlistItem ? (
+      {purchaseModal ? (
         <WatchlistPurchaseModal
-          itemName={purchaseAlert.itemName}
-          defaultPrice={purchaseWatchlistItem.targetPrice}
+          itemName={purchaseModal.itemName}
+          defaultPrice={purchaseModal.defaultPrice}
           loading={purchaseLoading}
           errorMessage={purchaseError}
           onClose={() => {
             if (purchaseLoading) {
               return;
             }
-            setPurchaseAlertId(null);
+            setPurchaseModal(null);
             setPurchaseError(null);
           }}
           onSubmit={(price) => {
             setPurchaseLoading(true);
             setPurchaseError(null);
-            void markWatchlistItemBought(purchaseWatchlistItem.id, price)
+            void markWatchlistItemBought(purchaseModal.watchlistId, price)
               .then(() => {
-                setPurchaseAlertId(null);
+                setPurchaseModal(null);
               })
               .catch((error) => {
                 setPurchaseError(error instanceof Error ? error.message : String(error));
