@@ -614,7 +614,7 @@
 .farm-now-header-row,
 .farm-now-row-main {
   display: grid;
-  grid-template-columns: minmax(240px, 1.5fr) minmax(140px, 0.6fr) minmax(90px, 0.4fr) minmax(120px, 0.5fr) 24px;
+  grid-template-columns: minmax(240px, 1.5fr) minmax(140px, 0.6fr) minmax(90px, 0.4fr) minmax(120px, 0.5fr) minmax(120px, 0.5fr) 24px;
   align-items: center;
   gap: 12px;
 }
