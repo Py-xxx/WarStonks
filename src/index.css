@@ -4115,6 +4115,42 @@ body {
   padding: 12px 14px 8px;
   display: block;
 }
+.portfolio-chart-shell {
+  display: grid;
+  gap: 10px;
+}
+.portfolio-chart-callout {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    rgba(10, 14, 22, 0.7);
+}
+.portfolio-chart-callout-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.portfolio-chart-callout-value {
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.portfolio-chart-callout-value.negative {
+  color: #f37f87;
+}
+.portfolio-chart-callout-meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
 .portfolio-chart-empty {
   min-height: 148px;
   display: grid;

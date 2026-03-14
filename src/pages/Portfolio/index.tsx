@@ -99,14 +99,51 @@ function formatHoursValue(value: number | null): string {
   return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 1)}h`;
 }
 
-function buildLineChartPoints(
+function formatAxisPlatinumValue(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '—';
+  }
+
+  const absolute = Math.abs(Math.round(value));
+  const prefix = value < 0 ? '-' : '';
+  if (absolute >= 1_000_000) {
+    return `${prefix}${(absolute / 1_000_000).toFixed(absolute >= 10_000_000 ? 0 : 1)}m`;
+  }
+  if (absolute >= 1_000) {
+    return `${prefix}${(absolute / 1_000).toFixed(absolute >= 10_000 ? 0 : 1)}k`;
+  }
+  return `${prefix}${absolute}p`;
+}
+
+function formatChartDateLabel(value: string): string {
+  try {
+    return formatShortLocalDateTime(value);
+  } catch {
+    return value;
+  }
+}
+
+function buildLinearGuides(min: number, max: number, count: number): number[] {
+  if (count <= 1) {
+    return [min];
+  }
+
+  const range = max - min;
+  if (range === 0) {
+    return Array.from({ length: count }, () => min);
+  }
+
+  return Array.from({ length: count }, (_, index) => min + (range / (count - 1)) * index);
+}
+
+function buildLineChartGeometry(
   values: number[],
   width: number,
   height: number,
   padding: { top: number; right: number; bottom: number; left: number },
 ) {
   if (values.length === 0) {
-    return { polyline: '', area: '', guides: [0, 0, 0, 0] };
+    return { polyline: '', area: '', guides: [0, 0, 0, 0], points: [] as { x: number; y: number; value: number; index: number }[] };
   }
 
   const min = Math.min(...values);
@@ -115,34 +152,41 @@ function buildLineChartPoints(
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
 
-  const toPoint = (value: number, index: number) => {
+  const points = values.map((value, index) => {
     const x = padding.left + (values.length === 1 ? innerWidth / 2 : (index / (values.length - 1)) * innerWidth);
     const normalized = (value - min) / range;
     const y = padding.top + innerHeight - normalized * innerHeight;
-    return `${x},${y}`;
-  };
+    return { x, y, value, index };
+  });
 
-  const polyline = values.map((value, index) => toPoint(value, index)).join(' ');
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(' ');
   const firstX = padding.left;
   const lastX = padding.left + innerWidth;
   const area = `${firstX},${height - padding.bottom} ${polyline} ${lastX},${height - padding.bottom}`;
-  const guides = Array.from({ length: 4 }, (_, index) => min + (range / 3) * index);
+  const guides = buildLinearGuides(min, max, 4);
 
-  return { polyline, area, guides };
+  return { polyline, area, guides, points };
 }
 
 function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
-  const width = 420;
-  const height = 160;
-  const padding = { top: 14, right: 12, bottom: 26, left: 42 };
+  const width = 520;
+  const height = 220;
+  const padding = { top: 18, right: 18, bottom: 34, left: 54 };
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const values = summary.cumulativeProfitPoints.map((point) => point.cumulativeProfit);
-  const { polyline, area, guides } = buildLineChartPoints(values, width, height, padding);
-  const xLabels = summary.cumulativeProfitPoints.filter((_, index, points) => {
-    if (points.length <= 4) {
-      return true;
-    }
-    return index === 0 || index === points.length - 1 || index === Math.floor(points.length / 2);
-  });
+  const { polyline, area, guides, points } = buildLineChartGeometry(values, width, height, padding);
+  const activeIndex = hoverIndex ?? Math.max(summary.cumulativeProfitPoints.length - 1, 0);
+  const activePoint = points[activeIndex] ?? null;
+  const activeData = summary.cumulativeProfitPoints[activeIndex] ?? null;
+  const xLabelIndices = new Set(
+    summary.cumulativeProfitPoints.length <= 4
+      ? summary.cumulativeProfitPoints.map((_, index) => index)
+      : [0, Math.floor(summary.cumulativeProfitPoints.length / 2), summary.cumulativeProfitPoints.length - 1],
+  );
+  const slotWidth =
+    summary.cumulativeProfitPoints.length > 1
+      ? (width - padding.left - padding.right) / (summary.cumulativeProfitPoints.length - 1)
+      : width - padding.left - padding.right;
 
   return (
     <div className="chart-card">
@@ -154,59 +198,121 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
         {summary.cumulativeProfitPoints.length === 0 ? (
           <div className="portfolio-chart-empty">No closed trades in this period yet.</div>
         ) : (
-          <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-            {guides.map((guide, index) => {
-              const y =
-                padding.top +
-                ((guides.length - 1 - index) / (guides.length - 1)) *
-                  (height - padding.top - padding.bottom);
-              return (
-                <g key={`${guide}-${index}`}>
+          <div className="portfolio-chart-shell">
+            <div className="portfolio-chart-callout">
+              <span className="portfolio-chart-callout-label">Active Point</span>
+              <div className="portfolio-chart-callout-value">
+                {activeData ? formatSignedPlatinumValue(activeData.cumulativeProfit) : '—'}
+              </div>
+              <span className="portfolio-chart-callout-meta">
+                {activeData ? formatChartDateLabel(activeData.bucketAt) : 'Move across the curve'}
+              </span>
+            </div>
+            <svg width="100%" height="220" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+              <rect
+                x={padding.left}
+                y={padding.top}
+                width={width - padding.left - padding.right}
+                height={height - padding.top - padding.bottom}
+                rx="10"
+                fill="rgba(255,255,255,0.02)"
+                stroke="rgba(255,255,255,0.05)"
+              />
+              {guides.map((guide, index) => {
+                const y =
+                  padding.top +
+                  ((guides.length - 1 - index) / Math.max(guides.length - 1, 1)) *
+                    (height - padding.top - padding.bottom);
+                return (
+                  <g key={`${guide}-${index}`}>
+                    <line
+                      x1={padding.left}
+                      y1={y}
+                      x2={width - padding.right}
+                      y2={y}
+                      stroke="rgba(255,255,255,0.07)"
+                      strokeWidth="1"
+                      strokeDasharray="3 5"
+                    />
+                    <text
+                      x={10}
+                      y={y + 3}
+                      fill="var(--text-muted)"
+                      fontSize="9"
+                      fontFamily="JetBrains Mono"
+                    >
+                      {formatAxisPlatinumValue(guide)}
+                    </text>
+                  </g>
+                );
+              })}
+              {points.map((point, index) => (
+                <line
+                  key={`guide-${point.index}`}
+                  x1={point.x}
+                  y1={padding.top}
+                  x2={point.x}
+                  y2={height - padding.bottom}
+                  stroke="rgba(255,255,255,0.045)"
+                  strokeWidth="1"
+                  opacity={xLabelIndices.has(index) ? 1 : 0.45}
+                />
+              ))}
+              <polygon points={area} fill="rgba(74, 158, 255, 0.13)" />
+              <polyline
+                points={polyline}
+                fill="none"
+                stroke="rgba(74, 158, 255, 0.95)"
+                strokeWidth="2.6"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+              {activePoint ? (
+                <>
                   <line
-                    x1={padding.left}
-                    y1={y}
-                    x2={width - padding.right}
-                    y2={y}
-                    stroke="rgba(255,255,255,0.07)"
-                    strokeWidth="1"
+                    x1={activePoint.x}
+                    y1={padding.top}
+                    x2={activePoint.x}
+                    y2={height - padding.bottom}
+                    stroke="rgba(74,158,255,0.5)"
+                    strokeWidth="1.2"
+                    strokeDasharray="4 4"
                   />
-                  <text
-                    x="6"
-                    y={y + 3}
-                    fill="var(--text-muted)"
-                    fontSize="9"
-                    fontFamily="JetBrains Mono"
-                  >
-                    {Math.round(guide)}
-                  </text>
-                </g>
-              );
-            })}
-            <polygon points={area} fill="rgba(74, 158, 255, 0.12)" />
-            <polyline points={polyline} fill="none" stroke="var(--accent-blue)" strokeWidth="2" />
-            {xLabels.map((point) => {
-              const index = summary.cumulativeProfitPoints.findIndex((entry) => entry.bucketAt === point.bucketAt);
-              const x =
-                padding.left +
-                (summary.cumulativeProfitPoints.length === 1
-                  ? (width - padding.left - padding.right) / 2
-                  : (index / (summary.cumulativeProfitPoints.length - 1)) *
-                    (width - padding.left - padding.right));
-              return (
-                <text
-                  key={point.bucketAt}
-                  x={x}
-                  y={height - 8}
-                  textAnchor={index === 0 ? 'start' : index === summary.cumulativeProfitPoints.length - 1 ? 'end' : 'middle'}
-                  fill="var(--text-muted)"
-                  fontSize="9"
-                  fontFamily="JetBrains Mono"
-                >
-                  {point.label}
-                </text>
-              );
-            })}
-          </svg>
+                  <circle cx={activePoint.x} cy={activePoint.y} r="5" fill="var(--accent-blue)" />
+                  <circle cx={activePoint.x} cy={activePoint.y} r="10" fill="rgba(74,158,255,0.14)" />
+                </>
+              ) : null}
+              {points.map((point, index) => {
+                const label = summary.cumulativeProfitPoints[index];
+                return (
+                  <g key={`hover-${point.index}`}>
+                    <rect
+                      x={point.x - slotWidth / 2}
+                      y={padding.top}
+                      width={Math.max(slotWidth, 18)}
+                      height={height - padding.top - padding.bottom}
+                      fill="transparent"
+                      onMouseEnter={() => setHoverIndex(index)}
+                      onMouseMove={() => setHoverIndex(index)}
+                      onMouseLeave={() => setHoverIndex(null)}
+                    />
+                    {xLabelIndices.has(index) ? (
+                      <text
+                        x={point.x}
+                        y={height - 10}
+                        textAnchor={index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle'}
+                        fill="var(--text-muted)"
+                        fontSize="9"
+                        fontFamily="JetBrains Mono"
+                      >
+                        {label.label}
+                      </text>
+                    ) : null}
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
         )}
       </div>
     </div>
@@ -214,14 +320,22 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
 }
 
 function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
-  const width = 320;
-  const height = 160;
-  const padding = { top: 16, right: 12, bottom: 28, left: 24 };
+  const width = 420;
+  const height = 220;
+  const padding = { top: 18, right: 16, bottom: 34, left: 50 };
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const points = summary.profitPerTradePoints;
   const maxAbs = Math.max(...points.map((point) => Math.abs(point.profit)), 1);
   const innerHeight = height - padding.top - padding.bottom;
   const baseline = padding.top + innerHeight / 2;
-  const barWidth = points.length > 0 ? Math.max(12, (width - padding.left - padding.right) / points.length - 10) : 0;
+  const barSlotWidth = points.length > 0 ? (width - padding.left - padding.right) / points.length : 0;
+  const barWidth = points.length > 0 ? Math.max(12, barSlotWidth - 8) : 0;
+  const guides = buildLinearGuides(maxAbs, -maxAbs, 5);
+  const activeIndex = hoverIndex ?? Math.max(points.length - 1, 0);
+  const activeTrade = points[activeIndex] ?? null;
+  const xLabelIndices = new Set(
+    points.length <= 4 ? points.map((_, index) => index) : [0, Math.floor(points.length / 2), points.length - 1],
+  );
 
   return (
     <div className="chart-card">
@@ -234,37 +348,108 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
         {points.length === 0 ? (
           <div className="portfolio-chart-empty">Profit bars will appear after your first completed sells.</div>
         ) : (
-          <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-            <line
-              x1={padding.left}
-              y1={baseline}
-              x2={width - padding.right}
-              y2={baseline}
-              stroke="rgba(255,255,255,0.09)"
-              strokeWidth="1"
-            />
-            {points.map((point, index) => {
-              const x =
-                padding.left +
-                index * ((width - padding.left - padding.right) / Math.max(points.length, 1)) +
-                4;
-              const normalizedHeight = (Math.abs(point.profit) / maxAbs) * (innerHeight / 2 - 8);
-              const isPositive = point.profit >= 0;
-              const y = isPositive ? baseline - normalizedHeight : baseline;
-              return (
-                <g key={point.id}>
-                  <rect
-                    x={x}
-                    y={y}
-                    width={barWidth}
-                    height={Math.max(normalizedHeight, 2)}
-                    rx="3"
-                    fill={isPositive ? 'rgba(61,214,140,0.58)' : 'rgba(240,79,88,0.58)'}
-                  />
-                </g>
-              );
-            })}
-          </svg>
+          <div className="portfolio-chart-shell">
+            <div className="portfolio-chart-callout">
+              <span className="portfolio-chart-callout-label">Active Trade</span>
+              <div className={`portfolio-chart-callout-value${activeTrade && activeTrade.profit < 0 ? ' negative' : ''}`}>
+                {activeTrade ? formatSignedPlatinumValue(activeTrade.profit) : '—'}
+              </div>
+              <span className="portfolio-chart-callout-meta">
+                {activeTrade ? `${activeTrade.itemName} · ${formatChartDateLabel(activeTrade.closedAt)}` : 'Hover a bar'}
+              </span>
+            </div>
+            <svg width="100%" height="220" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+              <rect
+                x={padding.left}
+                y={padding.top}
+                width={width - padding.left - padding.right}
+                height={height - padding.top - padding.bottom}
+                rx="10"
+                fill="rgba(255,255,255,0.02)"
+                stroke="rgba(255,255,255,0.05)"
+              />
+              {guides.map((guide) => {
+                const normalized = (guide + maxAbs) / (2 * maxAbs || 1);
+                const y = padding.top + innerHeight - normalized * innerHeight;
+                return (
+                  <g key={`profit-guide-${guide}`}>
+                    <line
+                      x1={padding.left}
+                      y1={y}
+                      x2={width - padding.right}
+                      y2={y}
+                      stroke={Math.abs(guide) < 0.0001 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.07)'}
+                      strokeWidth={Math.abs(guide) < 0.0001 ? '1.2' : '1'}
+                      strokeDasharray={Math.abs(guide) < 0.0001 ? undefined : '3 5'}
+                    />
+                    <text
+                      x={10}
+                      y={y + 3}
+                      fill="var(--text-muted)"
+                      fontSize="9"
+                      fontFamily="JetBrains Mono"
+                    >
+                      {formatAxisPlatinumValue(guide)}
+                    </text>
+                  </g>
+                );
+              })}
+              <line
+                x1={padding.left}
+                y1={baseline}
+                x2={width - padding.right}
+                y2={baseline}
+                stroke="rgba(255,255,255,0.14)"
+                strokeWidth="1.2"
+              />
+              {points.map((point, index) => {
+                const x = padding.left + index * barSlotWidth + (barSlotWidth - barWidth) / 2;
+                const normalizedHeight = (Math.abs(point.profit) / maxAbs) * (innerHeight / 2 - 8);
+                const isPositive = point.profit >= 0;
+                const y = isPositive ? baseline - normalizedHeight : baseline;
+                const isActive = activeIndex === index;
+                return (
+                  <g key={point.id}>
+                    <rect
+                      x={x}
+                      y={padding.top}
+                      width={Math.max(barSlotWidth, 16)}
+                      height={height - padding.top - padding.bottom}
+                      fill="transparent"
+                      onMouseEnter={() => setHoverIndex(index)}
+                      onMouseMove={() => setHoverIndex(index)}
+                      onMouseLeave={() => setHoverIndex(null)}
+                    />
+                    <rect
+                      x={x}
+                      y={y}
+                      width={barWidth}
+                      height={Math.max(normalizedHeight, 3)}
+                      rx="4"
+                      fill={isPositive ? 'rgba(61,214,140,0.7)' : 'rgba(240,79,88,0.7)'}
+                      stroke={isActive ? (isPositive ? 'rgba(61,214,140,1)' : 'rgba(240,79,88,1)') : 'transparent'}
+                      strokeWidth="1.1"
+                    />
+                    {xLabelIndices.has(index) ? (
+                      <text
+                        x={x + barWidth / 2}
+                        y={height - 10}
+                        textAnchor="middle"
+                        fill="var(--text-muted)"
+                        fontSize="9"
+                        fontFamily="JetBrains Mono"
+                      >
+                        {new Date(point.closedAt).toLocaleDateString('en-GB', {
+                          day: '2-digit',
+                          month: 'short',
+                        })}
+                      </text>
+                    ) : null}
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
         )}
       </div>
     </div>
