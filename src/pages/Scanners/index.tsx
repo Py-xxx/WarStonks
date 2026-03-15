@@ -125,6 +125,42 @@ function getRelicRefinementSummary(
   );
 }
 
+function buildScannerProgressDetails(progress: ArbitrageScannerProgress | null): string[] {
+  if (!progress) {
+    return [];
+  }
+
+  const details: string[] = [];
+
+  if (progress.currentSetName) {
+    details.push(`Current set: ${progress.currentSetName}`);
+  }
+
+  if (progress.currentComponentName) {
+    details.push(`Current component: ${progress.currentComponentName}`);
+  }
+
+  if (progress.totalComponentCount > 0) {
+    details.push(
+      `Components ${progress.completedComponentCount}/${progress.totalComponentCount}`,
+    );
+  }
+
+  if (progress.totalSetCount > 0) {
+    details.push(`Sets ${progress.completedSetCount}/${progress.totalSetCount}`);
+  }
+
+  details.push(`Skipped ${progress.skippedEntryCount}`);
+
+  if (progress.retryingItemName && progress.retryAttempt) {
+    details.push(
+      `Retry ${progress.retryAttempt}/2: ${progress.retryingItemName}`,
+    );
+  }
+
+  return details;
+}
+
 function ArbitrageComponentRow({
   component,
   targetValue,
@@ -538,6 +574,15 @@ export function ScannersPage() {
           startedAt: new Date().toISOString(),
           lastCompletedAt: current?.lastCompletedAt ?? null,
           lastError: null,
+          currentSetName: null,
+          currentComponentName: null,
+          completedSetCount: 0,
+          totalSetCount: current?.totalSetCount ?? 0,
+          completedComponentCount: 0,
+          totalComponentCount: current?.totalComponentCount ?? 0,
+          skippedEntryCount: 0,
+          retryingItemName: null,
+          retryAttempt: null,
         }));
         void loadScannerState();
       } else {
@@ -781,12 +826,22 @@ export function ScannersPage() {
                 <p className="scanner-progress-copy">
                   {progress?.statusText ?? 'No saved scanner results yet. Start a scan to cache the results.'}
                 </p>
+                {buildScannerProgressDetails(progress).length > 0 ? (
+                  <div className="scanner-progress-meta">
+                    <span>{buildScannerProgressDetails(progress).join(' · ')}</span>
+                  </div>
+                ) : null}
                 {arbitrage ? (
                   <div className="scanner-progress-meta">
                     <span>Last scan {formatShortLocalDateTime(arbitrage.scanFinishedAt)}</span>
                     <span>
                       {arbitrage.scannedSetCount} sets · {arbitrage.scannedComponentCount} components · {arbitrage.scannedRelicCount} relics
                     </span>
+                  </div>
+                ) : null}
+                {arbitrage?.skippedSummaryText ? (
+                  <div className="scanner-progress-meta">
+                    <span>{arbitrage.skippedSummaryText}</span>
                   </div>
                 ) : null}
                 {errorMessage ? (

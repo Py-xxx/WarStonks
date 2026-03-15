@@ -6,7 +6,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
@@ -31,7 +32,9 @@ const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
 const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
 const SCANNER_WFM_STATS_TIMEOUT_SECONDS: u64 = 8;
+const SCANNER_ITEM_RETRY_COUNT: usize = 2;
 const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
+const ARBITRAGE_SCANNER_HEARTBEAT_SECONDS: u64 = 3;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
 const ARBITRAGE_SCANNER_KEY: &str = "arbitrage";
 const ARBITRAGE_SCANNER_PROGRESS_EVENT: &str = "arbitrage-scanner-progress";
@@ -706,6 +709,10 @@ pub struct ArbitrageScannerResponse {
     pub refreshed_statistics_count: usize,
     pub skipped_entry_count: usize,
     #[serde(default)]
+    pub skipped_entries: Vec<ScannerSkippedEntry>,
+    #[serde(default)]
+    pub skipped_summary_text: Option<String>,
+    #[serde(default)]
     pub scanned_relic_count: usize,
     #[serde(default)]
     pub relic_opportunity_count: usize,
@@ -726,6 +733,24 @@ pub struct ArbitrageScannerProgress {
     pub started_at: Option<String>,
     pub last_completed_at: Option<String>,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub current_set_name: Option<String>,
+    #[serde(default)]
+    pub current_component_name: Option<String>,
+    #[serde(default)]
+    pub completed_set_count: usize,
+    #[serde(default)]
+    pub total_set_count: usize,
+    #[serde(default)]
+    pub completed_component_count: usize,
+    #[serde(default)]
+    pub total_component_count: usize,
+    #[serde(default)]
+    pub skipped_entry_count: usize,
+    #[serde(default)]
+    pub retrying_item_name: Option<String>,
+    #[serde(default)]
+    pub retry_attempt: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -754,6 +779,26 @@ pub(crate) struct OwnedSetComponentDelta {
     pub name: String,
     pub image_path: Option<String>,
     pub quantity_delta: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ScannerRuntimeProgress {
+    current_set_name: Option<String>,
+    current_component_name: Option<String>,
+    completed_set_count: usize,
+    total_set_count: usize,
+    completed_component_count: usize,
+    total_component_count: usize,
+    skipped_entry_count: usize,
+    retrying_item_name: Option<String>,
+    retry_attempt: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannerSkippedEntry {
+    pub name: String,
+    pub reason: String,
 }
 
 struct ArbitrageScannerRunOutcome {
@@ -1217,6 +1262,15 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           started_at TEXT,
           last_completed_at TEXT,
           last_error TEXT,
+          current_set_name TEXT,
+          current_component_name TEXT,
+          completed_set_count INTEGER NOT NULL DEFAULT 0,
+          total_set_count INTEGER NOT NULL DEFAULT 0,
+          completed_component_count INTEGER NOT NULL DEFAULT 0,
+          total_component_count INTEGER NOT NULL DEFAULT 0,
+          skipped_entry_count INTEGER NOT NULL DEFAULT 0,
+          retrying_item_name TEXT,
+          retry_attempt INTEGER,
           stop_requested INTEGER NOT NULL DEFAULT 0
         );
 
@@ -1276,6 +1330,51 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
             "scanner_progress",
             "stop_requested",
             "ALTER TABLE scanner_progress ADD COLUMN stop_requested INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "scanner_progress",
+            "current_set_name",
+            "ALTER TABLE scanner_progress ADD COLUMN current_set_name TEXT",
+        ),
+        (
+            "scanner_progress",
+            "current_component_name",
+            "ALTER TABLE scanner_progress ADD COLUMN current_component_name TEXT",
+        ),
+        (
+            "scanner_progress",
+            "completed_set_count",
+            "ALTER TABLE scanner_progress ADD COLUMN completed_set_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "scanner_progress",
+            "total_set_count",
+            "ALTER TABLE scanner_progress ADD COLUMN total_set_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "scanner_progress",
+            "completed_component_count",
+            "ALTER TABLE scanner_progress ADD COLUMN completed_component_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "scanner_progress",
+            "total_component_count",
+            "ALTER TABLE scanner_progress ADD COLUMN total_component_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "scanner_progress",
+            "skipped_entry_count",
+            "ALTER TABLE scanner_progress ADD COLUMN skipped_entry_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "scanner_progress",
+            "retrying_item_name",
+            "ALTER TABLE scanner_progress ADD COLUMN retrying_item_name TEXT",
+        ),
+        (
+            "scanner_progress",
+            "retry_attempt",
+            "ALTER TABLE scanner_progress ADD COLUMN retry_attempt INTEGER",
         ),
     ] {
         let has_column = connection
@@ -5461,7 +5560,185 @@ fn default_arbitrage_scanner_progress() -> Result<ArbitrageScannerProgress> {
         started_at: None,
         last_completed_at: None,
         last_error: None,
+        current_set_name: None,
+        current_component_name: None,
+        completed_set_count: 0,
+        total_set_count: 0,
+        completed_component_count: 0,
+        total_component_count: 0,
+        skipped_entry_count: 0,
+        retrying_item_name: None,
+        retry_attempt: None,
     })
+}
+
+fn scanner_progress_with_runtime(
+    base: &ArbitrageScannerProgress,
+    runtime: &ScannerRuntimeProgress,
+) -> ArbitrageScannerProgress {
+    ArbitrageScannerProgress {
+        scanner_key: base.scanner_key.clone(),
+        status: base.status.clone(),
+        progress_value: base.progress_value,
+        stage_label: base.stage_label.clone(),
+        status_text: base.status_text.clone(),
+        updated_at: base.updated_at.clone(),
+        started_at: base.started_at.clone(),
+        last_completed_at: base.last_completed_at.clone(),
+        last_error: base.last_error.clone(),
+        current_set_name: runtime.current_set_name.clone(),
+        current_component_name: runtime.current_component_name.clone(),
+        completed_set_count: runtime.completed_set_count,
+        total_set_count: runtime.total_set_count,
+        completed_component_count: runtime.completed_component_count,
+        total_component_count: runtime.total_component_count,
+        skipped_entry_count: runtime.skipped_entry_count,
+        retrying_item_name: runtime.retrying_item_name.clone(),
+        retry_attempt: runtime.retry_attempt,
+    }
+}
+
+fn total_component_count_from_response(response: &ArbitrageScannerResponse) -> usize {
+    response
+        .results
+        .iter()
+        .map(|entry| entry.components.len())
+        .sum()
+}
+
+fn emit_running_scanner_progress(
+    on_progress: &mut impl FnMut(ArbitrageScannerProgress),
+    started_at: &str,
+    completed_task_count: usize,
+    total_task_count: usize,
+    runtime: &ScannerRuntimeProgress,
+    stage_label: &str,
+    status_text: String,
+) -> Result<()> {
+    let progress_value = if total_task_count == 0 {
+        100.0
+    } else {
+        ((completed_task_count as f64 / total_task_count as f64) * 100.0).clamp(0.0, 99.0)
+    };
+    let base = ArbitrageScannerProgress {
+        scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+        status: "running".to_string(),
+        progress_value,
+        stage_label: stage_label.to_string(),
+        status_text,
+        updated_at: format_timestamp(now_utc())?,
+        started_at: Some(started_at.to_string()),
+        last_completed_at: None,
+        last_error: None,
+        current_set_name: None,
+        current_component_name: None,
+        completed_set_count: 0,
+        total_set_count: 0,
+        completed_component_count: 0,
+        total_component_count: 0,
+        skipped_entry_count: 0,
+        retrying_item_name: None,
+        retry_attempt: None,
+    };
+    on_progress(scanner_progress_with_runtime(&base, runtime));
+    Ok(())
+}
+
+fn resolve_scanner_price_model_with_retry(
+    on_progress: &mut impl FnMut(ArbitrageScannerProgress),
+    started_at: &str,
+    completed_task_count: usize,
+    total_task_count: usize,
+    runtime: &mut ScannerRuntimeProgress,
+    observatory_connection: &Connection,
+    shared_price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
+    refreshed_statistics_count: &mut usize,
+    skipped_entry_count: &mut usize,
+    skipped_entries: &mut Vec<ScannerSkippedEntry>,
+    item_id: i64,
+    slug: &str,
+    display_name: &str,
+    stage_label: &str,
+    current_set_name: Option<String>,
+    current_component_name: Option<String>,
+) -> Result<Option<ScannerPriceModel>> {
+    runtime.current_set_name = current_set_name;
+    runtime.current_component_name = current_component_name;
+    runtime.retrying_item_name = None;
+    runtime.retry_attempt = None;
+
+    for retry_attempt in 0..=SCANNER_ITEM_RETRY_COUNT {
+        if retry_attempt > 0 {
+            runtime.retrying_item_name = Some(display_name.to_string());
+            runtime.retry_attempt = Some(retry_attempt);
+            emit_running_scanner_progress(
+                on_progress,
+                started_at,
+                completed_task_count,
+                total_task_count,
+                runtime,
+                stage_label,
+                format!(
+                    "Retry {retry_attempt}/{SCANNER_ITEM_RETRY_COUNT} for {display_name} after a temporary scanner fetch failure."
+                ),
+            )?;
+        }
+
+        match get_or_build_scanner_price_model(
+            observatory_connection,
+            shared_price_model_cache,
+            item_id,
+            slug,
+            refreshed_statistics_count,
+        ) {
+            Ok(model) => {
+                runtime.retrying_item_name = None;
+                runtime.retry_attempt = None;
+                return Ok(model);
+            }
+            Err(error) => {
+                if retry_attempt < SCANNER_ITEM_RETRY_COUNT {
+                    eprintln!(
+                        "[scanner] retrying '{}' (item_id={}, attempt {}/{}) after error: {}",
+                        slug,
+                        item_id,
+                        retry_attempt + 1,
+                        SCANNER_ITEM_RETRY_COUNT + 1,
+                        error
+                    );
+                    continue;
+                }
+
+                *skipped_entry_count += 1;
+                runtime.skipped_entry_count = *skipped_entry_count;
+                runtime.retrying_item_name = None;
+                runtime.retry_attempt = None;
+                skipped_entries.push(ScannerSkippedEntry {
+                    name: display_name.to_string(),
+                    reason: error.to_string(),
+                });
+                eprintln!(
+                    "[scanner] skipped '{}' (item_id={}) after {} retries: {}",
+                    slug, item_id, SCANNER_ITEM_RETRY_COUNT, error
+                );
+                emit_running_scanner_progress(
+                    on_progress,
+                    started_at,
+                    completed_task_count,
+                    total_task_count,
+                    runtime,
+                    stage_label,
+                    format!(
+                        "Skipped {display_name} after {SCANNER_ITEM_RETRY_COUNT} retries. {} item(s) skipped so far.",
+                        *skipped_entry_count
+                    ),
+                )?;
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 fn stale_arbitrage_scanner_progress(
@@ -5489,12 +5766,22 @@ fn stale_arbitrage_scanner_progress(
         started_at: progress.started_at.clone(),
         last_completed_at: progress.last_completed_at.clone(),
         last_error: Some("Previous background scan became stale.".to_string()),
+        current_set_name: progress.current_set_name.clone(),
+        current_component_name: progress.current_component_name.clone(),
+        completed_set_count: progress.completed_set_count,
+        total_set_count: progress.total_set_count,
+        completed_component_count: progress.completed_component_count,
+        total_component_count: progress.total_component_count,
+        skipped_entry_count: progress.skipped_entry_count,
+        retrying_item_name: None,
+        retry_attempt: None,
     }))
 }
 
-fn persist_arbitrage_scanner_progress(
+fn persist_arbitrage_scanner_progress_with_stop_reset(
     connection: &Connection,
     progress: &ArbitrageScannerProgress,
+    clear_stop_requested: bool,
 ) -> Result<()> {
     connection.execute(
         "INSERT INTO scanner_progress (
@@ -5506,8 +5793,17 @@ fn persist_arbitrage_scanner_progress(
            updated_at,
            started_at,
            last_completed_at,
-           last_error
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           last_error,
+           current_set_name,
+           current_component_name,
+           completed_set_count,
+           total_set_count,
+           completed_component_count,
+           total_component_count,
+           skipped_entry_count,
+           retrying_item_name,
+           retry_attempt
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT(scanner_key) DO UPDATE SET
            status = excluded.status,
            progress_value = excluded.progress_value,
@@ -5517,7 +5813,19 @@ fn persist_arbitrage_scanner_progress(
            started_at = excluded.started_at,
            last_completed_at = excluded.last_completed_at,
            last_error = excluded.last_error,
-           stop_requested = 0",
+           current_set_name = excluded.current_set_name,
+           current_component_name = excluded.current_component_name,
+           completed_set_count = excluded.completed_set_count,
+           total_set_count = excluded.total_set_count,
+           completed_component_count = excluded.completed_component_count,
+           total_component_count = excluded.total_component_count,
+           skipped_entry_count = excluded.skipped_entry_count,
+           retrying_item_name = excluded.retrying_item_name,
+           retry_attempt = excluded.retry_attempt,
+           stop_requested = CASE
+             WHEN ?19 = 1 THEN 0
+             ELSE scanner_progress.stop_requested
+           END",
         params![
             progress.scanner_key,
             progress.status,
@@ -5528,10 +5836,27 @@ fn persist_arbitrage_scanner_progress(
             progress.started_at,
             progress.last_completed_at,
             progress.last_error,
+            progress.current_set_name,
+            progress.current_component_name,
+            progress.completed_set_count,
+            progress.total_set_count,
+            progress.completed_component_count,
+            progress.total_component_count,
+            progress.skipped_entry_count,
+            progress.retrying_item_name,
+            progress.retry_attempt,
+            if clear_stop_requested { 1 } else { 0 },
         ],
     )?;
 
     Ok(())
+}
+
+fn persist_arbitrage_scanner_progress(
+    connection: &Connection,
+    progress: &ArbitrageScannerProgress,
+) -> Result<()> {
+    persist_arbitrage_scanner_progress_with_stop_reset(connection, progress, false)
 }
 
 fn arbitrage_scanner_stop_requested(connection: &Connection) -> Result<bool> {
@@ -5578,7 +5903,16 @@ fn load_arbitrage_scanner_progress(connection: &Connection) -> Result<ArbitrageS
                updated_at,
                started_at,
                last_completed_at,
-               last_error
+               last_error,
+               current_set_name,
+               current_component_name,
+               completed_set_count,
+               total_set_count,
+               completed_component_count,
+               total_component_count,
+               skipped_entry_count,
+               retrying_item_name,
+               retry_attempt
              FROM scanner_progress
              WHERE scanner_key = ?1
              LIMIT 1",
@@ -5594,6 +5928,17 @@ fn load_arbitrage_scanner_progress(connection: &Connection) -> Result<ArbitrageS
                     started_at: row.get(6)?,
                     last_completed_at: row.get(7)?,
                     last_error: row.get(8)?,
+                    current_set_name: row.get(9)?,
+                    current_component_name: row.get(10)?,
+                    completed_set_count: row.get::<_, i64>(11)?.max(0) as usize,
+                    total_set_count: row.get::<_, i64>(12)?.max(0) as usize,
+                    completed_component_count: row.get::<_, i64>(13)?.max(0) as usize,
+                    total_component_count: row.get::<_, i64>(14)?.max(0) as usize,
+                    skipped_entry_count: row.get::<_, i64>(15)?.max(0) as usize,
+                    retrying_item_name: row.get(16)?,
+                    retry_attempt: row
+                        .get::<_, Option<i64>>(17)?
+                        .map(|value| value.max(0) as usize),
                 })
             },
         )
@@ -5602,7 +5947,11 @@ fn load_arbitrage_scanner_progress(connection: &Connection) -> Result<ArbitrageS
     match progress {
         Some(progress) => {
             if let Some(stale_progress) = stale_arbitrage_scanner_progress(&progress)? {
-                persist_arbitrage_scanner_progress(connection, &stale_progress)?;
+                persist_arbitrage_scanner_progress_with_stop_reset(
+                    connection,
+                    &stale_progress,
+                    true,
+                )?;
                 Ok(stale_progress)
             } else {
                 Ok(progress)
@@ -5610,7 +5959,7 @@ fn load_arbitrage_scanner_progress(connection: &Connection) -> Result<ArbitrageS
         }
         None => {
             let progress = default_arbitrage_scanner_progress()?;
-            persist_arbitrage_scanner_progress(connection, &progress)?;
+            persist_arbitrage_scanner_progress_with_stop_reset(connection, &progress, true)?;
             Ok(progress)
         }
     }
@@ -6411,21 +6760,12 @@ fn get_or_build_scanner_price_model(
         return Ok(existing.clone());
     }
 
-    let model = match (|| -> Result<Option<ScannerPriceModel>> {
+    let model = (|| -> Result<Option<ScannerPriceModel>> {
         if ensure_statistics_cached_for_scan(observatory_connection, item_id, slug, "base")? {
             *refreshed_statistics_count += 1;
         }
         build_statistics_price_model(observatory_connection, item_id, "base")
-    })() {
-        Ok(model) => model,
-        Err(error) => {
-            eprintln!(
-                "[scanner] failed to build price model for '{}' (item_id={}): {}",
-                slug, item_id, error
-            );
-            None
-        }
-    };
+    })()?;
     price_model_cache.insert(item_id, model.clone());
     Ok(model)
 }
@@ -6688,13 +7028,14 @@ fn build_relic_roi_note(
     parts.join(" · ")
 }
 
-fn build_relic_roi_entry(
+fn build_relic_roi_entry<F>(
     catalog_connection: &Connection,
     relic_root: &RelicRootCatalogRecord,
-    observatory_connection: &Connection,
-    shared_price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
-    refreshed_statistics_count: &mut usize,
-) -> Result<Option<RelicRoiEntry>> {
+    mut fetch_price_model: F,
+) -> Result<Option<RelicRoiEntry>>
+where
+    F: FnMut(i64, &str, &str) -> Result<Option<ScannerPriceModel>>,
+{
     let mut drops = load_relic_reward_profiles(catalog_connection, relic_root.item_id)?;
     if drops.is_empty() {
         return Ok(None);
@@ -6703,13 +7044,7 @@ fn build_relic_roi_entry(
     let mut entry_confidence_refs = Vec::new();
     for drop in &mut drops {
         let reward_model = match drop.item_id {
-            Some(reward_item_id) => get_or_build_scanner_price_model(
-                observatory_connection,
-                shared_price_model_cache,
-                reward_item_id,
-                &drop.slug,
-                refreshed_statistics_count,
-            )?,
+            Some(reward_item_id) => fetch_price_model(reward_item_id, &drop.slug, &drop.name)?,
             None => None,
         };
         drop.recommended_exit_low = reward_model.as_ref().and_then(|entry| entry.exit_low);
@@ -6830,11 +7165,21 @@ fn build_arbitrage_scanner_inner(
     let scanned_sets = load_scanner_sets_from_map(&app, &catalog_connection)?;
     let relic_roots = list_relic_roots_from_catalog(&catalog_connection)?;
     let started_at = format_timestamp(now_utc())?;
-    let total_work_items = scanned_sets.len() + relic_roots.len();
+    let total_set_count = scanned_sets.len();
+    let total_component_count = scanned_sets
+        .iter()
+        .map(|(_, components)| components.len())
+        .sum::<usize>();
     let scanned_component_count = scanned_sets
         .iter()
-        .map(|(_, components)| components.iter().map(|entry| entry.quantity_in_set.max(1) as usize).sum::<usize>())
+        .map(|(_, components)| {
+            components
+                .iter()
+                .map(|entry| entry.quantity_in_set.max(1) as usize)
+                .sum::<usize>()
+        })
         .sum::<usize>();
+    let total_task_count = total_set_count + total_component_count + relic_roots.len();
 
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
@@ -6843,95 +7188,167 @@ fn build_arbitrage_scanner_inner(
     let mut shared_price_model_cache = HashMap::<i64, Option<ScannerPriceModel>>::new();
     let mut was_stopped = false;
     let mut skipped_entry_count = 0usize;
+    let mut skipped_entries = Vec::<ScannerSkippedEntry>::new();
+    let mut runtime = ScannerRuntimeProgress {
+        total_set_count,
+        total_component_count,
+        ..Default::default()
+    };
+    let mut completed_task_count = 0usize;
 
-    on_progress(ArbitrageScannerProgress {
-        scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
-        status: "running".to_string(),
-        progress_value: 0.0,
-        stage_label: "Preparing".to_string(),
-        status_text: format!(
-            "Loaded {} sets and {} relics for scanner analysis.",
-            scanned_sets.len(),
+    emit_running_scanner_progress(
+        &mut on_progress,
+        &started_at,
+        completed_task_count,
+        total_task_count,
+        &runtime,
+        "Preparing",
+        format!(
+            "Loaded {} sets, {} components, and {} relics for scanner analysis.",
+            total_set_count,
+            total_component_count,
             relic_roots.len()
         ),
-        updated_at: format_timestamp(now_utc())?,
-        started_at: Some(started_at.clone()),
-        last_completed_at: None,
-        last_error: None,
-    });
+    )?;
 
-    for (index, (set_root, components)) in scanned_sets.iter().enumerate() {
+    for (set_index, (set_root, components)) in scanned_sets.iter().enumerate() {
         if arbitrage_scanner_stop_requested(&observatory_connection)? {
             was_stopped = true;
             break;
         }
 
-        let progress_value = if total_work_items == 0 {
-            100.0
-        } else {
-            ((index as f64 / total_work_items as f64) * 100.0).clamp(0.0, 99.0)
-        };
-        on_progress(ArbitrageScannerProgress {
-            scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
-            status: "running".to_string(),
-            progress_value,
-            stage_label: "Scanning Sets".to_string(),
-            status_text: format!(
-                "Scanning set {} ({}/{})",
-                set_root.name,
-                index + 1,
-                scanned_sets.len()
-            ),
-            updated_at: format_timestamp(now_utc())?,
-            started_at: Some(started_at.clone()),
-            last_completed_at: None,
-            last_error: None,
-        });
+        runtime.current_set_name = Some(set_root.name.clone());
+        runtime.current_component_name = None;
+        runtime.retrying_item_name = None;
+        runtime.retry_attempt = None;
+        emit_running_scanner_progress(
+            &mut on_progress,
+            &started_at,
+            completed_task_count,
+            total_task_count,
+            &runtime,
+            "Scanning Sets",
+            format!("Scanning set {} ({}/{})", set_root.name, set_index + 1, total_set_count),
+        )?;
 
-        let set_entry = (|| -> Result<ArbitrageScannerSetEntry> {
-            let set_model = get_or_build_scanner_price_model(
-                &observatory_connection,
-                &mut shared_price_model_cache,
-                set_root.item_id,
-                &set_root.slug,
-                &mut refreshed_statistics_count,
+        let set_model = resolve_scanner_price_model_with_retry(
+            &mut on_progress,
+            &started_at,
+            completed_task_count,
+            total_task_count,
+            &mut runtime,
+            &observatory_connection,
+            &mut shared_price_model_cache,
+            &mut refreshed_statistics_count,
+            &mut skipped_entry_count,
+            &mut skipped_entries,
+            set_root.item_id,
+            &set_root.slug,
+            &set_root.name,
+            "Scanning Sets",
+            Some(set_root.name.clone()),
+            None,
+        )?;
+        refreshed_set_count += 1;
+        completed_task_count += 1;
+
+        let mut component_models = Vec::with_capacity(components.len());
+        for (component_index, component) in components.iter().enumerate() {
+            if arbitrage_scanner_stop_requested(&observatory_connection)? {
+                was_stopped = true;
+                break;
+            }
+
+            runtime.current_set_name = Some(set_root.name.clone());
+            runtime.current_component_name = Some(component.component_name.clone());
+            runtime.retrying_item_name = None;
+            runtime.retry_attempt = None;
+            emit_running_scanner_progress(
+                &mut on_progress,
+                &started_at,
+                completed_task_count,
+                total_task_count,
+                &runtime,
+                "Scanning Sets",
+                format!(
+                    "Scanning set {} · Component {}/{}: {}",
+                    set_root.name,
+                    component_index + 1,
+                    components.len(),
+                    component.component_name
+                ),
             )?;
-            refreshed_set_count += 1;
 
-            let mut component_models = Vec::new();
-            for component in components {
-                let model = if let Some(component_item_id) = component.component_item_id {
-                    get_or_build_scanner_price_model(
-                        &observatory_connection,
-                        &mut shared_price_model_cache,
-                        component_item_id,
-                        &component.component_slug,
-                        &mut refreshed_statistics_count,
-                    )?
-                } else {
-                    None
-                };
-                component_models.push(model);
-            }
-
-            Ok(build_arbitrage_set_entry(
-                set_root,
-                set_model.as_ref(),
-                components,
-                &component_models,
-            ))
-        })();
-
-        match set_entry {
-            Ok(entry) => results.push(entry),
-            Err(error) => {
-                skipped_entry_count += 1;
-                eprintln!(
-                    "[scanner] failed to process set '{}' (item_id={}): {}",
-                    set_root.slug, set_root.item_id, error
-                );
-            }
+            let model = if let Some(component_item_id) = component.component_item_id {
+                resolve_scanner_price_model_with_retry(
+                    &mut on_progress,
+                    &started_at,
+                    completed_task_count,
+                    total_task_count,
+                    &mut runtime,
+                    &observatory_connection,
+                    &mut shared_price_model_cache,
+                    &mut refreshed_statistics_count,
+                    &mut skipped_entry_count,
+                    &mut skipped_entries,
+                    component_item_id,
+                    &component.component_slug,
+                    &component.component_name,
+                    "Scanning Sets",
+                    Some(set_root.name.clone()),
+                    Some(component.component_name.clone()),
+                )?
+            } else {
+                None
+            };
+            component_models.push(model);
+            runtime.completed_component_count += 1;
+            completed_task_count += 1;
+            runtime.retrying_item_name = None;
+            runtime.retry_attempt = None;
+            emit_running_scanner_progress(
+                &mut on_progress,
+                &started_at,
+                completed_task_count,
+                total_task_count,
+                &runtime,
+                "Scanning Sets",
+                format!(
+                    "Completed component {}/{} for {}. {} item(s) skipped so far.",
+                    component_index + 1,
+                    components.len(),
+                    set_root.name,
+                    runtime.skipped_entry_count
+                ),
+            )?;
         }
+
+        if was_stopped {
+            break;
+        }
+
+        results.push(build_arbitrage_set_entry(
+            set_root,
+            set_model.as_ref(),
+            components,
+            &component_models,
+        ));
+        runtime.completed_set_count += 1;
+        runtime.current_component_name = None;
+        runtime.retrying_item_name = None;
+        runtime.retry_attempt = None;
+        emit_running_scanner_progress(
+            &mut on_progress,
+            &started_at,
+            completed_task_count,
+            total_task_count,
+            &runtime,
+            "Scanning Sets",
+            format!(
+                "Completed set {} ({}/{}).",
+                set_root.name, runtime.completed_set_count, total_set_count
+            ),
+        )?;
     }
 
     let relic_roi_results = if was_stopped {
@@ -6944,45 +7361,75 @@ fn build_arbitrage_scanner_inner(
                 break;
             }
 
-            let progress_value = if total_work_items == 0 {
-                100.0
-            } else {
-                (((scanned_sets.len() + index) as f64 / total_work_items as f64) * 100.0)
-                    .clamp(0.0, 99.0)
-            };
-            on_progress(ArbitrageScannerProgress {
-                scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
-                status: "running".to_string(),
-                progress_value,
-                stage_label: "Scanning Relics".to_string(),
-                status_text: format!(
+            runtime.current_set_name = Some(relic_root.name.clone());
+            runtime.current_component_name = None;
+            runtime.retrying_item_name = None;
+            runtime.retry_attempt = None;
+            emit_running_scanner_progress(
+                &mut on_progress,
+                &started_at,
+                completed_task_count,
+                total_task_count,
+                &runtime,
+                "Scanning Relics",
+                format!(
                     "Scanning relic {} ({}/{})",
                     relic_root.name,
                     index + 1,
                     relic_roots.len()
                 ),
-                updated_at: format_timestamp(now_utc())?,
-                started_at: Some(started_at.clone()),
-                last_completed_at: None,
-                last_error: None,
-            });
-            match build_relic_roi_entry(
-                &catalog_connection,
-                relic_root,
-                &observatory_connection,
-                &mut shared_price_model_cache,
-                &mut refreshed_statistics_count,
-            ) {
+            )?;
+            match build_relic_roi_entry(&catalog_connection, relic_root, |item_id, slug, name| {
+                resolve_scanner_price_model_with_retry(
+                    &mut on_progress,
+                    &started_at,
+                    completed_task_count,
+                    total_task_count,
+                    &mut runtime,
+                    &observatory_connection,
+                    &mut shared_price_model_cache,
+                    &mut refreshed_statistics_count,
+                    &mut skipped_entry_count,
+                    &mut skipped_entries,
+                    item_id,
+                    slug,
+                    name,
+                    "Scanning Relics",
+                    Some(relic_root.name.clone()),
+                    Some(name.to_string()),
+                )
+            }) {
                 Ok(Some(entry)) => relic_entries.push(entry),
                 Ok(None) => {}
                 Err(error) => {
                     skipped_entry_count += 1;
+                    runtime.skipped_entry_count = skipped_entry_count;
+                    skipped_entries.push(ScannerSkippedEntry {
+                        name: relic_root.name.clone(),
+                        reason: error.to_string(),
+                    });
                     eprintln!(
                         "[scanner] failed to process relic '{}' (item_id={}): {}",
                         relic_root.slug, relic_root.item_id, error
                     );
                 }
             }
+            completed_task_count += 1;
+            emit_running_scanner_progress(
+                &mut on_progress,
+                &started_at,
+                completed_task_count,
+                total_task_count,
+                &runtime,
+                "Scanning Relics",
+                format!(
+                    "Completed relic {} ({}/{}). {} item(s) skipped so far.",
+                    relic_root.name,
+                    index + 1,
+                    relic_roots.len(),
+                    runtime.skipped_entry_count
+                ),
+            )?;
         }
 
         if was_stopped {
@@ -7040,6 +7487,15 @@ fn build_arbitrage_scanner_inner(
         .count();
 
     let computed_at = format_timestamp(now_utc())?;
+    let skipped_summary_text = if skipped_entries.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} scanner entr{} skipped.",
+            skipped_entries.len(),
+            if skipped_entries.len() == 1 { "y was" } else { "ies were" }
+        ))
+    };
 
     Ok(ArbitrageScannerRunOutcome {
         response: ArbitrageScannerResponse {
@@ -7052,6 +7508,8 @@ fn build_arbitrage_scanner_inner(
             refreshed_set_count,
             refreshed_statistics_count,
             skipped_entry_count,
+            skipped_entries,
+            skipped_summary_text,
             scanned_relic_count: relic_roi_results.len(),
             relic_opportunity_count,
             results,
@@ -8054,8 +8512,17 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
         started_at: Some(started_at.clone()),
         last_completed_at: current_state.progress.last_completed_at.clone(),
         last_error: None,
+        current_set_name: None,
+        current_component_name: None,
+        completed_set_count: 0,
+        total_set_count: 0,
+        completed_component_count: 0,
+        total_component_count: 0,
+        skipped_entry_count: 0,
+        retrying_item_name: None,
+        retry_attempt: None,
     };
-    persist_arbitrage_scanner_progress(&state_connection, &initial_progress)
+    persist_arbitrage_scanner_progress_with_stop_reset(&state_connection, &initial_progress, true)
         .map_err(|error| error.to_string())?;
     emit_arbitrage_scanner_progress(&app, &initial_progress);
 
@@ -8067,9 +8534,47 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
             Ok(connection) => connection,
             Err(_) => return,
         };
+        let live_progress = Arc::new(Mutex::new(initial_progress.clone()));
+        let heartbeat_stop = Arc::new(AtomicBool::new(false));
+        let heartbeat_progress = Arc::clone(&live_progress);
+        let heartbeat_stop_flag = Arc::clone(&heartbeat_stop);
+        let heartbeat_app = worker_app.clone();
+        let heartbeat_handle = std::thread::Builder::new()
+            .name("warstonks-arbitrage-scanner-heartbeat".to_string())
+            .spawn(move || {
+                let heartbeat_connection = match open_market_observatory_database(&heartbeat_app) {
+                    Ok(connection) => connection,
+                    Err(_) => return,
+                };
+                while !heartbeat_stop_flag.load(AtomicOrdering::Relaxed) {
+                    std::thread::sleep(Duration::from_secs(ARBITRAGE_SCANNER_HEARTBEAT_SECONDS));
+                    if heartbeat_stop_flag.load(AtomicOrdering::Relaxed) {
+                        break;
+                    }
+
+                    let mut progress = match heartbeat_progress.lock() {
+                        Ok(guard) => guard.clone(),
+                        Err(_) => break,
+                    };
+                    if progress.status != "running" {
+                        continue;
+                    }
+                    progress.updated_at = format_timestamp(now_utc())
+                        .unwrap_or_else(|_| progress.updated_at.clone());
+                    let _ = persist_arbitrage_scanner_progress(&heartbeat_connection, &progress);
+                    emit_arbitrage_scanner_progress(&heartbeat_app, &progress);
+                    if let Ok(mut guard) = heartbeat_progress.lock() {
+                        *guard = progress;
+                    }
+                }
+            })
+            .ok();
         let emit_progress = |progress: ArbitrageScannerProgress,
                              connection: &Connection,
                              app: &tauri::AppHandle| {
+            if let Ok(mut guard) = live_progress.lock() {
+                *guard = progress.clone();
+            }
             let _ = persist_arbitrage_scanner_progress(connection, &progress);
             emit_arbitrage_scanner_progress(app, &progress);
         };
@@ -8091,8 +8596,31 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                         started_at: Some(started_at.clone()),
                         last_completed_at: current_state.progress.last_completed_at.clone(),
                         last_error: None,
+                        current_set_name: None,
+                        current_component_name: None,
+                        completed_set_count: outcome.response.scanned_set_count.min(
+                            outcome.response.results.len(),
+                        ),
+                        total_set_count: outcome.response.scanned_set_count,
+                        completed_component_count: 0,
+                        total_component_count: outcome.response.scanned_component_count,
+                        skipped_entry_count: outcome.skipped_entry_count,
+                        retrying_item_name: None,
+                        retry_attempt: None,
                     };
-                    emit_progress(progress, &progress_connection, &worker_app);
+                    if let Ok(mut guard) = live_progress.lock() {
+                        *guard = progress.clone();
+                    }
+                    let _ = persist_arbitrage_scanner_progress_with_stop_reset(
+                        &progress_connection,
+                        &progress,
+                        true,
+                    );
+                    emit_arbitrage_scanner_progress(&worker_app, &progress);
+                    heartbeat_stop.store(true, AtomicOrdering::Relaxed);
+                    if let Some(handle) = heartbeat_handle {
+                        let _ = handle.join();
+                    }
                     return;
                 }
 
@@ -8120,8 +8648,25 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                     started_at: Some(started_at.clone()),
                     last_completed_at: Some(response.computed_at.clone()),
                     last_error: None,
+                    current_set_name: None,
+                    current_component_name: None,
+                    completed_set_count: response.scanned_set_count,
+                    total_set_count: response.scanned_set_count,
+                    completed_component_count: total_component_count_from_response(&response),
+                    total_component_count: total_component_count_from_response(&response),
+                    skipped_entry_count,
+                    retrying_item_name: None,
+                    retry_attempt: None,
                 };
-                emit_progress(progress, &progress_connection, &worker_app);
+                if let Ok(mut guard) = live_progress.lock() {
+                    *guard = progress.clone();
+                }
+                let _ = persist_arbitrage_scanner_progress_with_stop_reset(
+                    &progress_connection,
+                    &progress,
+                    true,
+                );
+                emit_arbitrage_scanner_progress(&worker_app, &progress);
             }
             Err(error) => {
                 let updated_at = format_timestamp(now_utc()).unwrap_or_else(|_| started_at.clone());
@@ -8135,9 +8680,30 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                     started_at: Some(started_at.clone()),
                     last_completed_at: current_state.progress.last_completed_at.clone(),
                     last_error: Some(error.to_string()),
+                    current_set_name: None,
+                    current_component_name: None,
+                    completed_set_count: current_state.progress.completed_set_count,
+                    total_set_count: current_state.progress.total_set_count,
+                    completed_component_count: current_state.progress.completed_component_count,
+                    total_component_count: current_state.progress.total_component_count,
+                    skipped_entry_count: current_state.progress.skipped_entry_count,
+                    retrying_item_name: None,
+                    retry_attempt: None,
                 };
-                emit_progress(progress, &progress_connection, &worker_app);
+                if let Ok(mut guard) = live_progress.lock() {
+                    *guard = progress.clone();
+                }
+                let _ = persist_arbitrage_scanner_progress_with_stop_reset(
+                    &progress_connection,
+                    &progress,
+                    true,
+                );
+                emit_arbitrage_scanner_progress(&worker_app, &progress);
             }
+        }
+        heartbeat_stop.store(true, AtomicOrdering::Relaxed);
+        if let Some(handle) = heartbeat_handle {
+            let _ = handle.join();
         }
     });
 
@@ -8208,6 +8774,15 @@ mod tests {
             started_at: None,
             last_completed_at: None,
             last_error: None,
+            current_set_name: Some("Example Set".to_string()),
+            current_component_name: Some("Example Component".to_string()),
+            completed_set_count: 1,
+            total_set_count: 10,
+            completed_component_count: 2,
+            total_component_count: 40,
+            skipped_entry_count: 0,
+            retrying_item_name: Some("Example Component".to_string()),
+            retry_attempt: Some(1),
         };
 
         let normalized = stale_arbitrage_scanner_progress(&stale_progress)
@@ -8220,6 +8795,56 @@ mod tests {
             normalized.last_error.as_deref(),
             Some("Previous background scan became stale.")
         );
+        assert_eq!(normalized.current_set_name.as_deref(), Some("Example Set"));
+        assert_eq!(
+            normalized.current_component_name.as_deref(),
+            Some("Example Component")
+        );
+        assert_eq!(normalized.retrying_item_name, None);
+        assert_eq!(normalized.retry_attempt, None);
+    }
+
+    #[test]
+    fn preserves_scanner_stop_request_during_running_progress_updates() {
+        let connection = Connection::open_in_memory().expect("in-memory connection");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        let running_progress = ArbitrageScannerProgress {
+            scanner_key: "arbitrage".to_string(),
+            status: "running".to_string(),
+            progress_value: 12.0,
+            stage_label: "Scanning".to_string(),
+            status_text: "Scanning components".to_string(),
+            updated_at: super::format_timestamp(super::now_utc()).unwrap(),
+            started_at: None,
+            last_completed_at: None,
+            last_error: None,
+            current_set_name: Some("Akgmagnus Prime Set".to_string()),
+            current_component_name: Some("Akmagnus Prime Barrel".to_string()),
+            completed_set_count: 0,
+            total_set_count: 10,
+            completed_component_count: 1,
+            total_component_count: 40,
+            skipped_entry_count: 0,
+            retrying_item_name: None,
+            retry_attempt: None,
+        };
+
+        super::persist_arbitrage_scanner_progress_with_stop_reset(&connection, &running_progress, true)
+            .expect("initial progress");
+        super::request_arbitrage_scanner_stop(&connection).expect("request stop");
+
+        let updated_progress = ArbitrageScannerProgress {
+            progress_value: 18.0,
+            status_text: "Scanning next component".to_string(),
+            updated_at: super::format_timestamp(super::now_utc()).unwrap(),
+            completed_component_count: 2,
+            ..running_progress
+        };
+        super::persist_arbitrage_scanner_progress(&connection, &updated_progress)
+            .expect("heartbeat progress");
+
+        assert!(super::arbitrage_scanner_stop_requested(&connection).expect("stop requested"));
     }
 
     fn sample_snapshot(captured_at: &str) -> MarketSnapshot {
