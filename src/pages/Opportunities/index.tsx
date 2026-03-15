@@ -97,7 +97,7 @@ type ScreenshotImportPreviewRow = SetCompletionScreenshotOcrRow & {
   remapQuery: string;
 };
 
-const SCREENSHOT_IMPORT_ZOOM_SCALE = 1700;
+const SCREENSHOT_IMPORT_ZOOM_SCALE = 2550;
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -567,6 +567,9 @@ function SetCompletionScreenshotImportModal({
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const [zoomDragging, setZoomDragging] = useState(false);
   const zoomDraggingRef = useRef(false);
+  const dragStartPointRef = useRef<{ x: number; y: number } | null>(null);
+  const dragStartSampleRef = useRef<{ x: number; y: number } | null>(null);
+  const [previewAspectRatio, setPreviewAspectRatio] = useState(1.6);
 
   if (!open) {
     return null;
@@ -583,19 +586,23 @@ function SetCompletionScreenshotImportModal({
     }
   };
 
-  const updateSampleFromZoomEvent = (event: {
+  const updateSampleFromZoomDrag = (event: {
     currentTarget: HTMLDivElement;
     clientX: number;
     clientY: number;
   }) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    const currentX = colorSample?.x ?? 0.5;
-    const currentY = colorSample?.y ?? 0.5;
-    const deltaX = (event.clientX - rect.left - rect.width / 2) / (rect.width * (SCREENSHOT_IMPORT_ZOOM_SCALE / 100));
-    const deltaY = (event.clientY - rect.top - rect.height / 2) / (rect.height * (SCREENSHOT_IMPORT_ZOOM_SCALE / 100));
+    const dragStartPoint = dragStartPointRef.current;
+    const dragStartSample = dragStartSampleRef.current;
+    if (!dragStartPoint || !dragStartSample) {
+      return;
+    }
+    const zoomFactor = SCREENSHOT_IMPORT_ZOOM_SCALE / 100;
+    const deltaX = (event.clientX - dragStartPoint.x) / (rect.width * zoomFactor);
+    const deltaY = (event.clientY - dragStartPoint.y) / (rect.height * zoomFactor);
     updateSampleFromPreviewPoint(
-      Math.max(0, Math.min(1, currentX + deltaX)),
-      Math.max(0, Math.min(1, currentY + deltaY)),
+      Math.max(0, Math.min(1, dragStartSample.x - deltaX)),
+      Math.max(0, Math.min(1, dragStartSample.y - deltaY)),
     );
   };
 
@@ -706,6 +713,12 @@ function SetCompletionScreenshotImportModal({
                       ref={previewImageRef}
                       src={previewUrl}
                       alt="Prime components screenshot preview"
+                      onLoad={(event) => {
+                        const image = event.currentTarget;
+                        if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+                          setPreviewAspectRatio(image.naturalWidth / image.naturalHeight);
+                        }
+                      }}
                     />
                   </button>
                   <div
@@ -771,32 +784,51 @@ function SetCompletionScreenshotImportModal({
                   <div className="screenshot-import-color-picker-row">
                     <div
                       className={`screenshot-import-zoom-preview${zoomDragging ? ' dragging' : ''}`}
-                      style={{
-                        backgroundImage: `url(${previewUrl})`,
-                        backgroundPosition: `${(colorSample?.x ?? 0.5) * 100}% ${(colorSample?.y ?? 0.5) * 100}%`,
-                        backgroundSize: `${SCREENSHOT_IMPORT_ZOOM_SCALE}%`,
-                      }}
+                      style={{ aspectRatio: `${previewAspectRatio}` }}
                       onPointerDown={(event) => {
                         event.currentTarget.setPointerCapture(event.pointerId);
                         zoomDraggingRef.current = true;
+                        dragStartPointRef.current = {
+                          x: event.clientX,
+                          y: event.clientY,
+                        };
+                        dragStartSampleRef.current = {
+                          x: colorSample?.x ?? 0.5,
+                          y: colorSample?.y ?? 0.5,
+                        };
                         setZoomDragging(true);
-                        updateSampleFromZoomEvent(event);
                       }}
                       onPointerMove={(event) => {
                         if (!zoomDraggingRef.current) {
                           return;
                         }
-                        updateSampleFromZoomEvent(event);
+                        updateSampleFromZoomDrag(event);
                       }}
                       onPointerUp={() => {
                         zoomDraggingRef.current = false;
+                        dragStartPointRef.current = null;
+                        dragStartSampleRef.current = null;
                         setZoomDragging(false);
                       }}
                       onPointerCancel={() => {
                         zoomDraggingRef.current = false;
+                        dragStartPointRef.current = null;
+                        dragStartSampleRef.current = null;
                         setZoomDragging(false);
                       }}
                     >
+                      <img
+                        className="screenshot-import-zoom-image"
+                        src={previewUrl}
+                        alt=""
+                        draggable={false}
+                        style={{
+                          width: `${SCREENSHOT_IMPORT_ZOOM_SCALE}%`,
+                          height: `${SCREENSHOT_IMPORT_ZOOM_SCALE}%`,
+                          left: `calc(50% - ${(colorSample?.x ?? 0.5) * SCREENSHOT_IMPORT_ZOOM_SCALE}%)`,
+                          top: `calc(50% - ${(colorSample?.y ?? 0.5) * SCREENSHOT_IMPORT_ZOOM_SCALE}%)`,
+                        }}
+                      />
                       <div className="screenshot-import-zoom-crosshair" />
                     </div>
                     <div className="screenshot-import-color-readout">
