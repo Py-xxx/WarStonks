@@ -450,12 +450,14 @@ export async function getWfmItemOrders(
   variantKey: string | null,
   sellerMode: SellerMode,
   requestPriority?: 'instant' | 'high' | 'medium' | 'low' | 'background',
+  requestSource?: 'watchlist' | 'quick-view' | 'trades' | 'generic',
 ): Promise<WfmItemOrdersResponse> {
   return invoke<WfmItemOrdersResponse>('get_wfm_item_orders', {
     slug,
     variantKey,
     sellerMode,
     requestPriority,
+    requestSource,
   });
 }
 

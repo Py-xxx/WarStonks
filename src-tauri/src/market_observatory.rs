@@ -2430,6 +2430,7 @@ fn fetch_filtered_orders_with_cancel<C>(
     variant_key: &str,
     seller_mode: &str,
     priority: RequestPriority,
+    request_label: &str,
     mut is_cancelled: C,
 ) -> Result<(
     Option<String>,
@@ -2449,7 +2450,7 @@ where
             .header("Platform", WFM_PLATFORM_HEADER)
             .header("Crossplay", WFM_CROSSPLAY_HEADER),
         priority,
-        "request WFM orders",
+        request_label,
         Some(format!("orders:{slug}")),
         || is_cancelled(),
     )?;
@@ -2508,7 +2509,36 @@ fn fetch_filtered_orders(
     Vec<WfmDetailedOrder>,
     MarketSnapshot,
 )> {
-    fetch_filtered_orders_with_cancel(slug, variant_key, seller_mode, priority, || false)
+    fetch_filtered_orders_with_cancel(
+        slug,
+        variant_key,
+        seller_mode,
+        priority,
+        "request WFM orders",
+        || false,
+    )
+}
+
+fn fetch_filtered_orders_labeled(
+    slug: &str,
+    variant_key: &str,
+    seller_mode: &str,
+    priority: RequestPriority,
+    request_label: &str,
+) -> Result<(
+    Option<String>,
+    Vec<WfmDetailedOrder>,
+    Vec<WfmDetailedOrder>,
+    MarketSnapshot,
+)> {
+    fetch_filtered_orders_with_cancel(
+        slug,
+        variant_key,
+        seller_mode,
+        priority,
+        request_label,
+        || false,
+    )
 }
 
 fn persist_snapshot(
@@ -7344,18 +7374,30 @@ pub async fn get_wfm_item_orders(
     variant_key: Option<String>,
     seller_mode: Option<String>,
     request_priority: Option<String>,
+    request_source: Option<String>,
 ) -> Result<WfmItemOrdersResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let variant_key = normalize_variant_key(variant_key.as_deref());
         let seller_mode = normalize_seller_mode(seller_mode.as_deref());
         let request_priority =
             RequestPriority::from_wire(request_priority.as_deref(), RequestPriority::Instant);
+        let request_label = match request_source
+            .as_deref()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("watchlist") => "request WFM watchlist orders",
+            Some("quick-view") => "request WFM quick view orders",
+            Some("trades") => "request WFM trade orders",
+            _ => "request WFM orders",
+        };
         let (api_version, sell_orders, buy_orders, snapshot) =
-            fetch_filtered_orders(
+            fetch_filtered_orders_labeled(
                 &slug,
                 &variant_key,
                 &seller_mode,
                 request_priority,
+                request_label,
             )?;
         Ok::<_, anyhow::Error>(WfmItemOrdersResponse {
             api_version,
