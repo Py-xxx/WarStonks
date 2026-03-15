@@ -131,6 +131,27 @@ export interface TrackingRefreshSummary {
   dueItems: number;
 }
 
+export interface SetCompletionPaddleOcrBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SetCompletionPaddleOcrCell {
+  rowId: string;
+  tileIndex: number;
+  nameBox: SetCompletionPaddleOcrBox | null;
+  quantityBox: SetCompletionPaddleOcrBox | null;
+}
+
+export interface SetCompletionPaddleOcrReading {
+  rowId: string;
+  tileIndex: number;
+  detectedText: string;
+  detectedQuantity: string | null;
+}
+
 export interface WorldStateMarketNewsResponse {
   news: WfstatNewsItem[];
   flashSales: WfstatFlashSale[];
@@ -596,6 +617,16 @@ export async function applySetCompletionScreenshotImport(
 ): Promise<SetCompletionOwnedItem[]> {
   return invoke<SetCompletionOwnedItem[]>('apply_set_completion_screenshot_import', {
     rows,
+  });
+}
+
+export async function runSetCompletionPaddleOcr(input: {
+  imageDataUrl: string;
+  cells: SetCompletionPaddleOcrCell[];
+}): Promise<SetCompletionPaddleOcrReading[]> {
+  return invoke<SetCompletionPaddleOcrReading[]>('run_set_completion_paddle_ocr', {
+    imageDataUrl: input.imageDataUrl,
+    cells: input.cells,
   });
 }
 

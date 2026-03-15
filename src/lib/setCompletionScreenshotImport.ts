@@ -1,6 +1,6 @@
-import { createWorker, PSM } from 'tesseract.js';
 import ssIgnoreAssetUrl from '../assets/set-completion/ss-ignore.png';
 import ssQtyAssetUrl from '../assets/set-completion/ss-qty.png';
+import { runSetCompletionPaddleOcr } from './tauriClient';
 
 export interface SetCompletionImportCrop {
   left: number;
@@ -70,11 +70,6 @@ interface TemplateMatch {
   score: number;
 }
 
-interface OcrTextCandidate {
-  text: string;
-  confidence: number;
-}
-
 const STRICT_SET_COMPLETION_IMPORT_COLORS = [
   { red: 0x8f, green: 0x80, blue: 0x52, hex: '#8f8052' },
   { red: 0xbe, green: 0xa9, blue: 0x66, hex: '#bea966' },
@@ -105,24 +100,6 @@ const NAME_REGION = {
 };
 const QTY_TEMPLATE_RATIOS = [0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3];
 const IGNORE_TEMPLATE_RATIOS = [0.15, 0.17, 0.19, 0.21, 0.23, 0.25];
-const PRIME_COMPONENT_HINTS = [
-  'prime',
-  'blueprint',
-  'systems',
-  'neuroptics',
-  'chassis',
-  'receiver',
-  'barrel',
-  'blade',
-  'handle',
-  'stock',
-  'grip',
-  'gauntlet',
-  'disc',
-  'ornament',
-  'harness',
-];
-
 const DEFAULT_CROP: SetCompletionImportCrop = {
   left: 0,
   top: 0,
@@ -136,7 +113,6 @@ let templatePromise:
       ignore: TemplateMask;
     }>
   | null = null;
-let ocrWorkerPromise: Promise<Awaited<ReturnType<typeof createWorker>>> | null = null;
 
 export function getDefaultSetCompletionImportCrop(): SetCompletionImportCrop {
   return { ...DEFAULT_CROP };
@@ -268,16 +244,6 @@ async function loadTemplates(): Promise<{ qty: TemplateMask; ignore: TemplateMas
   return templatePromise;
 }
 
-async function getOcrWorker(): Promise<Awaited<ReturnType<typeof createWorker>>> {
-  if (!ocrWorkerPromise) {
-    ocrWorkerPromise = createWorker('eng', 1, {
-      logger: () => undefined,
-      errorHandler: () => undefined,
-    });
-  }
-  return ocrWorkerPromise;
-}
-
 async function loadAssetMask(url: string): Promise<TemplateMask> {
   const image = new Image();
   image.decoding = 'async';
@@ -329,29 +295,6 @@ function extractCropCanvas(
     Math.round(sourceCanvas.height * (1 - crop.top - crop.bottom)),
   );
   return extractPixelCanvas(sourceCanvas, cropX, cropY, cropWidth, cropHeight);
-}
-
-function extractBoxCanvas(
-  sourceCanvas: HTMLCanvasElement,
-  box: SetCompletionDetectionBox,
-  padding?: {
-    left: number;
-    right: number;
-    top: number;
-    bottom: number;
-  },
-): HTMLCanvasElement {
-  const leftPadding = padding?.left ?? 0;
-  const rightPadding = padding?.right ?? 0;
-  const topPadding = padding?.top ?? 0;
-  const bottomPadding = padding?.bottom ?? 0;
-  const x = clamp(box.x - leftPadding, 0, Math.max(0, sourceCanvas.width - 1));
-  const y = clamp(box.y - topPadding, 0, Math.max(0, sourceCanvas.height - 1));
-  const maxRight = Math.max(0, sourceCanvas.width - 1);
-  const maxBottom = Math.max(0, sourceCanvas.height - 1);
-  const right = clamp(box.x + box.width - 1 + rightPadding, x, maxRight);
-  const bottom = clamp(box.y + box.height - 1 + bottomPadding, y, maxBottom);
-  return extractPixelCanvas(sourceCanvas, x, y, right - x + 1, bottom - y + 1);
 }
 
 function buildTileDescriptors(
@@ -410,261 +353,21 @@ async function readDetectedTextFromCells(
     return [];
   }
 
-  const worker = await getOcrWorker();
-  const readings: SetCompletionDetectedReading[] = [];
+  onProgress?.({
+    progress: 1,
+    stage: 'read',
+    detail: `Running PaddleOCR on ${cells.length} detected cells…`,
+  });
 
-  for (let index = 0; index < cells.length; index += 1) {
-    const cell = cells[index];
-    onProgress?.({
-      progress: cells.length ? index / cells.length : 0,
-      stage: 'read',
-      detail: `Reading detected text ${index + 1}/${cells.length}…`,
-    });
-
-    const [detectedText, detectedQuantity] = await Promise.all([
-      cell.nameBox
-        ? readNameText(worker, maskedCanvas, cell.nameBox)
-        : Promise.resolve(''),
-      cell.quantityBox
-        ? readQuantityText(worker, maskedCanvas, cell.quantityBox)
-        : Promise.resolve(null),
-    ]);
-
-    readings.push({
+  return runSetCompletionPaddleOcr({
+    imageDataUrl: maskedCanvas.toDataURL('image/png'),
+    cells: cells.map((cell) => ({
       rowId: cell.rowId,
       tileIndex: cell.tileIndex,
-      detectedText,
-      detectedQuantity,
-    });
-  }
-
-  return readings;
-}
-
-async function readNameText(
-  worker: Awaited<ReturnType<typeof createWorker>>,
-  maskedCanvas: HTMLCanvasElement,
-  box: SetCompletionDetectionBox,
-): Promise<string> {
-  const maskedRegion = extractBoxCanvas(maskedCanvas, box, {
-    left: 14,
-    right: 14,
-    top: 6,
-    bottom: 10,
+      nameBox: cell.nameBox,
+      quantityBox: cell.quantityBox,
+    })),
   });
-  const variants = [
-    { canvas: upscaleCanvas(trimTransparentColumns(maskedRegion), 2), psm: PSM.SINGLE_BLOCK },
-    {
-      canvas: upscaleCanvas(thickenMaskCanvas(trimTransparentColumns(maskedRegion)), 2),
-      psm: PSM.SINGLE_BLOCK,
-    },
-    {
-      canvas: upscaleCanvas(thickenMaskCanvas(trimTransparentColumns(maskedRegion)), 2),
-      psm: PSM.SPARSE_TEXT,
-    },
-  ];
-
-  const candidates: OcrTextCandidate[] = [];
-  for (const variant of variants) {
-    const candidate = await recognizeTextCandidate(worker, variant.canvas, variant.psm, {
-      whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -',
-      preserveSpaces: true,
-    });
-    if (candidate.text) {
-      candidates.push(candidate);
-    }
-  }
-
-  const bestCandidate = pickBestNameCandidate(candidates);
-  return bestCandidate?.text ?? '';
-}
-
-async function readQuantityText(
-  worker: Awaited<ReturnType<typeof createWorker>>,
-  maskedCanvas: HTMLCanvasElement,
-  box: SetCompletionDetectionBox,
-): Promise<string | null> {
-  const maskedRegion = trimTransparentColumns(
-    extractBoxCanvas(maskedCanvas, box, {
-      left: 0,
-      right: 4,
-      top: 4,
-      bottom: 4,
-    }),
-  );
-  const variants = [
-    { canvas: upscaleCanvas(maskedRegion, 3), psm: PSM.SINGLE_CHAR },
-    { canvas: upscaleCanvas(maskedRegion, 3), psm: PSM.SINGLE_WORD },
-    { canvas: upscaleCanvas(thickenMaskCanvas(maskedRegion), 3), psm: PSM.SINGLE_CHAR },
-    { canvas: upscaleCanvas(thickenMaskCanvas(maskedRegion), 3), psm: PSM.SINGLE_WORD },
-  ];
-
-  const candidates: OcrTextCandidate[] = [];
-  for (const variant of variants) {
-    const candidate = await recognizeTextCandidate(worker, variant.canvas, variant.psm, {
-      whitelist: '0123456789',
-      preserveSpaces: false,
-    });
-    const digits = candidate.text.match(/\d+/)?.[0] ?? '';
-    if (!digits) {
-      continue;
-    }
-    candidates.push({
-      text: digits,
-      confidence: candidate.confidence,
-    });
-  }
-
-  const bestCandidate = pickBestQuantityCandidate(candidates);
-  return bestCandidate?.text ?? null;
-}
-
-function normalizeDetectedText(value: string): string {
-  return value
-    .replace(/\r/g, ' ')
-    .replace(/\n+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-async function recognizeTextCandidate(
-  worker: Awaited<ReturnType<typeof createWorker>>,
-  canvas: HTMLCanvasElement,
-  psm: Tesseract.PSM,
-  options: {
-    whitelist: string;
-    preserveSpaces: boolean;
-  },
-): Promise<OcrTextCandidate> {
-  await worker.setParameters({
-    tessedit_pageseg_mode: psm,
-    preserve_interword_spaces: options.preserveSpaces ? '1' : '0',
-    tessedit_char_whitelist: options.whitelist,
-    user_defined_dpi: '300',
-  });
-  const { data } = await worker.recognize(canvas, {}, { text: true });
-  return {
-    text: normalizeDetectedText(data.text),
-    confidence: data.confidence ?? 0,
-  };
-}
-
-function pickBestNameCandidate(candidates: OcrTextCandidate[]): OcrTextCandidate | null {
-  let best: { candidate: OcrTextCandidate; score: number } | null = null;
-  for (const candidate of candidates) {
-    const score = scoreNameCandidate(candidate);
-    if (!best || score > best.score) {
-      best = { candidate, score };
-    }
-  }
-  return best?.candidate ?? null;
-}
-
-function scoreNameCandidate(candidate: OcrTextCandidate): number {
-  const text = candidate.text;
-  if (!text) {
-    return -1;
-  }
-  const normalized = text.toLowerCase();
-  const tokenCount = normalized.split(/\s+/).filter(Boolean).length;
-  const hintHits = PRIME_COMPONENT_HINTS.filter((hint) => normalized.includes(hint)).length;
-  const alphaNumericRatio =
-    normalized.replace(/[^a-z0-9]/g, '').length / Math.max(1, normalized.length);
-  return (
-    candidate.confidence * 0.55 +
-    normalized.length * 1.1 +
-    tokenCount * 8 +
-    hintHits * 14 +
-    (normalized.includes('prime') ? 18 : 0) +
-    alphaNumericRatio * 20
-  );
-}
-
-function pickBestQuantityCandidate(candidates: OcrTextCandidate[]): OcrTextCandidate | null {
-  let best: { candidate: OcrTextCandidate; score: number } | null = null;
-  for (const candidate of candidates) {
-    const digits = candidate.text;
-    const digitCount = digits.length;
-    const score =
-      candidate.confidence * 0.6 +
-      (digitCount <= 2 ? 20 : 0) +
-      (digits === '0' ? -30 : 0) +
-      Math.max(0, 12 - digitCount * 4);
-    if (!best || score > best.score) {
-      best = { candidate, score };
-    }
-  }
-  return best?.candidate ?? null;
-}
-
-function trimTransparentColumns(source: HTMLCanvasElement): HTMLCanvasElement {
-  const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
-  trimMaskToDenseColumns(canvas, {
-    thresholdRatio: 0.04,
-    minThreshold: 1,
-    padding: 2,
-  });
-  trimMaskToDenseRows(canvas, {
-    thresholdRatio: 0.04,
-    minThreshold: 1,
-    padding: 2,
-  });
-  return canvas;
-}
-
-function thickenMaskCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
-  const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return canvas;
-  }
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const sourceData = new Uint8ClampedArray(imageData.data);
-  const { data } = imageData;
-
-  for (let y = 1; y < canvas.height - 1; y += 1) {
-    for (let x = 1; x < canvas.width - 1; x += 1) {
-      const index = (y * canvas.width + x) * 4;
-      if (sourceData[index] > 180) {
-        continue;
-      }
-      let neighbors = 0;
-      for (let dy = -1; dy <= 1; dy += 1) {
-        for (let dx = -1; dx <= 1; dx += 1) {
-          if (dx === 0 && dy === 0) {
-            continue;
-          }
-          const neighborIndex = ((y + dy) * canvas.width + (x + dx)) * 4;
-          if (sourceData[neighborIndex] > 180) {
-            neighbors += 1;
-          }
-        }
-      }
-      if (neighbors >= 2) {
-        data[index] = 255;
-        data[index + 1] = 255;
-        data[index + 2] = 255;
-        data[index + 3] = 255;
-      }
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
-function upscaleCanvas(source: HTMLCanvasElement, scale: number): HTMLCanvasElement {
-  if (scale <= 1) {
-    return source;
-  }
-  const canvas = createCanvas(source.width * scale, source.height * scale);
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return source;
-  }
-  context.imageSmoothingEnabled = false;
-  context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  return canvas;
 }
 
 function analyzeTileMask(
