@@ -465,17 +465,23 @@ function deriveQuantityBox(
   }
 
   const rightShift = Math.max(1, Math.round(digitsBounds.width * 0.5));
+  const leftPadding = Math.max(1, Math.round(digitsBounds.width * 0.2));
+  const rightPadding = Math.max(1, Math.round(digitsBounds.width * 0.1));
   const verticalPadding = Math.max(2, Math.round(digitsBounds.height * 0.1));
   return {
     x:
-      badgeRegionRect.x +
-      stripX +
-      digitsBounds.x +
-      rightShift,
+      Math.max(
+        badgeRegionRect.x,
+        badgeRegionRect.x +
+          stripX +
+          digitsBounds.x +
+          rightShift -
+          leftPadding,
+      ),
     y: Math.max(0, badgeRegionRect.y + digitsBounds.y - verticalPadding),
     width: Math.max(
       1,
-      digitsBounds.width,
+      digitsBounds.width + leftPadding + rightPadding,
     ),
     height: Math.max(1, digitsBounds.height + verticalPadding * 2),
   };
