@@ -1,11 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  applySetCompletionScreenshotImport,
   getArbitrageScannerState,
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
   getSetCompletionOwnedItems,
+  matchSetCompletionScreenshotRows,
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
+import {
+  getDefaultSetCompletionImportCrop,
+  processSetCompletionInventoryScreenshot,
+  type SetCompletionImportCrop,
+  type SetCompletionScreenshotOcrRow,
+  type SetCompletionScreenshotProgress,
+} from '../../lib/setCompletionScreenshotImport';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { useAppStore } from '../../stores/useAppStore';
@@ -18,6 +27,7 @@ import type {
   RelicRefinementChanceProfile,
   RelicRoiDropEntry,
   RelicRoiEntry,
+  SetCompletionImportCandidate,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
 } from '../../types';
@@ -71,6 +81,128 @@ type PlannerCatalogItem = {
   name: string;
   imagePath: string | null;
 };
+
+type ScreenshotImportPreviewRow = SetCompletionScreenshotOcrRow & {
+  matchedItem: SetCompletionImportCandidate | null;
+  matchConfidence: number;
+  matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none' | 'manual';
+  matchStatus: 'matched' | 'matched-low-confidence' | 'unmatched';
+  matchReason: string;
+  removed: boolean;
+  remapQuery: string;
+};
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function mergeScreenshotImportRows(
+  ocrRows: SetCompletionScreenshotOcrRow[],
+  matchRows: Array<{
+    rowId: string;
+    matchedItem: SetCompletionImportCandidate | null;
+    confidence: number;
+    matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none';
+    status: 'matched' | 'matched-low-confidence' | 'unmatched';
+    reason: string;
+  }>,
+): ScreenshotImportPreviewRow[] {
+  const byId = new Map(matchRows.map((row) => [row.rowId, row]));
+  return ocrRows.map((row) => {
+    const matched = byId.get(row.rowId);
+    return {
+      ...row,
+      matchedItem: matched?.matchedItem ?? null,
+      matchConfidence: matched?.confidence ?? 0,
+      matchKind: matched?.matchKind ?? 'none',
+      matchStatus: matched?.status ?? 'unmatched',
+      matchReason: matched?.reason ?? 'No planner component match found.',
+      removed: false,
+      remapQuery: matched?.matchedItem?.name ?? row.detectedName,
+    };
+  });
+}
+
+function describeScreenshotImportRowState(row: ScreenshotImportPreviewRow): string {
+  if (row.removed) {
+    return 'Removed from import';
+  }
+  if (row.quantityState === 'unresolved') {
+    return 'Quantity unresolved';
+  }
+  if (row.matchStatus === 'unmatched' || !row.matchedItem) {
+    return 'Match required';
+  }
+  if (row.matchStatus === 'matched-low-confidence') {
+    return 'Low-confidence match';
+  }
+  return 'Ready to import';
+}
+
+function buildScreenshotImportApplyRows(
+  rows: ScreenshotImportPreviewRow[],
+): {
+  readyRows: Array<{
+    itemId: number | null;
+    slug: string;
+    name: string;
+    imagePath: string | null;
+    quantity: number;
+  }>;
+  blockedRows: ScreenshotImportPreviewRow[];
+} {
+  const readyRows: Array<{
+    itemId: number | null;
+    slug: string;
+    name: string;
+    imagePath: string | null;
+    quantity: number;
+  }> = [];
+  const blockedRows: ScreenshotImportPreviewRow[] = [];
+  const seenSlugs = new Set<string>();
+
+  for (const row of rows) {
+    if (row.removed) {
+      continue;
+    }
+    if (!row.matchedItem || row.quantity === null || row.quantityState === 'unresolved') {
+      blockedRows.push(row);
+      continue;
+    }
+    if (seenSlugs.has(row.matchedItem.slug)) {
+      blockedRows.push(row);
+      continue;
+    }
+    seenSlugs.add(row.matchedItem.slug);
+    readyRows.push({
+      itemId: row.matchedItem.itemId,
+      slug: row.matchedItem.slug,
+      name: row.matchedItem.name,
+      imagePath: row.matchedItem.imagePath,
+      quantity: row.quantity,
+    });
+  }
+
+  return { readyRows, blockedRows };
+}
+
+function filterPlannerCandidates(
+  candidates: PlannerCatalogItem[],
+  query: string,
+): PlannerCatalogItem[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return candidates.slice(0, 6);
+  }
+
+  return candidates
+    .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
+    .slice(0, 6);
+}
 
 function formatPlat(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -194,14 +326,6 @@ function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): s
   }
 
   return '';
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
 }
 
 function SetPlannerRow({
@@ -346,6 +470,302 @@ function SetPlannerRow({
   );
 }
 
+function SetCompletionScreenshotImportModal({
+  open,
+  fileInputRef,
+  previewUrl,
+  crop,
+  rows,
+  plannerCatalog,
+  processing,
+  applying,
+  progress,
+  errorMessage,
+  blockedRowCount,
+  readyRowCount,
+  activeRemapRowId,
+  onClose,
+  onPickFile,
+  onCropChange,
+  onReprocess,
+  onToggleRemove,
+  onRemapQueryChange,
+  onSelectRemap,
+  onSetActiveRemapRow,
+  onApply,
+}: {
+  open: boolean;
+  fileInputRef: { current: HTMLInputElement | null };
+  previewUrl: string | null;
+  crop: SetCompletionImportCrop;
+  rows: ScreenshotImportPreviewRow[];
+  plannerCatalog: PlannerCatalogItem[];
+  processing: boolean;
+  applying: boolean;
+  progress: SetCompletionScreenshotProgress | null;
+  errorMessage: string | null;
+  blockedRowCount: number;
+  readyRowCount: number;
+  activeRemapRowId: string | null;
+  onClose: () => void;
+  onPickFile: (file: File | null) => Promise<void>;
+  onCropChange: (nextCrop: SetCompletionImportCrop) => void;
+  onReprocess: () => Promise<void>;
+  onToggleRemove: (rowId: string) => void;
+  onRemapQueryChange: (rowId: string, value: string) => void;
+  onSelectRemap: (rowId: string, item: PlannerCatalogItem) => void;
+  onSetActiveRemapRow: (rowId: string | null) => void;
+  onApply: () => Promise<void>;
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <>
+      <button
+        className="modal-backdrop"
+        type="button"
+        aria-label="Close screenshot import"
+        onClick={onClose}
+      />
+      <div
+        className="settings-modal screenshot-import-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Import prime components from screenshot"
+      >
+        <div className="settings-modal-header">
+          <div className="settings-modal-title">
+            <span className="card-label">Set Completion Import</span>
+            <h3>Import Prime Components Screenshot</h3>
+          </div>
+          <div className="settings-modal-actions">
+            <button className="settings-close-btn" type="button" aria-label="Close" onClick={onClose}>
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-modal-body screenshot-import-body">
+          <div className="settings-form-card screenshot-import-left">
+            <div className="screenshot-import-toolbar">
+              <button
+                type="button"
+                className="settings-primary-btn"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Choose Screenshot
+              </button>
+              <button
+                type="button"
+                className="settings-secondary-btn"
+                onClick={() => {
+                  void onReprocess();
+                }}
+                disabled={!previewUrl || processing}
+              >
+                {processing ? 'Processing…' : 'Reprocess Crop'}
+              </button>
+              <input
+                ref={fileInputRef}
+                className="screenshot-import-file-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) => {
+                  void onPickFile(event.target.files?.[0] ?? null);
+                }}
+              />
+            </div>
+
+            <p className="watchlist-form-note">
+              Use a single screenshot from the in-game <strong>Prime Components</strong> tab. Only
+              the visible items in the image will be overwritten.
+            </p>
+
+            {progress ? (
+              <div className="scanner-inline-progress screenshot-import-progress">
+                <span className="scanner-progress-label">{progress.stage.toUpperCase()}</span>
+                <strong>{progress.detail}</strong>
+              </div>
+            ) : null}
+
+            {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
+
+            {previewUrl ? (
+              <>
+                <div className="screenshot-import-preview-shell">
+                  <img src={previewUrl} alt="Prime components screenshot preview" />
+                  <div
+                    className="screenshot-import-crop-overlay"
+                    style={{
+                      left: `${crop.left * 100}%`,
+                      top: `${crop.top * 100}%`,
+                      right: `${crop.right * 100}%`,
+                      bottom: `${crop.bottom * 100}%`,
+                    }}
+                  />
+                </div>
+
+                <div className="screenshot-import-crop-grid">
+                  {(
+                    [
+                      ['left', 'Left'],
+                      ['top', 'Top'],
+                      ['right', 'Right'],
+                      ['bottom', 'Bottom'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label key={key} className="settings-field">
+                      <span className="settings-field-label">{label} Crop</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={key === 'top' || key === 'bottom' ? 25 : 40}
+                        step={1}
+                        value={Math.round(crop[key] * 100)}
+                        onChange={(event) =>
+                          onCropChange({
+                            ...crop,
+                            [key]: Number(event.target.value) / 100,
+                          })
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="opportunities-placeholder">
+                Choose a screenshot to start local OCR and preview the visible prime components.
+              </div>
+            )}
+          </div>
+
+          <div className="settings-form-card screenshot-import-right">
+            <div className="screenshot-import-summary">
+              <div>
+                <span className="panel-title-eyebrow">Preview</span>
+                <h3>{rows.length ? `${rows.length} rows detected` : 'No rows detected yet'}</h3>
+              </div>
+              <div className="scanner-run-summary">
+                <span className="scanner-run-pill">{readyRowCount} READY</span>
+                <span className="scanner-run-pill scanner-run-pill-warning">
+                  {blockedRowCount} NEED REVIEW
+                </span>
+              </div>
+            </div>
+
+            <div className="screenshot-import-rows">
+              {rows.length === 0 ? (
+                <div className="watchlist-form-note">
+                  After OCR finishes, each visible inventory tile will appear here for review.
+                </div>
+              ) : (
+                rows.map((row) => {
+                  const suggestions = activeRemapRowId === row.rowId
+                    ? filterPlannerCandidates(plannerCatalog, row.remapQuery || row.detectedName)
+                    : [];
+                  return (
+                    <article
+                      key={row.rowId}
+                      className={`screenshot-import-row${row.removed ? ' removed' : ''}`}
+                    >
+                      <div className="screenshot-import-row-main">
+                        <span className="screenshot-import-row-thumb">
+                          <img src={row.thumbnailDataUrl} alt="" />
+                        </span>
+                        <div className="screenshot-import-row-copy">
+                          <strong>{row.matchedItem?.name ?? (row.detectedName || 'Unreadable tile')}</strong>
+                          <span>
+                            OCR: {row.detectedName || 'No text detected'} · Qty:{' '}
+                            {row.quantity === null ? 'Unreadable' : row.quantity}
+                          </span>
+                          <span>{describeScreenshotImportRowState(row)}</span>
+                        </div>
+                        <div className="screenshot-import-row-actions">
+                          <button
+                            type="button"
+                            className="settings-secondary-btn screenshot-import-row-toggle"
+                            onClick={() => onToggleRemove(row.rowId)}
+                          >
+                            {row.removed ? 'Restore' : 'Remove'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {!row.removed ? (
+                        <div className="screenshot-import-row-editor">
+                          <label className="settings-field">
+                            <span className="settings-field-label">Remap matched component</span>
+                            <input
+                              className="settings-input"
+                              type="text"
+                              value={row.remapQuery}
+                              onFocus={() => onSetActiveRemapRow(row.rowId)}
+                              onChange={(event) => onRemapQueryChange(row.rowId, event.target.value)}
+                              placeholder="Search planner components…"
+                            />
+                          </label>
+                          {suggestions.length > 0 ? (
+                            <div className="trade-listing-autocomplete-list">
+                              {suggestions.map((item) => {
+                                const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                                return (
+                                  <button
+                                    key={`${row.rowId}-${item.slug}`}
+                                    type="button"
+                                    className="trade-listing-autocomplete-option"
+                                    onClick={() => onSelectRemap(row.rowId, item)}
+                                  >
+                                    <span className="trade-listing-autocomplete-thumb">
+                                      {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : item.name[0]}
+                                    </span>
+                                    <span className="trade-listing-autocomplete-copy">
+                                      <span className="trade-listing-autocomplete-name">{item.name}</span>
+                                      <span className="trade-listing-autocomplete-meta">{item.slug}</span>
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                          <div className="watchlist-form-note">{row.matchReason}</div>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="settings-nav-footer screenshot-import-footer">
+              <button
+                type="button"
+                className="settings-secondary-btn"
+                onClick={onClose}
+                disabled={processing || applying}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="settings-primary-btn"
+                onClick={() => {
+                  void onApply();
+                }}
+                disabled={processing || applying || !rows.length}
+              >
+                {applying ? 'Applying…' : 'Apply Visible Import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function OpportunitiesPage() {
   const [activeTab, setActiveTab] = useState<OppTab>('set-planner');
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
@@ -369,6 +789,20 @@ export function OpportunitiesPage() {
   const [componentQuery, setComponentQuery] = useState('');
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
   const [plannerTargetInputs, setPlannerTargetInputs] = useState<Record<string, string>>({});
+  const [screenshotImportOpen, setScreenshotImportOpen] = useState(false);
+  const [screenshotImportCrop, setScreenshotImportCrop] = useState<SetCompletionImportCrop>(
+    getDefaultSetCompletionImportCrop,
+  );
+  const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
+  const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
+  const [screenshotImportRows, setScreenshotImportRows] = useState<ScreenshotImportPreviewRow[]>([]);
+  const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
+  const [screenshotImportApplying, setScreenshotImportApplying] = useState(false);
+  const [screenshotImportProgress, setScreenshotImportProgress] =
+    useState<SetCompletionScreenshotProgress | null>(null);
+  const [screenshotImportError, setScreenshotImportError] = useState<string | null>(null);
+  const [activeRemapRowId, setActiveRemapRowId] = useState<string | null>(null);
+  const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const setActivePage = useAppStore((state) => state.setActivePage);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
@@ -516,6 +950,17 @@ export function OpportunitiesPage() {
 
     return [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
   }, [scannerResponse]);
+
+  const plannerImportCandidates = useMemo<SetCompletionImportCandidate[]>(
+    () =>
+      plannerCatalog.map((item) => ({
+        itemId: item.itemId,
+        slug: item.slug,
+        name: item.name,
+        imagePath: item.imagePath,
+      })),
+    [plannerCatalog],
+  );
 
   const ownedMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -691,6 +1136,26 @@ export function OpportunitiesPage() {
       .slice(0, 8);
   }, [componentQuery, plannerCatalog]);
 
+  const screenshotImportCandidateBlockedRows = useMemo(
+    () => buildScreenshotImportApplyRows(screenshotImportRows).blockedRows,
+    [screenshotImportRows],
+  );
+
+  const screenshotImportReadyRows = useMemo(
+    () => buildScreenshotImportApplyRows(screenshotImportRows).readyRows,
+    [screenshotImportRows],
+  );
+
+  useEffect(() => {
+    if (!screenshotImportPreviewUrl) {
+      return undefined;
+    }
+
+    return () => {
+      URL.revokeObjectURL(screenshotImportPreviewUrl);
+    };
+  }, [screenshotImportPreviewUrl]);
+
   const upsertOwnedItem = async (item: PlannerCatalogItem, quantity: number) => {
     setSavingSlug(item.slug);
     setErrorMessage(null);
@@ -725,6 +1190,119 @@ export function OpportunitiesPage() {
       },
       Math.max(item.quantity + delta, 0),
     );
+  };
+
+  const resetScreenshotImportSession = () => {
+    setScreenshotImportRows([]);
+    setScreenshotImportError(null);
+    setScreenshotImportProgress(null);
+    setScreenshotImportProcessing(false);
+    setScreenshotImportApplying(false);
+    setActiveRemapRowId(null);
+    setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
+    setScreenshotImportFile(null);
+    setScreenshotImportPreviewUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+      return null;
+    });
+    if (screenshotFileInputRef.current) {
+      screenshotFileInputRef.current.value = '';
+    }
+  };
+
+  const closeScreenshotImport = () => {
+    setScreenshotImportOpen(false);
+    resetScreenshotImportSession();
+  };
+
+  const processScreenshotImportFile = async (
+    file: File,
+    crop: SetCompletionImportCrop,
+    previewUrl: string,
+  ) => {
+    setScreenshotImportProcessing(true);
+    setScreenshotImportApplying(false);
+    setScreenshotImportError(null);
+    setScreenshotImportRows([]);
+    setScreenshotImportProgress({
+      progress: 0,
+      stage: 'prepare',
+      detail: 'Preparing local OCR worker…',
+    });
+
+    try {
+      const ocrRows = await processSetCompletionInventoryScreenshot(file, crop, (progress) => {
+        setScreenshotImportProgress(progress);
+      });
+      const matchRows = await matchSetCompletionScreenshotRows({
+        rows: ocrRows.map((row) => ({
+          rowId: row.rowId,
+          detectedName: row.detectedName,
+        })),
+        allowedItems: plannerImportCandidates,
+      });
+      setScreenshotImportPreviewUrl((current) => {
+        if (current && current !== previewUrl) {
+          URL.revokeObjectURL(current);
+        }
+        return previewUrl;
+      });
+      setScreenshotImportRows(mergeScreenshotImportRows(ocrRows, matchRows));
+    } catch (error) {
+      URL.revokeObjectURL(previewUrl);
+      setScreenshotImportPreviewUrl(null);
+      setScreenshotImportError(toErrorMessage(error));
+    } finally {
+      setScreenshotImportProcessing(false);
+    }
+  };
+
+  const handleScreenshotFilePicked = async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    setScreenshotImportFile(file);
+    await processScreenshotImportFile(file, screenshotImportCrop, previewUrl);
+  };
+
+  const reprocessScreenshotImport = async () => {
+    if (!screenshotImportFile) {
+      return;
+    }
+    const previewUrl = screenshotImportPreviewUrl ?? URL.createObjectURL(screenshotImportFile);
+    await processScreenshotImportFile(screenshotImportFile, screenshotImportCrop, previewUrl);
+  };
+
+  const updateScreenshotImportRow = (
+    rowId: string,
+    updater: (row: ScreenshotImportPreviewRow) => ScreenshotImportPreviewRow,
+  ) => {
+    setScreenshotImportRows((current) =>
+      current.map((row) => (row.rowId === rowId ? updater(row) : row)),
+    );
+  };
+
+  const handleApplyScreenshotImport = async () => {
+    if (!screenshotImportReadyRows.length || screenshotImportCandidateBlockedRows.length) {
+      setScreenshotImportError(
+        'Resolve or remove every unmatched, duplicate, or unreadable row before applying the screenshot import.',
+      );
+      return;
+    }
+
+    setScreenshotImportApplying(true);
+    setScreenshotImportError(null);
+    try {
+      const nextOwnedItems = await applySetCompletionScreenshotImport(screenshotImportReadyRows);
+      setOwnedItems(nextOwnedItems);
+      closeScreenshotImport();
+    } catch (error) {
+      setScreenshotImportError(toErrorMessage(error));
+      setScreenshotImportApplying(false);
+    }
   };
 
   const handlePlannerTargetChange = (
@@ -908,6 +1486,14 @@ export function OpportunitiesPage() {
                     <label className="watchlist-add-label" htmlFor="planner-component-search">
                       Add owned component
                     </label>
+                    <button
+                      type="button"
+                      className="settings-secondary-btn screenshot-import-launch"
+                      onClick={() => setScreenshotImportOpen(true)}
+                      disabled={!plannerCatalog.length}
+                    >
+                      Import Screenshot
+                    </button>
                     <div className="set-planner-search-wrap">
                       <input
                         id="planner-component-search"
@@ -1387,6 +1973,69 @@ export function OpportunitiesPage() {
           </div>
         )}
       </div>
+      <SetCompletionScreenshotImportModal
+        open={screenshotImportOpen}
+        fileInputRef={screenshotFileInputRef}
+        previewUrl={screenshotImportPreviewUrl}
+        crop={screenshotImportCrop}
+        rows={screenshotImportRows}
+        plannerCatalog={plannerCatalog}
+        processing={screenshotImportProcessing}
+        applying={screenshotImportApplying}
+        progress={screenshotImportProgress}
+        errorMessage={screenshotImportError}
+        blockedRowCount={screenshotImportCandidateBlockedRows.length}
+        readyRowCount={screenshotImportReadyRows.length}
+        activeRemapRowId={activeRemapRowId}
+        onClose={closeScreenshotImport}
+        onPickFile={handleScreenshotFilePicked}
+        onCropChange={setScreenshotImportCrop}
+        onReprocess={reprocessScreenshotImport}
+        onToggleRemove={(rowId) => {
+          updateScreenshotImportRow(rowId, (row) => ({ ...row, removed: !row.removed }));
+        }}
+        onRemapQueryChange={(rowId, value) => {
+          updateScreenshotImportRow(rowId, (row) => ({
+            ...row,
+            remapQuery: value,
+            matchedItem:
+              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
+                ? row.matchedItem
+                : null,
+            matchStatus:
+              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
+                ? row.matchStatus
+                : 'unmatched',
+            matchKind:
+              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
+                ? row.matchKind
+                : 'none',
+            matchReason:
+              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
+                ? row.matchReason
+                : 'Search for the correct planner component to continue.',
+          }));
+        }}
+        onSelectRemap={(rowId, item) => {
+          updateScreenshotImportRow(rowId, (row) => ({
+            ...row,
+            matchedItem: {
+              itemId: item.itemId,
+              slug: item.slug,
+              name: item.name,
+              imagePath: item.imagePath,
+            },
+            remapQuery: item.name,
+            matchConfidence: 1,
+            matchKind: 'manual',
+            matchStatus: 'matched',
+            matchReason: 'Manually remapped to the selected planner component.',
+          }));
+          setActiveRemapRowId(null);
+        }}
+        onSetActiveRemapRow={setActiveRemapRowId}
+        onApply={handleApplyScreenshotImport}
+      />
     </>
   );
 }
