@@ -35,41 +35,73 @@ def crop_box(image: Image.Image, box: dict[str, int] | None) -> Image.Image | No
     return image.crop((left, top, right, bottom))
 
 
-def extract_texts(value: Any) -> list[str]:
-    texts: list[str] = []
+def parse_recognition_segments(value: Any) -> list[dict[str, Any]]:
+    segments: list[dict[str, Any]] = []
     if value is None:
-        return texts
-    if isinstance(value, str):
-        cleaned = normalize_text(value)
-        if cleaned:
-            texts.append(cleaned)
-        return texts
+        return segments
     if isinstance(value, dict):
-        for key in ("rec_texts", "text", "rec_text"):
-            field = value.get(key)
-            if isinstance(field, list):
-                for item in field:
-                    if isinstance(item, str):
-                        cleaned = normalize_text(item)
-                        if cleaned:
-                            texts.append(cleaned)
-            elif isinstance(field, str):
-                cleaned = normalize_text(field)
-                if cleaned:
-                    texts.append(cleaned)
-        for item in value.values():
-            texts.extend(extract_texts(item))
-        return texts
+        texts = value.get("rec_texts")
+        boxes = value.get("rec_boxes")
+        scores = value.get("rec_scores")
+        if isinstance(texts, list):
+            for index, text in enumerate(texts):
+                if not isinstance(text, str):
+                    continue
+                cleaned = normalize_text(text)
+                if not cleaned:
+                    continue
+                score = 0.0
+                if isinstance(scores, list) and index < len(scores):
+                    try:
+                        score = float(scores[index])
+                    except Exception:
+                        score = 0.0
+                bbox = parse_box(boxes[index]) if isinstance(boxes, (list, tuple)) and index < len(boxes) else None
+                segments.append(
+                    {
+                        "text": cleaned,
+                        "score": score,
+                        "bbox": bbox,
+                    }
+                )
+        return segments
     if isinstance(value, (list, tuple)):
-        if len(value) == 2 and isinstance(value[1], (list, tuple)):
-            maybe_text = value[1][0] if value[1] else None
-            if isinstance(maybe_text, str):
-                cleaned = normalize_text(maybe_text)
-                if cleaned:
-                    texts.append(cleaned)
         for item in value:
-            texts.extend(extract_texts(item))
-    return texts
+            segments.extend(parse_recognition_segments(item))
+    return segments
+
+
+def parse_box(box: Any) -> dict[str, float] | None:
+    if box is None:
+        return None
+    try:
+        array = np.asarray(box, dtype=float)
+    except Exception:
+        return None
+    if array.size == 0:
+        return None
+    if array.ndim == 1 and array.size >= 4:
+        x_values = [float(array[0]), float(array[2])]
+        y_values = [float(array[1]), float(array[3])]
+    elif array.ndim >= 2 and array.shape[-1] >= 2:
+        flattened = array.reshape(-1, array.shape[-1])
+        x_values = [float(point[0]) for point in flattened]
+        y_values = [float(point[1]) for point in flattened]
+    else:
+        return None
+    left = min(x_values)
+    right = max(x_values)
+    top = min(y_values)
+    bottom = max(y_values)
+    return {
+        "left": left,
+        "right": right,
+        "top": top,
+        "bottom": bottom,
+        "center_x": (left + right) / 2,
+        "center_y": (top + bottom) / 2,
+        "height": max(1.0, bottom - top),
+    }
 
 
 def normalize_text(value: str) -> str:
@@ -88,9 +120,68 @@ def unique_join(values: list[str]) -> str:
     return " ".join(output).strip()
 
 
-def run_ocr(ocr: PaddleOCR, image: Image.Image | None) -> str:
-    if image is None:
+def group_segments_into_lines(segments: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    ordered = sorted(
+        segments,
+        key=lambda segment: (
+            segment["bbox"]["center_y"] if segment["bbox"] else 0.0,
+            segment["bbox"]["center_x"] if segment["bbox"] else 0.0,
+        ),
+    )
+    lines: list[list[dict[str, Any]]] = []
+    for segment in ordered:
+        bbox = segment.get("bbox")
+        if bbox is None:
+            lines.append([segment])
+            continue
+        placed = False
+        for line in lines:
+            line_bboxes = [item["bbox"] for item in line if item.get("bbox") is not None]
+            if not line_bboxes:
+                continue
+            mean_center_y = sum(item["center_y"] for item in line_bboxes) / len(line_bboxes)
+            max_height = max(item["height"] for item in line_bboxes + [bbox])
+            if abs(bbox["center_y"] - mean_center_y) <= max_height * 0.65:
+                line.append(segment)
+                placed = True
+                break
+        if not placed:
+            lines.append([segment])
+    for line in lines:
+        line.sort(key=lambda segment: segment["bbox"]["center_x"] if segment.get("bbox") else 0.0)
+    lines.sort(
+        key=lambda line: min(
+            (segment["bbox"]["top"] if segment.get("bbox") else 0.0) for segment in line
+        )
+    )
+    return lines
+
+
+def build_name_text(segments: list[dict[str, Any]]) -> str:
+    if not segments:
         return ""
+    lines = group_segments_into_lines(segments)
+    line_texts = [unique_join([segment["text"] for segment in line]) for line in lines]
+    return unique_join([line for line in line_texts if line])
+
+
+def build_quantity_text(segments: list[dict[str, Any]]) -> str | None:
+    if not segments:
+        return None
+    ordered = build_name_text(segments)
+    digits = re.findall(r"\d+", ordered)
+    if digits:
+        return "".join(digits)
+    for segment in segments:
+        digits = re.findall(r"\d+", segment["text"])
+        if digits:
+            return "".join(digits)
+    return None
+
+
+def run_ocr(ocr: PaddleOCR, image: Image.Image | None, mode: str) -> str | None:
+    if image is None:
+        return None
     array = np.array(image.convert("RGB"))
     result = None
     if hasattr(ocr, "ocr"):
@@ -100,8 +191,10 @@ def run_ocr(ocr: PaddleOCR, image: Image.Image | None) -> str:
             result = ocr.ocr(array)
     if result is None and hasattr(ocr, "predict"):
         result = ocr.predict(array)
-    texts = extract_texts(result)
-    return unique_join(texts)
+    segments = parse_recognition_segments(result)
+    if mode == "quantity":
+        return build_quantity_text(segments)
+    return build_name_text(segments)
 
 
 def main() -> int:
@@ -112,13 +205,13 @@ def main() -> int:
     readings: list[dict[str, Any]] = []
 
     for cell in payload["cells"]:
-        name_text = run_ocr(ocr, crop_box(image, cell.get("nameBox")))
-        quantity_text = run_ocr(ocr, crop_box(image, cell.get("quantityBox")))
+        name_text = run_ocr(ocr, crop_box(image, cell.get("nameBox")), "name")
+        quantity_text = run_ocr(ocr, crop_box(image, cell.get("quantityBox")), "quantity")
         readings.append(
             {
                 "rowId": cell["rowId"],
                 "tileIndex": cell["tileIndex"],
-                "detectedText": name_text,
+                "detectedText": name_text or "",
                 "detectedQuantity": quantity_text or None,
             }
         )
