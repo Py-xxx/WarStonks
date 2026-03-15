@@ -3,7 +3,7 @@ use reqwest::blocking::Client;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
@@ -32,7 +32,7 @@ const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
 const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
 const SCANNER_WFM_STATS_TIMEOUT_SECONDS: u64 = 8;
-const SCANNER_ITEM_RETRY_COUNT: usize = 2;
+const SCANNER_ITEM_MAX_ATTEMPTS: usize = 3;
 const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ARBITRAGE_SCANNER_HEARTBEAT_SECONDS: u64 = 3;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
@@ -799,6 +799,25 @@ struct ScannerRuntimeProgress {
 pub struct ScannerSkippedEntry {
     pub name: String,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ScannerWorkKind {
+    Set,
+    Component,
+}
+
+#[derive(Debug, Clone)]
+struct ScannerWorkUnit {
+    item_id: Option<i64>,
+    slug: String,
+    display_name: String,
+    stage_label: &'static str,
+    current_set_name: Option<String>,
+    current_component_name: Option<String>,
+    completion_text: String,
+    kind: ScannerWorkKind,
+    attempt: usize,
 }
 
 struct ArbitrageScannerRunOutcome {
@@ -5655,103 +5674,6 @@ fn emit_running_scanner_progress(
     Ok(())
 }
 
-fn resolve_scanner_price_model_with_retry(
-    on_progress: &mut impl FnMut(ArbitrageScannerProgress),
-    started_at: &str,
-    completed_task_count: usize,
-    total_task_count: usize,
-    runtime: &mut ScannerRuntimeProgress,
-    observatory_connection: &Connection,
-    shared_price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
-    refreshed_statistics_count: &mut usize,
-    skipped_entry_count: &mut usize,
-    skipped_entries: &mut Vec<ScannerSkippedEntry>,
-    item_id: i64,
-    slug: &str,
-    display_name: &str,
-    stage_label: &str,
-    current_set_name: Option<String>,
-    current_component_name: Option<String>,
-) -> Result<Option<ScannerPriceModel>> {
-    runtime.current_set_name = current_set_name;
-    runtime.current_component_name = current_component_name;
-    runtime.retrying_item_name = None;
-    runtime.retry_attempt = None;
-
-    for retry_attempt in 0..=SCANNER_ITEM_RETRY_COUNT {
-        if retry_attempt > 0 {
-            runtime.retrying_item_name = Some(display_name.to_string());
-            runtime.retry_attempt = Some(retry_attempt);
-            emit_running_scanner_progress(
-                on_progress,
-                started_at,
-                completed_task_count,
-                total_task_count,
-                runtime,
-                stage_label,
-                format!(
-                    "Retry {retry_attempt}/{SCANNER_ITEM_RETRY_COUNT} for {display_name} after a temporary scanner fetch failure."
-                ),
-            )?;
-        }
-
-        match get_or_build_scanner_price_model(
-            observatory_connection,
-            shared_price_model_cache,
-            item_id,
-            slug,
-            refreshed_statistics_count,
-        ) {
-            Ok(model) => {
-                runtime.retrying_item_name = None;
-                runtime.retry_attempt = None;
-                return Ok(model);
-            }
-            Err(error) => {
-                if retry_attempt < SCANNER_ITEM_RETRY_COUNT {
-                    eprintln!(
-                        "[scanner] retrying '{}' (item_id={}, attempt {}/{}) after error: {}",
-                        slug,
-                        item_id,
-                        retry_attempt + 1,
-                        SCANNER_ITEM_RETRY_COUNT + 1,
-                        error
-                    );
-                    continue;
-                }
-
-                *skipped_entry_count += 1;
-                runtime.skipped_entry_count = *skipped_entry_count;
-                runtime.retrying_item_name = None;
-                runtime.retry_attempt = None;
-                skipped_entries.push(ScannerSkippedEntry {
-                    name: display_name.to_string(),
-                    reason: error.to_string(),
-                });
-                eprintln!(
-                    "[scanner] skipped '{}' (item_id={}) after {} retries: {}",
-                    slug, item_id, SCANNER_ITEM_RETRY_COUNT, error
-                );
-                emit_running_scanner_progress(
-                    on_progress,
-                    started_at,
-                    completed_task_count,
-                    total_task_count,
-                    runtime,
-                    stage_label,
-                    format!(
-                        "Skipped {display_name} after {SCANNER_ITEM_RETRY_COUNT} retries. {} item(s) skipped so far.",
-                        *skipped_entry_count
-                    ),
-                )?;
-                return Ok(None);
-            }
-        }
-    }
-
-    Ok(None)
-}
-
 fn stale_arbitrage_scanner_progress(
     progress: &ArbitrageScannerProgress,
 ) -> Result<Option<ArbitrageScannerProgress>> {
@@ -7194,7 +7116,6 @@ fn build_arbitrage_scanner_inner(
 
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
-    let mut results = Vec::new();
     // Shared across Arbitrage and Relic ROI so each prime item price model is derived once per scan run.
     let mut shared_price_model_cache = HashMap::<i64, Option<ScannerPriceModel>>::new();
     let mut was_stopped = false;
@@ -7222,144 +7143,202 @@ fn build_arbitrage_scanner_inner(
         ),
     )?;
 
-    for (set_index, (set_root, components)) in scanned_sets.iter().enumerate() {
+    let mut work_queue = VecDeque::<ScannerWorkUnit>::new();
+    for (set_root, components) in &scanned_sets {
+        work_queue.push_back(ScannerWorkUnit {
+            item_id: Some(set_root.item_id),
+            slug: set_root.slug.clone(),
+            display_name: set_root.name.clone(),
+            stage_label: "Scanning Sets",
+            current_set_name: Some(set_root.name.clone()),
+            current_component_name: None,
+            completion_text: format!("Completed set {}", set_root.name),
+            kind: ScannerWorkKind::Set,
+            attempt: 0,
+        });
+        for component in components {
+            work_queue.push_back(ScannerWorkUnit {
+                item_id: component.component_item_id,
+                slug: component.component_slug.clone(),
+                display_name: component.component_name.clone(),
+                stage_label: "Scanning Sets",
+                current_set_name: Some(set_root.name.clone()),
+                current_component_name: Some(component.component_name.clone()),
+                completion_text: format!("Completed component {} for {}", component.component_name, set_root.name),
+                kind: ScannerWorkKind::Component,
+                attempt: 0,
+            });
+        }
+    }
+
+    while let Some(mut work_unit) = work_queue.pop_front() {
         if arbitrage_scanner_stop_requested(&observatory_connection)? {
             was_stopped = true;
             break;
         }
 
-        runtime.current_set_name = Some(set_root.name.clone());
-        runtime.current_component_name = None;
-        runtime.retrying_item_name = None;
-        runtime.retry_attempt = None;
+        runtime.current_set_name = work_unit.current_set_name.clone();
+        runtime.current_component_name = work_unit.current_component_name.clone();
+        runtime.retrying_item_name = if work_unit.attempt > 0 {
+            Some(work_unit.display_name.clone())
+        } else {
+            None
+        };
+        runtime.retry_attempt = if work_unit.attempt > 0 {
+            Some(work_unit.attempt)
+        } else {
+            None
+        };
         emit_running_scanner_progress(
             &mut on_progress,
             &started_at,
             completed_task_count,
             total_task_count,
             &runtime,
-            "Scanning Sets",
-            format!("Scanning set {} ({}/{})", set_root.name, set_index + 1, total_set_count),
-        )?;
-
-        let set_model = resolve_scanner_price_model_with_retry(
-            &mut on_progress,
-            &started_at,
-            completed_task_count,
-            total_task_count,
-            &mut runtime,
-            &observatory_connection,
-            &mut shared_price_model_cache,
-            &mut refreshed_statistics_count,
-            &mut skipped_entry_count,
-            &mut skipped_entries,
-            set_root.item_id,
-            &set_root.slug,
-            &set_root.name,
-            "Scanning Sets",
-            Some(set_root.name.clone()),
-            None,
-        )?;
-        refreshed_set_count += 1;
-        completed_task_count += 1;
-
-        let mut component_models = Vec::with_capacity(components.len());
-        for (component_index, component) in components.iter().enumerate() {
-            if arbitrage_scanner_stop_requested(&observatory_connection)? {
-                was_stopped = true;
-                break;
-            }
-
-            runtime.current_set_name = Some(set_root.name.clone());
-            runtime.current_component_name = Some(component.component_name.clone());
-            runtime.retrying_item_name = None;
-            runtime.retry_attempt = None;
-            emit_running_scanner_progress(
-                &mut on_progress,
-                &started_at,
-                completed_task_count,
-                total_task_count,
-                &runtime,
-                "Scanning Sets",
+            work_unit.stage_label,
+            if let Some(component_name) = &work_unit.current_component_name {
                 format!(
-                    "Scanning set {} · Component {}/{}: {}",
-                    set_root.name,
-                    component_index + 1,
-                    components.len(),
-                    component.component_name
-                ),
-            )?;
+                    "Scanning set {} · Component {}",
+                    work_unit
+                        .current_set_name
+                        .as_deref()
+                        .unwrap_or("Unknown Set"),
+                    component_name
+                )
+            } else {
+                format!(
+                    "Scanning set {} ({}/{})",
+                    work_unit
+                        .current_set_name
+                        .as_deref()
+                        .unwrap_or(work_unit.display_name.as_str()),
+                    runtime.completed_set_count + 1,
+                    total_set_count
+                )
+            },
+        )?;
 
-            let model = if let Some(component_item_id) = component.component_item_id {
-                resolve_scanner_price_model_with_retry(
+        let resolution = match work_unit.item_id {
+            Some(item_id) => get_or_build_scanner_price_model(
+                &observatory_connection,
+                &mut shared_price_model_cache,
+                item_id,
+                &work_unit.slug,
+                &mut refreshed_statistics_count,
+            ),
+            None => Ok(None),
+        };
+
+        match resolution {
+            Ok(_) => {
+                if matches!(work_unit.kind, ScannerWorkKind::Set) {
+                    refreshed_set_count += 1;
+                    runtime.completed_set_count += 1;
+                    runtime.current_component_name = None;
+                } else {
+                    runtime.completed_component_count += 1;
+                }
+                completed_task_count += 1;
+                runtime.retrying_item_name = None;
+                runtime.retry_attempt = None;
+                emit_running_scanner_progress(
                     &mut on_progress,
                     &started_at,
                     completed_task_count,
                     total_task_count,
-                    &mut runtime,
-                    &observatory_connection,
-                    &mut shared_price_model_cache,
-                    &mut refreshed_statistics_count,
-                    &mut skipped_entry_count,
-                    &mut skipped_entries,
-                    component_item_id,
-                    &component.component_slug,
-                    &component.component_name,
-                    "Scanning Sets",
-                    Some(set_root.name.clone()),
-                    Some(component.component_name.clone()),
-                )?
-            } else {
-                None
-            };
-            component_models.push(model);
-            runtime.completed_component_count += 1;
-            completed_task_count += 1;
-            runtime.retrying_item_name = None;
-            runtime.retry_attempt = None;
-            emit_running_scanner_progress(
-                &mut on_progress,
-                &started_at,
-                completed_task_count,
-                total_task_count,
-                &runtime,
-                "Scanning Sets",
-                format!(
-                    "Completed component {}/{} for {}. {} item(s) skipped so far.",
-                    component_index + 1,
-                    components.len(),
-                    set_root.name,
-                    runtime.skipped_entry_count
-                ),
-            )?;
-        }
+                    &runtime,
+                    work_unit.stage_label,
+                    format!(
+                        "{}. {} item(s) skipped so far.",
+                        work_unit.completion_text, runtime.skipped_entry_count
+                    ),
+                )?;
+            }
+            Err(error) => {
+                let next_attempt = work_unit.attempt + 1;
+                if next_attempt < SCANNER_ITEM_MAX_ATTEMPTS {
+                    eprintln!(
+                        "[scanner] deferring '{}' (item_id={:?}) attempt {}/{} after error: {}",
+                        work_unit.slug,
+                        work_unit.item_id,
+                        next_attempt,
+                        SCANNER_ITEM_MAX_ATTEMPTS,
+                        error
+                    );
+                    runtime.retrying_item_name = Some(work_unit.display_name.clone());
+                    runtime.retry_attempt = Some(next_attempt);
+                    emit_running_scanner_progress(
+                        &mut on_progress,
+                        &started_at,
+                        completed_task_count,
+                        total_task_count,
+                        &runtime,
+                        work_unit.stage_label,
+                        format!(
+                            "Deferred {} after a temporary failure. It will be retried later ({}/{}).",
+                            work_unit.display_name, next_attempt, SCANNER_ITEM_MAX_ATTEMPTS,
+                        ),
+                    )?;
+                    work_unit.attempt = next_attempt;
+                    work_queue.push_back(work_unit);
+                    continue;
+                }
 
-        if was_stopped {
-            break;
+                skipped_entry_count += 1;
+                runtime.skipped_entry_count = skipped_entry_count;
+                skipped_entries.push(ScannerSkippedEntry {
+                    name: work_unit.display_name.clone(),
+                    reason: error.to_string(),
+                });
+                if matches!(work_unit.kind, ScannerWorkKind::Set) {
+                    runtime.completed_set_count += 1;
+                    runtime.current_component_name = None;
+                } else {
+                    runtime.completed_component_count += 1;
+                }
+                completed_task_count += 1;
+                runtime.retrying_item_name = None;
+                runtime.retry_attempt = None;
+                eprintln!(
+                    "[scanner] skipped '{}' (item_id={:?}) after {} attempts: {}",
+                    work_unit.slug, work_unit.item_id, SCANNER_ITEM_MAX_ATTEMPTS, error
+                );
+                emit_running_scanner_progress(
+                    &mut on_progress,
+                    &started_at,
+                    completed_task_count,
+                    total_task_count,
+                    &runtime,
+                    work_unit.stage_label,
+                    format!(
+                        "Skipped {} after {} attempts. {} item(s) skipped so far.",
+                        work_unit.display_name, SCANNER_ITEM_MAX_ATTEMPTS, runtime.skipped_entry_count
+                    ),
+                )?;
+            }
         }
+    }
 
+    let mut results = Vec::new();
+    for (set_root, components) in &scanned_sets {
+        let set_model = shared_price_model_cache
+            .get(&set_root.item_id)
+            .cloned()
+            .flatten();
+        let component_models = components
+            .iter()
+            .map(|component| {
+                component
+                    .component_item_id
+                    .and_then(|item_id| shared_price_model_cache.get(&item_id).cloned().flatten())
+            })
+            .collect::<Vec<_>>();
         results.push(build_arbitrage_set_entry(
             set_root,
             set_model.as_ref(),
             components,
             &component_models,
         ));
-        runtime.completed_set_count += 1;
-        runtime.current_component_name = None;
-        runtime.retrying_item_name = None;
-        runtime.retry_attempt = None;
-        emit_running_scanner_progress(
-            &mut on_progress,
-            &started_at,
-            completed_task_count,
-            total_task_count,
-            &runtime,
-            "Scanning Sets",
-            format!(
-                "Completed set {} ({}/{}).",
-                set_root.name, runtime.completed_set_count, total_set_count
-            ),
-        )?;
     }
 
     let relic_roi_results = if was_stopped {
@@ -7391,24 +7370,9 @@ fn build_arbitrage_scanner_inner(
                 ),
             )?;
             match build_relic_roi_entry(&catalog_connection, relic_root, |item_id, slug, name| {
-                resolve_scanner_price_model_with_retry(
-                    &mut on_progress,
-                    &started_at,
-                    completed_task_count,
-                    total_task_count,
-                    &mut runtime,
-                    &observatory_connection,
-                    &mut shared_price_model_cache,
-                    &mut refreshed_statistics_count,
-                    &mut skipped_entry_count,
-                    &mut skipped_entries,
-                    item_id,
-                    slug,
-                    name,
-                    "Scanning Relics",
-                    Some(relic_root.name.clone()),
-                    Some(name.to_string()),
-                )
+                let _ = slug;
+                let _ = name;
+                Ok(shared_price_model_cache.get(&item_id).cloned().flatten())
             }) {
                 Ok(Some(entry)) => relic_entries.push(entry),
                 Ok(None) => {}
