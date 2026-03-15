@@ -2462,6 +2462,7 @@ function AnalysisTab() {
                         )}
                         <div className="market-component-copy">
                           <span className="market-copy-title">{component.name}</span>
+                          <span>Needed for set: {component.quantityInSet}x</span>
                           <span>Current lowest: {formatPrice(component.currentLowestPrice)}</span>
                           <span>Recommended entry: {formatPrice(component.recommendedEntryPrice)}</span>
                         </div>
