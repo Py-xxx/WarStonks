@@ -1116,6 +1116,8 @@ export interface ArbitrageScannerResponse {
   refreshedSetCount: number;
   refreshedStatisticsCount: number;
   skippedEntryCount: number;
+  skippedEntries: Array<{ name: string; reason: string }>;
+  skippedSummaryText: string | null;
   scannedRelicCount: number;
   relicOpportunityCount: number;
   results: ArbitrageScannerSetEntry[];
@@ -1132,6 +1134,15 @@ export interface ArbitrageScannerProgress {
   startedAt: string | null;
   lastCompletedAt: string | null;
   lastError: string | null;
+  currentSetName: string | null;
+  currentComponentName: string | null;
+  completedSetCount: number;
+  totalSetCount: number;
+  completedComponentCount: number;
+  totalComponentCount: number;
+  skippedEntryCount: number;
+  retryingItemName: string | null;
+  retryAttempt: number | null;
 }
 
 export interface ArbitrageScannerState {
