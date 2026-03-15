@@ -16,6 +16,9 @@ pub fn run() {
                 crate::wfm_scheduler::configure_wfm_scheduler_debug_log(Some(
                     app_data_dir.join("log").join("queueDebug.jsonl"),
                 ));
+                crate::wfm_scheduler::configure_wfm_scheduler_health_log(Some(
+                    app_data_dir.join("log").join("queueHealth.md"),
+                ));
             }
             Ok(())
         })

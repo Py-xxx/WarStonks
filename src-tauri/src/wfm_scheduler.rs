@@ -31,6 +31,16 @@ pub enum RequestPriority {
 }
 
 impl RequestPriority {
+    fn metrics_index(self) -> usize {
+        match self {
+            Self::Instant => 0,
+            Self::High => 1,
+            Self::Medium => 2,
+            Self::Low => 3,
+            Self::Background => 4,
+        }
+    }
+
     fn normal_index(self) -> Option<usize> {
         match self {
             Self::Instant => None,
@@ -92,6 +102,19 @@ pub struct WfmHttpResponse {
 struct CachedResponse {
     result: std::result::Result<WfmHttpResponse, String>,
     expires_at: Instant,
+}
+
+#[derive(Debug, Clone, Default)]
+struct QueueHealthPriorityMetrics {
+    total_wait_ms: u64,
+    wait_samples: u64,
+    max_wait_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct RateLimitedBucket {
+    bucket_start_ms: u64,
+    count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -161,8 +184,14 @@ struct SchedulerState {
     coalesced: HashMap<String, CoalescedEntry>,
     total_grants: u64,
     total_coalesced_hits: u64,
+    total_coalesced_leaders: u64,
     total_rate_limited_responses: u64,
     debug_log_path: Option<PathBuf>,
+    health_log_path: Option<PathBuf>,
+    priority_metrics: [QueueHealthPriorityMetrics; 5],
+    blocked_by_instant_queue: u64,
+    blocked_by_reserved_instant_slot: u64,
+    rate_limited_buckets: VecDeque<RateLimitedBucket>,
 }
 
 impl Default for SchedulerState {
@@ -184,8 +213,14 @@ impl Default for SchedulerState {
             coalesced: HashMap::new(),
             total_grants: 0,
             total_coalesced_hits: 0,
+            total_coalesced_leaders: 0,
             total_rate_limited_responses: 0,
             debug_log_path: None,
+            health_log_path: None,
+            priority_metrics: std::array::from_fn(|_| QueueHealthPriorityMetrics::default()),
+            blocked_by_instant_queue: 0,
+            blocked_by_reserved_instant_slot: 0,
+            rate_limited_buckets: VecDeque::new(),
         }
     }
 }
@@ -199,6 +234,14 @@ pub fn configure_wfm_scheduler_debug_log(path: Option<PathBuf>) {
     let (lock, _) = scheduler_state();
     if let Ok(mut state) = lock.lock() {
         state.debug_log_path = path;
+    }
+}
+
+pub fn configure_wfm_scheduler_health_log(path: Option<PathBuf>) {
+    let (lock, _) = scheduler_state();
+    if let Ok(mut state) = lock.lock() {
+        state.health_log_path = path;
+        write_scheduler_health_report(&state, Instant::now());
     }
 }
 
@@ -230,7 +273,7 @@ where
         state.instant_queue.push_back(ticket.clone());
     }
     log_scheduler_event(
-        &state,
+        &mut state,
         Instant::now(),
         "queued",
         &ticket.label,
@@ -255,7 +298,7 @@ where
         if is_cancelled() {
             remove_ticket(&mut state, priority, ticket_id);
             log_scheduler_event(
-                &state,
+                &mut state,
                 now,
                 "cancelled",
                 label,
@@ -277,8 +320,9 @@ where
             let waited_ms = now
                 .saturating_duration_since(granted_ticket.enqueued_at)
                 .as_millis() as u64;
+            let reserved_instant_capacity = reserved_instant_capacity_in_use(&state);
             log_scheduler_event(
-                &state,
+                &mut state,
                 now,
                 "granted",
                 &granted_ticket.label,
@@ -286,7 +330,7 @@ where
                 Some(granted_ticket.id),
                 None,
                 None,
-                reserved_instant_capacity_in_use(&state),
+                reserved_instant_capacity,
                 Some(waited_ms),
                 None,
                 None,
@@ -309,7 +353,7 @@ where
         let wait_reason = scheduler_wait_reason(&state, priority, now);
         if last_wait_reason != Some(wait_reason.reason) {
             log_scheduler_event(
-                &state,
+                &mut state,
                 now,
                 "waiting",
                 label,
@@ -381,7 +425,7 @@ where
                     let cached_response = clone_cached_response(cached);
                     state.total_coalesced_hits = state.total_coalesced_hits.saturating_add(1);
                     log_scheduler_event(
-                        &state,
+                        &mut state,
                         now,
                         "coalesced-hit",
                         label,
@@ -406,7 +450,7 @@ where
                         .coalesced
                         .insert(coalesce_key.clone(), CoalescedEntry::InFlight);
                     log_scheduler_event(
-                        &state,
+                        &mut state,
                         now,
                         "coalesced-leader",
                         label,
@@ -425,7 +469,7 @@ where
 
             if wait_for_existing {
                 log_scheduler_event(
-                    &state,
+                    &mut state,
                     now,
                     "waiting",
                     label,
@@ -476,8 +520,9 @@ where
         } else {
             state.coalesced.remove(&coalesce_key);
         }
+        let reserved_instant_capacity = reserved_instant_capacity_in_use(&state);
         log_scheduler_event(
-            &state,
+            &mut state,
             Instant::now(),
             "resolved",
             label,
@@ -485,7 +530,7 @@ where
             None,
             Some(coalesce_key.clone()),
             None,
-            reserved_instant_capacity_in_use(&state),
+            reserved_instant_capacity,
             None,
             Some(total_started_at.elapsed().as_millis() as u64),
             Some(request_started_at.elapsed().as_millis() as u64),
@@ -519,7 +564,7 @@ pub fn record_wfm_response(status: u16, retry_after: Option<Duration>, label: &s
             backoff.as_millis()
         );
         log_scheduler_event(
-            &state,
+            &mut state,
             now,
             "rate-limited",
             label,
@@ -565,6 +610,176 @@ fn clone_cached_response(cached: &CachedResponse) -> Result<WfmHttpResponse> {
 struct SchedulerWaitReason {
     reason: &'static str,
     reserved_instant_capacity: bool,
+}
+
+fn update_priority_wait_metrics(
+    state: &mut SchedulerState,
+    priority: RequestPriority,
+    waited_ms: u64,
+) {
+    let metrics = &mut state.priority_metrics[priority.metrics_index()];
+    metrics.total_wait_ms = metrics.total_wait_ms.saturating_add(waited_ms);
+    metrics.wait_samples = metrics.wait_samples.saturating_add(1);
+    metrics.max_wait_ms = metrics.max_wait_ms.max(waited_ms);
+}
+
+fn record_rate_limited_bucket(state: &mut SchedulerState, timestamp_ms: u64) {
+    let bucket_start_ms = timestamp_ms - (timestamp_ms % 60_000);
+    if let Some(existing) = state
+        .rate_limited_buckets
+        .iter_mut()
+        .find(|bucket| bucket.bucket_start_ms == bucket_start_ms)
+    {
+        existing.count = existing.count.saturating_add(1);
+    } else {
+        state.rate_limited_buckets.push_back(RateLimitedBucket {
+            bucket_start_ms,
+            count: 1,
+        });
+    }
+
+    let cutoff = bucket_start_ms.saturating_sub(59 * 60_000);
+    while state
+        .rate_limited_buckets
+        .front()
+        .map(|bucket| bucket.bucket_start_ms < cutoff)
+        .unwrap_or(false)
+    {
+        state.rate_limited_buckets.pop_front();
+    }
+}
+
+fn priority_wait_summary_line(priority: RequestPriority, metrics: &QueueHealthPriorityMetrics) -> String {
+    let average_wait_ms = if metrics.wait_samples == 0 {
+        0
+    } else {
+        metrics.total_wait_ms / metrics.wait_samples
+    };
+    format!(
+        "- `{}`: avg {} ms, max {} ms, samples {}",
+        priority.as_str(),
+        average_wait_ms,
+        metrics.max_wait_ms,
+        metrics.wait_samples
+    )
+}
+
+fn write_scheduler_health_report(state: &SchedulerState, now: Instant) {
+    let Some(path) = state.health_log_path.clone() else {
+        return;
+    };
+
+    let generated_at_ms = unix_timestamp_ms();
+    let average_429_per_minute = if state.rate_limited_buckets.is_empty() {
+        0.0
+    } else {
+        let total_429 = state
+            .rate_limited_buckets
+            .iter()
+            .map(|bucket| bucket.count)
+            .sum::<u64>();
+        total_429 as f64 / state.rate_limited_buckets.len() as f64
+    };
+
+    let mut report = String::new();
+    report.push_str("# WFM Queue Health\n\n");
+    report.push_str(&format!("- Generated at (unix ms): `{generated_at_ms}`\n"));
+    report.push_str(&format!(
+        "- Current queue depths: instant `{}`, high `{}`, medium `{}`, low `{}`, background `{}`\n",
+        state.instant_queue.len(),
+        state.normal_queues[RequestPriority::High.normal_index().unwrap()].len(),
+        state.normal_queues[RequestPriority::Medium.normal_index().unwrap()].len(),
+        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].len(),
+        state.normal_queues[RequestPriority::Background.normal_index().unwrap()].len(),
+    ));
+    report.push_str(&format!(
+        "- Recent grants in rolling window: `{}`\n",
+        state.recent_grants.len()
+    ));
+    report.push_str(&format!(
+        "- Cooldown remaining: `{}` ms\n\n",
+        state.cooldown_until
+            .and_then(|instant| instant.checked_duration_since(now))
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0)
+    ));
+
+    report.push_str("## Wait Times By Priority\n");
+    report.push_str(&priority_wait_summary_line(
+        RequestPriority::Instant,
+        &state.priority_metrics[RequestPriority::Instant.metrics_index()],
+    ));
+    report.push('\n');
+    report.push_str(&priority_wait_summary_line(
+        RequestPriority::High,
+        &state.priority_metrics[RequestPriority::High.metrics_index()],
+    ));
+    report.push('\n');
+    report.push_str(&priority_wait_summary_line(
+        RequestPriority::Medium,
+        &state.priority_metrics[RequestPriority::Medium.metrics_index()],
+    ));
+    report.push('\n');
+    report.push_str(&priority_wait_summary_line(
+        RequestPriority::Low,
+        &state.priority_metrics[RequestPriority::Low.metrics_index()],
+    ));
+    report.push('\n');
+    report.push_str(&priority_wait_summary_line(
+        RequestPriority::Background,
+        &state.priority_metrics[RequestPriority::Background.metrics_index()],
+    ));
+    report.push_str("\n\n");
+
+    report.push_str("## Queue Pressure\n");
+    report.push_str(&format!(
+        "- Requests blocked by `instant-queue`: `{}`\n",
+        state.blocked_by_instant_queue
+    ));
+    report.push_str(&format!(
+        "- Requests blocked by `reserved-instant-slot`: `{}`\n\n",
+        state.blocked_by_reserved_instant_slot
+    ));
+
+    report.push_str("## Coalescing\n");
+    report.push_str(&format!(
+        "- Coalesced leaders: `{}`\n",
+        state.total_coalesced_leaders
+    ));
+    report.push_str(&format!(
+        "- Coalesced hits: `{}`\n",
+        state.total_coalesced_hits
+    ));
+    report.push_str(&format!(
+        "- Hit/leader ratio: `{:.2}`\n\n",
+        if state.total_coalesced_leaders == 0 {
+            0.0
+        } else {
+            state.total_coalesced_hits as f64 / state.total_coalesced_leaders as f64
+        }
+    ));
+
+    report.push_str("## Rate Limits\n");
+    report.push_str(&format!(
+        "- Total 429 responses: `{}`\n",
+        state.total_rate_limited_responses
+    ));
+    report.push_str(&format!(
+        "- Average 429s per recorded minute: `{average_429_per_minute:.2}`\n"
+    ));
+    report.push_str("- 429 count over time (minute buckets):\n");
+    if state.rate_limited_buckets.is_empty() {
+        report.push_str("  - none\n");
+    } else {
+        for bucket in &state.rate_limited_buckets {
+            report.push_str(&format!(
+                "  - `{}` -> `{}`\n",
+                bucket.bucket_start_ms, bucket.count
+            ));
+        }
+    }
+
+    let _ = write_text_file(&path, &report);
 }
 
 fn cleanup_expired_coalesced(state: &mut SchedulerState, now: Instant) {
@@ -832,9 +1047,10 @@ fn log_request_resolution(
     status: Option<u16>,
 ) {
     let (lock, _) = scheduler_state();
-    let state = lock.lock().expect("wfm scheduler lock poisoned");
+    let mut state = lock.lock().expect("wfm scheduler lock poisoned");
+    let reserved_instant_capacity = reserved_instant_capacity_in_use(&state);
     log_scheduler_event(
-        &state,
+        &mut state,
         Instant::now(),
         "request-finished",
         label,
@@ -842,7 +1058,7 @@ fn log_request_resolution(
         None,
         coalesce_key,
         None,
-        reserved_instant_capacity_in_use(&state),
+        reserved_instant_capacity,
         None,
         Some(total_started_at.elapsed().as_millis() as u64),
         Some(request_started_at.elapsed().as_millis() as u64),
@@ -852,7 +1068,7 @@ fn log_request_resolution(
 
 #[allow(clippy::too_many_arguments)]
 fn log_scheduler_event(
-    state: &SchedulerState,
+    state: &mut SchedulerState,
     now: Instant,
     event: &str,
     request_label: &str,
@@ -866,7 +1082,36 @@ fn log_scheduler_event(
     network_ms: Option<u64>,
     status: Option<u16>,
 ) {
+    if let Some(waited_ms) = waited_ms {
+        if event == "granted" {
+            update_priority_wait_metrics(state, request_priority, waited_ms);
+        }
+    }
+
+    if event == "coalesced-leader" {
+        state.total_coalesced_leaders = state.total_coalesced_leaders.saturating_add(1);
+    }
+
+    if event == "waiting" {
+        match blocked_reason.as_deref() {
+            Some("instant-queue") => {
+                state.blocked_by_instant_queue =
+                    state.blocked_by_instant_queue.saturating_add(1);
+            }
+            Some("reserved-instant-slot") => {
+                state.blocked_by_reserved_instant_slot =
+                    state.blocked_by_reserved_instant_slot.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    if event == "rate-limited" {
+        record_rate_limited_bucket(state, unix_timestamp_ms());
+    }
+
     let Some(path) = state.debug_log_path.clone() else {
+        write_scheduler_health_report(state, now);
         return;
     };
 
@@ -893,9 +1138,11 @@ fn log_scheduler_event(
     };
 
     let Ok(serialized) = serde_json::to_string(&payload) else {
+        write_scheduler_health_report(state, now);
         return;
     };
     let _ = append_json_line(&path, &serialized);
+    write_scheduler_health_report(state, now);
 }
 
 fn append_json_line(path: &PathBuf, line: &str) -> Result<()> {
@@ -906,6 +1153,15 @@ fn append_json_line(path: &PathBuf, line: &str) -> Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
     file.write_all(b"\n")?;
+    Ok(())
+}
+
+fn write_text_file(path: &PathBuf, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent)?;
+    }
+
+    std::fs::write(path, contents)?;
     Ok(())
 }
 
