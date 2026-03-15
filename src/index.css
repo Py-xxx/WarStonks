@@ -162,10 +162,6 @@
   justify-content: center;
 }
 
-.screenshot-import-modal {
-  width: min(2800px, calc(100vw - 20px));
-}
-
 .screenshot-import-body {
   grid-template-columns: minmax(0, 1.18fr) minmax(520px, 1fr);
 }
@@ -2624,6 +2620,11 @@ body {
   box-shadow: 0 26px 70px rgba(0, 0, 0, 0.34);
   overflow: auto;
   z-index: 350;
+}
+
+.settings-modal.screenshot-import-modal {
+  width: min(1680px, calc(100vw - 20px));
+  max-width: calc(100vw - 20px);
 }
 
 .settings-modal-header {
