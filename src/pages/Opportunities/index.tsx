@@ -9,10 +9,12 @@ import {
 import {
   analyzeSetCompletionInventoryScreenshot,
   getDefaultSetCompletionImportCrop,
+  getDefaultSetCompletionTraceSettings,
   getSetCompletionImportStrictColors,
   type SetCompletionImportCrop,
   type SetCompletionScreenshotDetectionPreview,
   type SetCompletionScreenshotProgress,
+  type SetCompletionTraceSettings,
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -364,9 +366,11 @@ function SetCompletionScreenshotImportModal({
   processing,
   progress,
   errorMessage,
+  traceSettings,
   onClose,
   onPickFile,
   onCropChange,
+  onTraceSettingsChange,
   onReprocess,
 }: {
   open: boolean;
@@ -377,15 +381,34 @@ function SetCompletionScreenshotImportModal({
   processing: boolean;
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
+  traceSettings: SetCompletionTraceSettings;
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onCropChange: (nextCrop: SetCompletionImportCrop) => void;
+  onTraceSettingsChange: (next: SetCompletionTraceSettings) => void;
   onReprocess: () => Promise<void>;
 }) {
+  const [zoomLevel, setZoomLevel] = useState(3);
+  const [previewFocus, setPreviewFocus] = useState({ x: 0.5, y: 0.5 });
+
+  useEffect(() => {
+    setPreviewFocus({ x: 0.5, y: 0.5 });
+  }, [detectionPreview?.annotatedPreviewDataUrl]);
+
   if (!open) {
     return null;
   }
   const strictPalette = getSetCompletionImportStrictColors();
+  const handlePreviewPointerMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) {
+      return;
+    }
+    setPreviewFocus({
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    });
+  };
 
   return (
     <>
@@ -542,13 +565,88 @@ function SetCompletionScreenshotImportModal({
                       ))}
                     </div>
                   </div>
+                  <div className="screenshot-import-trace-controls">
+                    {(
+                      [
+                        ['smoothness', 'Trace Smoothness', 0, 4],
+                        ['thickness', 'Trace Thickness', 1, 4],
+                        ['noiseCutoff', 'Noise Cutoff', 4, 24],
+                      ] as const
+                    ).map(([key, label, min, max]) => (
+                      <label key={key} className="settings-field screenshot-import-trace-field">
+                        <span className="settings-field-label">
+                          {label}
+                          <span className="screenshot-import-trace-value">{traceSettings[key]}</span>
+                        </span>
+                        <input
+                          type="range"
+                          min={min}
+                          max={max}
+                          step={1}
+                          value={traceSettings[key]}
+                          onChange={(event) =>
+                            onTraceSettingsChange({
+                              ...traceSettings,
+                              [key]: Number(event.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
                   <div className="screenshot-import-mask-image-shell">
                     {detectionPreview ? (
-                      <img
-                        className="screenshot-import-mask-image"
-                        src={detectionPreview.annotatedPreviewDataUrl}
-                        alt="Annotated screenshot detection preview"
-                      />
+                      <div className="screenshot-import-preview-grid">
+                        <div
+                          className="screenshot-import-annotated-shell"
+                          onMouseMove={handlePreviewPointerMove}
+                          onClick={handlePreviewPointerMove}
+                        >
+                          <img
+                            className="screenshot-import-mask-image"
+                            src={detectionPreview.annotatedPreviewDataUrl}
+                            alt="Annotated screenshot detection preview"
+                          />
+                          <span
+                            className="screenshot-import-preview-cursor"
+                            style={{
+                              left: `${previewFocus.x * 100}%`,
+                              top: `${previewFocus.y * 100}%`,
+                            }}
+                          />
+                        </div>
+                        <div className="screenshot-import-zoom-panel">
+                          <div className="screenshot-import-zoom-head">
+                            <span className="panel-title-eyebrow">Zoomed Preview</span>
+                            <span className="screenshot-import-trace-value">{zoomLevel.toFixed(1)}x</span>
+                          </div>
+                          <div className="screenshot-import-zoom-shell">
+                            <div
+                              className="screenshot-import-zoom-image"
+                              style={{
+                                backgroundImage: `url(${detectionPreview.annotatedPreviewDataUrl})`,
+                                backgroundSize: `${zoomLevel * 100}%`,
+                                backgroundPosition: `${previewFocus.x * 100}% ${previewFocus.y * 100}%`,
+                              }}
+                            />
+                            <span className="screenshot-import-zoom-crosshair" />
+                          </div>
+                          <label className="settings-field screenshot-import-trace-field">
+                            <span className="settings-field-label">
+                              Zoom
+                              <span className="screenshot-import-trace-value">{zoomLevel.toFixed(1)}x</span>
+                            </span>
+                            <input
+                              type="range"
+                              min={2}
+                              max={8}
+                              step={0.5}
+                              value={zoomLevel}
+                              onChange={(event) => setZoomLevel(Number(event.target.value))}
+                            />
+                          </label>
+                        </div>
+                      </div>
                     ) : (
                       <div className="watchlist-form-note">
                         The annotated masked preview will appear here after you run the detector.
@@ -594,10 +692,12 @@ function SetCompletionScreenshotImportModal({
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red">Red: item cell</span>
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-blue">Blue: item name</span>
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-green">Green: quantity</span>
+                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red-trace">Red trace: letters</span>
                   </div>
                   <div className="watchlist-form-note">
-                    OCR and import are disabled. This panel now only shows the masked preview and
-                    the detected red, blue, and green overlay boxes.
+                    OCR and import are disabled. This panel now only shows the masked preview, the
+                    detected overlay boxes, and the configurable red letter trace inside each blue
+                    text box.
                   </div>
                 </>
               ) : (
@@ -653,6 +753,8 @@ export function OpportunitiesPage() {
   );
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
   const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
+  const [screenshotImportTraceSettings, setScreenshotImportTraceSettings] =
+    useState<SetCompletionTraceSettings>(getDefaultSetCompletionTraceSettings);
   const [screenshotImportDetectionPreview, setScreenshotImportDetectionPreview] =
     useState<SetCompletionScreenshotDetectionPreview | null>(null);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
@@ -1069,6 +1171,7 @@ export function OpportunitiesPage() {
       const detectionPreview = await analyzeSetCompletionInventoryScreenshot(
         file,
         crop,
+        screenshotImportTraceSettings,
         (progress) => {
           setScreenshotImportProgress(progress);
         },
@@ -1099,6 +1202,7 @@ export function OpportunitiesPage() {
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
+    setScreenshotImportTraceSettings(getDefaultSetCompletionTraceSettings());
     setScreenshotImportFile(file);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
@@ -1122,6 +1226,13 @@ export function OpportunitiesPage() {
 
   const handleScreenshotImportCropChange = (nextCrop: SetCompletionImportCrop) => {
     setScreenshotImportCrop(nextCrop);
+    setScreenshotImportDetectionPreview(null);
+    setScreenshotImportError(null);
+    setScreenshotImportProgress(null);
+  };
+
+  const handleScreenshotImportTraceSettingsChange = (next: SetCompletionTraceSettings) => {
+    setScreenshotImportTraceSettings(next);
     setScreenshotImportDetectionPreview(null);
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
@@ -1804,9 +1915,11 @@ export function OpportunitiesPage() {
         processing={screenshotImportProcessing}
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
+        traceSettings={screenshotImportTraceSettings}
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
         onCropChange={handleScreenshotImportCropChange}
+        onTraceSettingsChange={handleScreenshotImportTraceSettingsChange}
         onReprocess={reprocessScreenshotImport}
       />
     </>
