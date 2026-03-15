@@ -2,348 +2,467 @@
 
 This file documents the shared Warframe Market request scheduler used by WarStonks.
 
+---
+
 ## Purpose
 
 Every Warframe Market API request must go through the shared scheduler.
 
 This is required because:
-- Warframe Market is rate limited.
-- Multiple app features run concurrently.
+- Warframe Market enforces a rate limit (currently **3 requests per rolling second**).
+- Multiple app features run concurrently (scanner, watchlist, trades, search).
 - User-facing requests must stay responsive even while background work is active.
-- Duplicate requests should be merged where possible instead of wasting request slots.
+- Duplicate requests must be merged where possible instead of wasting slots.
 
-This scheduler is the single source of truth for WFM HTTP request pacing.
+The scheduler is the **single source of truth** for all WFM HTTP request pacing.
+
+---
 
 ## Hard Rule
 
-Any WFM API request must be placed into the shared queue.
+Any code that calls a `warframe.market` endpoint must go through the shared scheduler.
 
-Never:
-- call `reqwest` directly for a WFM endpoint without scheduler access
-- create ad-hoc retry loops around WFM calls outside the scheduler
-- implement separate per-feature rate limiters for WFM
-- bypass queue priority selection in frontend or backend code
+**Never:**
+- Call `reqwest` directly for a WFM endpoint without going through the scheduler
+- Create ad-hoc retry loops around WFM calls outside the scheduler
+- Implement a separate per-feature rate limiter for WFM
+- Bypass priority selection via front-end workarounds
 
-Always:
-- use the shared scheduler utilities
-- assign an explicit priority
-- provide a clear request label
-- provide a coalescing key when the request can be shared
+**Always:**
+- Use the shared scheduler helpers (documented below)
+- Assign an explicit `RequestPriority`
+- Provide a human-readable label
+- Provide a coalescing key when the response can be shared across callers
 
-## Current Implementation
+---
 
-Primary implementation:
-- [/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/src/wfm_scheduler.rs](/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/src/wfm_scheduler.rs)
+## Implementation Files
 
-Common WFM request entry points:
-- [/Users/nathan/Documents/VSCodeProjects/WarStonks/WarStonks/src-tauri/src/trades.rs](/Users/nathan/Documents/VSCodeProjects/WarStonks/WarStonks/src-tauri/src/trades.rs)
-- [/Users/nathan/Documents/VSCodeProjects/WarStonks/WarStonks/src-tauri/src/market_observatory.rs](/Users/nathan/Documents/VSCodeProjects/WarStonks/WarStonks/src-tauri/src/market_observatory.rs)
-- [/Users/nathan/Documents/VSCodeProjects/WarStonks/WarStonks/src-tauri/src/commands/mod.rs](/Users/nathan/Documents/VSCodeProjects/WarStonks/WarStonks/src-tauri/src/commands/mod.rs)
+| File | Role |
+|---|---|
+| `src-tauri/src/wfm_scheduler.rs` | Scheduler core — rate window, deficit queuing, coalescing |
+| `src-tauri/src/market_observatory.rs` | All WFM calls for analytics, scanner, watchlist, orders |
+| `src-tauri/src/trades.rs` | WFM calls for trade-related endpoints |
 
-Frontend callers should route through Tauri commands that already use the scheduler.
+Frontend code does **not** call WFM directly. It invokes Tauri commands that already go through the scheduler.
+
+---
+
+## How To Add A New WFM Request — Step By Step
+
+### 1. Ask: can local cache satisfy this?
+
+Check the SQLite observatory DB first. If the data is fresh enough, return it without queuing anything. Network calls should be the fallback, not the default.
+
+```rust
+if statistics_cache_is_usable(&connection, item_id, variant_key, domain_key)? {
+    return build_model_from_cache(&connection, item_id, variant_key);
+}
+// only fetch if the cache is missing or stale
+```
+
+### 2. Build the request builder (do not send yet)
+
+Use `reqwest::blocking::Client` to build — but **do not call `.send()`**. The scheduler owns the send.
+
+```rust
+let client = wfm_http_client()?; // shared singleton from market_observatory.rs
+let builder = client
+    .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/orders"))
+    .header("Language", WFM_LANGUAGE_HEADER)
+    .header("Platform", WFM_PLATFORM_HEADER)
+    .header("Crossplay", WFM_CROSSPLAY_HEADER);
+```
+
+### 3. Choose a priority
+
+| Priority | When to use |
+|---|---|
+| `Instant` | User just clicked/searched and is waiting right now |
+| `High` | Time-sensitive refresh the user will notice if delayed, but not click-path critical |
+| `Medium` | Active panel refresh — visible, but a few hundred ms is acceptable |
+| `Low` | Scanner work, bulk hydration, non-urgent analytical refreshes |
+| `Background` | Maintenance-only — can wait behind almost anything |
+
+```rust
+use crate::wfm_scheduler::RequestPriority;
+
+let priority = RequestPriority::Low; // scanner work
+```
+
+### 4. Choose a coalescing key
+
+A coalescing key merges concurrent callers requesting the same resource into a single in-flight HTTP call. The second caller receives the same result as the first.
+
+**Format:** `"<resource-type>:<priority-scope>:<slug-or-identifier>"`
+
+The priority scope is embedded so that a `High` caller and a `Low` caller never share a key. This prevents a stale Background response from being served to a High caller that arrived later.
+
+```rust
+// Helper already exists in market_observatory.rs:
+fn scoped_wfm_coalesce_key(prefix: &str, priority: RequestPriority, slug: &str) -> String
+
+// Usage:
+let coalesce_key = Some(scoped_wfm_coalesce_key("statistics", priority, slug));
+// → "statistics:low:wisp_prime_set"
+
+let coalesce_key = Some(scoped_wfm_coalesce_key("orders", priority, slug));
+// → "orders:medium:arcane_energize"
+```
+
+Use `None` when the request is inherently unique (e.g. posting a new order, deleting an order, fetching the user's own mutable data that changes between calls).
+
+### 5. Route through `execute_wfm_bytes_request`
+
+This is the **standard call site** for all WFM HTTP requests in `market_observatory.rs`.
+It wraps `execute_coalesced_wfm_request` from `wfm_scheduler.rs`.
+
+```rust
+let response = execute_wfm_bytes_request(
+    builder,                    // reqwest::blocking::RequestBuilder, not yet sent
+    priority,                   // RequestPriority
+    "request WFM item orders",  // human-readable label for logs
+    coalesce_key,               // Option<String>
+    request_timeout,            // Option<Duration> — use Some(...) for scanner calls
+    || is_cancelled(),          // FnMut() -> bool — cancellation check
+)?;
+```
+
+`execute_wfm_bytes_request` does the following in order:
+1. Calls `execute_coalesced_wfm_request` (scheduler core).
+2. Checks the coalescing map — if another caller is already in-flight for this key, waits and shares the result.
+3. Calls `acquire_wfm_slot_interruptible` — waits for a rate-limit slot at the correct priority.
+4. Spawns the HTTP call on a thread (when a timeout is provided) and waits with `recv_timeout`.
+5. Calls `record_wfm_response` to register the HTTP status code (triggers cooldown on 429).
+6. Writes the result back to the coalescing map for any followers.
+
+### 6. Check the response status and parse
+
+```rust
+if response.status < 200 || response.status >= 300 {
+    return Err(extract_wfm_error_body("request WFM item orders", &response));
+}
+let parsed: MyResponseType = serde_json::from_slice(&response.body)?;
+```
+
+### 7. Write to the SQLite cache
+
+Never hold parsed WFM data only in memory across request boundaries. Write it to the observatory DB so it is available for cache-hit paths and survives app restarts.
+
+### 8. Handle the result at the call site
+
+Callers must handle `Err` explicitly. Do not let WFM errors propagate silently.
+
+```rust
+match fetch_and_cache_statistics_impl(...) {
+    Ok(_) => { /* proceed */ }
+    Err(e) if statistics_cache_is_usable(...)? => {
+        // stale cache is usable — degrade gracefully
+    }
+    Err(e) => return Err(e), // or record skip and continue
+}
+```
+
+---
+
+## Cancellable Requests (`is_cancelled`)
+
+All long-running or queued requests accept an `is_cancelled: impl FnMut() -> bool` closure.
+This is checked:
+- While waiting for a scheduler slot (inside `acquire_wfm_slot_interruptible`)
+- At the start of each coalescing loop iteration
+- In scanner loops before and after each item
+
+**For scanner work:**
+```rust
+let item_started = Instant::now();
+get_or_build_scanner_price_model(
+    ...,
+    || {
+        item_started.elapsed().as_secs() >= SCANNER_ITEM_TOTAL_DEADLINE_SECONDS
+            || arbitrage_scanner_stop_requested(&connection).unwrap_or(false)
+    },
+)
+```
+
+**For non-cancellable callers:**
+```rust
+|| false
+```
+
+---
+
+## Request Timeout
+
+Always pass a `Some(Duration)` timeout for scanner and background requests. This is the deadline
+on the raw HTTP call inside `run_wfm_request_with_timeout`.
+
+```rust
+// Scanner:
+Some(Duration::from_secs(SCANNER_WFM_STATS_TIMEOUT_SECONDS)) // currently 5s
+
+// Non-scanner analytics / watchlist:
+Some(Duration::from_secs(WFM_DEFAULT_REQUEST_TIMEOUT_SECONDS)) // currently 20s
+
+// User-facing instant path (rare — short timeout for snappy failure):
+Some(Duration::from_secs(8))
+```
+
+Pass `None` only when you are certain the caller's thread has its own deadline or you explicitly
+want the request to block as long as needed. The coalescing stale-eviction timer
+(`COALESCED_IN_FLIGHT_TIMEOUT = 5s`) acts as a backstop, but timeout `None` means a dead leader
+can hold a coalesced slot for the full 5 seconds before followers recover.
+
+---
 
 ## Rate Limit Model
 
-Current global limit:
-- `3` granted requests per rolling `1` second window
+```
+MAX_GRANTS_PER_WINDOW          = 3   (total per 1s rolling window)
+MAX_NON_INSTANT_GRANTS_PER_WINDOW = 2   (reserved-slot rule when instant queue is non-empty)
+RATE_LIMIT_WINDOW              = 1s
+SCHEDULER_POLL_INTERVAL        = 5ms  (condvar timeout fallback)
+BASE_RATE_LIMIT_BACKOFF        = 2s   (on first 429)
+MAX_RATE_LIMIT_BACKOFF         = 15s  (exponential cap)
+```
 
-Current scheduler behavior:
-- tracks recent grants in a rolling window
-- uses a dedicated `instant` lane plus a normal weighted scheduler
-- pauses grants if the window is full
-- reserves one slot for `instant` traffic
-- applies cooldown backoff after WFM rate-limit responses
-- logs queue state for debugging
+Reserved-capacity rule:
+- When the **instant queue is non-empty**, normal priorities may only consume 2 of 3 slots per window. The 3rd is held for instant traffic.
+- When the **instant queue is empty**, all 3 slots are available to normal priorities.
 
-Current cooldown constants:
-- base backoff: `2s`
-- max backoff: `15s`
+---
+
+## Coalescing Model
+
+```
+COALESCED_IN_FLIGHT_TIMEOUT = 5s   (stale-leader eviction)
+COALESCED_SUCCESS_TTL       = 1ms  (how long a Ready result is cached for followers)
+COALESCED_ERROR_TTL         = 1ms
+```
+
+**Follower behaviour:** If a key is `InFlight`, the follower sleeps in 5ms increments until
+the leader writes a `Ready` result. If the leader is gone (died, timed out) and the entry is
+older than `COALESCED_IN_FLIGHT_TIMEOUT`, the follower evicts the stale entry and promotes
+itself to leader — then retries the full request.
+
+**Implication:** A request with `None` timeout can hold a coalescing slot for up to 30 seconds
+(the reqwest client-level timeout). During that time any followers for the same key are blocked.
+This is why scanner paths always use `Some(SCANNER_WFM_STATS_TIMEOUT_SECONDS)`.
+
+---
 
 ## Priority Levels
 
-Current priorities:
-- `instant`
-- `high`
-- `medium`
-- `low`
-- `background`
+### `Instant`
 
-### Instant
+For requests that must feel immediate — user just interacted with the UI.
 
-Use for requests that must feel immediate to the user.
+- Examples: search panel orders load, opening Trades tab, Market Analysis/Analytics open, direct profile load.
+- Behaviour: dedicated queue lane, drains ahead of all normal work, may use all 3 grants per window.
+- **Do not use for scanners or background work.**
 
-Examples:
-- search result market loads
-- opening Trades tab
-- opening Market Analysis
-- opening Market Analytics
-- direct trade account/profile loads
+### `High`
 
-Behavior:
-- has a dedicated queue lane
-- drains ahead of all normal work
-- may use all 3 grants in the rolling window
-- should be used sparingly
+For important refreshes that are overdue and user-relevant, but not a direct click.
 
-### High
+- Examples: trade history polling when stale, watchlist item past its high-priority threshold.
 
-Use for important refreshes that are overdue and user-relevant, but not quite instant.
+### `Medium`
 
-Examples:
-- trade history polling
-- watchlist items that have become stale past their high-priority threshold
+For normal user-facing refreshes that are visible but not blocking first paint.
 
-### Medium
+- Examples: active panel auto-refresh, watchlist items due for refresh.
 
-Use for normal user-facing requests that are important but not urgent.
+### `Low`
 
-Examples:
-- active panel refreshes
-- watchlist items that are due but not critically stale
+For bulk work that matters but should yield to active user flows.
 
-### Low
+- Examples: arbitrage scanner, market cache hydration, scanner prefetch threads.
 
-Use for bulk work that matters, but can yield to active user flows.
+### `Background`
 
-Examples:
-- scanners
-- market cache hydration
-- non-urgent analytical refreshes
+For the least urgent work — can wait behind almost anything.
 
-### Background
+- Examples: watchlist items refreshed recently and being maintained, prefetch threads for upcoming scanner items.
 
-Use for the least urgent WFM work.
+---
 
-Examples:
-- watchlist items that were refreshed recently and are only being maintained
+## Fairness Model (Deficit Weighted Queuing)
 
-## Fairness Model
+Non-instant priorities share slots using a weighted deficit counter:
 
-Non-instant priorities use weighted fairness with queue deficits.
+```
+PRIORITY_QUANTA:
+  high       = 8
+  medium     = 4
+  low        = 2
+  background = 1
+```
 
-Current quanta:
-- `high = 8`
-- `medium = 4`
-- `low = 2`
-- `background = 1`
+Each time `try_grant` runs, it finds the queue with the most accumulated deficit credit and serves one ticket. After spending a quantum, the deficit for that priority decreases by 1. When all non-empty queues have zero credit, all deficits are replenished simultaneously.
 
-Meaning:
-- high gets the most turns
-- background gets the fewest
-- lower priorities still continue to get served
+This guarantees that over time:
+- High gets 8x as many slots as Background
+- Low gets 2x as many as Background
+- No priority ever starves completely
 
-This prevents starvation for long-running scanner or watchlist work.
+---
 
-Reserved-capacity rule:
-- normal traffic may only consume 2 grants in the rolling window
-- the 3rd slot is reserved for `instant` traffic
-- this prevents scanners/watchlist/pollers from filling the whole window before a user action arrives
+## Scanner-Specific Rules
 
-## Coalescing
+### Scanners must pipeline
 
-Coalescing is required whenever multiple callers may request the same WFM resource at nearly the same time.
+A sequential scanner (fetch → wait → process → fetch → wait...) only ever occupies **1 of 3** rate-limit slots. The other 2 are wasted.
 
-Use coalescing for:
-- profile fetches
-- `orders/my`
-- item orders for the same slug
-- item statistics for the same slug
-- trade history for the same account
+The arbitrage scanner uses a **prefetch lookahead** to keep all 3 slots occupied:
 
-Good coalescing key examples:
-- `profile:me`
-- `orders:my`
-- `orders:arcane_energize`
-- `statistics:arcane_energize`
-- `trade-history:https://api.warframe.market/v1/profile/<name>/statistics`
+```rust
+// Before blocking on item N, kick background prefetch threads for items N+1 and N+2.
+for ahead in work_queue.iter().take(SCANNER_PREFETCH_LOOKAHEAD) {
+    if let Some(ahead_item_id) = ahead.item_id {
+        kick_prefetch(ahead_item_id, ahead.slug.clone());
+    }
+}
+```
 
-Rules:
-- same resource + same logical response = same coalescing key
-- different response shapes or filters = different keys
-- if a result is safe to share, coalesce it
+Each prefetch thread:
+- Opens its own SQLite connection (WAL mode handles concurrent writes)
+- Calls `ensure_statistics_cached_for_scan` at `Low` priority
+- Stores the result to the SQLite cache
+- Exits
 
-## Labels
+When the main loop reaches item N+1, `statistics_cache_is_usable` returns true and no HTTP call is made. The rate-limit slot was already used by the prefetch thread.
 
-Every queued WFM request should use a human-readable label.
+**`SCANNER_PREFETCH_LOOKAHEAD = 2`** keeps exactly 3 total concurrent requests in flight at any time (1 main + 2 prefetch), saturating the 3 req/s window.
 
-Good labels:
-- `request WFM profile`
-- `load own orders`
-- `request WFM watchlist orders`
-- `request WFM statistics`
-- `request WFM item orders`
+### Scanner item deadline
 
-Labels should describe:
-- what is being requested
-- which subsystem it belongs to when useful
+Each scanner item has a total wall-clock deadline to prevent a single slow item from stalling the whole scan:
 
-Labels are used in:
-- queue debug logs
-- wait diagnostics
-- rate-limit debugging
+```
+SCANNER_ITEM_TOTAL_DEADLINE_SECONDS = 25s
+```
+
+This deadline is passed as the `is_cancelled` closure and checked at every scheduler wake-up:
+
+```rust
+let item_started = Instant::now();
+get_or_build_scanner_price_model(
+    ...,
+    || item_started.elapsed().as_secs() >= SCANNER_ITEM_TOTAL_DEADLINE_SECONDS
+        || arbitrage_scanner_stop_requested(&connection).unwrap_or(false),
+)
+```
+
+If the deadline fires, the item is retried up to `SCANNER_ITEM_MAX_ATTEMPTS = 3` times, then skipped.
+
+---
 
 ## Watchlist Scheduling
 
-Watchlist refreshes are not supposed to spam continuously.
+Watchlist refreshes use due-time scheduling, not fixed-interval polling.
 
-Current intended behavior:
-- each watchlist item has its own `nextScanAt`
-- once refreshed, it is rescheduled by updating `nextScanAt`
-- the watchlist scanner picks the next due item only
-- after a refresh completes, the scanner schedules the next due item again
+Each tracked item has a `nextScanAt`. Priority escalates with staleness:
 
-Priority escalation for watchlist items:
-- age under `15s` -> `background`
-- age `15s` or more -> `medium`
-- age `30s` or more -> `high`
+| Age | Priority |
+|---|---|
+| < 15s | `Background` |
+| ≥ 15s | `Medium` |
+| ≥ 30s | `High` |
 
-This means:
-- scanners can keep working
-- watchlist items move up only when stale enough
+The watchlist scanner picks only the next due item, refreshes it, then reschedules and picks the next. It does not batch-fire multiple parallel requests.
 
-## Trade Tab Requirements
+---
 
-Trades must always feel immediate.
+## Trade Tab Rules
 
-Required behavior:
-- profile/session checks must use `instant`
-- `orders/my` loads must use `instant`
-- duplicate profile and overview loads must be coalesced or deduplicated
-- switching between Sell and Buy tabs must not create a new blank-state loading cycle unless data is genuinely unavailable
+Trade data must feel instant.
 
-## Search / Market Requirements
+- `orders/my` loads → `Instant`
+- Profile/session checks → `Instant`
+- Duplicate loads must be coalesced: `Some(scoped_wfm_coalesce_key("orders", RequestPriority::Instant, "my"))`
+- Switching Sell ↔ Buy tabs must not retrigger full blank-state reloads if data is available
 
-Search and Market tabs are user-triggered and must not sit behind background work.
+---
 
-Required behavior:
-- quick-view item order loads: `instant`
-- Market Analysis live work: `instant`
-- Market Analytics live work: `instant`
+## Labels Reference
 
-If extra work is derived from those loads:
-- prefer local cache / SQLite data where possible
-- do not recursively trigger large numbers of new live WFM calls inside an instant path
+| Subsystem | Example label |
+|---|---|
+| Orders (items) | `"request WFM item orders"` |
+| Orders (own) | `"load own orders"` |
+| Statistics | `"request WFM statistics"` |
+| Watchlist | `"request WFM watchlist orders"` |
+| Profile | `"request WFM profile"` |
+| Trade history | `"request WFM trade history"` |
 
-## Scanner Requirements
+Labels appear in `queueDebug.jsonl` and stderr. Make them specific enough to identify the subsystem at a glance.
 
-Scanners must be queue-friendly.
-
-Required behavior:
-- scanner traffic should use `low` unless there is a specific reason otherwise
-- scanners must tolerate waiting
-- scanners must reuse cached/statistical models whenever possible
-- scanners must not use instant priority
-
-If a scanner can reuse:
-- cached statistics
-- cached set map data
-- cached observatory snapshots
-
-it should do so instead of forcing new live calls.
-
-## Retry / Backoff Rules
-
-The scheduler owns WFM retry pressure management.
-
-Required behavior:
-- rate-limit responses should be recorded centrally
-- cooldown/backoff should happen in the scheduler
-- individual callers should not each invent their own retry timing
-
-Callers may still:
-- surface errors to the UI
-- reschedule future work logically
-
-Callers must not:
-- create independent high-frequency retry loops against WFM
+---
 
 ## Logging
 
-Queue debug log path:
-- app data `/log/queueDebug.jsonl`
-- app data `/log/queueHealth.md`
+| Log file | Contents |
+|---|---|
+| `<app-data>/log/queueDebug.jsonl` | One JSON line per scheduler event |
+| `<app-data>/log/queueHealth.md` | Rolling summary (overwritten on each event) |
 
-The log should be used to verify:
-- a request entered the queue
-- its priority was correct
-- it waited too long or not
-- duplicate calls are being coalesced correctly
-- instant traffic is not being drowned by lower-priority work
+Useful events to grep for:
+- `queued` — request entered the scheduler
+- `granted` — slot was given; `waited_ms` shows how long it waited
+- `resolved` — coalesced request finished; `total_ms` and `network_ms` available
+- `coalesced-leader` — this caller is making the real HTTP call
+- `coalesced-hit` — this caller reused an in-flight result
+- `coalesced-stale-evicted` — dead leader was cleaned up, follower retries as leader
+- `rate-limited` — WFM returned 429; `cooldown_remaining_ms` shows backoff length
+- `cancelled` — caller was cancelled while waiting
 
-Useful events include:
-- `queued`
-- `granted`
-- `resolved`
-- `coalesced-leader`
-- `coalesced-hit`
-- `rate-limited`
+Health report fields to watch:
+- `avg wait ms` / `max wait ms` per priority — should be < 1000ms for Low
+- `blocked by instant-queue` — how often normal work yielded for instant traffic
+- `coalesced hits / leaders ratio` — higher is better (means callers are sharing results)
+- `429 count over time` — if this grows, reduce request frequency or check coalescing gaps
 
-Queue health report should summarize:
-- average wait time by priority
-- max wait time by priority
-- blocked-by-instant-queue count
-- blocked-by-reserved-instant-slot count
-- coalesced hits vs leaders
-- 429 count over time
+---
 
-## How To Add A New WFM Request
+## Checklist Before Merging A New WFM Call
 
-1. Decide whether the request is truly necessary.
-2. Decide whether local cache/database data can satisfy it first.
-3. Pick the correct priority.
-4. Choose a stable request label.
-5. Add a coalescing key if the response can be shared.
-6. Route the request through the shared scheduler utility.
-7. Make sure the caller handles failure explicitly.
-8. Verify the request appears correctly in `queueDebug.jsonl`.
+- [ ] Request goes through `execute_wfm_bytes_request` (or `execute_coalesced_wfm_request` directly)
+- [ ] `reqwest` builder is built but **not sent** before passing to the scheduler
+- [ ] Priority is appropriate for the use case
+- [ ] Coalescing key is set where the response can be shared
+- [ ] `is_cancelled` closure is wired correctly (not hardcoded `|| false` for cancellable flows)
+- [ ] A `Some(Duration)` timeout is passed for scanner and background requests
+- [ ] Non-success HTTP status codes are handled explicitly
+- [ ] Result is written to the SQLite cache for future cache-hit paths
+- [ ] `queueDebug.jsonl` shows the request entering the queue at the correct priority
+- [ ] The call does not introduce a duplicate request burst (check coalescing coverage)
+- [ ] The feature degrades gracefully if the queue is busy or the API is slow
 
-## Priority Selection Guide
+---
 
-Use `instant` when:
-- the user just clicked/opened/searched and expects an immediate answer
+## Common Mistakes
 
-Use `high` when:
-- the request is time-sensitive and overdue, but not direct click-path critical
-- startup WFM catalog fetch is required during bootstrap
+| Mistake | Fix |
+|---|---|
+| Calling `.send()` on the `reqwest` builder directly | Pass the `builder` to `execute_wfm_bytes_request` instead |
+| Forgetting `request_timeout` on scanner calls | Always pass `Some(Duration::from_secs(SCANNER_WFM_STATS_TIMEOUT_SECONDS))` |
+| Using the same coalescing key for different priority levels | Use `scoped_wfm_coalesce_key` — it embeds the priority scope automatically |
+| Triggering multiple identical requests from different UI layers | Add a coalescing key so they share a single in-flight request |
+| Using `Instant` priority for scanner or background work | Scanner uses `Low`; maintenance uses `Background` |
+| Creating a per-feature retry loop around WFM calls | The scheduler owns 429 backoff; callers should just propagate the error |
+| Running a sequential scanner without prefetch | Use `SCANNER_PREFETCH_LOOKAHEAD` to keep all 3 slots occupied |
+| Polling WFM on a fixed interval | Use due-time scheduling with `nextScanAt` like the watchlist does |
 
-Use `medium` when:
-- it supports an active screen but is not blocking first paint
-
-Use `low` when:
-- it is background work that still matters
-
-Use `background` when:
-- it is maintenance work that can wait behind almost anything else
-
-## Common Mistakes To Avoid
-
-- Triggering multiple identical WFM requests from different UI layers
-- Using live WFM calls inside loops when cached local data already exists
-- Leaving a user-facing panel dependent on a background-only request
-- Forgetting to add a descriptive request label
-- Forgetting to add a coalescing key
-- Using `instant` for scanners or other bulk work
-- Polling WFM on a fixed interval when a due-time scheduler is more appropriate
-
-## Review Checklist
-
-Before merging any WFM integration change, verify:
-- the request goes through the shared scheduler
-- the priority is appropriate
-- coalescing is used when possible
-- labels are clear
-- logs show the request correctly
-- the call does not introduce duplicate queue bursts
-- the feature still behaves correctly under queue delay
+---
 
 ## Summary
 
-WarStonks must behave like a single coordinated WFM client.
+WarStonks behaves as a single coordinated WFM client:
 
-That means:
-- one scheduler
-- one rate-limit policy
-- one logging path
-- explicit priorities
-- coalescing by default where safe
-- no direct WFM bypasses
+- **One scheduler** — `wfm_scheduler.rs`
+- **One rate-limit policy** — 3/s rolling window, exponential 429 backoff
+- **One logging path** — `queueDebug.jsonl` + `queueHealth.md`
+- **Explicit priorities** — every caller declares its urgency
+- **Coalescing by default** — duplicate in-flight requests share one HTTP call
+- **No direct bypasses** — `reqwest` is never called for WFM endpoints outside the scheduler stack

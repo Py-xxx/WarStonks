@@ -48,6 +48,10 @@ const RELIC_REFINEMENT_INTACT: &str = "intact";
 const RELIC_REFINEMENT_EXCEPTIONAL: &str = "exceptional";
 const RELIC_REFINEMENT_FLAWLESS: &str = "flawless";
 const RELIC_REFINEMENT_RADIANT: &str = "radiant";
+/// Maximum per-order quantity used for weight in the sell ladder percentile calculation.
+/// Orders above this size (typically bot walls) get capped so one large listing
+/// cannot dominate the weighted exit price.
+const SELL_ORDER_WALL_QTY_CAP: i64 = 50;
 
 fn scoped_wfm_coalesce_key(prefix: &str, priority: RequestPriority, slug: &str) -> String {
     let priority_scope = match priority {
@@ -4095,9 +4099,18 @@ fn build_trend_metric_set(points: &[AnalyticsChartPoint], series_key: &str) -> T
 }
 
 fn compute_stability(points: &[AnalyticsChartPoint]) -> (f64, f64, f64) {
+    // Prefer median_sell (live snapshot data), but fall back to closed statistics
+    // price series so stability is meaningful even in the stats-only scanner path
+    // where median_sell is never populated.
     let values = points
         .iter()
-        .filter_map(|point| point.median_sell)
+        .filter_map(|point| {
+            point
+                .median_sell
+                .or(point.weighted_avg)
+                .or(point.average_price)
+                .or(point.closed_price)
+        })
         .collect::<Vec<_>>();
     if values.len() < 2 {
         return (50.0, 0.0, 50.0);
@@ -4698,9 +4711,16 @@ fn liquidity_score_percent(snapshot: &MarketSnapshot) -> f64 {
         20.0
     };
 
-    let activity_index = (snapshot.sell_order_count + snapshot.buy_order_count) as f64 * 0.3
-        + (snapshot.sell_quantity + snapshot.buy_quantity) as f64 * 0.5
-        + (snapshot.unique_sell_users + snapshot.unique_buy_users) as f64 * 0.2;
+    // Cap raw sell/buy quantity at 10x their respective order counts before weighting.
+    // Without this, a single wall listing (e.g. one order with 9000 units) inflates
+    // the activity index to the maximum tier, falsely implying deep liquid market depth.
+    let capped_sell_qty =
+        (snapshot.sell_quantity as f64).min(snapshot.sell_order_count as f64 * 10.0);
+    let capped_buy_qty =
+        (snapshot.buy_quantity as f64).min(snapshot.buy_order_count as f64 * 10.0);
+    let activity_index = (snapshot.sell_order_count + snapshot.buy_order_count) as f64 * 0.35
+        + (capped_sell_qty + capped_buy_qty) * 0.45
+        + (snapshot.unique_sell_users + snapshot.unique_buy_users) as f64 * 0.20;
     let market_depth = if activity_index >= 120.0 {
         100.0
     } else if activity_index >= 80.0 {
@@ -4750,9 +4770,15 @@ fn weighted_sell_percentile_price(
         return None;
     }
 
+    // Cap per-order quantity at SELL_ORDER_WALL_QTY_CAP before applying sqrt weight.
+    // This prevents a single bot listing (e.g. 9000 units) from dominating
+    // the weighted percentile and artificially lowering the computed exit price.
     let mut ladder = sell_orders
         .iter()
-        .map(|order| (order.platinum, (order.quantity.max(1) as f64).sqrt()))
+        .map(|order| {
+            let capped_qty = order.quantity.max(1).min(SELL_ORDER_WALL_QTY_CAP);
+            (order.platinum, (capped_qty as f64).sqrt())
+        })
         .collect::<Vec<_>>();
     ladder.sort_by(|left, right| left.0.total_cmp(&right.0));
 
@@ -7241,12 +7267,12 @@ where
     Ok(model)
 }
 
+/// Converts a confidence level string to a numeric score (0–100).
+/// Uses the same scale as `confidence_percent` to ensure consistent scoring
+/// across all features (arbitrage, relic ROI, efficiency).
 fn confidence_score(level: &str) -> f64 {
-    match level {
-        "high" => 100.0,
-        "medium" => 72.0,
-        _ => 42.0,
-    }
+    let summary = build_confidence_summary(level, vec![]);
+    confidence_percent(&summary)
 }
 
 fn chance_for_refinement(
@@ -7473,12 +7499,21 @@ fn relic_tier_sort_order(value: &str) -> i64 {
     }
 }
 
+/// Maximum run value (plat/run EV) that maps to the highest run-value component score.
+/// Relics with EV above this still score at max, but the scale is linear below it,
+/// so a 40p/run relic and an 80p/run relic are now meaningfully differentiated.
+const RELIC_ROI_MAX_RUN_VALUE: f64 = 80.0;
+
 fn build_relic_roi_score(
     run_value: Option<f64>,
     weighted_liquidity: f64,
     confidence_summary: &MarketConfidenceSummary,
 ) -> f64 {
-    let run_value_component = run_value.unwrap_or_default().max(0.0).min(50.0) * 1.5;
+    // Scale linearly from 0 → RELIC_ROI_MAX_RUN_VALUE run value, capping at 75 points.
+    // Previously capped at 50 * 1.5 = 75 but hit the cap at only 33p EV, meaning
+    // all high-value relics scored identically. Now 40p ≈ 37.5 pts, 80p ≈ 75 pts.
+    let run_value_component =
+        (run_value.unwrap_or_default().max(0.0) / RELIC_ROI_MAX_RUN_VALUE).min(1.0) * 75.0;
     let liquidity_component = weighted_liquidity.clamp(0.0, 100.0) * 0.28;
     let confidence_component = confidence_score(&confidence_summary.level) * 0.18;
     (run_value_component + liquidity_component + confidence_component).clamp(0.0, 100.0)
@@ -9340,13 +9375,15 @@ mod tests {
         build_liquidity_confidence, build_manipulation_risk, build_market_snapshot,
         build_orderbook_pressure, build_relic_roi_score, build_supply_confidence,
         build_time_of_day_liquidity, build_trend_quality_breakdown, chance_for_refinement,
-        compute_pressure_ratio,
-        compute_zone_bands, extract_rank_stat_highlights, initialize_market_observatory_schema,
-        insert_statistics_rows_for_domain, normalize_variant_key, persist_snapshot,
-        pressure_label, resample_rows, scoped_wfm_coalesce_key,
-        stale_arbitrage_scanner_progress, AnalyticsBucketSizeKey, AnalyticsChartPoint,
-        AnalyticsDomainKey, ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary,
-        MarketSnapshot, RelicRefinementChanceProfile, WfmDetailedOrder, WfmStatisticsRowApi,
+        compute_pressure_ratio, compute_stability, compute_zone_bands,
+        confidence_percent, confidence_score, efficiency_score_percent,
+        extract_rank_stat_highlights, initialize_market_observatory_schema,
+        insert_statistics_rows_for_domain, liquidity_score_percent, normalize_variant_key,
+        persist_snapshot, pressure_label, resample_rows, scoped_wfm_coalesce_key,
+        stale_arbitrage_scanner_progress, weighted_sell_percentile_price,
+        AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey,
+        ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary, MarketSnapshot,
+        RelicRefinementChanceProfile, WfmDetailedOrder, WfmStatisticsRowApi,
     };
     use crate::wfm_scheduler::RequestPriority;
     use rusqlite::Connection;
@@ -10984,5 +11021,155 @@ mod tests {
         assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_high), Some(69.0));
         assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_target), Some(67.0));
         assert_eq!(pricing.recommended_exit_price, Some(67.0));
+    }
+
+    // ── Calculation audit tests ─────────────────────────────────────────────
+
+    #[test]
+    fn confidence_score_and_confidence_percent_agree() {
+        // confidence_score must delegate to confidence_percent so all features
+        // use the same numeric scale regardless of which helper they call.
+        let high = build_confidence_summary("high", vec![]);
+        let medium = build_confidence_summary("medium", vec![]);
+        let low = build_confidence_summary("low", vec![]);
+        assert_eq!(confidence_score("high"), confidence_percent(&high));
+        assert_eq!(confidence_score("medium"), confidence_percent(&medium));
+        assert_eq!(confidence_score("low"), confidence_percent(&low));
+        assert_eq!(confidence_score("unknown"), confidence_percent(&low));
+    }
+
+    #[test]
+    fn wall_quantity_cap_prevents_bot_listing_from_dominating_exit_price() {
+        // A realistic bot wall scenario: one seller with 9000 units at the floor price,
+        // plus many normal sellers at higher prices.
+        let mut orders = vec![
+            sample_order("sell", 85.0, 9000, "bot_seller"), // wall
+        ];
+        for i in 0..89 {
+            orders.push(sample_order("sell", 89.0 + (i % 5) as f64, 2, &format!("seller_{i}")));
+        }
+
+        // Without wall capping the wall dominates and percentile returns floor (≈85).
+        // With the cap the wall weight is sqrt(50)≈7 vs 89 sellers at sqrt(2)≈1.4 each,
+        // so the 40th percentile should land above the floor at 89p.
+        let price_at_40 = weighted_sell_percentile_price(&orders, 40.0)
+            .expect("should return a price");
+        assert!(
+            price_at_40 >= 89.0,
+            "expected exit percentile above floor (got {price_at_40})"
+        );
+    }
+
+    #[test]
+    fn market_depth_not_inflated_by_wall_listing() {
+        // A market dominated by a bot wall: 1 seller with 9000 qty, 3 tiny buy orders.
+        // Without the cap, activity_index exceeds 120 (max depth tier) solely from quantity.
+        // With the cap, depth correctly reflects the sparse real participation.
+        let wall_snapshot = MarketSnapshot {
+            captured_at: "2026-01-01T00:00:00Z".to_string(),
+            lowest_sell: Some(85.0),
+            median_sell: Some(107.0),
+            highest_buy: Some(82.0),
+            spread: Some(3.0),
+            spread_pct: Some(3.5),
+            sell_order_count: 1,
+            sell_quantity: 9000,
+            buy_order_count: 3,
+            buy_quantity: 6,
+            near_floor_seller_count: 1,
+            near_floor_quantity: 9000,
+            unique_sell_users: 1,
+            unique_buy_users: 3,
+            pressure_ratio: Some(0.3),
+            entry_depth: 6.0,
+            exit_depth: 9000.0,
+            depth_levels: vec![],
+        };
+        let score = liquidity_score_percent(&wall_snapshot);
+        // Without fix: activity_index ≈ 0.5×9006 = 4503 → max depth tier = 100
+        // With fix: capped_qty = min(9000, 1×10)=10, capped_buy=min(6,3×10)=6 → activity_index = 0.35×4 + 0.45×16 + 0.20×4 = 9.6 → depth=20
+        // Even after demand_balance=20 (weak buy side), score should be well below 80.
+        assert!(
+            score < 80.0,
+            "wall-dominated market should not score as highly liquid (got {score})"
+        );
+    }
+
+    #[test]
+    fn compute_stability_uses_fallback_prices_when_median_sell_absent() {
+        fn make_point(weighted_avg: f64, closed_price: f64) -> AnalyticsChartPoint {
+            AnalyticsChartPoint {
+                bucket_at: "2026-01-01T00:00:00Z".to_string(),
+                open_price: None,
+                closed_price: Some(closed_price),
+                low_price: None,
+                high_price: None,
+                lowest_sell: None,
+                median_sell: None,   // ← absent as in stats-only path
+                moving_avg: None,
+                weighted_avg: Some(weighted_avg),
+                average_price: None,
+                highest_buy: None,
+                fair_value_low: None,
+                fair_value_high: None,
+                entry_zone: None,
+                exit_zone: None,
+                volume: 10.0,
+            }
+        }
+        let points = vec![
+            make_point(90.0, 90.0),
+            make_point(91.0, 91.0),
+            make_point(90.5, 90.5),
+        ];
+        let (stability, _volatility, _noise) = compute_stability(&points);
+        assert!(
+            stability > 50.0,
+            "stability should reflect fallback price series, not default 50 (got {stability})"
+        );
+    }
+
+    #[test]
+    fn relic_roi_score_differentiates_high_value_relics() {
+        let high_confidence = build_confidence_summary("high", vec![]);
+        let score_low_ev = build_relic_roi_score(Some(5.0), 80.0, &high_confidence);
+        let score_mid_ev = build_relic_roi_score(Some(30.0), 80.0, &high_confidence);
+        let score_high_ev = build_relic_roi_score(Some(60.0), 80.0, &high_confidence);
+        let score_max_ev = build_relic_roi_score(Some(80.0), 80.0, &high_confidence);
+
+        // Scores must be strictly increasing with EV
+        assert!(
+            score_low_ev < score_mid_ev,
+            "5p EV ({score_low_ev}) should score lower than 30p EV ({score_mid_ev})"
+        );
+        assert!(
+            score_mid_ev < score_high_ev,
+            "30p EV ({score_mid_ev}) should score lower than 60p EV ({score_high_ev})"
+        );
+        assert!(
+            score_high_ev < score_max_ev,
+            "60p EV ({score_high_ev}) should score lower than 80p EV ({score_max_ev})"
+        );
+        // The old formula capped at 33p EV; verify we no longer plateau early
+        assert!(
+            (score_max_ev - score_mid_ev) > 5.0,
+            "there should be meaningful score gap between 30p and 80p EV"
+        );
+        // All scores stay in valid range
+        assert!(score_max_ev <= 100.0);
+        assert!(score_low_ev >= 0.0);
+    }
+
+    #[test]
+    fn efficiency_score_penalizes_high_risk_and_rewards_high_liquidity() {
+        // Low risk, good liquidity, decent margin → should score well
+        let good = efficiency_score_percent(Some(80.0), Some(96.0), 75.0, 0)
+            .expect("efficiency score");
+        // High risk (45% penalty) → should score much lower
+        let risky = efficiency_score_percent(Some(80.0), Some(96.0), 75.0, 45)
+            .expect("efficiency score");
+        assert!(good > risky, "high risk should reduce efficiency score");
+        assert!(good <= 100.0 && good >= 0.0);
+        assert!(risky <= 100.0 && risky >= 0.0);
     }
 }
