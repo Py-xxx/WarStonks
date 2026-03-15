@@ -407,6 +407,79 @@
   color: var(--accent-amber);
 }
 
+.scanner-run-pill-red {
+  border-color: rgba(240, 79, 88, 0.28);
+  background: rgba(240, 79, 88, 0.12);
+  color: var(--accent-red);
+}
+
+.scanner-run-pill-blue {
+  border-color: rgba(74, 158, 255, 0.26);
+  background: rgba(74, 158, 255, 0.1);
+  color: var(--accent-blue);
+}
+
+.scanner-run-pill-green {
+  border-color: rgba(61, 214, 140, 0.26);
+  background: rgba(61, 214, 140, 0.1);
+  color: var(--accent-green);
+}
+
+.scanner-run-pill-purple {
+  border-color: rgba(139, 111, 255, 0.28);
+  background: rgba(139, 111, 255, 0.12);
+  color: var(--accent-purple);
+}
+
+.screenshot-import-summary-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(13, 15, 20, 0.58);
+}
+
+.screenshot-import-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.screenshot-import-legend-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.screenshot-import-legend-pill-red {
+  border: 1px solid rgba(240, 79, 88, 0.28);
+  background: rgba(240, 79, 88, 0.12);
+  color: var(--accent-red);
+}
+
+.screenshot-import-legend-pill-blue {
+  border: 1px solid rgba(74, 158, 255, 0.26);
+  background: rgba(74, 158, 255, 0.1);
+  color: var(--accent-blue);
+}
+
+.screenshot-import-legend-pill-green {
+  border: 1px solid rgba(61, 214, 140, 0.26);
+  background: rgba(61, 214, 140, 0.1);
+  color: var(--accent-green);
+}
+
+.screenshot-import-legend-pill-purple {
+  border: 1px solid rgba(139, 111, 255, 0.28);
+  background: rgba(139, 111, 255, 0.12);
+  color: var(--accent-purple);
+}
+
 .screenshot-import-rows {
   display: grid;
   gap: 10px;
