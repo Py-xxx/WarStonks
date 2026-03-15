@@ -261,6 +261,7 @@ Callers must not:
 
 Queue debug log path:
 - app data `/log/queueDebug.jsonl`
+- app data `/log/queueHealth.md`
 
 The log should be used to verify:
 - a request entered the queue
@@ -276,6 +277,14 @@ Useful events include:
 - `coalesced-leader`
 - `coalesced-hit`
 - `rate-limited`
+
+Queue health report should summarize:
+- average wait time by priority
+- max wait time by priority
+- blocked-by-instant-queue count
+- blocked-by-reserved-instant-slot count
+- coalesced hits vs leaders
+- 429 count over time
 
 ## How To Add A New WFM Request
 
