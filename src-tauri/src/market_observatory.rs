@@ -6286,10 +6286,21 @@ fn get_or_build_scanner_price_model(
         return Ok(existing.clone());
     }
 
-    if ensure_statistics_cached_for_scan(observatory_connection, item_id, slug, "base")? {
-        *refreshed_statistics_count += 1;
-    }
-    let model = build_statistics_price_model(observatory_connection, item_id, "base")?;
+    let model = match (|| -> Result<Option<ScannerPriceModel>> {
+        if ensure_statistics_cached_for_scan(observatory_connection, item_id, slug, "base")? {
+            *refreshed_statistics_count += 1;
+        }
+        build_statistics_price_model(observatory_connection, item_id, "base")
+    })() {
+        Ok(model) => model,
+        Err(error) => {
+            eprintln!(
+                "[scanner] failed to build price model for '{}' (item_id={}): {}",
+                slug, item_id, error
+            );
+            None
+        }
+    };
     price_model_cache.insert(item_id, model.clone());
     Ok(model)
 }
