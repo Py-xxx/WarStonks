@@ -2411,7 +2411,12 @@ fn merge_snapshot_chart_points(
 
     if let Some(latest_snapshot_point) = latest_snapshot_point {
         if let Some(entry) = point_by_bucket.get_mut(&latest_snapshot_point.bucket_at) {
+            entry.open_price = latest_snapshot_point.open_price.or(entry.open_price);
+            entry.closed_price = latest_snapshot_point.closed_price.or(entry.closed_price);
+            entry.low_price = latest_snapshot_point.low_price.or(entry.low_price);
+            entry.high_price = latest_snapshot_point.high_price.or(entry.high_price);
             entry.lowest_sell = latest_snapshot_point.lowest_sell.or(entry.lowest_sell);
+            entry.median_sell = latest_snapshot_point.median_sell.or(entry.median_sell);
             entry.highest_buy = latest_snapshot_point.highest_buy.or(entry.highest_buy);
         }
     }
@@ -9563,7 +9568,11 @@ mod tests {
         let merged = super::merge_snapshot_chart_points(stats_points, snapshot_points);
 
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].median_sell, Some(28.0));
+        assert_eq!(merged[0].open_price, Some(20.0));
+        assert_eq!(merged[0].closed_price, Some(20.0));
+        assert_eq!(merged[0].low_price, Some(20.0));
+        assert_eq!(merged[0].high_price, Some(22.0));
+        assert_eq!(merged[0].median_sell, Some(21.0));
         assert_eq!(merged[0].lowest_sell, Some(20.0));
         assert_eq!(merged[0].highest_buy, Some(19.0));
         assert_eq!(merged[0].fair_value_high, Some(25.0));
