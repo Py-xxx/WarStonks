@@ -1,4 +1,3 @@
-import ssIgnoreAssetUrl from '../assets/set-completion/ss-ignore.png';
 import ssQtyAssetUrl from '../assets/set-completion/ss-qty.png';
 import { runSetCompletionPaddleOcr } from './tauriClient';
 
@@ -28,14 +27,12 @@ export interface SetCompletionDetectionCell {
   itemBox: SetCompletionDetectionBox;
   nameBox: SetCompletionDetectionBox | null;
   quantityBox: SetCompletionDetectionBox | null;
-  ignoreBox: SetCompletionDetectionBox | null;
 }
 
 export interface SetCompletionScreenshotDetectionPreview {
   annotatedPreviewDataUrl: string;
   detectedItemCount: number;
   quantityCount: number;
-  ignoreCount: number;
   nameCount: number;
   cells: SetCompletionDetectionCell[];
   readings: SetCompletionDetectedReading[];
@@ -99,7 +96,6 @@ const NAME_REGION = {
   height: 0.64,
 };
 const QTY_TEMPLATE_RATIOS = [0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3];
-const IGNORE_TEMPLATE_RATIOS = [0.15, 0.17, 0.19, 0.21, 0.23, 0.25];
 const DEFAULT_CROP: SetCompletionImportCrop = {
   left: 0,
   top: 0,
@@ -107,12 +103,7 @@ const DEFAULT_CROP: SetCompletionImportCrop = {
   bottom: 0,
 };
 
-let templatePromise:
-  | Promise<{
-      qty: TemplateMask;
-      ignore: TemplateMask;
-    }>
-  | null = null;
+let templatePromise: Promise<{ qty: TemplateMask }> | null = null;
 
 export function getDefaultSetCompletionImportCrop(): SetCompletionImportCrop {
   return { ...DEFAULT_CROP };
@@ -193,9 +184,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
       quantityBox: detection.quantityBox
         ? translateBox(detection.quantityBox, descriptor.maskRect.x, descriptor.maskRect.y)
         : null,
-      ignoreBox: detection.ignoreBox
-        ? translateBox(detection.ignoreBox, descriptor.maskRect.x, descriptor.maskRect.y)
-        : null,
     });
   }
 
@@ -213,7 +201,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
     annotatedPreviewDataUrl: previewCanvas.toDataURL('image/png'),
     detectedItemCount: cells.length,
     quantityCount: cells.filter((cell) => cell.quantityBox !== null).length,
-    ignoreCount: cells.filter((cell) => cell.ignoreBox !== null).length,
     nameCount: cells.filter((cell) => cell.nameBox !== null).length,
     cells,
     readings,
@@ -233,12 +220,9 @@ async function loadFileImage(file: File): Promise<HTMLImageElement> {
   }
 }
 
-async function loadTemplates(): Promise<{ qty: TemplateMask; ignore: TemplateMask }> {
+async function loadTemplates(): Promise<{ qty: TemplateMask }> {
   if (!templatePromise) {
-    templatePromise = Promise.all([
-      loadAssetMask(ssQtyAssetUrl),
-      loadAssetMask(ssIgnoreAssetUrl),
-    ]).then(([qty, ignore]) => ({ qty, ignore }));
+    templatePromise = Promise.all([loadAssetMask(ssQtyAssetUrl)]).then(([qty]) => ({ qty }));
   }
 
   return templatePromise;
@@ -372,13 +356,12 @@ async function readDetectedTextFromCells(
 
 function analyzeTileMask(
   tileMask: HTMLCanvasElement,
-  templates: { qty: TemplateMask; ignore: TemplateMask },
+  templates: { qty: TemplateMask },
 ): {
   detected: boolean;
   previewCanvas: HTMLCanvasElement;
   nameBox: SetCompletionDetectionBox | null;
   quantityBox: SetCompletionDetectionBox | null;
-  ignoreBox: SetCompletionDetectionBox | null;
 } {
   const previewCanvas = createCanvas(tileMask.width, tileMask.height);
   const previewContext = previewCanvas.getContext('2d');
@@ -406,12 +389,6 @@ function analyzeTileMask(
     badgeRegionRect.height,
   );
 
-  const ignoreMatch = matchTemplateInRegion(
-    badgePreview,
-    templates.ignore,
-    IGNORE_TEMPLATE_RATIOS,
-    0.56,
-  );
   const quantityIconMatch = matchTemplateInRegion(
     badgePreview,
     templates.qty,
@@ -419,11 +396,8 @@ function analyzeTileMask(
     0.46,
   );
 
-  const ignoreBox = ignoreMatch
-    ? translateBox(ignoreMatch, badgeRegionRect.x, badgeRegionRect.y)
-    : null;
   const quantityBox = quantityIconMatch
-    ? deriveQuantityBox(badgePreview, quantityIconMatch, ignoreMatch, badgeRegionRect)
+    ? deriveQuantityBox(badgePreview, quantityIconMatch, badgeRegionRect)
     : null;
 
   const nameRegionRect = toPixelRegion(tileMask, NAME_REGION);
@@ -451,24 +425,22 @@ function analyzeTileMask(
       )
     : null;
 
-  const detected = nameBox !== null || quantityBox !== null || ignoreBox !== null;
+  const detected = nameBox !== null || quantityBox !== null;
   return {
     detected,
     previewCanvas,
     nameBox,
     quantityBox,
-    ignoreBox,
   };
 }
 
 function deriveQuantityBox(
   badgePreview: HTMLCanvasElement,
   quantityIconMatch: TemplateMatch,
-  ignoreMatch: TemplateMatch | null,
   badgeRegionRect: SetCompletionDetectionBox,
 ): SetCompletionDetectionBox | null {
   const stripX = clamp(
-    quantityIconMatch.x + quantityIconMatch.width + Math.round(badgePreview.width * 0.03),
+    quantityIconMatch.x + quantityIconMatch.width + Math.round(badgePreview.width * 0.05),
     0,
     badgePreview.width - 1,
   );
@@ -483,17 +455,6 @@ function deriveQuantityBox(
     stripWidth,
     badgePreview.height,
   );
-  if (ignoreMatch) {
-    suppressOverlap(
-      strip,
-      {
-        x: ignoreMatch.x - stripX,
-        y: ignoreMatch.y,
-        width: ignoreMatch.width,
-        height: ignoreMatch.height,
-      },
-    );
-  }
   trimMaskToDenseRows(strip);
   trimMaskToDenseColumns(strip);
   const digitsBounds = findMaskBounds(strip, {
@@ -503,19 +464,20 @@ function deriveQuantityBox(
     return null;
   }
 
+  const rightShift = Math.max(1, Math.round(digitsBounds.width * 0.5));
+  const verticalPadding = Math.max(2, Math.round(digitsBounds.height * 0.1));
   return {
     x:
       badgeRegionRect.x +
       stripX +
       digitsBounds.x +
-      Math.min(3, Math.max(1, Math.round(digitsBounds.width * 0.12))),
-    y: badgeRegionRect.y + digitsBounds.y,
+      rightShift,
+    y: Math.max(0, badgeRegionRect.y + digitsBounds.y - verticalPadding),
     width: Math.max(
       1,
-      digitsBounds.width -
-        Math.min(3, Math.max(1, Math.round(digitsBounds.width * 0.12))),
+      digitsBounds.width,
     ),
-    height: digitsBounds.height,
+    height: Math.max(1, digitsBounds.height + verticalPadding * 2),
   };
 }
 
@@ -654,11 +616,6 @@ function drawOverlayBoxes(
   for (const cell of cells) {
     if (cell.quantityBox) {
       strokeBox(context, cell.quantityBox, '#3dd68c', 3);
-    }
-  }
-  for (const cell of cells) {
-    if (cell.ignoreBox) {
-      strokeBox(context, cell.ignoreBox, '#8b6fff', 3);
     }
   }
 }
@@ -1154,31 +1111,6 @@ function componentBounds(width: number, component: number[]): SetCompletionDetec
     width: maxX - minX + 1,
     height: maxY - minY + 1,
   };
-}
-
-function suppressOverlap(canvas: HTMLCanvasElement, box: SetCompletionDetectionBox): void {
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return;
-  }
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const { data } = imageData;
-  const startX = clamp(box.x, 0, canvas.width - 1);
-  const startY = clamp(box.y, 0, canvas.height - 1);
-  const endX = clamp(box.x + box.width, startX, canvas.width);
-  const endY = clamp(box.y + box.height, startY, canvas.height);
-
-  for (let y = startY; y < endY; y += 1) {
-    for (let x = startX; x < endX; x += 1) {
-      const index = (y * canvas.width + x) * 4;
-      data[index] = 0;
-      data[index + 1] = 0;
-      data[index + 2] = 0;
-      data[index + 3] = 255;
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
 }
 
 function toPixelRegion(
