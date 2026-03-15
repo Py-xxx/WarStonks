@@ -161,6 +161,21 @@ function relicRarityTone(rarity: string | null): string {
   return 'unknown';
 }
 
+function relicRefinementTone(refinementKey: string): string {
+  switch (refinementKey) {
+    case 'exceptional':
+      return 'exceptional';
+    case 'flawless':
+      return 'flawless';
+    case 'radiant':
+      return 'radiant';
+    case 'intact':
+      return 'intact';
+    default:
+      return 'unknown';
+  }
+}
+
 function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): string {
   if (
     component.recommendedEntryLow !== null &&
@@ -1034,49 +1049,54 @@ export function OpportunitiesPage() {
                   </div>
                 </div>
               ) : (
-                <div className="owned-relics-table">
-                  <div className="owned-relics-header-row">
-                    <span className="owned-relics-header-label">Relic</span>
-                    <span className="owned-relics-header-label">Total</span>
-                    {RELIC_REFINEMENT_COLUMNS.map((column) => (
-                      <span key={column.key} className="owned-relics-header-label">
-                        {column.label}
-                      </span>
-                    ))}
-                    <span className="owned-relics-header-label owned-relics-header-action" aria-hidden="true" />
-                  </div>
-
+                <div className="owned-relics-list">
                   {ownedRelics.map((relic) => {
                     const relicKey = `${relic.tier}:${relic.code}`;
                     const expanded = expandedRelicKey === relicKey;
                     const imageUrl = resolveWfmAssetUrl(relic.imagePath);
                     return (
-                      <article key={relicKey} className={`owned-relics-row${expanded ? ' is-expanded' : ''}`}>
+                      <article
+                        key={relicKey}
+                        className={`farm-now-row owned-relics-row${expanded ? ' is-expanded' : ''}`}
+                      >
                         <button
                           type="button"
-                          className="owned-relics-row-button"
+                          className="farm-now-row-button owned-relics-row-button"
                           onClick={() => setExpandedRelicKey((current) => (current === relicKey ? null : relicKey))}
                         >
-                          <div className="owned-relics-row-main">
-                            <div className="owned-relics-cell owned-relics-cell-name">
-                              <span className="owned-relics-thumb">
+                          <div className="farm-now-row-main owned-relics-row-main">
+                            <div className="farm-now-cell farm-now-cell-name owned-relics-cell-name">
+                              <span className="farm-now-thumb owned-relics-thumb">
                                 {imageUrl ? (
                                   <img src={imageUrl} alt="" loading="lazy" />
                                 ) : (
                                   <span>{relic.name.slice(0, 1)}</span>
                                 )}
                               </span>
-                              <div className="owned-relics-copy">
+                              <div className="farm-now-copy owned-relics-copy">
                                 <strong>{relic.name}</strong>
-                                <span className="owned-relics-subtitle">{relic.tier} {relic.code}</span>
+                                <span className="farm-now-subtitle owned-relics-subtitle">
+                                  {relic.tier} {relic.code}
+                                </span>
                               </div>
                             </div>
-                            <span className="owned-relics-cell owned-relics-count">{relic.counts.total}</span>
-                            <span className="owned-relics-cell owned-relics-count">{relic.counts.intact}</span>
-                            <span className="owned-relics-cell owned-relics-count">{relic.counts.exceptional}</span>
-                            <span className="owned-relics-cell owned-relics-count">{relic.counts.flawless}</span>
-                            <span className="owned-relics-cell owned-relics-count">{relic.counts.radiant}</span>
-                            <span className="owned-relics-cell owned-relics-action">{expanded ? '−' : '+'}</span>
+                            <span className="farm-now-cell owned-relics-cell-total">
+                              <span className="owned-relics-total-label">Total</span>
+                              <strong>{relic.counts.total}</strong>
+                            </span>
+                            <div className="farm-now-cell owned-relics-refinement-pills">
+                              {RELIC_REFINEMENT_COLUMNS.map((column) => (
+                                <span
+                                  key={`${relicKey}-${column.key}`}
+                                  className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(column.key)}`}
+                                >
+                                  {column.label} · {relic.counts[column.key]}
+                                </span>
+                              ))}
+                            </div>
+                            <span className="farm-now-cell farm-now-cell-action owned-relics-action">
+                              {expanded ? '−' : '+'}
+                            </span>
                           </div>
                         </button>
 
@@ -1292,7 +1312,11 @@ export function OpportunitiesPage() {
                               </div>
                             </div>
                             <span className="farm-now-cell farm-now-cell-refinement">
-                              <span className="market-panel-badge tone-blue">{row.refinementLabel}</span>
+                              <span
+                                className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(row.refinementKey)}`}
+                              >
+                                {row.refinementLabel}
+                              </span>
                             </span>
                             <span className="farm-now-cell farm-now-cell-owned">
                               ×{row.ownedCount}
