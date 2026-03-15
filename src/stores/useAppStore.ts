@@ -2158,6 +2158,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         item.variantKey,
         latestState.sellerMode,
         getWatchlistRequestPriority(item),
+        'watchlist',
       );
       if (!isLatestWatchlistRefresh(id, refreshGeneration)) {
         return { alertTriggered: false };
