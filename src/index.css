@@ -362,12 +362,110 @@
   background: rgba(5, 7, 10, 0.92);
 }
 
+.screenshot-import-preview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 12px;
+  width: 100%;
+}
+
+.screenshot-import-annotated-shell {
+  position: relative;
+  cursor: crosshair;
+}
+
 .screenshot-import-mask-image {
   display: block;
   width: 100%;
   max-height: 320px;
   object-fit: contain;
   image-rendering: crisp-edges;
+}
+
+.screenshot-import-preview-cursor {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  margin-top: -8px;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(255, 79, 90, 0.7);
+  pointer-events: none;
+}
+
+.screenshot-import-zoom-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.screenshot-import-zoom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.screenshot-import-zoom-shell {
+  position: relative;
+  height: 220px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(74, 158, 255, 0.16);
+  background: #05070a;
+}
+
+.screenshot-import-zoom-image {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  image-rendering: crisp-edges;
+}
+
+.screenshot-import-zoom-crosshair {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.screenshot-import-zoom-crosshair::before,
+.screenshot-import-zoom-crosshair::after {
+  content: '';
+  position: absolute;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.screenshot-import-zoom-crosshair::before {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.screenshot-import-zoom-crosshair::after {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.screenshot-import-trace-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.screenshot-import-trace-field {
+  gap: 8px;
+}
+
+.screenshot-import-trace-value {
+  color: var(--accent-blue);
+  font-size: 12px;
+  letter-spacing: 0.04em;
 }
 
 .screenshot-import-summary {
@@ -472,6 +570,12 @@
   border: 1px solid rgba(61, 214, 140, 0.26);
   background: rgba(61, 214, 140, 0.1);
   color: var(--accent-green);
+}
+
+.screenshot-import-legend-pill-red-trace {
+  border: 1px solid rgba(255, 79, 90, 0.28);
+  background: rgba(255, 79, 90, 0.16);
+  color: #ff7b84;
 }
 
 .screenshot-import-legend-pill-purple {

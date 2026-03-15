@@ -20,6 +20,12 @@ export interface SetCompletionDetectionBox {
   height: number;
 }
 
+export interface SetCompletionTraceSettings {
+  smoothness: number;
+  thickness: number;
+  noiseCutoff: number;
+}
+
 export interface SetCompletionDetectionCell {
   rowId: string;
   tileIndex: number;
@@ -65,6 +71,11 @@ const STRICT_SET_COMPLETION_IMPORT_COLORS = [
   { red: 0xad, green: 0x9a, blue: 0x5f, hex: '#ad9a5f' },
 ] as const;
 const DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE = 8;
+const DEFAULT_SET_COMPLETION_TRACE_SETTINGS: SetCompletionTraceSettings = {
+  smoothness: 2,
+  thickness: 2,
+  noiseCutoff: 10,
+};
 const MASK_SCALE = 4;
 const GRID_COLUMNS = 7;
 const GRID_ROWS = 3;
@@ -104,6 +115,10 @@ export function getDefaultSetCompletionImportTolerance(): number {
   return DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE;
 }
 
+export function getDefaultSetCompletionTraceSettings(): SetCompletionTraceSettings {
+  return { ...DEFAULT_SET_COMPLETION_TRACE_SETTINGS };
+}
+
 export function getSetCompletionImportStrictColors(): string[] {
   return STRICT_SET_COMPLETION_IMPORT_COLORS.map((color) => color.hex);
 }
@@ -111,6 +126,7 @@ export function getSetCompletionImportStrictColors(): string[] {
 export async function analyzeSetCompletionInventoryScreenshot(
   file: File,
   crop: SetCompletionImportCrop,
+  traceSettings: SetCompletionTraceSettings,
   onProgress?: (progress: SetCompletionScreenshotProgress) => void,
 ): Promise<SetCompletionScreenshotDetectionPreview> {
   const [image, templates] = await Promise.all([loadFileImage(file), loadTemplates()]);
@@ -152,7 +168,7 @@ export async function analyzeSetCompletionInventoryScreenshot(
       descriptor.maskRect.width,
       descriptor.maskRect.height,
     );
-    const detection = analyzeTileMask(tileMask, templates);
+    const detection = analyzeTileMask(tileMask, templates, traceSettings);
     if (!detection.detected) {
       continue;
     }
@@ -319,6 +335,7 @@ function buildTileDescriptors(
 function analyzeTileMask(
   tileMask: HTMLCanvasElement,
   templates: { qty: TemplateMask },
+  traceSettings: SetCompletionTraceSettings,
 ): {
   detected: boolean;
   previewCanvas: HTMLCanvasElement;
@@ -375,6 +392,7 @@ function analyzeTileMask(
     nameBox,
     quantityBox,
   });
+  applyLetterTraceOverlay(previewCanvas, tileMask, nameBox, traceSettings);
   const detected = nameBox !== null || quantityBox !== null;
   return {
     detected,
@@ -682,6 +700,41 @@ function cleanupPreviewMask(
   return canvas;
 }
 
+function applyLetterTraceOverlay(
+  previewCanvas: HTMLCanvasElement,
+  sourceMask: HTMLCanvasElement,
+  nameBox: SetCompletionDetectionBox | null,
+  traceSettings: SetCompletionTraceSettings,
+): void {
+  if (!nameBox) {
+    return;
+  }
+
+  const traceRegion = extractPixelCanvas(
+    sourceMask,
+    nameBox.x,
+    nameBox.y,
+    nameBox.width,
+    nameBox.height,
+  );
+  const tracePixels = extractBinaryPixels(traceRegion);
+  const filteredPixels = filterTracePixels(
+    tracePixels,
+    traceRegion.width,
+    traceRegion.height,
+    traceSettings,
+  );
+  drawTracePixels(
+    previewCanvas,
+    filteredPixels,
+    traceRegion.width,
+    traceRegion.height,
+    nameBox.x,
+    nameBox.y,
+    traceSettings.thickness,
+  );
+}
+
 function cleanupNameDetectionMask(source: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
   removeThinMaskComponents(canvas);
@@ -693,6 +746,173 @@ function cleanupNameDetectionMask(source: HTMLCanvasElement): HTMLCanvasElement 
     padding: 4,
   });
   return trimmed;
+}
+
+function filterTracePixels(
+  pixels: Uint8Array<ArrayBufferLike>,
+  width: number,
+  height: number,
+  traceSettings: SetCompletionTraceSettings,
+): Uint8Array<ArrayBufferLike> {
+  let working: Uint8Array<ArrayBufferLike> = new Uint8Array(pixels);
+  working = removeSmallBinaryComponents(working, width, height, traceSettings.noiseCutoff);
+  for (let step = 0; step < traceSettings.smoothness; step += 1) {
+    working = smoothBinaryPixels(working, width, height);
+  }
+  return working;
+}
+
+function removeSmallBinaryComponents(
+  pixels: Uint8Array<ArrayBufferLike>,
+  width: number,
+  height: number,
+  minArea: number,
+): Uint8Array<ArrayBufferLike> {
+  const next = new Uint8Array(pixels);
+  const visited = new Uint8Array(width * height);
+
+  for (let index = 0; index < pixels.length; index += 1) {
+    if (visited[index] || pixels[index] === 0) {
+      continue;
+    }
+    const component = collectBinaryComponent(pixels, width, height, visited, index);
+    if (component.length >= minArea) {
+      continue;
+    }
+    for (const pixelIndex of component) {
+      next[pixelIndex] = 0;
+    }
+  }
+
+  return next;
+}
+
+function smoothBinaryPixels(
+  pixels: Uint8Array<ArrayBufferLike>,
+  width: number,
+  height: number,
+): Uint8Array<ArrayBufferLike> {
+  const next = new Uint8Array(pixels);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      let activeNeighbors = 0;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          if (dx === 0 && dy === 0) {
+            continue;
+          }
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+            continue;
+          }
+          if (pixels[ny * width + nx] === 1) {
+            activeNeighbors += 1;
+          }
+        }
+      }
+      if (pixels[index] === 1 && activeNeighbors <= 1) {
+        next[index] = 0;
+      } else if (pixels[index] === 0 && activeNeighbors >= 5) {
+        next[index] = 1;
+      }
+    }
+  }
+  return next;
+}
+
+function collectBinaryComponent(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  visited: Uint8Array,
+  startIndex: number,
+): number[] {
+  const queue = [startIndex];
+  const component: number[] = [];
+  visited[startIndex] = 1;
+
+  while (queue.length) {
+    const current = queue.pop()!;
+    component.push(current);
+    const cx = current % width;
+    const cy = Math.floor(current / width);
+    const neighbors = [
+      [cx - 1, cy],
+      [cx + 1, cy],
+      [cx, cy - 1],
+      [cx, cy + 1],
+    ];
+    for (const [nx, ny] of neighbors) {
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+        continue;
+      }
+      const neighbor = ny * width + nx;
+      if (visited[neighbor] || pixels[neighbor] === 0) {
+        continue;
+      }
+      visited[neighbor] = 1;
+      queue.push(neighbor);
+    }
+  }
+
+  return component;
+}
+
+function drawTracePixels(
+  canvas: HTMLCanvasElement,
+  pixels: Uint8Array<ArrayBufferLike>,
+  width: number,
+  height: number,
+  offsetX: number,
+  offsetY: number,
+  thickness: number,
+): void {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return;
+  }
+
+  context.fillStyle = '#ff4f5a';
+  const radius = Math.max(0, thickness - 1);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      if (pixels[index] === 0 || !isTraceEdgePixel(pixels, width, height, x, y)) {
+        continue;
+      }
+      context.fillRect(offsetX + x - radius, offsetY + y - radius, radius * 2 + 1, radius * 2 + 1);
+    }
+  }
+}
+
+function isTraceEdgePixel(
+  pixels: Uint8Array<ArrayBufferLike>,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+): boolean {
+  if (pixels[y * width + x] === 0) {
+    return false;
+  }
+  const neighbors = [
+    [x - 1, y],
+    [x + 1, y],
+    [x, y - 1],
+    [x, y + 1],
+  ];
+  for (const [nx, ny] of neighbors) {
+    if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+      return true;
+    }
+    if (pixels[ny * width + nx] === 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildPreviewKeepRegions(
