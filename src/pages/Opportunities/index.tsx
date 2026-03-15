@@ -639,7 +639,7 @@ function SetCompletionScreenshotImportModal({
                             <input
                               type="range"
                               min={2}
-                              max={8}
+                              max={30}
                               step={0.5}
                               value={zoomLevel}
                               onChange={(event) => setZoomLevel(Number(event.target.value))}
