@@ -255,10 +255,6 @@ pub fn configure_wfm_scheduler_health_log(path: Option<PathBuf>) {
     }
 }
 
-pub fn acquire_wfm_slot(priority: RequestPriority, label: &str) {
-    let _ = acquire_wfm_slot_interruptible(priority, label, || false);
-}
-
 pub fn acquire_wfm_slot_interruptible<C>(
     priority: RequestPriority,
     label: &str,
