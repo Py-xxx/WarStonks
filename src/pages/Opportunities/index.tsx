@@ -89,6 +89,8 @@ type ScreenshotImportPreviewRow = SetCompletionScreenshotOcrRow & {
   matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none' | 'manual';
   matchStatus: 'matched' | 'matched-low-confidence' | 'unmatched';
   matchReason: string;
+  chosenOcrText: string | null;
+  chosenOcrConfidence: number | null;
   removed: boolean;
   remapQuery: string;
 };
@@ -110,6 +112,8 @@ function mergeScreenshotImportRows(
     matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none';
     status: 'matched' | 'matched-low-confidence' | 'unmatched';
     reason: string;
+    chosenOcrText: string | null;
+    chosenOcrConfidence: number | null;
   }>,
 ): ScreenshotImportPreviewRow[] {
   const byId = new Map(matchRows.map((row) => [row.rowId, row]));
@@ -122,8 +126,10 @@ function mergeScreenshotImportRows(
       matchKind: matched?.matchKind ?? 'none',
       matchStatus: matched?.status ?? 'unmatched',
       matchReason: matched?.reason ?? 'No planner component match found.',
+      chosenOcrText: matched?.chosenOcrText ?? row.detectedName,
+      chosenOcrConfidence: matched?.chosenOcrConfidence ?? row.nameConfidence,
       removed: false,
-      remapQuery: matched?.matchedItem?.name ?? row.detectedName,
+      remapQuery: matched?.matchedItem?.name ?? matched?.chosenOcrText ?? row.detectedName,
     };
   });
 }
@@ -485,6 +491,7 @@ function SetCompletionScreenshotImportModal({
   blockedRowCount,
   readyRowCount,
   activeRemapRowId,
+  expandedDebugRowId,
   onClose,
   onPickFile,
   onCropChange,
@@ -493,6 +500,7 @@ function SetCompletionScreenshotImportModal({
   onRemapQueryChange,
   onSelectRemap,
   onSetActiveRemapRow,
+  onToggleDebugRow,
   onApply,
 }: {
   open: boolean;
@@ -508,6 +516,7 @@ function SetCompletionScreenshotImportModal({
   blockedRowCount: number;
   readyRowCount: number;
   activeRemapRowId: string | null;
+  expandedDebugRowId: string | null;
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onCropChange: (nextCrop: SetCompletionImportCrop) => void;
@@ -516,6 +525,7 @@ function SetCompletionScreenshotImportModal({
   onRemapQueryChange: (rowId: string, value: string) => void;
   onSelectRemap: (rowId: string, item: PlannerCatalogItem) => void;
   onSetActiveRemapRow: (rowId: string | null) => void;
+  onToggleDebugRow: (rowId: string) => void;
   onApply: () => Promise<void>;
 }) {
   if (!open) {
@@ -698,14 +708,21 @@ function SetCompletionScreenshotImportModal({
                           <img src={row.thumbnailDataUrl} alt="" />
                         </span>
                         <div className="screenshot-import-row-copy">
-                          <strong>{row.matchedItem?.name ?? (row.detectedName || 'Unreadable tile')}</strong>
+                          <strong>{row.matchedItem?.name ?? (row.chosenOcrText || row.detectedName || 'Unreadable tile')}</strong>
                           <span>
-                            OCR: {row.detectedName || 'No text detected'} · Qty:{' '}
+                            OCR: {row.chosenOcrText || row.detectedName || 'No text detected'} · Qty:{' '}
                             {row.quantity === null ? 'Unreadable' : row.quantity}
                           </span>
                           <span>{describeScreenshotImportRowState(row)}</span>
                         </div>
                         <div className="screenshot-import-row-actions">
+                          <button
+                            type="button"
+                            className="settings-secondary-btn screenshot-import-row-toggle"
+                            onClick={() => onToggleDebugRow(row.rowId)}
+                          >
+                            {expandedDebugRowId === row.rowId ? 'Hide OCR' : 'Show OCR'}
+                          </button>
                           <button
                             type="button"
                             className="settings-secondary-btn screenshot-import-row-toggle"
@@ -753,6 +770,29 @@ function SetCompletionScreenshotImportModal({
                             </div>
                           ) : null}
                           <div className="watchlist-form-note">{row.matchReason}</div>
+                        </div>
+                      ) : null}
+                      {!row.removed && expandedDebugRowId === row.rowId ? (
+                        <div className="screenshot-import-row-debug">
+                          <div className="screenshot-import-row-debug-head">
+                            <span className="panel-title-eyebrow">OCR Diagnostics</span>
+                            <span className="watchlist-form-note">
+                              Chosen OCR: {row.chosenOcrText || '—'} · Match {Math.round(row.matchConfidence * 100)}%
+                            </span>
+                          </div>
+                          <div className="screenshot-import-ocr-variants">
+                            {row.ocrVariants.length === 0 ? (
+                              <div className="watchlist-form-note">No OCR variants were captured for this tile.</div>
+                            ) : (
+                              row.ocrVariants.map((variant) => (
+                                <div key={`${row.rowId}-${variant.key}`} className="screenshot-import-ocr-variant">
+                                  <strong>{variant.label}</strong>
+                                  <span>{variant.text || 'No readable text'}</span>
+                                  <span>{Math.round(variant.confidence * 100)}% OCR confidence</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
                         </div>
                       ) : null}
                     </article>
@@ -824,6 +864,7 @@ export function OpportunitiesPage() {
     useState<SetCompletionScreenshotProgress | null>(null);
   const [screenshotImportError, setScreenshotImportError] = useState<string | null>(null);
   const [activeRemapRowId, setActiveRemapRowId] = useState<string | null>(null);
+  const [expandedImportDebugRowId, setExpandedImportDebugRowId] = useState<string | null>(null);
   const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const setActivePage = useAppStore((state) => state.setActivePage);
@@ -1221,6 +1262,7 @@ export function OpportunitiesPage() {
     setScreenshotImportProcessing(false);
     setScreenshotImportApplying(false);
     setActiveRemapRowId(null);
+    setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(null);
     setScreenshotImportPreviewUrl((current) => {
@@ -1261,7 +1303,7 @@ export function OpportunitiesPage() {
       const matchRows = await matchSetCompletionScreenshotRows({
         rows: ocrRows.map((row) => ({
           rowId: row.rowId,
-          detectedName: row.detectedName,
+          ocrVariants: row.ocrVariants,
         })),
         allowedItems: plannerImportCandidates,
       });
@@ -2009,6 +2051,7 @@ export function OpportunitiesPage() {
         blockedRowCount={screenshotImportCandidateBlockedRows.length}
         readyRowCount={screenshotImportReadyRows.length}
         activeRemapRowId={activeRemapRowId}
+        expandedDebugRowId={expandedImportDebugRowId}
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
         onCropChange={setScreenshotImportCrop}
@@ -2056,6 +2099,9 @@ export function OpportunitiesPage() {
           setActiveRemapRowId(null);
         }}
         onSetActiveRemapRow={setActiveRemapRowId}
+        onToggleDebugRow={(rowId) =>
+          setExpandedImportDebugRowId((current) => (current === rowId ? null : rowId))
+        }
         onApply={handleApplyScreenshotImport}
       />
     </>

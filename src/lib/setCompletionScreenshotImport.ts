@@ -1,3 +1,5 @@
+import type { SetCompletionScreenshotOcrVariant } from '../types';
+
 export interface SetCompletionImportCrop {
   left: number;
   top: number;
@@ -11,6 +13,7 @@ export interface SetCompletionScreenshotOcrRow {
   thumbnailDataUrl: string;
   detectedName: string;
   nameConfidence: number;
+  ocrVariants: SetCompletionScreenshotOcrVariant[];
   quantity: number | null;
   quantityConfidence: number;
   quantityState: 'detected' | 'defaulted' | 'unresolved';
@@ -110,27 +113,12 @@ export async function processSetCompletionInventoryScreenshot(
         quantityState = 'unresolved';
       }
 
-      const nameCanvas = preprocessForOcr(
-        extractRegionCanvas(tileCanvas, {
-          left: 0.08,
-          top: 0.5,
-          width: 0.84,
-          height: 0.42,
-        }),
-        'text',
-      );
+      const ocrVariants = await recognizeNameVariants(worker, PSM, tileCanvas);
+      const bestVariant = chooseBestOcrVariant(ocrVariants);
+      const detectedName = bestVariant?.text ?? '';
+      const nameConfidence = bestVariant?.confidence ?? 0;
 
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-        preserve_interword_spaces: '1',
-        tessedit_char_whitelist:
-          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '-",
-      });
-      const nameResult = await worker.recognize(nameCanvas);
-      const detectedName = cleanupDetectedName(nameResult.data.text);
-      const nameConfidence = (nameResult.data.confidence ?? 0) / 100;
-
-      if (!detectedName && quantityState === 'defaulted' && !regionHasSignal(nameCanvas)) {
+      if (!detectedName && quantityState === 'defaulted' && !tileHasNameSignal(tileCanvas)) {
         continue;
       }
 
@@ -140,6 +128,7 @@ export async function processSetCompletionInventoryScreenshot(
         thumbnailDataUrl: tileCanvas.toDataURL('image/png'),
         detectedName,
         nameConfidence,
+        ocrVariants,
         quantity,
         quantityConfidence,
         quantityState,
@@ -250,7 +239,7 @@ function extractPixelCanvas(
 
 function preprocessForOcr(
   source: HTMLCanvasElement,
-  mode: 'text' | 'digits',
+  mode: 'text' | 'text-strong' | 'digits',
 ): HTMLCanvasElement {
   const scale = mode === 'digits' ? 4 : 3;
   const canvas = createCanvas(source.width * scale, source.height * scale);
@@ -268,8 +257,12 @@ function preprocessForOcr(
     const green = data[index + 1];
     const blue = data[index + 2];
     const luminance = red * 0.299 + green * 0.587 + blue * 0.114;
-    const boosted = Math.max(0, Math.min(255, (luminance - 50) * 2.25));
-    const threshold = mode === 'digits' ? 130 : 118;
+    const boosted = Math.max(
+      0,
+      Math.min(255, (luminance - (mode === 'text-strong' ? 62 : 50)) * (mode === 'text-strong' ? 2.8 : 2.25)),
+    );
+    const threshold =
+      mode === 'digits' ? 130 : mode === 'text-strong' ? 108 : 118;
     const value = boosted >= threshold ? 255 : 0;
     data[index] = value;
     data[index + 1] = value;
@@ -305,7 +298,130 @@ function cleanupDetectedName(value: string): string {
   return value
     .replace(/\s+/g, ' ')
     .replace(/\s*[\|/\\]\s*/g, ' ')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
     .trim();
+}
+
+async function recognizeNameVariants(
+  worker: any,
+  PSM: any,
+  tileCanvas: HTMLCanvasElement,
+): Promise<SetCompletionScreenshotOcrVariant[]> {
+  const passes = [
+    {
+      key: 'standard',
+      label: 'Standard Crop',
+      region: { left: 0.08, top: 0.47, width: 0.84, height: 0.47 },
+      mode: 'text' as const,
+      psm: PSM.SINGLE_BLOCK,
+    },
+    {
+      key: 'tall',
+      label: 'Tall Crop',
+      region: { left: 0.06, top: 0.42, width: 0.88, height: 0.54 },
+      mode: 'text' as const,
+      psm: PSM.SINGLE_BLOCK,
+    },
+    {
+      key: 'strong',
+      label: 'High Contrast',
+      region: { left: 0.06, top: 0.44, width: 0.88, height: 0.5 },
+      mode: 'text-strong' as const,
+      psm: PSM.SPARSE_TEXT,
+    },
+  ];
+
+  const variants: SetCompletionScreenshotOcrVariant[] = [];
+  for (const pass of passes) {
+    const nameCanvas = preprocessForOcr(extractRegionCanvas(tileCanvas, pass.region), pass.mode);
+    await worker.setParameters({
+      tessedit_pageseg_mode: pass.psm as unknown as string,
+      preserve_interword_spaces: '1',
+      tessedit_char_whitelist:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '-",
+    });
+    const result = await worker.recognize(nameCanvas, {}, { blocks: true });
+    const linesText = extractBlockLinesText(result.data.blocks);
+    const rawText = cleanupDetectedName(result.data.text);
+    const mergedText = cleanupDetectedName(linesText || rawText);
+    if (!mergedText && !regionHasSignal(nameCanvas)) {
+      continue;
+    }
+    variants.push({
+      key: pass.key,
+      label: pass.label,
+      text: mergedText,
+      confidence: (result.data.confidence ?? 0) / 100,
+    });
+  }
+
+  return dedupeOcrVariants(variants);
+}
+
+function chooseBestOcrVariant(
+  variants: SetCompletionScreenshotOcrVariant[],
+): SetCompletionScreenshotOcrVariant | null {
+  if (!variants.length) {
+    return null;
+  }
+
+  return [...variants].sort((left, right) => {
+    const lengthDelta = right.text.length - left.text.length;
+    if (lengthDelta !== 0) {
+      return lengthDelta;
+    }
+    return right.confidence - left.confidence;
+  })[0];
+}
+
+function dedupeOcrVariants(
+  variants: SetCompletionScreenshotOcrVariant[],
+): SetCompletionScreenshotOcrVariant[] {
+  const byText = new Map<string, SetCompletionScreenshotOcrVariant>();
+  for (const variant of variants) {
+    const normalized = cleanupDetectedName(variant.text).toLowerCase();
+    if (!normalized) {
+      continue;
+    }
+    const existing = byText.get(normalized);
+    if (!existing || variant.confidence > existing.confidence) {
+      byText.set(normalized, { ...variant, text: cleanupDetectedName(variant.text) });
+    }
+  }
+
+  return [...byText.values()].sort((left, right) => right.confidence - left.confidence);
+}
+
+function extractBlockLinesText(blocks: Array<{ paragraphs?: Array<{ lines?: Array<{ text: string }> }> }> | null): string {
+  if (!blocks?.length) {
+    return '';
+  }
+
+  const lines: string[] = [];
+  for (const block of blocks) {
+    for (const paragraph of block.paragraphs ?? []) {
+      for (const line of paragraph.lines ?? []) {
+        const cleaned = cleanupDetectedName(line.text);
+        if (cleaned) {
+          lines.push(cleaned);
+        }
+      }
+    }
+  }
+
+  return lines.join(' ');
+}
+
+function tileHasNameSignal(tileCanvas: HTMLCanvasElement): boolean {
+  return regionHasSignal(
+    extractRegionCanvas(tileCanvas, {
+      left: 0.06,
+      top: 0.42,
+      width: 0.88,
+      height: 0.54,
+    }),
+  );
 }
 
 function createCanvas(width: number, height: number): HTMLCanvasElement {
