@@ -34,6 +34,12 @@ export interface SetCompletionImportColorSample {
   hex: string;
 }
 
+const DEFAULT_SET_COMPLETION_IMPORT_COLOR = {
+  red: 190,
+  green: 169,
+  blue: 102,
+} as const;
+
 const DEFAULT_CROP: SetCompletionImportCrop = {
   left: 0,
   top: 0,
@@ -172,6 +178,21 @@ export async function sampleSetCompletionImportColorAtPoint(
     green: data[1],
     blue: data[2],
     hex: rgbToHex(data[0], data[1], data[2]),
+  };
+}
+
+export function getDefaultSetCompletionImportColorSample(): SetCompletionImportColorSample {
+  return {
+    x: 0.5,
+    y: 0.5,
+    red: DEFAULT_SET_COMPLETION_IMPORT_COLOR.red,
+    green: DEFAULT_SET_COMPLETION_IMPORT_COLOR.green,
+    blue: DEFAULT_SET_COMPLETION_IMPORT_COLOR.blue,
+    hex: rgbToHex(
+      DEFAULT_SET_COMPLETION_IMPORT_COLOR.red,
+      DEFAULT_SET_COMPLETION_IMPORT_COLOR.green,
+      DEFAULT_SET_COMPLETION_IMPORT_COLOR.blue,
+    ),
   };
 }
 
@@ -899,10 +920,15 @@ function suggestSetCompletionImportColorSampleFromImage(
   const cropHeight = Math.max(1, Math.round(image.naturalHeight * (1 - crop.top - crop.bottom)));
   const { data } = context.getImageData(cropX, cropY, cropWidth, cropHeight);
 
-  let bestScore = 0;
+  let bestScore = Number.POSITIVE_INFINITY;
   let bestX = Math.round(cropWidth * 0.5);
   let bestY = Math.round(cropHeight * 0.7);
-  let bestColor = [214, 186, 112];
+  let bestColor: [number, number, number] = [
+    DEFAULT_SET_COMPLETION_IMPORT_COLOR.red,
+    DEFAULT_SET_COMPLETION_IMPORT_COLOR.green,
+    DEFAULT_SET_COMPLETION_IMPORT_COLOR.blue,
+  ];
+  let foundMatch = false;
 
   for (let y = Math.round(cropHeight * 0.28); y < cropHeight; y += 2) {
     for (let x = 0; x < cropWidth; x += 2) {
@@ -911,7 +937,11 @@ function suggestSetCompletionImportColorSampleFromImage(
       const green = data[index + 1];
       const blue = data[index + 2];
       const score = scorePotentialTextPixel(red, green, blue);
-      if (score > bestScore) {
+      if (score === Number.POSITIVE_INFINITY || score > 72) {
+        continue;
+      }
+      foundMatch = true;
+      if (score < bestScore) {
         bestScore = score;
         bestX = x;
         bestY = y;
@@ -921,8 +951,8 @@ function suggestSetCompletionImportColorSampleFromImage(
   }
 
   return {
-    x: (cropX + bestX) / image.naturalWidth,
-    y: (cropY + bestY) / image.naturalHeight,
+    x: foundMatch ? (cropX + bestX) / image.naturalWidth : 0.5,
+    y: foundMatch ? (cropY + bestY) / image.naturalHeight : 0.5,
     red: bestColor[0],
     green: bestColor[1],
     blue: bestColor[2],
@@ -931,14 +961,17 @@ function suggestSetCompletionImportColorSampleFromImage(
 }
 
 function scorePotentialTextPixel(red: number, green: number, blue: number): number {
-  if (red < 120 || green < 90 || blue > 170) {
-    return 0;
+  if (red < 110 || green < 90 || blue > 170) {
+    return Number.POSITIVE_INFINITY;
   }
-  if (red < green || Math.abs(red - green) > 70) {
-    return 0;
-  }
-  const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
-  return red * 0.5 + green * 0.4 - blue * 0.25 + chroma * 0.35;
+  const colorDistance =
+    Math.abs(red - DEFAULT_SET_COMPLETION_IMPORT_COLOR.red) +
+    Math.abs(green - DEFAULT_SET_COMPLETION_IMPORT_COLOR.green) +
+    Math.abs(blue - DEFAULT_SET_COMPLETION_IMPORT_COLOR.blue);
+  const channelSpread = Math.abs(red - green);
+  const bluePenalty = Math.max(0, blue - 120) * 0.75;
+  const darkPenalty = red < 145 || green < 125 ? 18 : 0;
+  return colorDistance + channelSpread * 0.35 + bluePenalty + darkPenalty;
 }
 
 function rgbToHex(red: number, green: number, blue: number): string {
