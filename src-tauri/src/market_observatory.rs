@@ -2424,6 +2424,38 @@ fn merge_snapshot_chart_points(
     point_by_bucket.into_values().collect()
 }
 
+fn realistic_live_median_price(
+    snapshot: &MarketSnapshot,
+    sell_orders: &[WfmDetailedOrder],
+) -> Option<f64> {
+    let live_snapshot_median = snapshot.median_sell;
+    let liquidity_score = liquidity_score_percent(snapshot);
+    let live_percentile = choose_live_exit_percentile(snapshot, liquidity_score);
+    let ladder_target = weighted_sell_percentile_price(sell_orders, live_percentile);
+
+    match (live_snapshot_median, ladder_target) {
+        (Some(snapshot_median), Some(ladder_price)) => Some(snapshot_median.min(ladder_price)),
+        (Some(snapshot_median), None) => Some(snapshot_median),
+        (None, Some(ladder_price)) => Some(ladder_price),
+        (None, None) => None,
+    }
+}
+
+fn apply_realistic_live_median_to_latest_bucket(
+    chart_points: &mut [AnalyticsChartPoint],
+    snapshot: &MarketSnapshot,
+    sell_orders: &[WfmDetailedOrder],
+) {
+    let Some(realistic_median) = realistic_live_median_price(snapshot, sell_orders) else {
+        return;
+    };
+    let Some(last_point) = chart_points.last_mut() else {
+        return;
+    };
+
+    last_point.median_sell = Some(realistic_median);
+}
+
 fn filter_supported_order(order: &WfmOrderRecord, variant_key: &str, seller_mode: &str) -> bool {
     if order.visible != Some(true) {
         return false;
@@ -2979,6 +3011,25 @@ fn capture_tracking_snapshot_with_priority(
     seller_mode: &str,
     priority: RequestPriority,
 ) -> Result<MarketSnapshot> {
+    let (_, _, snapshot) = capture_tracking_snapshot_with_orders_priority(
+        connection,
+        item_id,
+        slug,
+        variant_key,
+        seller_mode,
+        priority,
+    )?;
+    Ok(snapshot)
+}
+
+fn capture_tracking_snapshot_with_orders_priority(
+    connection: &Connection,
+    item_id: i64,
+    slug: &str,
+    variant_key: &str,
+    seller_mode: &str,
+    priority: RequestPriority,
+) -> Result<(Vec<WfmDetailedOrder>, Vec<WfmDetailedOrder>, MarketSnapshot)> {
     let (_, sell_orders, buy_orders, snapshot) = fetch_filtered_orders(
         slug,
         variant_key,
@@ -3005,8 +3056,7 @@ fn capture_tracking_snapshot_with_priority(
         false,
         Some(snapshot.captured_at.as_str()),
     )?;
-    let _ = (sell_orders, buy_orders);
-    Ok(snapshot)
+    Ok((sell_orders, buy_orders, snapshot))
 }
 
 fn capture_tracking_snapshot(
@@ -3152,32 +3202,6 @@ fn latest_snapshot_for_item(
     snapshot.depth_levels = rows.collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(Some(snapshot))
-}
-
-fn maybe_capture_fresh_snapshot(
-    connection: &Connection,
-    item_id: i64,
-    slug: &str,
-    variant_key: &str,
-    seller_mode: &str,
-) -> Result<MarketSnapshot> {
-    if let Some(snapshot) = latest_snapshot_for_item(connection, item_id, variant_key, seller_mode)?
-    {
-        if let Some(captured_at) = parse_timestamp(&snapshot.captured_at) {
-            if now_utc() - captured_at < TimeDuration::minutes(TRACKING_SNAPSHOT_INTERVAL_MINUTES) {
-                return Ok(snapshot);
-            }
-        }
-    }
-
-    capture_tracking_snapshot_with_priority(
-        connection,
-        item_id,
-        slug,
-        variant_key,
-        seller_mode,
-        RequestPriority::Instant,
-    )
 }
 
 fn aggregate_weighted(values: impl Iterator<Item = (Option<f64>, f64)>) -> Option<f64> {
@@ -8288,8 +8312,14 @@ fn build_item_analytics_inner(
         }
     }
 
-    let snapshot =
-        maybe_capture_fresh_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode)?;
+    let (live_sell_orders, _, snapshot) = capture_tracking_snapshot_with_orders_priority(
+        &connection,
+        item_id,
+        &slug,
+        &variant_key,
+        &seller_mode,
+        RequestPriority::Instant,
+    )?;
     let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
         load_statistics_rows_for_domain(&connection, item_id, &variant_key, "48hours")?;
     let trend_points = resample_rows(
@@ -8331,6 +8361,7 @@ fn build_item_analytics_inner(
             analytics_bucket_size_key,
         )?,
     );
+    apply_realistic_live_median_to_latest_bucket(&mut chart_points, &snapshot, &live_sell_orders);
     if let Some(zone_bands) = historical_zone_bands.as_ref() {
         for point in &mut chart_points {
             point.entry_zone = Some(zone_bands.entry_target);
@@ -9576,6 +9607,194 @@ mod tests {
         assert_eq!(merged[0].lowest_sell, Some(20.0));
         assert_eq!(merged[0].highest_buy, Some(19.0));
         assert_eq!(merged[0].fair_value_high, Some(25.0));
+    }
+
+    #[test]
+    fn apply_realistic_live_median_caps_latest_bucket_against_live_ladder() {
+        let snapshot = MarketSnapshot {
+            captured_at: "2026-03-11T00:00:00Z".to_string(),
+            lowest_sell: Some(18.0),
+            median_sell: Some(24.0),
+            highest_buy: Some(17.0),
+            spread: Some(1.0),
+            spread_pct: Some(5.0),
+            sell_order_count: 8,
+            sell_quantity: 8,
+            buy_order_count: 4,
+            buy_quantity: 4,
+            near_floor_seller_count: 2,
+            near_floor_quantity: 2,
+            unique_sell_users: 8,
+            unique_buy_users: 4,
+            pressure_ratio: Some(1.0),
+            entry_depth: 4.0,
+            exit_depth: 6.0,
+            depth_levels: Vec::new(),
+        };
+        let sell_orders = vec![
+            WfmDetailedOrder {
+                order_id: "1".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 18.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "a".to_string(),
+                user_slug: Some("a".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "2".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 19.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "b".to_string(),
+                user_slug: Some("b".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "3".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 20.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "c".to_string(),
+                user_slug: Some("c".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "4".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 21.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "d".to_string(),
+                user_slug: Some("d".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+        ];
+        let mut chart_points = vec![AnalyticsChartPoint {
+            bucket_at: "2026-03-11T00:00:00Z".to_string(),
+            open_price: Some(18.0),
+            closed_price: Some(18.0),
+            low_price: Some(18.0),
+            high_price: Some(24.0),
+            lowest_sell: Some(18.0),
+            median_sell: Some(24.0),
+            moving_avg: Some(20.0),
+            weighted_avg: Some(20.0),
+            average_price: Some(20.0),
+            highest_buy: Some(17.0),
+            fair_value_low: Some(18.0),
+            fair_value_high: Some(22.0),
+            entry_zone: Some(19.0),
+            exit_zone: Some(21.0),
+            volume: 10.0,
+        }];
+
+        super::apply_realistic_live_median_to_latest_bucket(
+            &mut chart_points,
+            &snapshot,
+            &sell_orders,
+        );
+
+        assert_eq!(chart_points[0].median_sell, Some(19.0));
+    }
+
+    #[test]
+    fn apply_realistic_live_median_keeps_sane_snapshot_median() {
+        let snapshot = MarketSnapshot {
+            captured_at: "2026-03-11T00:00:00Z".to_string(),
+            lowest_sell: Some(18.0),
+            median_sell: Some(19.0),
+            highest_buy: Some(17.0),
+            spread: Some(1.0),
+            spread_pct: Some(5.0),
+            sell_order_count: 8,
+            sell_quantity: 8,
+            buy_order_count: 4,
+            buy_quantity: 4,
+            near_floor_seller_count: 2,
+            near_floor_quantity: 2,
+            unique_sell_users: 8,
+            unique_buy_users: 4,
+            pressure_ratio: Some(1.0),
+            entry_depth: 4.0,
+            exit_depth: 6.0,
+            depth_levels: Vec::new(),
+        };
+        let sell_orders = vec![
+            WfmDetailedOrder {
+                order_id: "1".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 18.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "a".to_string(),
+                user_slug: Some("a".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "2".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 20.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "b".to_string(),
+                user_slug: Some("b".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "3".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 21.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "c".to_string(),
+                user_slug: Some("c".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+        ];
+        let mut chart_points = vec![AnalyticsChartPoint {
+            bucket_at: "2026-03-11T00:00:00Z".to_string(),
+            open_price: Some(18.0),
+            closed_price: Some(18.0),
+            low_price: Some(18.0),
+            high_price: Some(21.0),
+            lowest_sell: Some(18.0),
+            median_sell: Some(19.0),
+            moving_avg: Some(19.0),
+            weighted_avg: Some(19.0),
+            average_price: Some(19.0),
+            highest_buy: Some(17.0),
+            fair_value_low: Some(18.0),
+            fair_value_high: Some(20.0),
+            entry_zone: Some(18.0),
+            exit_zone: Some(20.0),
+            volume: 10.0,
+        }];
+
+        super::apply_realistic_live_median_to_latest_bucket(
+            &mut chart_points,
+            &snapshot,
+            &sell_orders,
+        );
+
+        assert_eq!(chart_points[0].median_sell, Some(19.0));
     }
 
     #[test]
