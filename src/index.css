@@ -480,6 +480,29 @@
   color: var(--accent-purple);
 }
 
+.screenshot-import-readings {
+  display: grid;
+  gap: 10px;
+}
+
+.screenshot-import-reading-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.screenshot-import-reading-list li {
+  line-height: 1.45;
+}
+
+.screenshot-import-reading-list strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .screenshot-import-rows {
   display: grid;
   gap: 10px;

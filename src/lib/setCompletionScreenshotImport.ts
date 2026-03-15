@@ -1,3 +1,4 @@
+import { createWorker, PSM } from 'tesseract.js';
 import ssIgnoreAssetUrl from '../assets/set-completion/ss-ignore.png';
 import ssQtyAssetUrl from '../assets/set-completion/ss-qty.png';
 
@@ -37,6 +38,14 @@ export interface SetCompletionScreenshotDetectionPreview {
   ignoreCount: number;
   nameCount: number;
   cells: SetCompletionDetectionCell[];
+  readings: SetCompletionDetectedReading[];
+}
+
+export interface SetCompletionDetectedReading {
+  rowId: string;
+  tileIndex: number;
+  detectedText: string;
+  detectedQuantity: string | null;
 }
 
 interface TileDescriptor {
@@ -105,6 +114,7 @@ let templatePromise:
       ignore: TemplateMask;
     }>
   | null = null;
+let ocrWorkerPromise: Promise<Awaited<ReturnType<typeof createWorker>>> | null = null;
 
 export function getDefaultSetCompletionImportCrop(): SetCompletionImportCrop {
   return { ...DEFAULT_CROP };
@@ -193,6 +203,8 @@ export async function analyzeSetCompletionInventoryScreenshot(
 
   drawOverlayBoxes(previewContext, cells);
 
+  const readings = await readDetectedTextFromCells(maskedCanvas, cells, onProgress);
+
   onProgress?.({
     progress: 1,
     stage: 'complete',
@@ -206,6 +218,7 @@ export async function analyzeSetCompletionInventoryScreenshot(
     ignoreCount: cells.filter((cell) => cell.ignoreBox !== null).length,
     nameCount: cells.filter((cell) => cell.nameBox !== null).length,
     cells,
+    readings,
   };
 }
 
@@ -231,6 +244,16 @@ async function loadTemplates(): Promise<{ qty: TemplateMask; ignore: TemplateMas
   }
 
   return templatePromise;
+}
+
+async function getOcrWorker(): Promise<Awaited<ReturnType<typeof createWorker>>> {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = createWorker('eng', 1, {
+      logger: () => undefined,
+      errorHandler: () => undefined,
+    });
+  }
+  return ocrWorkerPromise;
 }
 
 async function loadAssetMask(url: string): Promise<TemplateMask> {
@@ -286,6 +309,29 @@ function extractCropCanvas(
   return extractPixelCanvas(sourceCanvas, cropX, cropY, cropWidth, cropHeight);
 }
 
+function extractBoxCanvas(
+  sourceCanvas: HTMLCanvasElement,
+  box: SetCompletionDetectionBox,
+  padding?: {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  },
+): HTMLCanvasElement {
+  const leftPadding = padding?.left ?? 0;
+  const rightPadding = padding?.right ?? 0;
+  const topPadding = padding?.top ?? 0;
+  const bottomPadding = padding?.bottom ?? 0;
+  const x = clamp(box.x - leftPadding, 0, Math.max(0, sourceCanvas.width - 1));
+  const y = clamp(box.y - topPadding, 0, Math.max(0, sourceCanvas.height - 1));
+  const maxRight = Math.max(0, sourceCanvas.width - 1);
+  const maxBottom = Math.max(0, sourceCanvas.height - 1);
+  const right = clamp(box.x + box.width - 1 + rightPadding, x, maxRight);
+  const bottom = clamp(box.y + box.height - 1 + bottomPadding, y, maxBottom);
+  return extractPixelCanvas(sourceCanvas, x, y, right - x + 1, bottom - y + 1);
+}
+
 function buildTileDescriptors(
   cropWidth: number,
   cropHeight: number,
@@ -331,6 +377,95 @@ function buildTileDescriptors(
   }
 
   return tiles;
+}
+
+async function readDetectedTextFromCells(
+  maskedCanvas: HTMLCanvasElement,
+  cells: SetCompletionDetectionCell[],
+  onProgress?: (progress: SetCompletionScreenshotProgress) => void,
+): Promise<SetCompletionDetectedReading[]> {
+  if (!cells.length) {
+    return [];
+  }
+
+  const worker = await getOcrWorker();
+  const readings: SetCompletionDetectedReading[] = [];
+
+  for (let index = 0; index < cells.length; index += 1) {
+    const cell = cells[index];
+    onProgress?.({
+      progress: cells.length ? index / cells.length : 0,
+      stage: 'read',
+      detail: `Reading detected text ${index + 1}/${cells.length}…`,
+    });
+
+    const [detectedText, detectedQuantity] = await Promise.all([
+      cell.nameBox ? readNameText(worker, maskedCanvas, cell.nameBox) : Promise.resolve(''),
+      cell.quantityBox
+        ? readQuantityText(worker, maskedCanvas, cell.quantityBox)
+        : Promise.resolve(null),
+    ]);
+
+    readings.push({
+      rowId: cell.rowId,
+      tileIndex: cell.tileIndex,
+      detectedText,
+      detectedQuantity,
+    });
+  }
+
+  return readings;
+}
+
+async function readNameText(
+  worker: Awaited<ReturnType<typeof createWorker>>,
+  maskedCanvas: HTMLCanvasElement,
+  box: SetCompletionDetectionBox,
+): Promise<string> {
+  await worker.setParameters({
+    tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+    preserve_interword_spaces: '1',
+    user_defined_dpi: '300',
+    tessedit_char_whitelist:
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -',
+  });
+  const regionCanvas = extractBoxCanvas(maskedCanvas, box, {
+    left: 8,
+    right: 8,
+    top: 4,
+    bottom: 4,
+  });
+  const { data } = await worker.recognize(regionCanvas, {}, { text: true });
+  return normalizeDetectedText(data.text);
+}
+
+async function readQuantityText(
+  worker: Awaited<ReturnType<typeof createWorker>>,
+  maskedCanvas: HTMLCanvasElement,
+  box: SetCompletionDetectionBox,
+): Promise<string | null> {
+  await worker.setParameters({
+    tessedit_pageseg_mode: PSM.SINGLE_WORD,
+    tessedit_char_whitelist: '0123456789',
+    user_defined_dpi: '300',
+  });
+  const regionCanvas = extractBoxCanvas(maskedCanvas, box, {
+    left: 4,
+    right: 8,
+    top: 4,
+    bottom: 4,
+  });
+  const { data } = await worker.recognize(regionCanvas, {}, { text: true });
+  const match = data.text.match(/\d+/);
+  return match ? match[0] : null;
+}
+
+function normalizeDetectedText(value: string): string {
+  return value
+    .replace(/\r/g, ' ')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function analyzeTileMask(

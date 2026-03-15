@@ -591,7 +591,7 @@ function SetCompletionScreenshotImportModal({
               {detectionPreview ? (
                 <>
                   <div className="watchlist-form-note">
-                    The preview shows the masked image with overlay boxes only:
+                    The preview shows the masked image with overlay boxes:
                   </div>
                   <div className="screenshot-import-legend">
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red">Red: item cell</span>
@@ -600,13 +600,33 @@ function SetCompletionScreenshotImportModal({
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-purple">Purple: ignore icon</span>
                   </div>
                   <div className="watchlist-form-note">
-                    OCR, matching, remapping, and apply are temporarily disabled until the visual
-                    detector is correct.
+                    OCR matching and import are still disabled. This panel now only shows the raw
+                    detected text and quantity reads from the highlighted boxes.
+                  </div>
+                  <div className="screenshot-import-readings">
+                    <span className="panel-title-eyebrow">Detected Text</span>
+                    {detectionPreview.readings.length ? (
+                      <ul className="screenshot-import-reading-list">
+                        {detectionPreview.readings
+                          .slice()
+                          .sort((left, right) => left.tileIndex - right.tileIndex)
+                          .map((reading) => (
+                            <li key={reading.rowId}>
+                              <strong>{reading.detectedText || 'Unreadable text'}</strong>
+                              {reading.detectedQuantity ? ` · Qty ${reading.detectedQuantity}` : ''}
+                            </li>
+                          ))}
+                      </ul>
+                    ) : (
+                      <div className="watchlist-form-note">
+                        No readable text was detected yet for the visible cells.
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (
                 <div className="watchlist-form-note">
-                  Run the detector to generate the annotated preview and box counts.
+                  Run the detector to generate the annotated preview and the raw text readout.
                 </div>
               )}
             </div>
