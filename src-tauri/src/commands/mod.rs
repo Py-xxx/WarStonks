@@ -265,15 +265,16 @@ fn execute_wfm_bytes_request(
     action_label: &str,
     coalesce_key: Option<String>,
 ) -> Result<WfmHttpResponse> {
-    execute_coalesced_wfm_request(priority, action_label, coalesce_key, || false, || {
+    let action_label_owned = action_label.to_string();
+    execute_coalesced_wfm_request(priority, action_label, coalesce_key, None, || false, move || {
         let response = builder
             .send()
-            .with_context(|| format!("failed to {action_label}"))?;
+            .with_context(|| format!("failed to {}", action_label_owned))?;
         let status = response.status();
         let retry_after = parse_retry_after_seconds(response.headers());
         let body = response
             .bytes()
-            .with_context(|| format!("failed to read {action_label} response body"))?
+            .with_context(|| format!("failed to read {} response body", action_label_owned))?
             .to_vec();
         Ok(WfmHttpResponse {
             status: status.as_u16(),
