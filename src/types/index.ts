@@ -1086,10 +1086,7 @@ export interface RelicRoiDropEntry {
 export interface RelicRoiRefinementSummary {
   refinementKey: string;
   refinementLabel: string;
-  relicBuyPrice: number | null;
-  expectedExitValue: number | null;
-  netProfit: number | null;
-  roiPct: number | null;
+  runValue: number | null;
   liquidityScore: number;
   relicRoiScore: number;
   confidenceSummary: MarketConfidenceSummary;
@@ -1111,10 +1108,14 @@ export interface RelicRoiEntry {
 
 export interface ArbitrageScannerResponse {
   computedAt: string;
+  scanStartedAt: string;
+  scanFinishedAt: string;
   scannedSetCount: number;
+  scannedComponentCount: number;
   opportunityCount: number;
   refreshedSetCount: number;
   refreshedStatisticsCount: number;
+  skippedEntryCount: number;
   scannedRelicCount: number;
   relicOpportunityCount: number;
   results: ArbitrageScannerSetEntry[];

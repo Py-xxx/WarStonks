@@ -82,17 +82,17 @@ function getDefaultComponentTarget(component: ArbitrageScannerComponentEntry): s
     return String(
       Math.max(
         1,
-        Math.round((component.recommendedEntryLow + component.recommendedEntryHigh) / 2),
+        Math.ceil((component.recommendedEntryLow + component.recommendedEntryHigh) / 2),
       ),
     );
   }
 
   if (component.recommendedEntryPrice !== null) {
-    return String(Math.max(1, Math.round(component.recommendedEntryPrice)));
+    return String(Math.max(1, Math.ceil(component.recommendedEntryPrice)));
   }
 
   if (component.currentStatsPrice !== null) {
-    return String(Math.max(1, Math.round(component.currentStatsPrice)));
+    return String(Math.max(1, Math.ceil(component.currentStatsPrice)));
   }
 
   return '';
@@ -387,19 +387,16 @@ function RelicRoiRow({
         </div>
         <div className="scanner-list-metrics-relic">
           <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{formatPlat(summary?.relicBuyPrice ?? null)}</strong>
-          </div>
-          <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{formatPlat(summary?.expectedExitValue ?? null)}</strong>
-          </div>
-          <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{formatPlat(summary?.netProfit ?? null)}</strong>
-          </div>
-          <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{formatPercent(summary?.roiPct ?? null)}</strong>
+            <strong>{formatPlat(summary?.runValue ?? null)}</strong>
           </div>
           <div className="scanner-list-metric scanner-list-metric-inline">
             <strong>{Math.round(summary?.liquidityScore ?? 0)}%</strong>
+          </div>
+          <div className="scanner-list-metric scanner-list-metric-inline">
+            <strong>{entry.isUnvaulted ? 'Unvaulted' : 'Vaulted'}</strong>
+          </div>
+          <div className="scanner-list-metric scanner-list-metric-inline">
+            <strong>{Math.round(summary?.relicRoiScore ?? 0)}</strong>
           </div>
         </div>
         <div className="scanner-list-badges scanner-list-badges-relic">
@@ -426,14 +423,12 @@ function RelicRoiRow({
               <span className="scanner-stat-pill-value">{summary?.refinementLabel ?? '—'}</span>
             </span>
             <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Buy Price</span>
-              <span className="scanner-stat-pill-value">{formatPlat(summary?.relicBuyPrice ?? null)}</span>
+              <span className="scanner-stat-pill-label">Run Value</span>
+              <span className="scanner-stat-pill-value">{formatPlat(summary?.runValue ?? null)}</span>
             </span>
             <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Confidence</span>
-              <span className="scanner-stat-pill-value">
-                {summary?.confidenceSummary.label ?? entry.confidenceSummary.label}
-              </span>
+              <span className="scanner-stat-pill-label">Liquidity</span>
+              <span className="scanner-stat-pill-value">{Math.round(summary?.liquidityScore ?? 0)}%</span>
             </span>
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">Drops</span>
@@ -746,16 +741,16 @@ export function ScannersPage() {
                     <>
                       <h3>Statistics-only set arbitrage</h3>
                       <p>
-                        Basket costs use component entry bands with quantity in set. Set exits use conservative
-                        achieved-price zones. No live orderbook requests are used in the scan.
+                        Uses the bootstrapped set map as the source of truth, refreshes WFM statistics for each
+                        set and component, and saves one frozen scan snapshot until the next successful run.
                       </p>
                     </>
                   ) : (
                     <>
                       <h3>Shared relic ROI scan</h3>
                       <p>
-                        Uses the same cached statistics scan as Arbitrage. Relic ROI values are refinement-aware,
-                        prime-drop only, and include relic buy cost against expected exit value per run.
+                        Uses the same completed scan as Arbitrage. Relic ROI is fully local, refinement-aware,
+                        and ranks relics by expected run value with liquidity and confidence weighting.
                       </p>
                     </>
                   )}
@@ -786,6 +781,14 @@ export function ScannersPage() {
                 <p className="scanner-progress-copy">
                   {progress?.statusText ?? 'No saved scanner results yet. Start a scan to cache the results.'}
                 </p>
+                {arbitrage ? (
+                  <div className="scanner-progress-meta">
+                    <span>Last scan {formatShortLocalDateTime(arbitrage.scanFinishedAt)}</span>
+                    <span>
+                      {arbitrage.scannedSetCount} sets · {arbitrage.scannedComponentCount} components · {arbitrage.scannedRelicCount} relics
+                    </span>
+                  </div>
+                ) : null}
                 {errorMessage ? (
                   <div className="scanner-inline-error" role="alert">
                     <strong>Scanner failed</strong>
@@ -817,11 +820,10 @@ export function ScannersPage() {
                 <div className="scanner-results-list">
                   <div className="scanner-list-header scanner-list-header-relic">
                     <div className="scanner-list-header-primary" />
-                    <span>Buy</span>
                     <span>Run Value</span>
-                    <span>Net</span>
-                    <span>ROI</span>
                     <span>Liquidity</span>
+                    <span>Vault</span>
+                    <span>Score</span>
                     <div className="scanner-list-header-actions" />
                   </div>
                   {relicResults.map((entry, index) => (

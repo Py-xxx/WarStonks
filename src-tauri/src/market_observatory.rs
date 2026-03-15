@@ -4,7 +4,8 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -18,6 +19,7 @@ use crate::wfm_scheduler::{
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
+const SCANNER_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_LANGUAGE_HEADER: &str = "en";
@@ -628,10 +630,7 @@ pub struct RelicRoiDropEntry {
 pub struct RelicRoiRefinementSummary {
     pub refinement_key: String,
     pub refinement_label: String,
-    pub relic_buy_price: Option<f64>,
-    pub expected_exit_value: Option<f64>,
-    pub net_profit: Option<f64>,
-    pub roi_pct: Option<f64>,
+    pub run_value: Option<f64>,
     pub liquidity_score: f64,
     pub relic_roi_score: f64,
     pub confidence_summary: MarketConfidenceSummary,
@@ -697,10 +696,14 @@ pub struct OwnedRelicInventoryCache {
 #[serde(rename_all = "camelCase")]
 pub struct ArbitrageScannerResponse {
     pub computed_at: String,
+    pub scan_started_at: String,
+    pub scan_finished_at: String,
     pub scanned_set_count: usize,
+    pub scanned_component_count: usize,
     pub opportunity_count: usize,
     pub refreshed_set_count: usize,
     pub refreshed_statistics_count: usize,
+    pub skipped_entry_count: usize,
     #[serde(default)]
     pub scanned_relic_count: usize,
     #[serde(default)]
@@ -828,6 +831,32 @@ struct RelicRootCatalogRecord {
     name: String,
     image_path: Option<String>,
     vaulted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScannerSetMapFile {
+    #[serde(default)]
+    warstonks_version: Option<String>,
+    api_version: Option<String>,
+    generated_at: String,
+    sets: Vec<ScannerSetMapSetRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScannerSetMapSetRecord {
+    slug: String,
+    name: String,
+    image_path: Option<String>,
+    components: Vec<ScannerSetMapComponentRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScannerSetMapComponentRecord {
+    slug: String,
+    quantity_in_set: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -999,6 +1028,14 @@ fn resolve_catalog_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
         .app_data_dir()
         .context("failed to resolve the app data directory")?;
     Ok(app_data_dir.join(ITEM_CATALOG_DATABASE_FILE))
+}
+
+fn resolve_scanner_set_map_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve the app data directory")?;
+    Ok(app_data_dir.join("data").join(SCANNER_SET_MAP_FILE_NAME))
 }
 
 fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
@@ -5062,31 +5099,107 @@ fn resolve_item_id_by_slug(connection: &Connection, slug: &str) -> Result<Option
         .map_err(Into::into)
 }
 
-fn list_set_roots_from_catalog(connection: &Connection) -> Result<Vec<SetRootCatalogRecord>> {
-    let mut statement = connection.prepare(
-        "SELECT DISTINCT
-           w.item_id,
-           w.slug,
-           COALESCE(w.name_en, REPLACE(w.slug, '_', ' ')) AS name,
-           COALESCE(w.thumb, w.icon) AS image_path
-         FROM wfm_items w
-         JOIN wfm_item_tags t ON t.wfm_id = w.wfm_id
-         WHERE t.tag = 'set'
-           AND w.slug LIKE '%_set'
-         ORDER BY name ASC",
-    )?;
+fn load_scanner_set_map_file(path: &Path) -> Result<Option<ScannerSetMapFile>> {
+    if !path.exists() {
+        return Ok(None);
+    }
 
-    let rows = statement.query_map([], |row| {
-        Ok(SetRootCatalogRecord {
-            item_id: row.get(0)?,
-            slug: row.get(1)?,
-            name: row.get(2)?,
-            image_path: row.get(3)?,
-        })
-    })?;
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read scanner set map at {}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
 
-    rows.collect::<std::result::Result<Vec<_>, _>>()
+    let file = serde_json::from_str::<ScannerSetMapFile>(&raw)
+        .with_context(|| format!("failed to parse scanner set map at {}", path.display()))?;
+    Ok(Some(file))
+}
+
+fn load_catalog_item_brief_by_slug(
+    connection: &Connection,
+    slug: &str,
+) -> Result<Option<(i64, String, Option<String>)>> {
+    connection
+        .query_row(
+            "SELECT
+               i.item_id,
+               COALESCE(i.preferred_name, i.canonical_name, i.wfstat_name, i.wfm_slug, ?1) AS item_name,
+               COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path
+             FROM items i
+             LEFT JOIN wfm_items w ON w.item_id = i.item_id
+             WHERE i.wfm_slug = ?1
+                OR i.preferred_slug = ?1
+             LIMIT 1",
+            params![slug],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()
         .map_err(Into::into)
+}
+
+fn load_scanner_sets_from_map(
+    app: &tauri::AppHandle,
+    catalog_connection: &Connection,
+) -> Result<Vec<(SetRootCatalogRecord, Vec<CachedSetComponentRecord>)>> {
+    let map_path = resolve_scanner_set_map_path(app)?;
+    let set_map = load_scanner_set_map_file(&map_path)?
+        .ok_or_else(|| anyhow!("scanner set map is unavailable at {}", map_path.display()))?;
+    let generated_at = set_map.generated_at.clone();
+
+    let mut sets = Vec::with_capacity(set_map.sets.len());
+    for set_record in set_map.sets {
+        let Some((set_item_id, resolved_name, resolved_image)) =
+            load_catalog_item_brief_by_slug(catalog_connection, &set_record.slug)?
+        else {
+            continue;
+        };
+
+        let set_root = SetRootCatalogRecord {
+            item_id: set_item_id,
+            slug: set_record.slug.clone(),
+            name: if set_record.name.trim().is_empty() {
+                resolved_name
+            } else {
+                set_record.name.clone()
+            },
+            image_path: set_record.image_path.or(resolved_image),
+        };
+
+        let mut components = Vec::with_capacity(set_record.components.len());
+        for (index, component) in set_record.components.iter().enumerate() {
+            let Some((component_item_id, component_name, component_image_path)) =
+                load_catalog_item_brief_by_slug(catalog_connection, &component.slug)?
+            else {
+                continue;
+            };
+
+            components.push(CachedSetComponentRecord {
+                set_item_id: set_root.item_id,
+                set_slug: set_root.slug.clone(),
+                set_name: set_root.name.clone(),
+                set_image_path: set_root.image_path.clone(),
+                component_item_id: Some(component_item_id),
+                component_slug: component.slug.clone(),
+                component_name,
+                component_image_path,
+                quantity_in_set: component.quantity_in_set.max(1),
+                sort_order: index as i64,
+                fetched_at: generated_at.clone(),
+            });
+        }
+
+        if !components.is_empty() {
+            sets.push((set_root, components));
+        }
+    }
+
+    Ok(sets)
 }
 
 fn list_relic_roots_from_catalog(connection: &Connection) -> Result<Vec<RelicRootCatalogRecord>> {
@@ -5103,6 +5216,7 @@ fn list_relic_roots_from_catalog(connection: &Connection) -> Result<Vec<RelicRoo
          WHERE i.relic_tier IS NOT NULL
            AND i.relic_code IS NOT NULL
            AND i.wfm_slug IS NOT NULL
+           AND LOWER(i.relic_tier) <> 'requiem'
          GROUP BY i.item_id, i.wfm_slug, i.preferred_name, image_path
          ORDER BY i.preferred_name ASC",
     )?;
@@ -6550,17 +6664,14 @@ fn relic_tier_sort_order(value: &str) -> i64 {
 }
 
 fn build_relic_roi_score(
-    net_profit: Option<f64>,
-    roi_pct: Option<f64>,
+    run_value: Option<f64>,
     weighted_liquidity: f64,
     confidence_summary: &MarketConfidenceSummary,
 ) -> f64 {
-    let profit_component = net_profit.unwrap_or_default().max(0.0).min(50.0) * 1.3;
-    let roi_component = roi_pct.unwrap_or_default().max(0.0).min(300.0) * 0.38;
+    let run_value_component = run_value.unwrap_or_default().max(0.0).min(50.0) * 1.5;
     let liquidity_component = weighted_liquidity.clamp(0.0, 100.0) * 0.28;
     let confidence_component = confidence_score(&confidence_summary.level) * 0.18;
-    (profit_component + roi_component + liquidity_component + confidence_component)
-        .clamp(0.0, 100.0)
+    (run_value_component + liquidity_component + confidence_component).clamp(0.0, 100.0)
 }
 
 fn build_relic_roi_note(
@@ -6589,17 +6700,6 @@ fn build_relic_roi_entry(
     if drops.is_empty() {
         return Ok(None);
     }
-
-    let relic_model = get_or_build_scanner_price_model(
-        observatory_connection,
-        shared_price_model_cache,
-        relic_root.item_id,
-        &relic_root.slug,
-        refreshed_statistics_count,
-    )?;
-    let relic_buy_price = relic_model
-        .as_ref()
-        .and_then(|entry| entry.current_stats_price.or(entry.recommended_entry_price));
 
     let mut entry_confidence_refs = Vec::new();
     for drop in &mut drops {
@@ -6633,16 +6733,10 @@ fn build_relic_roi_entry(
     }
 
     let confidence_refs = entry_confidence_refs.iter().collect::<Vec<_>>();
-    let relic_confidence = relic_model
-        .as_ref()
-        .map(|entry| entry.confidence_summary.clone())
-        .unwrap_or_else(|| {
-            build_confidence_summary("low", vec!["Missing relic stats".to_string()])
-        });
     let mut refinement_summaries = Vec::new();
 
     for refinement_key in all_relic_refinement_keys() {
-        let mut expected_exit_value = 0.0;
+        let mut run_value = 0.0;
         let mut priced_drop_count = 0usize;
         let mut weighted_liquidity_numerator = 0.0;
         let mut weighted_liquidity_denominator = 0.0;
@@ -6658,24 +6752,16 @@ fn build_relic_roi_entry(
             };
 
             let expected_contribution = normalized_relic_chance(chance) * exit_price;
-            expected_exit_value += expected_contribution;
+            run_value += expected_contribution;
             priced_drop_count += 1;
             weighted_liquidity_numerator += expected_contribution * drop.liquidity_score;
             weighted_liquidity_denominator += expected_contribution;
         }
 
-        let expected_exit_value = if priced_drop_count > 0 {
-            Some(round_platinum(expected_exit_value))
+        let run_value = if priced_drop_count > 0 {
+            Some(round_platinum(run_value))
         } else {
             None
-        };
-        let net_profit = match (expected_exit_value, relic_buy_price) {
-            (Some(expected), Some(buy)) => Some(round_platinum(expected - buy)),
-            _ => None,
-        };
-        let roi_pct = match (net_profit, relic_buy_price) {
-            (Some(net), Some(buy)) if buy > 0.0 => Some(round_platinum((net / buy) * 100.0)),
-            _ => None,
         };
         let weighted_liquidity = if weighted_liquidity_denominator > 0.0 {
             (weighted_liquidity_numerator / weighted_liquidity_denominator).clamp(20.0, 100.0)
@@ -6683,20 +6769,15 @@ fn build_relic_roi_entry(
             20.0
         };
 
-        let mut combined_refs = confidence_refs.clone();
-        combined_refs.push(&relic_confidence);
         if priced_drop_count < drops.len() {
             extra_reasons.push(format!(
                 "Incomplete priced drops ({priced_drop_count}/{})",
                 drops.len()
             ));
         }
-        if relic_buy_price.is_none() {
-            extra_reasons.push("Missing relic buy price".to_string());
-        }
 
         let extra_reason_refs = extra_reasons.iter().map(String::as_str).collect::<Vec<_>>();
-        let confidence_summary = combined_confidence(&combined_refs, &extra_reason_refs);
+        let confidence_summary = combined_confidence(&confidence_refs, &extra_reason_refs);
         let note = build_relic_roi_note(
             drops.len(),
             priced_drop_count,
@@ -6706,17 +6787,9 @@ fn build_relic_roi_entry(
         refinement_summaries.push(RelicRoiRefinementSummary {
             refinement_key: refinement_key.to_string(),
             refinement_label: relic_refinement_label(refinement_key).to_string(),
-            relic_buy_price: relic_buy_price.map(round_platinum),
-            expected_exit_value,
-            net_profit,
-            roi_pct,
+            run_value,
             liquidity_score: round_platinum(weighted_liquidity),
-            relic_roi_score: build_relic_roi_score(
-                net_profit,
-                roi_pct,
-                weighted_liquidity,
-                &confidence_summary,
-            ),
+            relic_roi_score: build_relic_roi_score(run_value, weighted_liquidity, &confidence_summary),
             confidence_summary,
             note,
         });
@@ -6755,10 +6828,14 @@ fn build_arbitrage_scanner_inner(
 ) -> Result<ArbitrageScannerRunOutcome> {
     let catalog_connection = open_catalog_database(&app)?;
     let observatory_connection = open_market_observatory_database(&app)?;
-    let set_roots = list_set_roots_from_catalog(&catalog_connection)?;
+    let scanned_sets = load_scanner_sets_from_map(&app, &catalog_connection)?;
     let relic_roots = list_relic_roots_from_catalog(&catalog_connection)?;
     let started_at = format_timestamp(now_utc())?;
-    let total_work_items = set_roots.len() + relic_roots.len();
+    let total_work_items = scanned_sets.len() + relic_roots.len();
+    let scanned_component_count = scanned_sets
+        .iter()
+        .map(|(_, components)| components.iter().map(|entry| entry.quantity_in_set.max(1) as usize).sum::<usize>())
+        .sum::<usize>();
 
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
@@ -6775,7 +6852,7 @@ fn build_arbitrage_scanner_inner(
         stage_label: "Preparing".to_string(),
         status_text: format!(
             "Loaded {} sets and {} relics for scanner analysis.",
-            set_roots.len(),
+            scanned_sets.len(),
             relic_roots.len()
         ),
         updated_at: format_timestamp(now_utc())?,
@@ -6784,7 +6861,7 @@ fn build_arbitrage_scanner_inner(
         last_error: None,
     });
 
-    for (index, set_root) in set_roots.iter().enumerate() {
+    for (index, (set_root, components)) in scanned_sets.iter().enumerate() {
         if arbitrage_scanner_stop_requested(&observatory_connection)? {
             was_stopped = true;
             break;
@@ -6804,7 +6881,7 @@ fn build_arbitrage_scanner_inner(
                 "Scanning set {} ({}/{})",
                 set_root.name,
                 index + 1,
-                set_roots.len()
+                scanned_sets.len()
             ),
             updated_at: format_timestamp(now_utc())?,
             started_at: Some(started_at.clone()),
@@ -6813,12 +6890,6 @@ fn build_arbitrage_scanner_inner(
         });
 
         let set_entry = (|| -> Result<ArbitrageScannerSetEntry> {
-            let (components, did_refresh_set) =
-                ensure_set_components_cached(&catalog_connection, &observatory_connection, set_root)?;
-            if did_refresh_set {
-                refreshed_set_count += 1;
-            }
-
             let set_model = get_or_build_scanner_price_model(
                 &observatory_connection,
                 &mut shared_price_model_cache,
@@ -6826,9 +6897,10 @@ fn build_arbitrage_scanner_inner(
                 &set_root.slug,
                 &mut refreshed_statistics_count,
             )?;
+            refreshed_set_count += 1;
 
             let mut component_models = Vec::new();
-            for component in &components {
+            for component in components {
                 let model = if let Some(component_item_id) = component.component_item_id {
                     get_or_build_scanner_price_model(
                         &observatory_connection,
@@ -6846,7 +6918,7 @@ fn build_arbitrage_scanner_inner(
             Ok(build_arbitrage_set_entry(
                 set_root,
                 set_model.as_ref(),
-                &components,
+                components,
                 &component_models,
             ))
         })();
@@ -6876,7 +6948,7 @@ fn build_arbitrage_scanner_inner(
             let progress_value = if total_work_items == 0 {
                 100.0
             } else {
-                (((set_roots.len() + index) as f64 / total_work_items as f64) * 100.0)
+                (((scanned_sets.len() + index) as f64 / total_work_items as f64) * 100.0)
                     .clamp(0.0, 99.0)
             };
             on_progress(ArbitrageScannerProgress {
@@ -6962,7 +7034,7 @@ fn build_arbitrage_scanner_inner(
                 .refinements
                 .iter()
                 .find(|summary| summary.refinement_key == RELIC_REFINEMENT_INTACT)
-                .and_then(|summary| summary.net_profit)
+                .and_then(|summary| summary.run_value)
                 .unwrap_or_default()
                 > 0.0
         })
@@ -6972,11 +7044,15 @@ fn build_arbitrage_scanner_inner(
 
     Ok(ArbitrageScannerRunOutcome {
         response: ArbitrageScannerResponse {
-            computed_at,
-            scanned_set_count: set_roots.len(),
+            computed_at: computed_at.clone(),
+            scan_started_at: started_at.clone(),
+            scan_finished_at: computed_at.clone(),
+            scanned_set_count: scanned_sets.len(),
+            scanned_component_count,
             opportunity_count,
             refreshed_set_count,
             refreshed_statistics_count,
+            skipped_entry_count,
             scanned_relic_count: relic_roi_results.len(),
             relic_opportunity_count,
             results,
@@ -8955,8 +9031,8 @@ mod tests {
             is_degraded: true,
         };
 
-        let strong_score = build_relic_roi_score(Some(22.0), Some(140.0), 78.0, &high_confidence);
-        let weak_score = build_relic_roi_score(Some(3.0), Some(18.0), 28.0, &low_confidence);
+        let strong_score = build_relic_roi_score(Some(22.0), 78.0, &high_confidence);
+        let weak_score = build_relic_roi_score(Some(3.0), 28.0, &low_confidence);
 
         assert!(strong_score > weak_score);
         assert!(strong_score > 50.0);
@@ -8966,6 +9042,22 @@ mod tests {
     fn relic_roi_expected_value_uses_percent_chance() {
         let expected_contribution = super::normalized_relic_chance(20.0) * 50.0;
         assert!((expected_contribution - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn relic_roi_opportunity_uses_run_value() {
+        let summary = super::RelicRoiRefinementSummary {
+            refinement_key: super::RELIC_REFINEMENT_INTACT.to_string(),
+            refinement_label: "Intact".to_string(),
+            run_value: Some(14.0),
+            liquidity_score: 72.0,
+            relic_roi_score: 80.0,
+            confidence_summary: super::build_confidence_summary("high", Vec::new()),
+            note: "example".to_string(),
+        };
+
+        assert_eq!(summary.run_value, Some(14.0));
+        assert!(summary.relic_roi_score > 0.0);
     }
 
     #[test]
