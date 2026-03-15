@@ -788,6 +788,51 @@ pub struct SetCompletionOwnedItem {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionImportCandidate {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionScreenshotMatchInputRow {
+    pub row_id: String,
+    pub detected_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionScreenshotMatchRow {
+    pub row_id: String,
+    pub matched_item: Option<SetCompletionImportCandidate>,
+    pub confidence: f64,
+    pub match_kind: String,
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionScreenshotApplyRow {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub quantity: i64,
+}
+
+#[derive(Debug, Clone)]
+struct SetCompletionImportCandidateProfile {
+    candidate: SetCompletionImportCandidate,
+    normalized_name: String,
+    normalized_slug: String,
+    aliases: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedSetComponentDelta {
     pub sync_key: String,
@@ -1127,6 +1172,69 @@ fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .context("failed to open the local item catalog")
+}
+
+fn normalize_set_completion_import_lookup_value(value: &str) -> Option<String> {
+    let normalized = value
+        .chars()
+        .map(|character| match character.to_ascii_lowercase() {
+            '0' => 'o',
+            '1' | '|' | '!' => 'l',
+            '5' | '$' => 's',
+            character if character.is_ascii_alphanumeric() => character,
+            _ => ' ',
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn slug_to_set_completion_lookup_value(slug: &str) -> Option<String> {
+    normalize_set_completion_import_lookup_value(&slug.replace('_', " "))
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    let left_chars = left.chars().collect::<Vec<_>>();
+    let right_chars = right.chars().collect::<Vec<_>>();
+    if left_chars.is_empty() {
+        return right_chars.len();
+    }
+    if right_chars.is_empty() {
+        return left_chars.len();
+    }
+
+    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
+    let mut current = vec![0usize; right_chars.len() + 1];
+
+    for (left_index, left_char) in left_chars.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right_chars.iter().enumerate() {
+            let substitution_cost = usize::from(left_char != right_char);
+            current[right_index + 1] = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(previous[right_index] + substitution_cost);
+        }
+        previous.clone_from_slice(&current);
+    }
+
+    previous[right_chars.len()]
+}
+
+fn normalized_similarity(left: &str, right: &str) -> f64 {
+    let longest = left.chars().count().max(right.chars().count());
+    if longest == 0 {
+        return 1.0;
+    }
+
+    let distance = levenshtein_distance(left, right) as f64;
+    (1.0 - distance / longest as f64).clamp(0.0, 1.0)
 }
 
 pub(crate) fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
@@ -6641,6 +6749,259 @@ fn upsert_set_completion_owned_item(
     load_set_completion_owned_items(connection)
 }
 
+fn build_set_completion_import_candidate_profiles(
+    catalog_connection: &Connection,
+    allowed_items: &[SetCompletionImportCandidate],
+) -> Result<Vec<SetCompletionImportCandidateProfile>> {
+    let mut alias_statement = catalog_connection.prepare(
+        "SELECT normalized_alias_value
+         FROM item_aliases
+         WHERE item_id = ?1
+           AND normalized_alias_value IS NOT NULL
+           AND normalized_alias_value != ''
+         ORDER BY
+           CASE alias_scope
+             WHEN 'wfm_name_en' THEN 0
+             WHEN 'wfstat_name' THEN 1
+             WHEN 'wfstat_component_name' THEN 2
+             WHEN 'normalized_name' THEN 3
+             ELSE 4
+           END,
+           is_primary DESC,
+           alias_id ASC",
+    )?;
+
+    let mut profiles = Vec::new();
+    for item in allowed_items {
+        let normalized_name = normalize_set_completion_import_lookup_value(&item.name)
+            .ok_or_else(|| anyhow!("allowed import candidate name is required"))?;
+        let normalized_slug =
+            slug_to_set_completion_lookup_value(&item.slug).unwrap_or_else(|| normalized_name.clone());
+
+        let aliases = match item.item_id {
+            Some(item_id) => alias_statement
+                .query_map([item_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .context("failed to load import candidate aliases")?,
+            None => Vec::new(),
+        };
+
+        profiles.push(SetCompletionImportCandidateProfile {
+            candidate: item.clone(),
+            normalized_name,
+            normalized_slug,
+            aliases,
+        });
+    }
+
+    Ok(profiles)
+}
+
+fn match_set_completion_detected_name(
+    row_id: &str,
+    detected_name: &str,
+    profiles: &[SetCompletionImportCandidateProfile],
+) -> SetCompletionScreenshotMatchRow {
+    let Some(normalized_detected_name) =
+        normalize_set_completion_import_lookup_value(detected_name)
+    else {
+        return SetCompletionScreenshotMatchRow {
+            row_id: row_id.to_string(),
+            matched_item: None,
+            confidence: 0.0,
+            match_kind: "none".to_string(),
+            status: "unmatched".to_string(),
+            reason: "No readable item name detected.".to_string(),
+        };
+    };
+
+    for profile in profiles {
+        if normalized_detected_name == profile.normalized_name {
+            return SetCompletionScreenshotMatchRow {
+                row_id: row_id.to_string(),
+                matched_item: Some(profile.candidate.clone()),
+                confidence: 1.0,
+                match_kind: "exact".to_string(),
+                status: "matched".to_string(),
+                reason: "Exact normalized item name match.".to_string(),
+            };
+        }
+
+        if normalized_detected_name == profile.normalized_slug {
+            return SetCompletionScreenshotMatchRow {
+                row_id: row_id.to_string(),
+                matched_item: Some(profile.candidate.clone()),
+                confidence: 0.95,
+                match_kind: "slug".to_string(),
+                status: "matched".to_string(),
+                reason: "Matched the planner component slug.".to_string(),
+            };
+        }
+
+        if profile
+            .aliases
+            .iter()
+            .any(|alias| alias == &normalized_detected_name)
+        {
+            return SetCompletionScreenshotMatchRow {
+                row_id: row_id.to_string(),
+                matched_item: Some(profile.candidate.clone()),
+                confidence: 0.98,
+                match_kind: "alias".to_string(),
+                status: "matched".to_string(),
+                reason: "Matched a catalog alias for this prime component.".to_string(),
+            };
+        }
+    }
+
+    let mut best_match: Option<(&SetCompletionImportCandidateProfile, f64)> = None;
+    let mut second_best_score = 0.0f64;
+    for profile in profiles {
+        let mut best_profile_score =
+            normalized_similarity(&normalized_detected_name, &profile.normalized_name);
+        best_profile_score = best_profile_score
+            .max(normalized_similarity(&normalized_detected_name, &profile.normalized_slug));
+        for alias in &profile.aliases {
+            best_profile_score =
+                best_profile_score.max(normalized_similarity(&normalized_detected_name, alias));
+        }
+
+        match best_match {
+            Some((_, current_score)) if best_profile_score > current_score => {
+                second_best_score = current_score;
+                best_match = Some((profile, best_profile_score));
+            }
+            Some(_) => {
+                if best_profile_score > second_best_score {
+                    second_best_score = best_profile_score;
+                }
+            }
+            None => {
+                best_match = Some((profile, best_profile_score));
+            }
+        }
+    }
+
+    let Some((profile, best_score)) = best_match else {
+        return SetCompletionScreenshotMatchRow {
+            row_id: row_id.to_string(),
+            matched_item: None,
+            confidence: 0.0,
+            match_kind: "none".to_string(),
+            status: "unmatched".to_string(),
+            reason: "No planner component candidates were available for matching.".to_string(),
+        };
+    };
+
+    if best_score < 0.72 {
+        return SetCompletionScreenshotMatchRow {
+            row_id: row_id.to_string(),
+            matched_item: None,
+            confidence: best_score,
+            match_kind: "none".to_string(),
+            status: "unmatched".to_string(),
+            reason: "Detected name did not match any prime component strongly enough.".to_string(),
+        };
+    }
+
+    let confidence_gap = best_score - second_best_score;
+    let status = if best_score >= 0.86 || confidence_gap >= 0.08 {
+        "matched"
+    } else {
+        "matched-low-confidence"
+    };
+
+    SetCompletionScreenshotMatchRow {
+        row_id: row_id.to_string(),
+        matched_item: Some(profile.candidate.clone()),
+        confidence: best_score,
+        match_kind: "fuzzy".to_string(),
+        status: status.to_string(),
+        reason: format!(
+            "Closest OCR-tolerant match for this visible prime component ({:.0}% confidence).",
+            best_score * 100.0
+        ),
+    }
+}
+
+fn match_set_completion_screenshot_rows_inner(
+    catalog_connection: &Connection,
+    rows: &[SetCompletionScreenshotMatchInputRow],
+    allowed_items: &[SetCompletionImportCandidate],
+) -> Result<Vec<SetCompletionScreenshotMatchRow>> {
+    let profiles = build_set_completion_import_candidate_profiles(catalog_connection, allowed_items)?;
+    Ok(rows
+        .iter()
+        .map(|row| match_set_completion_detected_name(&row.row_id, &row.detected_name, &profiles))
+        .collect())
+}
+
+fn apply_set_completion_screenshot_import_inner(
+    connection: &mut Connection,
+    rows: &[SetCompletionScreenshotApplyRow],
+) -> Result<Vec<SetCompletionOwnedItem>> {
+    if rows.is_empty() {
+        return load_set_completion_owned_items(connection);
+    }
+
+    let updated_at = format_timestamp(now_utc())?;
+    let transaction = connection
+        .transaction()
+        .context("failed to start set completion screenshot import transaction")?;
+    let mut seen_slugs = HashSet::new();
+
+    for row in rows {
+        if row.slug.trim().is_empty() {
+            return Err(anyhow!("confirmed import row is missing a component slug"));
+        }
+        if row.name.trim().is_empty() {
+            return Err(anyhow!("confirmed import row is missing a component name"));
+        }
+        if row.quantity <= 0 {
+            return Err(anyhow!(
+                "confirmed import quantity must be greater than zero for {}",
+                row.name
+            ));
+        }
+        if !seen_slugs.insert(row.slug.clone()) {
+            return Err(anyhow!(
+                "duplicate confirmed import entry for component slug {}",
+                row.slug
+            ));
+        }
+
+        transaction.execute(
+            "INSERT INTO owned_set_components (
+               component_slug,
+               component_item_id,
+               component_name,
+               component_image_path,
+               quantity,
+               updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(component_slug) DO UPDATE SET
+               component_item_id = excluded.component_item_id,
+               component_name = excluded.component_name,
+               component_image_path = excluded.component_image_path,
+               quantity = excluded.quantity,
+               updated_at = excluded.updated_at",
+            params![
+                row.slug,
+                row.item_id,
+                row.name,
+                row.image_path,
+                row.quantity,
+                updated_at,
+            ],
+        )?;
+    }
+
+    transaction
+        .commit()
+        .context("failed to commit set completion screenshot import")?;
+    load_set_completion_owned_items(connection)
+}
+
 fn apply_owned_set_component_deltas_inner(
     connection: &mut Connection,
     deltas: &[OwnedSetComponentDelta],
@@ -8990,6 +9351,35 @@ pub async fn set_set_completion_owned_item_quantity(
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub async fn match_set_completion_screenshot_rows(
+    app: tauri::AppHandle,
+    rows: Vec<SetCompletionScreenshotMatchInputRow>,
+    allowed_items: Vec<SetCompletionImportCandidate>,
+) -> Result<Vec<SetCompletionScreenshotMatchRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog_connection = open_catalog_database(&app)?;
+        match_set_completion_screenshot_rows_inner(&catalog_connection, &rows, &allowed_items)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_set_completion_screenshot_import(
+    app: tauri::AppHandle,
+    rows: Vec<SetCompletionScreenshotApplyRow>,
+) -> Result<Vec<SetCompletionOwnedItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut connection = open_market_observatory_database(&app)?;
+        apply_set_completion_screenshot_import_inner(&mut connection, &rows)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Clone)]
 struct OwnedRelicCacheRow {
     tier: String,
@@ -9469,11 +9859,14 @@ mod tests {
         confidence_percent, confidence_score, efficiency_score_percent,
         extract_rank_stat_highlights, initialize_market_observatory_schema,
         insert_statistics_rows_for_domain, liquidity_score_percent, normalize_variant_key,
-        persist_snapshot, pressure_label, resample_rows, scoped_wfm_coalesce_key,
+        match_set_completion_detected_name, persist_snapshot, pressure_label, resample_rows,
+        scoped_wfm_coalesce_key,
         stale_arbitrage_scanner_progress, weighted_sell_percentile_price,
         AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey,
         ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary, MarketSnapshot,
-        RelicRefinementChanceProfile, WfmDetailedOrder, WfmStatisticsRowApi,
+        RelicRefinementChanceProfile, SetCompletionImportCandidate,
+        SetCompletionImportCandidateProfile, SetCompletionScreenshotApplyRow, WfmDetailedOrder,
+        WfmStatisticsRowApi,
     };
     use crate::wfm_scheduler::RequestPriority;
     use rusqlite::Connection;
@@ -10545,6 +10938,105 @@ mod tests {
         .expect("remove owned item");
 
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn set_completion_import_match_prefers_exact_normalized_name() {
+        let profile = SetCompletionImportCandidateProfile {
+            candidate: SetCompletionImportCandidate {
+                item_id: Some(42),
+                slug: "wisp_prime_chassis".to_string(),
+                name: "Wisp Prime Chassis".to_string(),
+                image_path: None,
+            },
+            normalized_name: "wisp prime chassis".to_string(),
+            normalized_slug: "wisp prime chassis".to_string(),
+            aliases: vec!["wisp p chassis".to_string()],
+        };
+
+        let matched =
+            match_set_completion_detected_name("row-1", "Wisp   Prime   Chassis", &[profile]);
+
+        assert_eq!(matched.match_kind, "exact");
+        assert_eq!(matched.status, "matched");
+        assert_eq!(
+            matched.matched_item.as_ref().map(|item| item.slug.as_str()),
+            Some("wisp_prime_chassis")
+        );
+    }
+
+    #[test]
+    fn set_completion_import_match_uses_fuzzy_fallback_for_ocr_noise() {
+        let profile = SetCompletionImportCandidateProfile {
+            candidate: SetCompletionImportCandidate {
+                item_id: Some(99),
+                slug: "saryn_prime_systems".to_string(),
+                name: "Saryn Prime Systems".to_string(),
+                image_path: None,
+            },
+            normalized_name: "saryn prime systems".to_string(),
+            normalized_slug: "saryn prime systems".to_string(),
+            aliases: Vec::new(),
+        };
+
+        let matched =
+            match_set_completion_detected_name("row-2", "Saryn Pr1me Systerns", &[profile]);
+
+        assert_eq!(matched.match_kind, "fuzzy");
+        assert!(matched.status == "matched" || matched.status == "matched-low-confidence");
+        assert_eq!(
+            matched.matched_item.as_ref().map(|item| item.slug.as_str()),
+            Some("saryn_prime_systems")
+        );
+    }
+
+    #[test]
+    fn set_completion_screenshot_import_overwrites_only_visible_rows() {
+        let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        super::upsert_set_completion_owned_item(
+            &connection,
+            Some(42),
+            "wisp_prime_chassis",
+            "Wisp Prime Chassis",
+            None,
+            2,
+        )
+        .expect("seed wisp");
+        super::upsert_set_completion_owned_item(
+            &connection,
+            Some(84),
+            "mesa_prime_barrel",
+            "Mesa Prime Barrel",
+            None,
+            4,
+        )
+        .expect("seed mesa");
+
+        let items = super::apply_set_completion_screenshot_import_inner(
+            &mut connection,
+            &[SetCompletionScreenshotApplyRow {
+                item_id: Some(42),
+                slug: "wisp_prime_chassis".to_string(),
+                name: "Wisp Prime Chassis".to_string(),
+                image_path: None,
+                quantity: 7,
+            }],
+        )
+        .expect("apply screenshot import");
+
+        let wisp = items
+            .iter()
+            .find(|item| item.slug == "wisp_prime_chassis")
+            .expect("wisp row");
+        let mesa = items
+            .iter()
+            .find(|item| item.slug == "mesa_prime_barrel")
+            .expect("mesa row");
+
+        assert_eq!(wisp.quantity, 7);
+        assert_eq!(mesa.quantity, 4);
     }
 
     #[test]

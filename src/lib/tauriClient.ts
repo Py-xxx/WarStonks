@@ -33,6 +33,10 @@ import type {
   TradeSignInInput,
   TradeUpdateListingInput,
   SetCompletionOwnedItem,
+  SetCompletionImportCandidate,
+  SetCompletionScreenshotApplyRow,
+  SetCompletionScreenshotMatchInputRow,
+  SetCompletionScreenshotMatchRow,
   OwnedRelicInventoryCache,
   PersistedWorldStateCacheEntry,
   SellerMode,
@@ -574,6 +578,24 @@ export async function setSetCompletionOwnedItemQuantity(input: {
     name: input.name,
     imagePath: input.imagePath,
     quantity: input.quantity,
+  });
+}
+
+export async function matchSetCompletionScreenshotRows(input: {
+  rows: SetCompletionScreenshotMatchInputRow[];
+  allowedItems: SetCompletionImportCandidate[];
+}): Promise<SetCompletionScreenshotMatchRow[]> {
+  return invoke<SetCompletionScreenshotMatchRow[]>('match_set_completion_screenshot_rows', {
+    rows: input.rows,
+    allowedItems: input.allowedItems,
+  });
+}
+
+export async function applySetCompletionScreenshotImport(
+  rows: SetCompletionScreenshotApplyRow[],
+): Promise<SetCompletionOwnedItem[]> {
+  return invoke<SetCompletionOwnedItem[]>('apply_set_completion_screenshot_import', {
+    rows,
   });
 }
 

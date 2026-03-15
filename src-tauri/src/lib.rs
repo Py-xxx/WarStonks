@@ -43,6 +43,8 @@ pub fn run() {
             market_observatory::get_arbitrage_scanner_state,
             market_observatory::get_set_completion_owned_items,
             market_observatory::set_set_completion_owned_item_quantity,
+            market_observatory::match_set_completion_screenshot_rows,
+            market_observatory::apply_set_completion_screenshot_import,
             market_observatory::get_owned_relic_inventory_cache,
             market_observatory::refresh_owned_relic_inventory,
             market_observatory::start_arbitrage_scanner,
