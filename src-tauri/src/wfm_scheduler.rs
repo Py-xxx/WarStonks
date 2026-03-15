@@ -17,7 +17,7 @@ const MAX_DEFICIT_MULTIPLIER: i32 = 4;
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const COALESCED_SUCCESS_TTL: Duration = Duration::from_millis(1);
 const COALESCED_ERROR_TTL: Duration = Duration::from_millis(1);
-const COALESCED_IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(8);
+const COALESCED_IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 const BASE_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(15);
 const SLOW_WAIT_LOG_THRESHOLD: Duration = Duration::from_millis(250);
@@ -934,7 +934,8 @@ fn scheduler_available_for_priority(
 }
 
 fn reserved_instant_capacity_in_use(state: &SchedulerState) -> bool {
-    state.recent_grants.len() >= MAX_NON_INSTANT_GRANTS_PER_WINDOW
+    !state.instant_queue.is_empty()
+        && state.recent_grants.len() >= MAX_NON_INSTANT_GRANTS_PER_WINDOW
         && state.recent_grants.len() < MAX_GRANTS_PER_WINDOW
 }
 
@@ -961,12 +962,16 @@ fn scheduler_wait_reason(
         };
     }
 
+    // When instant queue is empty, normal work may use all 3 slots.
     let grant_limit = match priority {
         RequestPriority::Instant => MAX_GRANTS_PER_WINDOW,
-        RequestPriority::High
-        | RequestPriority::Medium
-        | RequestPriority::Low
-        | RequestPriority::Background => MAX_NON_INSTANT_GRANTS_PER_WINDOW,
+        _ => {
+            if state.instant_queue.is_empty() {
+                MAX_GRANTS_PER_WINDOW
+            } else {
+                MAX_NON_INSTANT_GRANTS_PER_WINDOW
+            }
+        }
     };
 
     if state.recent_grants.len() >= grant_limit {
@@ -1052,7 +1057,14 @@ fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> 
         return None;
     }
 
-    if !scheduler_available_for_priority(state, now, RequestPriority::High) {
+    // Reserve the 3rd slot for instant traffic only when instant work is actually pending.
+    // When instant queue is empty, normal work may use all 3 slots.
+    let normal_grant_limit = if state.instant_queue.is_empty() {
+        MAX_GRANTS_PER_WINDOW
+    } else {
+        MAX_NON_INSTANT_GRANTS_PER_WINDOW
+    };
+    if state.recent_grants.len() >= normal_grant_limit {
         return None;
     }
 
@@ -1277,7 +1289,8 @@ fn unix_timestamp_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        try_grant, RequestPriority, RequestTicket, SchedulerState, RATE_LIMIT_WINDOW,
+        stale_in_flight_generation, try_grant, CoalescedEntry, RequestPriority, RequestTicket,
+        SchedulerState, COALESCED_IN_FLIGHT_TIMEOUT, RATE_LIMIT_WINDOW,
     };
     use std::time::{Duration, Instant};
 
@@ -1321,6 +1334,8 @@ mod tests {
 
     #[test]
     fn low_priority_cannot_consume_reserved_instant_slot() {
+        // With 2 recent grants and an instant item pending, the 3rd slot is reserved.
+        // try_grant should service the instant item, not the low-priority item.
         let now = Instant::now();
         let mut state = SchedulerState::default();
         state.recent_grants.push_back(now - Duration::from_millis(200));
@@ -1332,12 +1347,40 @@ mod tests {
             enqueued_at: now,
             priority: RequestPriority::Low,
         });
+        // instant queue has a pending item, so the 3rd slot is reserved for it
+        state.instant_queue.push_back(RequestTicket {
+            id: 2,
+            label: "analysis".to_string(),
+            enqueued_at: now,
+            priority: RequestPriority::Instant,
+        });
 
-        assert!(try_grant(&mut state, now).is_none());
+        let granted = try_grant(&mut state, now).expect("expected instant ticket on reserved slot");
+        assert_eq!(granted.priority, RequestPriority::Instant);
         assert_eq!(
             state.normal_queues[RequestPriority::Low.normal_index().unwrap()].len(),
-            1
+            1,
+            "low-priority item must remain queued"
         );
+    }
+
+    #[test]
+    fn normal_priority_can_use_third_slot_when_instant_queue_is_empty() {
+        let now = Instant::now();
+        let mut state = SchedulerState::default();
+        state.recent_grants.push_back(now - Duration::from_millis(200));
+        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(
+            RequestTicket {
+            id: 1,
+            label: "scanner".to_string(),
+            enqueued_at: now,
+            priority: RequestPriority::Low,
+        });
+        // instant queue is empty, so scanner can use the 3rd slot
+        let granted = try_grant(&mut state, now).expect("expected low ticket via 3rd slot");
+        assert_eq!(granted.priority, RequestPriority::Low);
+        assert_eq!(state.recent_grants.len(), 3);
     }
 
     #[test]
