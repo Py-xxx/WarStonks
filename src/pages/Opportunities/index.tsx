@@ -680,6 +680,21 @@ function SetCompletionScreenshotImportModal({
 
         <div className="settings-modal-body screenshot-import-body">
           <div className="settings-form-card screenshot-import-left">
+            <div className="screenshot-import-example">
+              <div className="screenshot-import-example-copy">
+                <span className="panel-title-eyebrow">Example Only</span>
+                <strong>Use this as a framing reference</strong>
+                <span>
+                  Screenshot from the in-game inventory view with the grid fully visible and no
+                  extra overlays. If your screenshot does not match this shape closely, the import
+                  will be unreliable.
+                </span>
+              </div>
+              <div className="screenshot-import-example-image">
+                <img src={setCompletionImportExample} alt="Example Prime Components screenshot layout" />
+              </div>
+            </div>
+
             <div className="screenshot-import-toolbar">
               <button
                 type="button"
@@ -718,20 +733,6 @@ function SetCompletionScreenshotImportModal({
             <p className="watchlist-form-note">
               Workflow: choose the screenshot, manually adjust the crop guide, then click <strong>Run Scan</strong>.
             </p>
-
-            <div className="screenshot-import-example">
-              <div className="screenshot-import-example-copy">
-                <span className="panel-title-eyebrow">Required Layout</span>
-                <strong>Screenshot must match this framing</strong>
-                <span>
-                  Use the in-game inventory view with the grid fully visible and no extra overlays.
-                  If your screenshot does not match this shape closely, the import will be unreliable.
-                </span>
-              </div>
-              <div className="screenshot-import-example-image">
-                <img src={setCompletionImportExample} alt="Example Prime Components screenshot layout" />
-              </div>
-            </div>
 
             {progress ? (
               <div className="scanner-inline-progress screenshot-import-progress">

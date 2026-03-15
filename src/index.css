@@ -190,9 +190,10 @@
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid rgba(74, 158, 255, 0.16);
+  margin-bottom: 8px;
+  border: 1px dashed rgba(74, 158, 255, 0.28);
   border-radius: 14px;
-  background: rgba(10, 14, 22, 0.72);
+  background: rgba(7, 11, 18, 0.62);
 }
 
 .screenshot-import-example-copy {
@@ -212,6 +213,7 @@
 }
 
 .screenshot-import-example-image {
+  max-width: 520px;
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
