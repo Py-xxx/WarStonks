@@ -81,7 +81,7 @@ const STRICT_SET_COMPLETION_IMPORT_COLORS = [
   { red: 0xbb, green: 0xa6, blue: 0x65, hex: '#bba665' },
   { red: 0xad, green: 0x9a, blue: 0x5f, hex: '#ad9a5f' },
 ] as const;
-const DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE = 5;
+const DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE = 8;
 const MASK_SCALE = 4;
 const GRID_COLUMNS = 7;
 const GRID_ROWS = 3;
@@ -447,10 +447,10 @@ async function readNameText(
   box: SetCompletionDetectionBox,
 ): Promise<string> {
   const maskedRegion = extractBoxCanvas(maskedCanvas, box, {
-    left: 10,
-    right: 10,
-    top: 4,
-    bottom: 6,
+    left: 14,
+    right: 14,
+    top: 6,
+    bottom: 10,
   });
   const variants = [
     { canvas: upscaleCanvas(trimTransparentColumns(maskedRegion), 2), psm: PSM.SINGLE_BLOCK },
@@ -739,9 +739,9 @@ function analyzeTileMask(
   const nameBox = localNameBounds
     ? translateBox(
         expandBoundsToBottom(localNameBounds, nameMask.width, nameMask.height, {
-          left: Math.max(2, Math.round(nameMask.width * 0.01)),
-          right: Math.max(2, Math.round(nameMask.width * 0.01)),
-          top: Math.max(2, Math.round(nameMask.height * 0.02)),
+          left: Math.max(8, Math.round(nameMask.width * 0.03)),
+          right: Math.max(8, Math.round(nameMask.width * 0.03)),
+          top: Math.max(6, Math.round(nameMask.height * 0.03)),
         }),
         nameRegionRect.x,
         nameRegionRect.y,
