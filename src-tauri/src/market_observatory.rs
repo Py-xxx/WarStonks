@@ -2358,6 +2358,7 @@ fn merge_snapshot_chart_points(
     mut chart_points: Vec<AnalyticsChartPoint>,
     snapshot_points: Vec<AnalyticsChartPoint>,
 ) -> Vec<AnalyticsChartPoint> {
+    let latest_snapshot_point = snapshot_points.last().cloned();
     let mut point_by_bucket = chart_points
         .drain(..)
         .map(|point| (point.bucket_at.clone(), point))
@@ -2397,6 +2398,19 @@ fn merge_snapshot_chart_points(
         }
         if entry.exit_zone.is_none() {
             entry.exit_zone = snapshot_point.exit_zone;
+        }
+    }
+
+    if let Some(latest_snapshot_point) = latest_snapshot_point {
+        if let Some(entry) = point_by_bucket.get_mut(&latest_snapshot_point.bucket_at) {
+            entry.open_price = latest_snapshot_point.open_price.or(entry.open_price);
+            entry.closed_price = latest_snapshot_point.closed_price.or(entry.closed_price);
+            entry.low_price = latest_snapshot_point.low_price.or(entry.low_price);
+            entry.high_price = latest_snapshot_point.high_price.or(entry.high_price);
+            entry.lowest_sell = latest_snapshot_point.lowest_sell.or(entry.lowest_sell);
+            entry.median_sell = latest_snapshot_point.median_sell.or(entry.median_sell);
+            entry.average_price = latest_snapshot_point.average_price.or(entry.average_price);
+            entry.highest_buy = latest_snapshot_point.highest_buy.or(entry.highest_buy);
         }
     }
 
@@ -9124,6 +9138,56 @@ mod tests {
         assert!(lowest_sell.slope_1h.unwrap_or_default() > 0.0);
         assert!(lowest_sell.slope_3h.unwrap_or_default() > 0.0);
         assert!(lowest_sell.slope_6h.unwrap_or_default() > 0.0);
+    }
+
+    #[test]
+    fn merge_snapshot_chart_points_overwrites_latest_bucket_with_live_snapshot_values() {
+        let stats_points = vec![
+            AnalyticsChartPoint {
+                bucket_at: "2026-03-11T00:00:00Z".to_string(),
+                open_price: Some(20.0),
+                closed_price: Some(21.0),
+                low_price: Some(20.0),
+                high_price: Some(28.0),
+                lowest_sell: Some(20.0),
+                median_sell: Some(28.0),
+                moving_avg: Some(22.0),
+                weighted_avg: Some(23.0),
+                average_price: Some(24.0),
+                highest_buy: Some(18.0),
+                fair_value_low: Some(19.0),
+                fair_value_high: Some(25.0),
+                entry_zone: Some(20.0),
+                exit_zone: Some(24.0),
+                volume: 10.0,
+            },
+        ];
+        let snapshot_points = vec![AnalyticsChartPoint {
+            bucket_at: "2026-03-11T00:00:00Z".to_string(),
+            open_price: Some(20.0),
+            closed_price: Some(20.0),
+            low_price: Some(20.0),
+            high_price: Some(22.0),
+            lowest_sell: Some(20.0),
+            median_sell: Some(21.0),
+            moving_avg: None,
+            weighted_avg: None,
+            average_price: Some(21.0),
+            highest_buy: Some(19.0),
+            fair_value_low: None,
+            fair_value_high: None,
+            entry_zone: None,
+            exit_zone: None,
+            volume: 0.0,
+        }];
+
+        let merged = super::merge_snapshot_chart_points(stats_points, snapshot_points);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].median_sell, Some(21.0));
+        assert_eq!(merged[0].lowest_sell, Some(20.0));
+        assert_eq!(merged[0].highest_buy, Some(19.0));
+        assert_eq!(merged[0].fair_value_high, Some(25.0));
     }
 
     #[test]
