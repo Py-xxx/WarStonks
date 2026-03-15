@@ -1562,11 +1562,11 @@ fn filter_variant_statistics_rows(
     match derive_variant_rank(variant_key) {
         Some(rank) => rows
             .into_iter()
-            .filter(|row| row.mod_rank == Some(rank))
+            .filter(|row| row.mod_rank.unwrap_or(0) == rank)
             .collect(),
         None => rows
             .into_iter()
-            .filter(|row| row.mod_rank.is_none())
+            .filter(|row| row.mod_rank.unwrap_or(0) == 0)
             .collect(),
     }
 }
@@ -2403,13 +2403,7 @@ fn merge_snapshot_chart_points(
 
     if let Some(latest_snapshot_point) = latest_snapshot_point {
         if let Some(entry) = point_by_bucket.get_mut(&latest_snapshot_point.bucket_at) {
-            entry.open_price = latest_snapshot_point.open_price.or(entry.open_price);
-            entry.closed_price = latest_snapshot_point.closed_price.or(entry.closed_price);
-            entry.low_price = latest_snapshot_point.low_price.or(entry.low_price);
-            entry.high_price = latest_snapshot_point.high_price.or(entry.high_price);
             entry.lowest_sell = latest_snapshot_point.lowest_sell.or(entry.lowest_sell);
-            entry.median_sell = latest_snapshot_point.median_sell.or(entry.median_sell);
-            entry.average_price = latest_snapshot_point.average_price.or(entry.average_price);
             entry.highest_buy = latest_snapshot_point.highest_buy.or(entry.highest_buy);
         }
     }
@@ -9184,10 +9178,56 @@ mod tests {
         let merged = super::merge_snapshot_chart_points(stats_points, snapshot_points);
 
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].median_sell, Some(21.0));
+        assert_eq!(merged[0].median_sell, Some(28.0));
         assert_eq!(merged[0].lowest_sell, Some(20.0));
         assert_eq!(merged[0].highest_buy, Some(19.0));
         assert_eq!(merged[0].fair_value_high, Some(25.0));
+    }
+
+    #[test]
+    fn filter_variant_statistics_rows_treats_rank_zero_as_base_market() {
+        let rows = vec![
+            WfmStatisticsRowApi {
+                datetime: "2026-03-11T00:00:00Z".to_string(),
+                volume: Some(1.0),
+                min_price: Some(10.0),
+                max_price: Some(12.0),
+                open_price: Some(10.0),
+                closed_price: Some(11.0),
+                avg_price: Some(11.0),
+                wa_price: Some(11.0),
+                median: Some(11.0),
+                moving_avg: Some(11.0),
+                donch_top: None,
+                donch_bot: None,
+                order_type: Some("sell".to_string()),
+                mod_rank: Some(0),
+            },
+            WfmStatisticsRowApi {
+                datetime: "2026-03-11T01:00:00Z".to_string(),
+                volume: Some(1.0),
+                min_price: Some(20.0),
+                max_price: Some(22.0),
+                open_price: Some(20.0),
+                closed_price: Some(21.0),
+                avg_price: Some(21.0),
+                wa_price: Some(21.0),
+                median: Some(21.0),
+                moving_avg: Some(21.0),
+                donch_top: None,
+                donch_bot: None,
+                order_type: Some("sell".to_string()),
+                mod_rank: Some(2),
+            },
+        ];
+
+        let filtered_base = super::filter_variant_statistics_rows(rows.clone(), "base");
+        let filtered_rank_two = super::filter_variant_statistics_rows(rows, "rank:2");
+
+        assert_eq!(filtered_base.len(), 1);
+        assert_eq!(filtered_base[0].mod_rank, Some(0));
+        assert_eq!(filtered_rank_two.len(), 1);
+        assert_eq!(filtered_rank_two[0].mod_rank, Some(2));
     }
 
     #[test]
