@@ -4620,6 +4620,117 @@ fn build_manipulation_confidence(recent_snapshots: &[MarketSnapshot]) -> MarketC
     build_confidence_summary(level, reasons)
 }
 
+fn thin_market_active(snapshot: &MarketSnapshot) -> bool {
+    snapshot.sell_order_count < 6 || snapshot.unique_sell_users < 4 || snapshot.buy_order_count < 3
+}
+
+fn liquidity_withdrawal_active(snapshots: &[MarketSnapshot]) -> bool {
+    if snapshots.len() < 6 {
+        return false;
+    }
+
+    let split_index = snapshots.len() / 2;
+    if split_index == 0 || split_index >= snapshots.len() {
+        return false;
+    }
+
+    let previous_avg = snapshots[..split_index]
+        .iter()
+        .map(|entry| entry.buy_quantity as f64)
+        .sum::<f64>()
+        / split_index as f64;
+    let recent_avg = snapshots[split_index..]
+        .iter()
+        .map(|entry| entry.buy_quantity as f64)
+        .sum::<f64>()
+        / (snapshots.len() - split_index) as f64;
+    let floor_start = snapshots[split_index - 1].lowest_sell.unwrap_or(0.0);
+    let floor_end = snapshots.last().and_then(|entry| entry.lowest_sell).unwrap_or(0.0);
+
+    previous_avg > 0.0
+        && recent_avg <= previous_avg * 0.65
+        && (floor_end - floor_start).abs() <= 2.0
+}
+
+fn volatile_undercut_active(snapshots: &[MarketSnapshot]) -> bool {
+    if snapshots.len() < 6 {
+        return false;
+    }
+
+    let mut direction_changes = 0;
+    let mut previous_direction = 0_i8;
+    for window in snapshots.windows(2) {
+        if let [previous, current] = window {
+            if let (Some(previous_floor), Some(current_floor)) =
+                (previous.lowest_sell, current.lowest_sell)
+            {
+                let direction = match current_floor.partial_cmp(&previous_floor) {
+                    Some(Ordering::Less) => -1,
+                    Some(Ordering::Greater) => 1,
+                    _ => 0,
+                };
+                if direction != 0 && previous_direction != 0 && direction != previous_direction {
+                    direction_changes += 1;
+                }
+                if direction != 0 {
+                    previous_direction = direction;
+                }
+            }
+        }
+    }
+
+    direction_changes >= 3 || undercut_velocity_per_hour(snapshots).unwrap_or(0.0) >= 0.45
+}
+
+fn unstable_buy_pressure_active(snapshots: &[MarketSnapshot]) -> bool {
+    if snapshots.len() < 6 {
+        return false;
+    }
+
+    snapshot_std_dev(
+        &snapshots
+            .iter()
+            .filter_map(|entry| entry.pressure_ratio)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or(0.0)
+        >= 0.35
+}
+
+fn append_persistence_detail(base: &str, streak: usize) -> String {
+    if streak >= 6 {
+        format!("{base} This has stayed active across the latest {streak} snapshots.")
+    } else if streak >= 3 {
+        format!("{base} This has persisted across the latest {streak} snapshots.")
+    } else {
+        base.to_string()
+    }
+}
+
+fn latest_signal_streak<F>(
+    snapshots: &[MarketSnapshot],
+    minimum_window: usize,
+    mut is_active: F,
+) -> usize
+where
+    F: FnMut(&[MarketSnapshot]) -> bool,
+{
+    if snapshots.len() < minimum_window {
+        return 0;
+    }
+
+    let mut streak = 0;
+    for end in (minimum_window..=snapshots.len()).rev() {
+        if is_active(&snapshots[..end]) {
+            streak += 1;
+        } else {
+            break;
+        }
+    }
+
+    streak
+}
+
 fn build_time_of_day_confidence(
     bucket_count: usize,
     sample_count: usize,
@@ -4958,7 +5069,17 @@ fn build_manipulation_risk(
     recent_snapshots: &[MarketSnapshot],
 ) -> ManipulationRiskSummary {
     let confidence_summary = build_manipulation_confidence(recent_snapshots);
-    let allow_pattern_signals = confidence_summary.level != "low" && recent_snapshots.len() >= 6;
+    let mut snapshots = recent_snapshots.to_vec();
+    match snapshots.last() {
+        Some(last) if last.captured_at == snapshot.captured_at => {
+            if let Some(last_mut) = snapshots.last_mut() {
+                *last_mut = snapshot.clone();
+            }
+        }
+        _ => snapshots.push(snapshot.clone()),
+    }
+
+    let allow_pattern_signals = confidence_summary.level != "low" && snapshots.len() >= 6;
     let price_wall_active = snapshot
         .depth_levels
         .iter()
@@ -4967,76 +5088,23 @@ fn build_manipulation_risk(
         .reduce(f64::max)
         .unwrap_or(0.0)
         >= 0.40;
+    let liquidity_withdrawal_signal =
+        allow_pattern_signals && liquidity_withdrawal_active(&snapshots);
+    let volatile_undercut_signal = allow_pattern_signals && volatile_undercut_active(&snapshots);
+    let unstable_buy_pressure_signal =
+        allow_pattern_signals && unstable_buy_pressure_active(&snapshots);
+    let thin_market_signal = thin_market_active(snapshot);
 
-    let liquidity_withdrawal_active = if allow_pattern_signals {
-        let split_index = recent_snapshots.len() / 2;
-        let previous_avg = recent_snapshots[..split_index]
-            .iter()
-            .map(|entry| entry.buy_quantity as f64)
-            .sum::<f64>()
-            / split_index as f64;
-        let recent_avg = recent_snapshots[split_index..]
-            .iter()
-            .map(|entry| entry.buy_quantity as f64)
-            .sum::<f64>()
-            / (recent_snapshots.len() - split_index) as f64;
-        let floor_start = recent_snapshots[split_index - 1].lowest_sell.unwrap_or(0.0);
-        let floor_end = recent_snapshots
-            .last()
-            .and_then(|entry| entry.lowest_sell)
-            .unwrap_or(0.0);
-        previous_avg > 0.0
-            && recent_avg <= previous_avg * 0.65
-            && (floor_end - floor_start).abs() <= 2.0
-    } else {
-        false
-    };
-
-    let volatile_undercut_active = if allow_pattern_signals {
-        let mut direction_changes = 0;
-        let mut previous_direction = 0_i8;
-        for window in recent_snapshots.windows(2) {
-            if let [previous, current] = window {
-                if let (Some(previous_floor), Some(current_floor)) =
-                    (previous.lowest_sell, current.lowest_sell)
-                {
-                    let direction = match current_floor.partial_cmp(&previous_floor) {
-                        Some(Ordering::Less) => -1,
-                        Some(Ordering::Greater) => 1,
-                        _ => 0,
-                    };
-                    if direction != 0 && previous_direction != 0 && direction != previous_direction
-                    {
-                        direction_changes += 1;
-                    }
-                    if direction != 0 {
-                        previous_direction = direction;
-                    }
-                }
-            }
-        }
-        direction_changes >= 3
-            || undercut_velocity_per_hour(recent_snapshots).unwrap_or(0.0) >= 0.45
-    } else {
-        false
-    };
-
-    let unstable_buy_pressure_active = if allow_pattern_signals {
-        snapshot_std_dev(
-            &recent_snapshots
-                .iter()
-                .filter_map(|entry| entry.pressure_ratio)
-                .collect::<Vec<_>>(),
-        )
-        .unwrap_or(0.0)
-            >= 0.35
-    } else {
-        false
-    };
-
-    let thin_market_active = snapshot.sell_order_count < 6
-        || snapshot.unique_sell_users < 4
-        || snapshot.buy_order_count < 3;
+    let price_wall_streak = if price_wall_active { 1 } else { 0 };
+    let thin_market_streak = latest_signal_streak(&snapshots, 1, |window| {
+        window.last().map(thin_market_active).unwrap_or(false)
+    });
+    let liquidity_withdrawal_streak =
+        latest_signal_streak(&snapshots, 6, liquidity_withdrawal_active);
+    let volatile_undercut_streak =
+        latest_signal_streak(&snapshots, 6, volatile_undercut_active);
+    let unstable_buy_pressure_streak =
+        latest_signal_streak(&snapshots, 6, unstable_buy_pressure_active);
 
     let signals = vec![
         ManipulationSignalState {
@@ -5044,7 +5112,10 @@ fn build_manipulation_risk(
             label: "Price Wall".to_string(),
             active: price_wall_active,
             detail: if price_wall_active {
-                "A single sell level is carrying an outsized share of visible supply.".to_string()
+                append_persistence_detail(
+                    "A single sell level is carrying an outsized share of visible supply.",
+                    price_wall_streak,
+                )
             } else {
                 "Visible sell supply is not concentrated at one price wall.".to_string()
             },
@@ -5052,10 +5123,12 @@ fn build_manipulation_risk(
         ManipulationSignalState {
             key: "liquidity_withdrawal".to_string(),
             label: "Liquidity Withdrawal".to_string(),
-            active: liquidity_withdrawal_active,
-            detail: if liquidity_withdrawal_active {
-                "Buy-side quantity has fallen materially without the floor repricing down."
-                    .to_string()
+            active: liquidity_withdrawal_signal,
+            detail: if liquidity_withdrawal_signal {
+                append_persistence_detail(
+                    "Buy-side quantity has fallen materially without the floor repricing down.",
+                    liquidity_withdrawal_streak,
+                )
             } else {
                 "Buy-side liquidity is not showing a sharp withdrawal pattern.".to_string()
             },
@@ -5063,10 +5136,12 @@ fn build_manipulation_risk(
         ManipulationSignalState {
             key: "volatile_undercut_cycling".to_string(),
             label: "Volatile Undercut Cycling".to_string(),
-            active: volatile_undercut_active,
-            detail: if volatile_undercut_active {
-                "Recent floor changes are cycling fast enough to suggest unstable queue behavior."
-                    .to_string()
+            active: volatile_undercut_signal,
+            detail: if volatile_undercut_signal {
+                append_persistence_detail(
+                    "Recent floor changes are cycling fast enough to suggest unstable queue behavior.",
+                    volatile_undercut_streak,
+                )
             } else {
                 "Recent floor changes are not cycling aggressively.".to_string()
             },
@@ -5074,10 +5149,12 @@ fn build_manipulation_risk(
         ManipulationSignalState {
             key: "unstable_buy_pressure".to_string(),
             label: "Unstable Buy Pressure".to_string(),
-            active: unstable_buy_pressure_active,
-            detail: if unstable_buy_pressure_active {
-                "Pressure ratio is moving around too aggressively across recent snapshots."
-                    .to_string()
+            active: unstable_buy_pressure_signal,
+            detail: if unstable_buy_pressure_signal {
+                append_persistence_detail(
+                    "Pressure ratio is moving around too aggressively across recent snapshots.",
+                    unstable_buy_pressure_streak,
+                )
             } else {
                 "Buy pressure has been comparatively stable across recent snapshots.".to_string()
             },
@@ -5085,9 +5162,12 @@ fn build_manipulation_risk(
         ManipulationSignalState {
             key: "thin_market".to_string(),
             label: "Thin Market".to_string(),
-            active: thin_market_active,
-            detail: if thin_market_active {
-                "Visible supply and demand are both too light for stable execution.".to_string()
+            active: thin_market_signal,
+            detail: if thin_market_signal {
+                append_persistence_detail(
+                    "Visible supply and demand are both too light for stable execution.",
+                    thin_market_streak,
+                )
             } else {
                 "The live book is deep enough to avoid the thinnest-market warning.".to_string()
             },
@@ -5095,9 +5175,19 @@ fn build_manipulation_risk(
     ];
 
     let active_signals = signals.iter().filter(|signal| signal.active).count();
-    let risk_level = if active_signals >= 3 {
+    let max_signal_streak = [
+        price_wall_streak,
+        liquidity_withdrawal_streak,
+        volatile_undercut_streak,
+        unstable_buy_pressure_streak,
+        thin_market_streak,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0);
+    let risk_level = if active_signals >= 3 || max_signal_streak >= 6 {
         "High"
-    } else if active_signals >= 2 {
+    } else if active_signals >= 2 || max_signal_streak >= 3 {
         "Moderate"
     } else {
         "Low"
@@ -10294,6 +10384,35 @@ mod tests {
                 .unwrap_or(false)
                 == false
         );
+    }
+
+    #[test]
+    fn persistent_thin_market_escalates_manipulation_risk() {
+        let mut snapshot = sample_snapshot("2026-03-11T06:00:00Z");
+        snapshot.sell_order_count = 3;
+        snapshot.unique_sell_users = 2;
+        snapshot.buy_order_count = 1;
+
+        let recent = (0..6)
+            .map(|hour| {
+                let mut entry = sample_snapshot(
+                    &super::format_timestamp(
+                        super::parse_timestamp("2026-03-11T00:00:00Z").unwrap()
+                            + time::Duration::hours(hour),
+                    )
+                    .unwrap(),
+                );
+                entry.sell_order_count = 3;
+                entry.unique_sell_users = 2;
+                entry.buy_order_count = 1;
+                entry
+            })
+            .collect::<Vec<_>>();
+
+        let risk = build_manipulation_risk(&snapshot, &recent);
+
+        assert_eq!(risk.risk_level, "High");
+        assert_eq!(risk.efficiency_penalty_pct, 45);
     }
 
     #[test]
