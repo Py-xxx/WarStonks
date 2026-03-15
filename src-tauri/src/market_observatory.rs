@@ -2242,18 +2242,19 @@ fn build_statistics_price_model(
         entry_high: zone_bands
             .as_ref()
             .map(|entry| round_platinum(entry.entry_high)),
-        recommended_entry_price: zone_bands
-            .as_ref()
-            .map(|entry| round_platinum(entry.entry_high)),
+        recommended_entry_price: recommended_entry_price_from_zone(zone_bands.as_ref()),
         exit_low: zone_bands
             .as_ref()
             .map(|entry| round_platinum(entry.exit_low)),
         exit_high: zone_bands
             .as_ref()
             .map(|entry| round_platinum(entry.exit_high)),
-        recommended_exit_price: zone_bands
-            .as_ref()
-            .map(|entry| round_platinum(entry.exit_low)),
+        recommended_exit_price: historical_recommended_exit_price(
+            recommended_entry_price_from_zone(zone_bands.as_ref()),
+            &closed_rows,
+            zone_bands.as_ref(),
+            None,
+        ),
         current_stats_price,
         liquidity_score,
         sale_state,
@@ -3296,6 +3297,14 @@ struct HistoricalZoneAnchors {
     fair_center: Option<f64>,
 }
 
+struct HistoricalExitProfile {
+    fair_high_anchor: Option<f64>,
+    recent_fair_anchor: Option<f64>,
+    recent_mid_anchor: Option<f64>,
+    drift_pct: Option<f64>,
+    relative_volume: Option<f64>,
+}
+
 fn round_platinum(value: f64) -> f64 {
     value.round()
 }
@@ -3438,6 +3447,257 @@ fn compute_zone_bands(
         entry_target: round_platinum((entry_low + entry_high) * 0.5),
         exit_target: round_platinum((exit_low + exit_high) * 0.5),
     })
+}
+
+fn recommended_entry_price_from_zone(zone_bands: Option<&ZoneBands>) -> Option<f64> {
+    zone_bands.map(|entry| round_platinum(entry.entry_target))
+}
+
+fn resolved_recommended_entry_price(
+    recommended_entry_price: Option<f64>,
+    current_floor_price: Option<f64>,
+) -> Option<f64> {
+    match (recommended_entry_price, current_floor_price) {
+        (Some(recommended), Some(current)) if current <= recommended => Some(current),
+        (Some(recommended), _) => Some(recommended),
+        (None, current) => current,
+    }
+}
+
+fn average_recent_prices(values: &[f64], take: usize) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+
+    let slice_len = values.len().min(take);
+    let slice = &values[values.len() - slice_len..];
+    Some(slice.iter().sum::<f64>() / slice.len() as f64)
+}
+
+fn interquartile_bounds(sorted_values: &[f64]) -> Option<(f64, f64)> {
+    if sorted_values.len() < 4 {
+        return None;
+    }
+
+    let q1 = percentile_price(sorted_values, 0.25)?;
+    let q3 = percentile_price(sorted_values, 0.75)?;
+    let iqr = q3 - q1;
+    Some((q1 - (iqr * 1.5), q3 + (iqr * 1.5)))
+}
+
+fn filtered_price_series(values: &[f64]) -> Vec<f64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sorted_values = values.to_vec();
+    sorted_values.sort_by(|left, right| left.total_cmp(right));
+    let Some((lower_bound, upper_bound)) = interquartile_bounds(&sorted_values) else {
+        return sorted_values;
+    };
+
+    let filtered = sorted_values
+        .into_iter()
+        .filter(|value| *value >= lower_bound && *value <= upper_bound)
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        values.to_vec()
+    } else {
+        filtered
+    }
+}
+
+fn weighted_average_pairs(pairs: &[(Option<f64>, f64)]) -> Option<f64> {
+    let mut weighted_sum = 0.0;
+    let mut total_weight = 0.0;
+    for (value, weight) in pairs {
+        if let Some(price) = value {
+            weighted_sum += price * *weight;
+            total_weight += *weight;
+        }
+    }
+
+    if total_weight > 0.0 {
+        Some(weighted_sum / total_weight)
+    } else {
+        None
+    }
+}
+
+fn build_historical_exit_profile(rows: &[InternalStatsRow]) -> HistoricalExitProfile {
+    let cutoff = now_utc() - TimeDuration::days(14);
+    let recent_rows = rows
+        .iter()
+        .filter(|row| row.bucket_at >= cutoff)
+        .collect::<Vec<_>>();
+    let source_rows = if recent_rows.is_empty() {
+        rows.iter().collect::<Vec<_>>()
+    } else {
+        recent_rows
+    };
+
+    let fair_series = source_rows
+        .iter()
+        .filter_map(|row| row.median.or(row.wa_price).or(row.avg_price).or(row.moving_avg))
+        .collect::<Vec<_>>();
+    let filtered_fair_series = filtered_price_series(&fair_series);
+    let recent_fair_series = source_rows
+        .iter()
+        .filter_map(|row| row.median.or(row.wa_price).or(row.avg_price).or(row.moving_avg))
+        .collect::<Vec<_>>();
+
+    let fair_high_anchor = percentile_price(&filtered_fair_series, 0.68)
+        .or_else(|| percentile_price(&filtered_fair_series, 0.62))
+        .or_else(|| filtered_fair_series.last().copied());
+    let recent_fair_anchor =
+        average_recent_prices(&recent_fair_series, 3).or_else(|| average_recent_prices(&filtered_fair_series, 3));
+    let recent_mid_anchor =
+        average_recent_prices(&recent_fair_series, 7).or_else(|| average_recent_prices(&filtered_fair_series, 6));
+
+    let drift_pct = if recent_fair_series.len() >= 6 {
+        let midpoint = recent_fair_series.len() / 2;
+        let previous_avg = recent_fair_series[..midpoint].iter().sum::<f64>() / midpoint as f64;
+        let recent_avg =
+            recent_fair_series[midpoint..].iter().sum::<f64>() / (recent_fair_series.len() - midpoint) as f64;
+        if previous_avg > 0.0 {
+            Some(((recent_avg - previous_avg) / previous_avg) * 100.0)
+        } else {
+            None
+        }
+    } else {
+        let previous_avg = average_recent_prices(&recent_fair_series[..recent_fair_series.len().saturating_sub(3)], 3);
+        let recent_avg = average_recent_prices(&recent_fair_series, 3);
+        match (previous_avg, recent_avg) {
+            (Some(previous), Some(recent)) if previous > 0.0 => {
+                Some(((recent - previous) / previous) * 100.0)
+            }
+            _ => None,
+        }
+    };
+
+    let recent_volume_cutoff = now_utc() - TimeDuration::days(7);
+    let recent_volume = rows
+        .iter()
+        .filter(|row| row.bucket_at >= recent_volume_cutoff)
+        .map(|row| row.volume)
+        .sum::<f64>();
+    let baseline_volume = rows.iter().map(|row| row.volume).sum::<f64>() / rows.len().max(1) as f64;
+    let relative_volume = if baseline_volume > 0.0 {
+        Some((recent_volume / 7.0) / baseline_volume)
+    } else {
+        None
+    };
+
+    HistoricalExitProfile {
+        fair_high_anchor,
+        recent_fair_anchor,
+        recent_mid_anchor,
+        drift_pct,
+        relative_volume,
+    }
+}
+
+fn historical_recommended_exit_price(
+    entry_price: Option<f64>,
+    rows: &[InternalStatsRow],
+    zone_bands: Option<&ZoneBands>,
+    zone_overview: Option<&EntryExitZoneOverview>,
+) -> Option<f64> {
+    if rows.is_empty() {
+        return zone_bands
+            .map(|entry| round_platinum(entry.exit_target))
+            .or_else(|| zone_overview.and_then(|entry| entry.exit_zone_low));
+    }
+
+    let profile = build_historical_exit_profile(rows);
+    let zone_low = zone_bands
+        .map(|entry| entry.exit_low)
+        .or_else(|| zone_overview.and_then(|entry| entry.exit_zone_low));
+    let zone_high = zone_bands
+        .map(|entry| entry.exit_high)
+        .or_else(|| zone_overview.and_then(|entry| entry.exit_zone_high));
+    let zone_target = zone_bands
+        .map(|entry| entry.exit_target)
+        .or_else(|| {
+            zone_overview.and_then(|entry| {
+                entry.exit_zone_low.zip(entry.exit_zone_high).map(|(low, high)| (low + high) * 0.5)
+            })
+        });
+
+    let mut target = weighted_average_pairs(&[
+        (profile.recent_fair_anchor, 0.38),
+        (profile.recent_mid_anchor, 0.27),
+        (profile.fair_high_anchor, 0.20),
+        (zone_target, 0.15),
+    ])
+    .or(profile.recent_fair_anchor)
+    .or(profile.recent_mid_anchor)
+    .or(profile.fair_high_anchor)
+    .or(zone_target)
+    .or(entry_price)?;
+
+    if let Some(relative_volume) = profile.relative_volume {
+        if relative_volume < 0.65 {
+            target -= 3.0;
+        } else if relative_volume < 0.9 {
+            target -= 1.5;
+        }
+    }
+
+    if let Some(drift_pct) = profile.drift_pct {
+        if drift_pct <= -8.0 {
+            target -= 3.0;
+        } else if drift_pct <= -4.0 {
+            target -= 1.5;
+        }
+    }
+
+    if let Some(fair_high_anchor) = profile.fair_high_anchor {
+        target = target.min(fair_high_anchor + 2.0);
+    }
+
+    if let Some(zone_high) = zone_high {
+        target = target.min(zone_high);
+    }
+    if let Some(zone_low) = zone_low {
+        target = target.max(zone_low);
+    }
+
+    let target = round_platinum(target);
+    match entry_price {
+        Some(entry) => Some(target.max(round_platinum(entry + 1.0))),
+        None => Some(target),
+    }
+}
+
+fn choose_live_exit_percentile(snapshot: &MarketSnapshot, liquidity_score: f64) -> f64 {
+    let mut percentile: f64 = if snapshot.sell_order_count < 12 {
+        38.0
+    } else if snapshot.sell_order_count < 25 {
+        44.0
+    } else {
+        49.0
+    };
+
+    match pressure_label(snapshot.pressure_ratio) {
+        label if label == "Exit Pressure" => percentile -= 11.0,
+        label if label == "Balanced" => percentile -= 6.0,
+        _ => {}
+    }
+
+    if liquidity_score >= 78.0 && snapshot.near_floor_seller_count <= 3 && snapshot.sell_order_count >= 18 {
+        percentile += 4.0;
+    } else if liquidity_score < 45.0 {
+        percentile -= 3.0;
+    }
+
+    if snapshot.buy_quantity >= snapshot.sell_quantity && snapshot.buy_order_count >= snapshot.sell_order_count {
+        percentile += 3.0;
+    } else if snapshot.buy_quantity * 2 < snapshot.sell_quantity {
+        percentile -= 4.0;
+    }
+
+    percentile.clamp(25.0, 58.0)
 }
 
 fn last_defined_value(
@@ -3756,7 +4016,9 @@ fn build_entry_exit_zone_overview(
     let exit_zone_high = computed_zone_bands.as_ref().map(|zone| zone.exit_high);
 
     let current_lowest_price = snapshot.and_then(|entry| entry.lowest_sell);
-    let current_median_lowest_price = snapshot.and_then(|entry| entry.median_sell);
+    let current_median_lowest_price = latest_point
+        .and_then(|point| point.median_sell)
+        .or_else(|| snapshot.and_then(|entry| entry.median_sell));
     let base_zone_quality = match (
         current_lowest_price,
         entry_zone_low,
@@ -4376,14 +4638,6 @@ fn weighted_sell_percentile_price(
     prices.last().copied()
 }
 
-fn historical_exit_ceiling(rows: &[InternalStatsRow]) -> Option<f64> {
-    let cutoff = now_utc() - TimeDuration::days(14);
-    rows.iter()
-        .filter(|row| row.bucket_at >= cutoff)
-        .filter_map(|row| row.max_price.or(row.donch_top).or(row.median))
-        .reduce(f64::max)
-}
-
 fn recommended_exit_price(
     entry_price: Option<f64>,
     sell_orders: &[WfmDetailedOrder],
@@ -4391,27 +4645,28 @@ fn recommended_exit_price(
     stats_rows: &[InternalStatsRow],
     zone_overview: &EntryExitZoneOverview,
 ) -> Option<f64> {
-    let p60 = weighted_sell_percentile_price(sell_orders, 60.0);
-    let historical_ceiling = historical_exit_ceiling(stats_rows)
-        .or(zone_overview.exit_zone_high)
-        .or(zone_overview.fair_value_high);
-    let depth_based_cushion = if snapshot.sell_order_count < 12 {
+    let liquidity_score = liquidity_score_percent(snapshot);
+    let live_percentile = choose_live_exit_percentile(snapshot, liquidity_score);
+    let live_target = weighted_sell_percentile_price(sell_orders, live_percentile);
+    let historical_target =
+        historical_recommended_exit_price(entry_price, stats_rows, None, Some(zone_overview));
+    let execution_cushion = if snapshot.sell_order_count < 10 {
+        1.0
+    } else if snapshot.sell_order_count < 24 {
         2.0
     } else {
-        1.0
+        3.0
     };
 
-    let candidate = match (p60, historical_ceiling) {
-        (Some(percentile), Some(ceiling)) => {
-            percentile.max(ceiling - depth_based_cushion).min(ceiling)
-        }
-        (Some(percentile), None) => percentile,
-        (None, Some(ceiling)) => ceiling - depth_based_cushion,
+    let candidate = match (historical_target, live_target) {
+        (Some(history), Some(live)) => history.min(live + execution_cushion),
+        (Some(history), None) => history,
+        (None, Some(live)) => live,
         (None, None) => return entry_price,
     };
 
     let candidate = round_platinum(candidate);
-    Some(candidate.max(round_platinum(entry_price.unwrap_or(candidate))))
+    Some(candidate.max(round_platinum(entry_price.unwrap_or(candidate) + 1.0)))
 }
 
 fn efficiency_score_percent(
@@ -7758,7 +8013,14 @@ fn build_item_analysis_inner(
     let manipulation_risk = build_manipulation_risk(&current_snapshot, &recent_snapshots);
     let liquidity_score = liquidity_score_percent(&current_snapshot);
     let liquidity_confidence = build_liquidity_confidence(&current_snapshot, &recent_snapshots);
-    let entry_price = round_price_option(current_snapshot.lowest_sell);
+    let shared_price_model = build_statistics_price_model(&connection, item_id, &variant_key)?;
+    let current_floor_price = round_price_option(current_snapshot.lowest_sell);
+    let entry_price = resolved_recommended_entry_price(
+        shared_price_model
+            .as_ref()
+            .and_then(|entry| entry.recommended_entry_price),
+        current_floor_price,
+    );
     let exit_price = round_price_option(recommended_exit_price(
         entry_price,
         &sell_orders,
@@ -7767,7 +8029,9 @@ fn build_item_analysis_inner(
         &analytics.entry_exit_zone_overview,
     ));
     let gross_margin = match (
-        historical_exit_ceiling(&stats_rows).map(round_platinum),
+        shared_price_model
+            .as_ref()
+            .and_then(|entry| entry.recommended_exit_price),
         entry_price,
     ) {
         (Some(exit_ceiling), Some(entry)) => Some(exit_ceiling - entry),
@@ -10087,5 +10351,114 @@ mod tests {
                 .and_then(|entry| entry.recommended_exit_price)
         );
         assert_eq!(refreshed_statistics_count, 0);
+    }
+
+    #[test]
+    fn resolved_recommended_entry_price_prefers_better_live_floor() {
+        assert_eq!(
+            super::resolved_recommended_entry_price(Some(58.0), Some(55.0)),
+            Some(55.0)
+        );
+        assert_eq!(
+            super::resolved_recommended_entry_price(Some(58.0), Some(61.0)),
+            Some(58.0)
+        );
+    }
+
+    #[test]
+    fn historical_recommended_exit_price_ignores_single_spiky_bucket() {
+        let base_time = super::now_utc() - time::Duration::days(10);
+        let rows = vec![
+            InternalStatsRow {
+                bucket_at: base_time,
+                source_kind: "closed".to_string(),
+                volume: 12.0,
+                min_price: Some(61.0),
+                max_price: Some(67.0),
+                open_price: Some(62.0),
+                closed_price: Some(63.0),
+                avg_price: Some(63.0),
+                wa_price: Some(63.0),
+                median: Some(63.0),
+                moving_avg: Some(63.0),
+                donch_top: Some(67.0),
+                donch_bot: Some(61.0),
+            },
+            InternalStatsRow {
+                bucket_at: base_time + time::Duration::days(2),
+                source_kind: "closed".to_string(),
+                volume: 10.0,
+                min_price: Some(62.0),
+                max_price: Some(68.0),
+                open_price: Some(63.0),
+                closed_price: Some(64.0),
+                avg_price: Some(64.0),
+                wa_price: Some(64.0),
+                median: Some(64.0),
+                moving_avg: Some(64.0),
+                donch_top: Some(68.0),
+                donch_bot: Some(62.0),
+            },
+            InternalStatsRow {
+                bucket_at: base_time + time::Duration::days(4),
+                source_kind: "closed".to_string(),
+                volume: 9.0,
+                min_price: Some(63.0),
+                max_price: Some(69.0),
+                open_price: Some(64.0),
+                closed_price: Some(65.0),
+                avg_price: Some(65.0),
+                wa_price: Some(65.0),
+                median: Some(65.0),
+                moving_avg: Some(65.0),
+                donch_top: Some(69.0),
+                donch_bot: Some(63.0),
+            },
+            InternalStatsRow {
+                bucket_at: base_time + time::Duration::days(6),
+                source_kind: "closed".to_string(),
+                volume: 11.0,
+                min_price: Some(64.0),
+                max_price: Some(70.0),
+                open_price: Some(65.0),
+                closed_price: Some(66.0),
+                avg_price: Some(66.0),
+                wa_price: Some(66.0),
+                median: Some(66.0),
+                moving_avg: Some(66.0),
+                donch_top: Some(70.0),
+                donch_bot: Some(64.0),
+            },
+            InternalStatsRow {
+                bucket_at: base_time + time::Duration::days(8),
+                source_kind: "closed".to_string(),
+                volume: 1.0,
+                min_price: Some(80.0),
+                max_price: Some(95.0),
+                open_price: Some(86.0),
+                closed_price: Some(90.0),
+                avg_price: Some(90.0),
+                wa_price: Some(90.0),
+                median: Some(90.0),
+                moving_avg: Some(90.0),
+                donch_top: Some(95.0),
+                donch_bot: Some(80.0),
+            },
+        ];
+
+        let zone = super::ZoneBands {
+            entry_low: 57.0,
+            entry_high: 60.0,
+            exit_low: 67.0,
+            exit_high: 71.0,
+            entry_target: 59.0,
+            exit_target: 69.0,
+        };
+
+        let recommended =
+            super::historical_recommended_exit_price(Some(59.0), &rows, Some(&zone), None)
+                .expect("recommended exit");
+
+        assert_eq!(recommended, 68.0);
     }
 }
