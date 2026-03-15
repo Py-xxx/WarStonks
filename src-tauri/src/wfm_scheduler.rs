@@ -10,8 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const MAX_GRANTS_PER_WINDOW: usize = 3;
 const MAX_NON_INSTANT_GRANTS_PER_WINDOW: usize = 2;
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
-const PRIORITY_COUNT: usize = 5;
-const PRIORITY_QUANTA: [i32; PRIORITY_COUNT] = [0, 8, 4, 2, 1];
+const NORMAL_PRIORITY_COUNT: usize = 4;
+const PRIORITY_QUANTA: [i32; NORMAL_PRIORITY_COUNT] = [8, 4, 2, 1];
 const MAX_DEFICIT_MULTIPLIER: i32 = 4;
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const COALESCED_SUCCESS_TTL: Duration = Duration::from_millis(1);
@@ -31,13 +31,13 @@ pub enum RequestPriority {
 }
 
 impl RequestPriority {
-    fn index(self) -> usize {
+    fn normal_index(self) -> Option<usize> {
         match self {
-            Self::Instant => 0,
-            Self::High => 1,
-            Self::Medium => 2,
-            Self::Low => 3,
-            Self::Background => 4,
+            Self::Instant => None,
+            Self::High => Some(0),
+            Self::Medium => Some(1),
+            Self::Low => Some(2),
+            Self::Background => Some(3),
         }
     }
 
@@ -62,6 +62,13 @@ impl RequestPriority {
             Self::Medium => "medium",
             Self::Low => "low",
             Self::Background => "background",
+        }
+    }
+
+    fn lane(self) -> &'static str {
+        match self {
+            Self::Instant => "instant",
+            Self::High | Self::Medium | Self::Low | Self::Background => "normal",
         }
     }
 }
@@ -98,6 +105,7 @@ enum CoalescedEntry {
 pub struct WfmQueuedRequestSnapshot {
     pub id: u64,
     pub label: String,
+    pub lane: String,
     pub priority: String,
     pub queued_ms: u64,
 }
@@ -126,9 +134,12 @@ struct QueueDebugEvent {
     timestamp_ms: u64,
     event: String,
     request_label: String,
+    request_lane: String,
     request_priority: String,
     ticket_id: Option<u64>,
     coalesce_key: Option<String>,
+    blocked_reason: Option<String>,
+    reserved_instant_capacity: bool,
     waited_ms: Option<u64>,
     total_ms: Option<u64>,
     network_ms: Option<u64>,
@@ -139,8 +150,9 @@ struct QueueDebugEvent {
 
 #[derive(Debug)]
 struct SchedulerState {
-    queues: [VecDeque<RequestTicket>; PRIORITY_COUNT],
-    deficits: [i32; PRIORITY_COUNT],
+    instant_queue: VecDeque<RequestTicket>,
+    normal_queues: [VecDeque<RequestTicket>; NORMAL_PRIORITY_COUNT],
+    deficits: [i32; NORMAL_PRIORITY_COUNT],
     cursor: usize,
     next_id: u64,
     recent_grants: VecDeque<Instant>,
@@ -156,15 +168,15 @@ struct SchedulerState {
 impl Default for SchedulerState {
     fn default() -> Self {
         Self {
-            queues: [
-                VecDeque::new(),
+            instant_queue: VecDeque::new(),
+            normal_queues: [
                 VecDeque::new(),
                 VecDeque::new(),
                 VecDeque::new(),
                 VecDeque::new(),
             ],
-            deficits: [0; PRIORITY_COUNT],
-            cursor: RequestPriority::High.index(),
+            deficits: [0; NORMAL_PRIORITY_COUNT],
+            cursor: 0,
             next_id: 1,
             recent_grants: VecDeque::new(),
             cooldown_until: None,
@@ -212,7 +224,11 @@ where
         enqueued_at: Instant::now(),
         priority,
     };
-    state.queues[priority.index()].push_back(ticket.clone());
+    if let Some(index) = priority.normal_index() {
+        state.normal_queues[index].push_back(ticket.clone());
+    } else {
+        state.instant_queue.push_back(ticket.clone());
+    }
     log_scheduler_event(
         &state,
         Instant::now(),
@@ -222,11 +238,14 @@ where
         Some(ticket.id),
         None,
         None,
+        false,
+        None,
         None,
         None,
         None,
     );
     condvar.notify_all();
+    let mut last_wait_reason: Option<&'static str> = None;
 
     loop {
         let now = Instant::now();
@@ -234,7 +253,7 @@ where
         cleanup_expired_coalesced(&mut state, now);
 
         if is_cancelled() {
-            remove_ticket(&mut state, priority.index(), ticket_id);
+            remove_ticket(&mut state, priority, ticket_id);
             log_scheduler_event(
                 &state,
                 now,
@@ -243,6 +262,8 @@ where
                 priority,
                 Some(ticket_id),
                 None,
+                None,
+                false,
                 None,
                 None,
                 None,
@@ -264,6 +285,8 @@ where
                 granted_ticket.priority,
                 Some(granted_ticket.id),
                 None,
+                None,
+                reserved_instant_capacity_in_use(&state),
                 Some(waited_ms),
                 None,
                 None,
@@ -281,6 +304,26 @@ where
                 }
                 return Ok(());
             }
+        }
+
+        let wait_reason = scheduler_wait_reason(&state, priority, now);
+        if last_wait_reason != Some(wait_reason.reason) {
+            log_scheduler_event(
+                &state,
+                now,
+                "waiting",
+                label,
+                priority,
+                Some(ticket_id),
+                None,
+                Some(wait_reason.reason.to_string()),
+                wait_reason.reserved_instant_capacity,
+                None,
+                None,
+                None,
+                None,
+            );
+            last_wait_reason = Some(wait_reason.reason);
         }
 
         let timeout = scheduler_wait_duration(&state, now).unwrap_or(SCHEDULER_POLL_INTERVAL);
@@ -346,6 +389,8 @@ where
                         None,
                         Some(coalesce_key.clone()),
                         None,
+                        false,
+                        None,
                         Some(total_started_at.elapsed().as_millis() as u64),
                         Some(0),
                         cached_response.as_ref().ok().map(|response| response.status),
@@ -369,6 +414,8 @@ where
                         None,
                         Some(coalesce_key.clone()),
                         None,
+                        false,
+                        None,
                         None,
                         None,
                         None,
@@ -377,6 +424,21 @@ where
             }
 
             if wait_for_existing {
+                log_scheduler_event(
+                    &state,
+                    now,
+                    "waiting",
+                    label,
+                    priority,
+                    None,
+                    Some(coalesce_key.clone()),
+                    Some("coalesced".to_string()),
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
                 let (next_state, _) = condvar.wait_timeout(state, SCHEDULER_POLL_INTERVAL).unwrap();
                 drop(next_state);
                 continue;
@@ -423,6 +485,8 @@ where
             None,
             Some(coalesce_key.clone()),
             None,
+            reserved_instant_capacity_in_use(&state),
+            None,
             Some(total_started_at.elapsed().as_millis() as u64),
             Some(request_started_at.elapsed().as_millis() as u64),
             outcome.as_ref().ok().map(|response| response.status),
@@ -462,6 +526,8 @@ pub fn record_wfm_response(status: u16, retry_after: Option<Duration>, label: &s
             RequestPriority::High,
             None,
             None,
+            Some("cooldown".to_string()),
+            false,
             None,
             None,
             None,
@@ -494,6 +560,11 @@ pub fn wfm_scheduler_snapshot() -> WfmSchedulerSnapshot {
 
 fn clone_cached_response(cached: &CachedResponse) -> Result<WfmHttpResponse> {
     cached.result.clone().map_err(|error| anyhow!(error))
+}
+
+struct SchedulerWaitReason {
+    reason: &'static str,
+    reserved_instant_capacity: bool,
 }
 
 fn cleanup_expired_coalesced(state: &mut SchedulerState, now: Instant) {
@@ -545,6 +616,62 @@ fn scheduler_available_for_priority(
     state.recent_grants.len() < grant_limit
 }
 
+fn reserved_instant_capacity_in_use(state: &SchedulerState) -> bool {
+    state.recent_grants.len() >= MAX_NON_INSTANT_GRANTS_PER_WINDOW
+        && state.recent_grants.len() < MAX_GRANTS_PER_WINDOW
+}
+
+fn scheduler_wait_reason(
+    state: &SchedulerState,
+    priority: RequestPriority,
+    now: Instant,
+) -> SchedulerWaitReason {
+    if state
+        .cooldown_until
+        .map(|instant| instant > now)
+        .unwrap_or(false)
+    {
+        return SchedulerWaitReason {
+            reason: "cooldown",
+            reserved_instant_capacity: false,
+        };
+    }
+
+    if priority != RequestPriority::Instant && !state.instant_queue.is_empty() {
+        return SchedulerWaitReason {
+            reason: "instant-queue",
+            reserved_instant_capacity: reserved_instant_capacity_in_use(state),
+        };
+    }
+
+    let grant_limit = match priority {
+        RequestPriority::Instant => MAX_GRANTS_PER_WINDOW,
+        RequestPriority::High
+        | RequestPriority::Medium
+        | RequestPriority::Low
+        | RequestPriority::Background => MAX_NON_INSTANT_GRANTS_PER_WINDOW,
+    };
+
+    if state.recent_grants.len() >= grant_limit {
+        let reason = if priority == RequestPriority::Instant {
+            "rate-window"
+        } else if reserved_instant_capacity_in_use(state) {
+            "reserved-instant-slot"
+        } else {
+            "rate-window"
+        };
+        return SchedulerWaitReason {
+            reason,
+            reserved_instant_capacity: reserved_instant_capacity_in_use(state),
+        };
+    }
+
+    SchedulerWaitReason {
+        reason: "normal-queue",
+        reserved_instant_capacity: false,
+    }
+}
+
 fn scheduler_wait_duration(state: &SchedulerState, now: Instant) -> Option<Duration> {
     let rate_wait = state.recent_grants.front().map(|oldest| {
         let elapsed = now.duration_since(*oldest);
@@ -567,7 +694,7 @@ fn scheduler_wait_duration(state: &SchedulerState, now: Instant) -> Option<Durat
 }
 
 fn replenish_deficits(state: &mut SchedulerState) {
-    for index in RequestPriority::High.index()..PRIORITY_COUNT {
+    for index in 0..NORMAL_PRIORITY_COUNT {
         let max_deficit = PRIORITY_QUANTA[index] * MAX_DEFICIT_MULTIPLIER;
         let updated = state.deficits[index] + PRIORITY_QUANTA[index];
         state.deficits[index] = updated.min(max_deficit);
@@ -575,14 +702,14 @@ fn replenish_deficits(state: &mut SchedulerState) {
 }
 
 fn select_weighted_queue_index(state: &mut SchedulerState) -> Option<usize> {
-    for _ in RequestPriority::High.index()..PRIORITY_COUNT {
+    for _ in 0..NORMAL_PRIORITY_COUNT {
         let index = state.cursor;
         state.cursor += 1;
-        if state.cursor >= PRIORITY_COUNT {
-            state.cursor = RequestPriority::High.index();
+        if state.cursor >= NORMAL_PRIORITY_COUNT {
+            state.cursor = 0;
         }
 
-        if !state.queues[index].is_empty() && state.deficits[index] > 0 {
+        if !state.normal_queues[index].is_empty() && state.deficits[index] > 0 {
             return Some(index);
         }
     }
@@ -590,12 +717,12 @@ fn select_weighted_queue_index(state: &mut SchedulerState) -> Option<usize> {
 }
 
 fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> {
-    if state.queues.iter().all(|queue| queue.is_empty()) {
+    if state.instant_queue.is_empty() && state.normal_queues.iter().all(|queue| queue.is_empty()) {
         return None;
     }
 
     if scheduler_available_for_priority(state, now, RequestPriority::Instant) {
-        if let Some(ticket) = state.queues[RequestPriority::Instant.index()].pop_front() {
+        if let Some(ticket) = state.instant_queue.pop_front() {
             state.recent_grants.push_back(now);
             state.total_grants = state.total_grants.saturating_add(1);
             return Some(ticket);
@@ -604,15 +731,18 @@ fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> 
         return None;
     }
 
+    if !state.instant_queue.is_empty() {
+        return None;
+    }
+
     if !scheduler_available_for_priority(state, now, RequestPriority::High) {
         return None;
     }
 
     let has_credit = state
-        .queues
+        .normal_queues
         .iter()
         .enumerate()
-        .skip(RequestPriority::High.index())
         .any(|(index, queue)| !queue.is_empty() && state.deficits[index] > 0);
     if !has_credit {
         replenish_deficits(state);
@@ -623,19 +753,25 @@ fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> 
         select_weighted_queue_index(state)
     })?;
 
-    let ticket = state.queues[index].pop_front()?;
+    let ticket = state.normal_queues[index].pop_front()?;
     state.deficits[index] = state.deficits[index].saturating_sub(1);
     state.recent_grants.push_back(now);
     state.total_grants = state.total_grants.saturating_add(1);
     Some(ticket)
 }
 
-fn remove_ticket(state: &mut SchedulerState, queue_index: usize, ticket_id: u64) {
-    if let Some(position) = state.queues[queue_index]
+fn remove_ticket(state: &mut SchedulerState, priority: RequestPriority, ticket_id: u64) {
+    let queue = if let Some(index) = priority.normal_index() {
+        &mut state.normal_queues[index]
+    } else {
+        &mut state.instant_queue
+    };
+
+    if let Some(position) = queue
         .iter()
         .position(|ticket| ticket.id == ticket_id)
     {
-        state.queues[queue_index].remove(position);
+        queue.remove(position);
     }
 }
 
@@ -657,11 +793,14 @@ fn build_snapshot(state: &SchedulerState, now: Instant) -> WfmSchedulerSnapshot 
         .unwrap_or(0);
 
     WfmSchedulerSnapshot {
-        instant_queue_depth: state.queues[RequestPriority::Instant.index()].len(),
-        high_queue_depth: state.queues[RequestPriority::High.index()].len(),
-        medium_queue_depth: state.queues[RequestPriority::Medium.index()].len(),
-        low_queue_depth: state.queues[RequestPriority::Low.index()].len(),
-        background_queue_depth: state.queues[RequestPriority::Background.index()].len(),
+        instant_queue_depth: state.instant_queue.len(),
+        high_queue_depth: state.normal_queues[RequestPriority::High.normal_index().unwrap()].len(),
+        medium_queue_depth: state.normal_queues[RequestPriority::Medium.normal_index().unwrap()]
+            .len(),
+        low_queue_depth: state.normal_queues[RequestPriority::Low.normal_index().unwrap()].len(),
+        background_queue_depth: state.normal_queues
+            [RequestPriority::Background.normal_index().unwrap()]
+        .len(),
         recent_grants_in_window: state.recent_grants.len(),
         in_flight_coalesced_keys,
         cached_coalesced_keys,
@@ -670,12 +809,13 @@ fn build_snapshot(state: &SchedulerState, now: Instant) -> WfmSchedulerSnapshot 
         total_rate_limited_responses: state.total_rate_limited_responses,
         cooldown_remaining_ms,
         queued_requests: state
-            .queues
+            .instant_queue
             .iter()
-            .flat_map(|queue| queue.iter())
+            .chain(state.normal_queues.iter().flat_map(|queue| queue.iter()))
             .map(|ticket| WfmQueuedRequestSnapshot {
                 id: ticket.id,
                 label: ticket.label.clone(),
+                lane: ticket.priority.lane().to_string(),
                 priority: ticket.priority.as_str().to_string(),
                 queued_ms: now.saturating_duration_since(ticket.enqueued_at).as_millis() as u64,
             })
@@ -702,6 +842,8 @@ fn log_request_resolution(
         None,
         coalesce_key,
         None,
+        reserved_instant_capacity_in_use(&state),
+        None,
         Some(total_started_at.elapsed().as_millis() as u64),
         Some(request_started_at.elapsed().as_millis() as u64),
         status,
@@ -717,6 +859,8 @@ fn log_scheduler_event(
     request_priority: RequestPriority,
     ticket_id: Option<u64>,
     coalesce_key: Option<String>,
+    blocked_reason: Option<String>,
+    reserved_instant_capacity: bool,
     waited_ms: Option<u64>,
     total_ms: Option<u64>,
     network_ms: Option<u64>,
@@ -730,9 +874,12 @@ fn log_scheduler_event(
         timestamp_ms: unix_timestamp_ms(),
         event: event.to_string(),
         request_label: request_label.to_string(),
+        request_lane: request_priority.lane().to_string(),
         request_priority: request_priority.as_str().to_string(),
         ticket_id,
         coalesce_key,
+        blocked_reason,
+        reserved_instant_capacity,
         waited_ms,
         total_ms,
         network_ms,
@@ -780,13 +927,13 @@ mod tests {
     fn instant_priority_jumps_the_queue() {
         let now = Instant::now();
         let mut state = SchedulerState::default();
-        state.queues[RequestPriority::Low.index()].push_back(RequestTicket {
+        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(RequestTicket {
             id: 1,
             label: "scanner".to_string(),
             enqueued_at: now,
             priority: RequestPriority::Low,
         });
-        state.queues[RequestPriority::Instant.index()].push_back(RequestTicket {
+        state.instant_queue.push_back(RequestTicket {
             id: 2,
             label: "search".to_string(),
             enqueued_at: now,
@@ -820,7 +967,8 @@ mod tests {
         let mut state = SchedulerState::default();
         state.recent_grants.push_back(now - Duration::from_millis(200));
         state.recent_grants.push_back(now - Duration::from_millis(100));
-        state.queues[RequestPriority::Low.index()].push_back(RequestTicket {
+        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(
+            RequestTicket {
             id: 1,
             label: "scanner".to_string(),
             enqueued_at: now,
@@ -828,7 +976,10 @@ mod tests {
         });
 
         assert!(try_grant(&mut state, now).is_none());
-        assert_eq!(state.queues[RequestPriority::Low.index()].len(), 1);
+        assert_eq!(
+            state.normal_queues[RequestPriority::Low.normal_index().unwrap()].len(),
+            1
+        );
     }
 
     #[test]
@@ -837,7 +988,7 @@ mod tests {
         let mut state = SchedulerState::default();
         state.recent_grants.push_back(now - Duration::from_millis(200));
         state.recent_grants.push_back(now - Duration::from_millis(100));
-        state.queues[RequestPriority::Instant.index()].push_back(RequestTicket {
+        state.instant_queue.push_back(RequestTicket {
             id: 1,
             label: "analysis".to_string(),
             enqueued_at: now,
@@ -856,7 +1007,8 @@ mod tests {
         state.recent_grants
             .push_back(now - RATE_LIMIT_WINDOW - Duration::from_millis(10));
         state.recent_grants.push_back(now - Duration::from_millis(100));
-        state.queues[RequestPriority::Low.index()].push_back(RequestTicket {
+        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(
+            RequestTicket {
             id: 1,
             label: "scanner".to_string(),
             enqueued_at: now,

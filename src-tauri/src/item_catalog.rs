@@ -11,6 +11,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
+
 const ITEM_CATALOG_SCHEMA_SQL: &str = include_str!("../sql/item_catalog.sql");
 const MANUAL_ALIAS_SEED_JSON: &str = include_str!("../sql/manual_aliases.json");
 
@@ -345,7 +347,13 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         "Downloading the latest item catalog from warframe.market.",
         0.08,
     );
-    let wfm_bytes = fetch_to_file(WFM_ITEMS_URL, &paths.wfm_file_path)?;
+    let wfm_bytes = fetch_wfm_to_file(
+        WFM_ITEMS_URL,
+        &paths.wfm_file_path,
+        RequestPriority::High,
+        "request WFM item catalog",
+        Some("catalog:wfm-items".to_string()),
+    )?;
     let wfm_json: Value =
         serde_json::from_slice(&wfm_bytes).context("failed to parse WFM item response JSON")?;
     let wfm_meta = build_wfm_meta(&wfm_json, &paths.wfm_file_path, &now, &wfm_bytes)?;
@@ -397,7 +405,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         "Downloading the full unfiltered WFStat item catalog.",
         0.22,
     );
-    let wfstat_bytes = fetch_to_file(WFSTAT_ITEMS_URL, &paths.wfstat_file_path)?;
+    let wfstat_bytes = fetch_http_to_file(WFSTAT_ITEMS_URL, &paths.wfstat_file_path)?;
     let wfstat_json: Value = serde_json::from_slice(&wfstat_bytes)
         .context("failed to parse WFStat item response JSON")?;
     let wfstat_meta =
@@ -2842,7 +2850,15 @@ fn open_database(path: &Path) -> Result<Connection> {
     Ok(connection)
 }
 
-fn fetch_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
+fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn fetch_http_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()?;
@@ -2855,6 +2871,49 @@ fn fetch_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
     fs::write(output_path, &bytes)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
     Ok(bytes)
+}
+
+fn fetch_wfm_to_file(
+    url: &str,
+    output_path: &Path,
+    priority: RequestPriority,
+    action_label: &str,
+    coalesce_key: Option<String>,
+) -> Result<Vec<u8>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()?;
+    let response = execute_coalesced_wfm_request(priority, action_label, coalesce_key, || false, || {
+        let response = client
+            .get(url)
+            .send()
+            .with_context(|| format!("failed to {action_label}"))?;
+        let status = response.status();
+        let retry_after = parse_retry_after_seconds(response.headers());
+        let body = response
+            .bytes()
+            .with_context(|| format!("failed to read {action_label} response body"))?
+            .to_vec();
+        Ok(WfmHttpResponse {
+            status: status.as_u16(),
+            body,
+            retry_after,
+        })
+    })?;
+
+    if response.status < 200 || response.status >= 300 {
+        let body = String::from_utf8_lossy(&response.body);
+        let trimmed = body.trim();
+        return Err(anyhow!(if trimmed.is_empty() {
+            format!("{action_label} failed with status {}", response.status)
+        } else {
+            format!("{action_label} failed with status {}: {trimmed}", response.status)
+        }));
+    }
+
+    fs::write(output_path, &response.body)
+        .with_context(|| format!("failed to write {}", output_path.display()))?;
+    Ok(response.body)
 }
 
 fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths> {

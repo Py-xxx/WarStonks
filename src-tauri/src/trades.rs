@@ -1203,13 +1203,6 @@ fn execute_wfm_bytes_request(
     })
 }
 
-fn execute_wfm_request(
-    builder: reqwest::blocking::RequestBuilder,
-    action_label: &str,
-) -> Result<reqwest::blocking::Response> {
-    execute_wfm_request_with_priority(builder, action_label, RequestPriority::High)
-}
-
 fn execute_wfm_request_with_priority(
     builder: reqwest::blocking::RequestBuilder,
     action_label: &str,
@@ -5306,21 +5299,21 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     }
 
     let device_id = generate_device_id();
-    let response = client
-        .post(format!("{WFM_API_BASE_URL_V1}/auth/signin"))
-        .header("User-Agent", WFM_USER_AGENT)
-        .header("Authorization", "JWT")
-        .header("Accept", "application/json")
-        .json(&json!({
-            "auth_type": "header",
-            "email": trimmed_email,
-            "password": trimmed_password,
-            "device_id": device_id,
-        }))
-        .send()
-        .context("failed to request WFM sign-in")?
-        .error_for_status()
-        .context("WFM sign-in request failed")?;
+    let response = execute_wfm_request_with_priority(
+        client
+            .post(format!("{WFM_API_BASE_URL_V1}/auth/signin"))
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Authorization", "JWT")
+            .header("Accept", "application/json")
+            .json(&json!({
+                "auth_type": "header",
+                "email": trimmed_email,
+                "password": trimmed_password,
+                "device_id": device_id,
+            })),
+        "request WFM sign-in",
+        RequestPriority::Instant,
+    )?;
 
     let auth_header = response
         .headers()
@@ -5528,7 +5521,7 @@ fn create_order_inner(
         payload["rank"] = json!(rank);
     }
 
-    execute_wfm_request(
+    execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::POST,
@@ -5537,6 +5530,7 @@ fn create_order_inner(
         )
         .json(&payload),
         &format!("create {order_type} order"),
+        RequestPriority::Instant,
     )?;
 
     build_trade_overview_inner(app, seller_mode)
@@ -5568,7 +5562,7 @@ fn update_order_inner(
         payload["rank"] = json!(rank);
     }
 
-    execute_wfm_request(
+    execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::PATCH,
@@ -5577,6 +5571,7 @@ fn update_order_inner(
         )
         .json(&payload),
         &format!("update {order_type} order"),
+        RequestPriority::Instant,
     )?;
 
     build_trade_overview_inner(app, seller_mode)
@@ -5598,7 +5593,7 @@ fn close_order_inner(
         return Err(anyhow!("Quantity to close must be greater than zero."));
     }
 
-    execute_wfm_request(
+    execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::POST,
@@ -5607,6 +5602,7 @@ fn close_order_inner(
         )
         .json(&json!({ "quantity": quantity })),
         &format!("close {order_type} order"),
+        RequestPriority::Instant,
     )?;
 
     build_trade_overview_inner(app, seller_mode)
@@ -5624,7 +5620,7 @@ fn delete_order_inner(
         return Err(anyhow!("Unsupported order type."));
     }
 
-    execute_wfm_request(
+    execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::DELETE,
@@ -5632,6 +5628,7 @@ fn delete_order_inner(
             Some(&session.token),
         ),
         &format!("delete {order_type} order"),
+        RequestPriority::Instant,
     )?;
 
     build_trade_overview_inner(app, seller_mode)
