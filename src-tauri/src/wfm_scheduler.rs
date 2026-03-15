@@ -8,6 +8,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_GRANTS_PER_WINDOW: usize = 3;
+const MAX_NON_INSTANT_GRANTS_PER_WINDOW: usize = 2;
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const PRIORITY_COUNT: usize = 5;
 const PRIORITY_QUANTA: [i32; PRIORITY_COUNT] = [0, 8, 4, 2, 1];
@@ -520,12 +521,28 @@ fn prune_old_grants(state: &mut SchedulerState, now: Instant) {
     }
 }
 
-fn scheduler_available(state: &SchedulerState, now: Instant) -> bool {
+fn scheduler_available_for_priority(
+    state: &SchedulerState,
+    now: Instant,
+    priority: RequestPriority,
+) -> bool {
     let cooldown_ready = state
         .cooldown_until
         .map(|instant| instant <= now)
         .unwrap_or(true);
-    cooldown_ready && state.recent_grants.len() < MAX_GRANTS_PER_WINDOW
+    if !cooldown_ready {
+        return false;
+    }
+
+    let grant_limit = match priority {
+        RequestPriority::Instant => MAX_GRANTS_PER_WINDOW,
+        RequestPriority::High
+        | RequestPriority::Medium
+        | RequestPriority::Low
+        | RequestPriority::Background => MAX_NON_INSTANT_GRANTS_PER_WINDOW,
+    };
+
+    state.recent_grants.len() < grant_limit
 }
 
 fn scheduler_wait_duration(state: &SchedulerState, now: Instant) -> Option<Duration> {
@@ -577,14 +594,18 @@ fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> 
         return None;
     }
 
-    if !scheduler_available(state, now) {
+    if scheduler_available_for_priority(state, now, RequestPriority::Instant) {
+        if let Some(ticket) = state.queues[RequestPriority::Instant.index()].pop_front() {
+            state.recent_grants.push_back(now);
+            state.total_grants = state.total_grants.saturating_add(1);
+            return Some(ticket);
+        }
+    } else {
         return None;
     }
 
-    if let Some(ticket) = state.queues[RequestPriority::Instant.index()].pop_front() {
-        state.recent_grants.push_back(now);
-        state.total_grants = state.total_grants.saturating_add(1);
-        return Some(ticket);
+    if !scheduler_available_for_priority(state, now, RequestPriority::High) {
+        return None;
     }
 
     let has_credit = state
@@ -751,9 +772,9 @@ fn unix_timestamp_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        try_grant, RequestPriority, RequestTicket, SchedulerState,
+        try_grant, RequestPriority, RequestTicket, SchedulerState, RATE_LIMIT_WINDOW,
     };
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn instant_priority_jumps_the_queue() {
@@ -791,5 +812,58 @@ mod tests {
             RequestPriority::from_wire(Some("unknown"), RequestPriority::Medium),
             RequestPriority::Medium
         );
+    }
+
+    #[test]
+    fn low_priority_cannot_consume_reserved_instant_slot() {
+        let now = Instant::now();
+        let mut state = SchedulerState::default();
+        state.recent_grants.push_back(now - Duration::from_millis(200));
+        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state.queues[RequestPriority::Low.index()].push_back(RequestTicket {
+            id: 1,
+            label: "scanner".to_string(),
+            enqueued_at: now,
+            priority: RequestPriority::Low,
+        });
+
+        assert!(try_grant(&mut state, now).is_none());
+        assert_eq!(state.queues[RequestPriority::Low.index()].len(), 1);
+    }
+
+    #[test]
+    fn instant_priority_can_use_reserved_slot_after_two_recent_grants() {
+        let now = Instant::now();
+        let mut state = SchedulerState::default();
+        state.recent_grants.push_back(now - Duration::from_millis(200));
+        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state.queues[RequestPriority::Instant.index()].push_back(RequestTicket {
+            id: 1,
+            label: "analysis".to_string(),
+            enqueued_at: now,
+            priority: RequestPriority::Instant,
+        });
+
+        let granted = try_grant(&mut state, now).expect("expected instant ticket");
+        assert_eq!(granted.priority, RequestPriority::Instant);
+        assert_eq!(state.recent_grants.len(), 3);
+    }
+
+    #[test]
+    fn low_priority_can_resume_after_window_expires() {
+        let now = Instant::now();
+        let mut state = SchedulerState::default();
+        state.recent_grants
+            .push_back(now - RATE_LIMIT_WINDOW - Duration::from_millis(10));
+        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state.queues[RequestPriority::Low.index()].push_back(RequestTicket {
+            id: 1,
+            label: "scanner".to_string(),
+            enqueued_at: now,
+            priority: RequestPriority::Low,
+        });
+
+        let granted = try_grant(&mut state, now).expect("expected low ticket");
+        assert_eq!(granted.priority, RequestPriority::Low);
     }
 }
