@@ -621,46 +621,65 @@ async function recognizeQuantityFromTile(
     width: 0.3,
     height: 0.22,
   });
-  const tightMask = buildColorMaskCanvas(badgeRegion, colorSample, 18);
+  const tightMask = cleanupMaskCanvas(buildColorMaskCanvas(badgeRegion, colorSample, 18));
   const anchorBounds = findMaskBounds(tightMask, { maxXRatio: 0.62, minArea: 24 });
-  const digitRegion = anchorBounds
+  const anchorRight = anchorBounds
+    ? clamp(
+        Math.ceil((anchorBounds.x + anchorBounds.width) / 4) + 2,
+        0,
+        badgeRegion.width - 1,
+      )
+    : null;
+  const digitRegion = anchorRight !== null
     ? extractPixelCanvas(
         badgeRegion,
-        clamp(Math.floor(anchorBounds.x / 4 + anchorBounds.width / 4 + 2), 0, badgeRegion.width - 1),
-        0,
-        Math.max(1, badgeRegion.width - clamp(Math.floor(anchorBounds.x / 4 + anchorBounds.width / 4 + 2), 0, badgeRegion.width - 1)),
-        badgeRegion.height,
+        Math.max(anchorRight, Math.floor(badgeRegion.width * 0.28)),
+        Math.max(0, Math.floor(badgeRegion.height * 0.02)),
+        Math.max(
+          1,
+          Math.floor(badgeRegion.width * 0.94) -
+            Math.max(anchorRight, Math.floor(badgeRegion.width * 0.28)),
+        ),
+        Math.max(1, Math.floor(badgeRegion.height * 0.88)),
       )
     : extractRegionCanvas(badgeRegion, {
         left: 0.34,
-        top: 0,
-        width: 0.62,
-        height: 1,
+        top: 0.02,
+        width: 0.6,
+        height: 0.88,
       });
 
+  const exactDigitMask = focusDigitMaskCanvas(buildColorMaskCanvas(digitRegion, colorSample, 0));
+  const tightDigitMask = focusDigitMaskCanvas(buildColorMaskCanvas(digitRegion, colorSample, 18));
+  const relaxedDigitMask = focusDigitMaskCanvas(buildColorMaskCanvas(digitRegion, colorSample, 26));
+  const grayscaleDigitMask = focusDigitMaskCanvas(preprocessForOcr(digitRegion, 'digits'));
+
   const digitPasses = [
-    buildColorMaskCanvas(digitRegion, colorSample, 0),
-    buildColorMaskCanvas(digitRegion, colorSample, 18),
-    preprocessForOcr(digitRegion, 'digits'),
+    { canvas: exactDigitMask, psm: PSM.SINGLE_WORD, label: 'exact-word' },
+    { canvas: tightDigitMask, psm: PSM.SINGLE_WORD, label: 'tight-word' },
+    { canvas: relaxedDigitMask, psm: PSM.SINGLE_WORD, label: 'relaxed-word' },
+    { canvas: tightDigitMask, psm: PSM.SINGLE_CHAR, label: 'tight-char' },
+    { canvas: grayscaleDigitMask, psm: PSM.SINGLE_WORD, label: 'grayscale-word' },
+    { canvas: grayscaleDigitMask, psm: PSM.SINGLE_CHAR, label: 'grayscale-char' },
   ];
 
   const candidates: Array<{ digits: string; confidence: number }> = [];
-  await worker.setParameters({
-    tessedit_pageseg_mode: PSM.SINGLE_WORD as unknown as string,
-    tessedit_char_whitelist: '0123456789',
-  });
   for (const pass of digitPasses) {
-    const result = await worker.recognize(pass);
+    await worker.setParameters({
+      tessedit_pageseg_mode: pass.psm as unknown as string,
+      tessedit_char_whitelist: '0123456789',
+    });
+    const result = await worker.recognize(pass.canvas);
     const digits = result.data.text.trim().replace(/\D/g, '');
     if (digits) {
       candidates.push({
         digits,
-        confidence: (result.data.confidence ?? 0) / 100,
+        confidence: scoreDigitCandidate(digits, pass.canvas, (result.data.confidence ?? 0) / 100),
       });
     }
   }
 
-  const digitSignal = digitPasses.some((pass) => regionHasSignal(pass));
+  const digitSignal = digitPasses.some((pass) => regionHasSignal(pass.canvas));
   const best = chooseBestDigitCandidate(candidates);
   if (best) {
     return {
@@ -681,6 +700,13 @@ async function recognizeQuantityFromTile(
     quantityConfidence: 0,
     quantityState: 'unresolved',
   };
+}
+
+function focusDigitMaskCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  const canvas = cleanupMaskCanvas(source);
+  trimMaskToDenseColumns(canvas);
+  removeDigitLeftNoise(canvas);
+  return canvas;
 }
 
 function chooseBestDigitCandidate(
@@ -706,6 +732,17 @@ function chooseBestDigitCandidate(
     }
     return right.confidence - left.confidence;
   })[0] ?? null;
+}
+
+function scoreDigitCandidate(
+  digits: string,
+  canvas: HTMLCanvasElement,
+  ocrConfidence: number,
+): number {
+  const bounds = findMaskBounds(canvas);
+  const signalBoost = bounds ? Math.min(0.16, bounds.area / Math.max(1, canvas.width * canvas.height)) : 0;
+  const lengthPenalty = digits.length > 2 ? 0.18 : 0;
+  return Math.max(0, ocrConfidence + signalBoost - lengthPenalty);
 }
 
 function detectTextBandCanvas(
@@ -801,6 +838,89 @@ function trimMaskToDenseRows(canvas: HTMLCanvasElement): void {
       data[index + 1] = 0;
       data[index + 2] = 0;
       data[index + 3] = 255;
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+}
+
+function trimMaskToDenseColumns(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return;
+  }
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imageData;
+  const columnScores = new Array(canvas.width).fill(0);
+  let maxScore = 0;
+
+  for (let x = 0; x < canvas.width; x += 1) {
+    let score = 0;
+    for (let y = 0; y < canvas.height; y += 1) {
+      const index = (y * canvas.width + x) * 4;
+      if (data[index] > 180) {
+        score += 1;
+      }
+    }
+    columnScores[x] = score;
+    maxScore = Math.max(maxScore, score);
+  }
+
+  if (maxScore === 0) {
+    return;
+  }
+
+  const threshold = Math.max(1, Math.round(maxScore * 0.12));
+  let start = columnScores.findIndex((score) => score >= threshold);
+  let end =
+    columnScores.length - 1 - [...columnScores].reverse().findIndex((score) => score >= threshold);
+  if (start < 0 || end < start) {
+    return;
+  }
+  start = clamp(start - 3, 0, canvas.width - 1);
+  end = clamp(end + 3, start, canvas.width - 1);
+
+  for (let x = 0; x < canvas.width; x += 1) {
+    if (x >= start && x <= end) {
+      continue;
+    }
+    for (let y = 0; y < canvas.height; y += 1) {
+      const index = (y * canvas.width + x) * 4;
+      data[index] = 0;
+      data[index + 1] = 0;
+      data[index + 2] = 0;
+      data[index + 3] = 255;
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+}
+
+function removeDigitLeftNoise(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return;
+  }
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imageData;
+  const cutoff = Math.floor(canvas.width * 0.18);
+
+  for (let x = 0; x < cutoff; x += 1) {
+    let brightCount = 0;
+    for (let y = 0; y < canvas.height; y += 1) {
+      const index = (y * canvas.width + x) * 4;
+      if (data[index] > 180) {
+        brightCount += 1;
+      }
+    }
+    if (brightCount > Math.max(2, Math.round(canvas.height * 0.42))) {
+      for (let y = 0; y < canvas.height; y += 1) {
+        const index = (y * canvas.width + x) * 4;
+        data[index] = 0;
+        data[index + 1] = 0;
+        data[index + 2] = 0;
+        data[index + 3] = 255;
+      }
     }
   }
 
