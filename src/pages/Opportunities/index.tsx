@@ -201,7 +201,19 @@ function buildScreenshotImportApplyRows(
     quantity: number;
   }> = [];
   const blockedRows: ScreenshotImportPreviewRow[] = [];
-  const seenSlugs = new Set<string>();
+  const slugCounts = new Map<string, number>();
+
+  for (const row of rows) {
+    if (
+      row.removed ||
+      !row.matchedItem ||
+      row.quantity === null ||
+      row.quantityState === 'unresolved'
+    ) {
+      continue;
+    }
+    slugCounts.set(row.matchedItem.slug, (slugCounts.get(row.matchedItem.slug) ?? 0) + 1);
+  }
 
   for (const row of rows) {
     if (row.removed) {
@@ -211,11 +223,10 @@ function buildScreenshotImportApplyRows(
       blockedRows.push(row);
       continue;
     }
-    if (seenSlugs.has(row.matchedItem.slug)) {
+    if ((slugCounts.get(row.matchedItem.slug) ?? 0) > 1) {
       blockedRows.push(row);
       continue;
     }
-    seenSlugs.add(row.matchedItem.slug);
     readyRows.push({
       itemId: row.matchedItem.itemId,
       slug: row.matchedItem.slug,
