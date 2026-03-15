@@ -15,6 +15,7 @@ import {
   type SetCompletionScreenshotOcrRow,
   type SetCompletionScreenshotProgress,
 } from '../../lib/setCompletionScreenshotImport';
+import setCompletionImportExample from '../../assets/set-completion-import-example.png';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { useAppStore } from '../../stores/useAppStore';
@@ -580,8 +581,24 @@ function SetCompletionScreenshotImportModal({
 
             <p className="watchlist-form-note">
               Use a single screenshot from the in-game <strong>Prime Components</strong> tab. Only
-              the visible items in the image will be overwritten.
+              the visible items in the image will be overwritten. The importer is now locked to a
+              fixed <strong>7 × 3</strong> visible grid and will only process up to <strong>21 items</strong>{' '}
+              per screenshot.
             </p>
+
+            <div className="screenshot-import-example">
+              <div className="screenshot-import-example-copy">
+                <span className="panel-title-eyebrow">Required Layout</span>
+                <strong>Screenshot must match this framing</strong>
+                <span>
+                  Use the in-game inventory view with the grid fully visible and no extra overlays.
+                  If your screenshot does not match this shape closely, the import will be unreliable.
+                </span>
+              </div>
+              <div className="screenshot-import-example-image">
+                <img src={setCompletionImportExample} alt="Example Prime Components screenshot layout" />
+              </div>
+            </div>
 
             {progress ? (
               <div className="scanner-inline-progress screenshot-import-progress">
@@ -634,10 +651,15 @@ function SetCompletionScreenshotImportModal({
                     </label>
                   ))}
                 </div>
+                <div className="watchlist-form-note">
+                  Adjust the crop only so the blue guide cleanly wraps the fixed 7-column by 3-row
+                  inventory grid.
+                </div>
               </>
             ) : (
               <div className="opportunities-placeholder">
-                Choose a screenshot to start local OCR and preview the visible prime components.
+                Choose a screenshot to start local OCR and preview up to 21 visible prime
+                components.
               </div>
             )}
           </div>

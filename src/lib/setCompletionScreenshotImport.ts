@@ -23,14 +23,20 @@ export interface SetCompletionScreenshotProgress {
 }
 
 const DEFAULT_CROP: SetCompletionImportCrop = {
-  left: 0.01,
-  top: 0.075,
-  right: 0.285,
-  bottom: 0.06,
+  left: 0.005,
+  top: 0.12,
+  right: 0.235,
+  bottom: 0.165,
 };
 
-const GRID_COLUMNS = 6;
-const GRID_ROWS = 5;
+const GRID_COLUMNS = 7;
+const GRID_ROWS = 3;
+const GRID_CELL_INSET = {
+  left: 0.035,
+  top: 0.04,
+  right: 0.035,
+  bottom: 0.055,
+};
 
 export function getDefaultSetCompletionImportCrop(): SetCompletionImportCrop {
   return { ...DEFAULT_CROP };
@@ -190,7 +196,25 @@ function extractTileCanvases(
       const y = Math.round(cropY + row * tileHeight);
       const width = Math.max(1, Math.round(tileWidth));
       const height = Math.max(1, Math.round(tileHeight));
-      tiles.push(extractPixelCanvas(sourceCanvas, x, y, width, height));
+      const insetX = Math.round(width * GRID_CELL_INSET.left);
+      const insetY = Math.round(height * GRID_CELL_INSET.top);
+      const insetWidth = Math.max(
+        1,
+        Math.round(width * (1 - GRID_CELL_INSET.left - GRID_CELL_INSET.right)),
+      );
+      const insetHeight = Math.max(
+        1,
+        Math.round(height * (1 - GRID_CELL_INSET.top - GRID_CELL_INSET.bottom)),
+      );
+      tiles.push(
+        extractPixelCanvas(
+          sourceCanvas,
+          x + insetX,
+          y + insetY,
+          insetWidth,
+          insetHeight,
+        ),
+      );
     }
   }
 
