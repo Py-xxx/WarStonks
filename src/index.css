@@ -545,6 +545,13 @@
   gap: 4px;
 }
 
+.screenshot-import-row-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .screenshot-import-row-copy strong {
   color: var(--text-primary);
   font-size: 13px;
@@ -554,6 +561,39 @@
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.screenshot-import-qty-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.screenshot-import-qty-field span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.screenshot-import-qty-input {
+  width: 72px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(6, 10, 18, 0.92);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.screenshot-import-qty-input:focus {
+  outline: none;
+  border-color: rgba(74, 158, 255, 0.42);
+  box-shadow: 0 0 0 1px rgba(74, 158, 255, 0.16);
 }
 
 .screenshot-import-row-toggle {

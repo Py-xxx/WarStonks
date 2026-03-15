@@ -556,6 +556,7 @@ function SetCompletionScreenshotImportModal({
   onSelectColorSample,
   onReprocess,
   onToggleRemove,
+  onSetQuantity,
   onRemapQueryChange,
   onSelectRemap,
   onSetActiveRemapRow,
@@ -583,6 +584,7 @@ function SetCompletionScreenshotImportModal({
   onSelectColorSample: (sample: SetCompletionImportColorSample) => void;
   onReprocess: () => Promise<void>;
   onToggleRemove: (rowId: string) => void;
+  onSetQuantity: (rowId: string, value: string) => void;
   onRemapQueryChange: (rowId: string, value: string) => void;
   onSelectRemap: (rowId: string, item: PlannerCatalogItem) => void;
   onSetActiveRemapRow: (rowId: string | null) => void;
@@ -937,7 +939,23 @@ function SetCompletionScreenshotImportModal({
                           <img src={row.thumbnailDataUrl} alt="" />
                         </span>
                         <div className="screenshot-import-row-copy">
-                          <strong>{row.matchedItem?.name ?? (row.chosenOcrText || row.detectedName || 'Unreadable tile')}</strong>
+                          <div className="screenshot-import-row-topline">
+                            <strong>{row.matchedItem?.name ?? (row.chosenOcrText || row.detectedName || 'Unreadable tile')}</strong>
+                            {!row.removed ? (
+                              <label className="screenshot-import-qty-field">
+                                <span>Qty</span>
+                                <input
+                                  className="screenshot-import-qty-input"
+                                  type="number"
+                                  min={1}
+                                  step={1}
+                                  value={row.quantity === null ? '' : row.quantity}
+                                  onChange={(event) => onSetQuantity(row.rowId, event.target.value)}
+                                  placeholder="Qty"
+                                />
+                              </label>
+                            ) : null}
+                          </div>
                           <span>
                             OCR: {row.chosenOcrText || row.detectedName || 'No text detected'} · Qty:{' '}
                             {row.quantity === null ? 'Unreadable' : row.quantity}
@@ -2342,6 +2360,34 @@ export function OpportunitiesPage() {
         onReprocess={reprocessScreenshotImport}
         onToggleRemove={(rowId) => {
           updateScreenshotImportRow(rowId, (row) => ({ ...row, removed: !row.removed }));
+        }}
+        onSetQuantity={(rowId, value) => {
+          updateScreenshotImportRow(rowId, (row) => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+              return {
+                ...row,
+                quantity: null,
+                quantityState: 'unresolved',
+                quantityConfidence: 0,
+              };
+            }
+            const parsed = Number.parseInt(trimmed, 10);
+            if (!Number.isFinite(parsed) || parsed < 1) {
+              return {
+                ...row,
+                quantity: null,
+                quantityState: 'unresolved',
+                quantityConfidence: 0,
+              };
+            }
+            return {
+              ...row,
+              quantity: parsed,
+              quantityState: 'detected',
+              quantityConfidence: 1,
+            };
+          });
         }}
         onRemapQueryChange={(rowId, value) => {
           updateScreenshotImportRow(rowId, (row) => ({
