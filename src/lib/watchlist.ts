@@ -90,22 +90,35 @@ export function selectNextWatchlistItemToScan(
   nowMs: number = Date.now(),
 ): WatchlistItem | null {
   let nextDueItem: WatchlistItem | null = null;
-  let nextUpcomingItem: WatchlistItem | null = null;
 
   for (const item of items) {
     if (item.nextScanAt <= nowMs) {
       if (!nextDueItem || item.nextScanAt < nextDueItem.nextScanAt) {
         nextDueItem = item;
       }
-      continue;
-    }
-
-    if (!nextUpcomingItem || item.nextScanAt < nextUpcomingItem.nextScanAt) {
-      nextUpcomingItem = item;
     }
   }
 
-  return nextDueItem ?? nextUpcomingItem;
+  return nextDueItem;
+}
+
+export function getNextWatchlistScanDelayMs(
+  items: WatchlistItem[],
+  nowMs: number = Date.now(),
+): number {
+  let nextScanAt: number | null = null;
+
+  for (const item of items) {
+    if (nextScanAt === null || item.nextScanAt < nextScanAt) {
+      nextScanAt = item.nextScanAt;
+    }
+  }
+
+  if (nextScanAt === null) {
+    return WATCHLIST_SCANNER_TICK_MS;
+  }
+
+  return Math.max(0, nextScanAt - nowMs);
 }
 
 export function getWatchlistVisualState(item: WatchlistItem): {

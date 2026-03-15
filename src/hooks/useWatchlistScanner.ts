@@ -1,21 +1,44 @@
 import { useEffect, useRef } from 'react';
 import { playAlertSound, primeAlertAudio } from '../lib/alertAudio';
 import {
+  getNextWatchlistScanDelayMs,
   selectNextWatchlistItemToScan,
-  WATCHLIST_SCANNER_TICK_MS,
 } from '../lib/watchlist';
 import { useAppStore } from '../stores/useAppStore';
 
 export function useWatchlistScanner() {
   const requestInFlightRef = useRef(false);
+  const timeoutIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     primeAlertAudio();
   }, []);
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => {
+    let disposed = false;
+
+    const clearScheduledTick = () => {
+      if (timeoutIdRef.current !== null) {
+        window.clearTimeout(timeoutIdRef.current);
+        timeoutIdRef.current = null;
+      }
+    };
+
+    const scheduleNextTick = (delayMs: number) => {
+      if (disposed) {
+        return;
+      }
+      clearScheduledTick();
+      timeoutIdRef.current = window.setTimeout(runTick, Math.max(0, delayMs));
+    };
+
+    const runTick = () => {
+      if (disposed) {
+        return;
+      }
+
       if (requestInFlightRef.current) {
+        scheduleNextTick(250);
         return;
       }
 
@@ -23,6 +46,7 @@ export function useWatchlistScanner() {
       const nextItem = selectNextWatchlistItemToScan(state.watchlist);
 
       if (!nextItem) {
+        scheduleNextTick(getNextWatchlistScanDelayMs(state.watchlist));
         return;
       }
 
@@ -37,11 +61,15 @@ export function useWatchlistScanner() {
         })
         .finally(() => {
           requestInFlightRef.current = false;
+          scheduleNextTick(getNextWatchlistScanDelayMs(useAppStore.getState().watchlist));
         });
-    }, WATCHLIST_SCANNER_TICK_MS);
+    };
+
+    scheduleNextTick(0);
 
     return () => {
-      window.clearInterval(intervalId);
+      disposed = true;
+      clearScheduledTick();
     };
   }, []);
 }
