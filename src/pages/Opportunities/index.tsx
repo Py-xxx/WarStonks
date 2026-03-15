@@ -11,6 +11,9 @@ import {
 import {
   getDefaultSetCompletionImportCrop,
   processSetCompletionInventoryScreenshot,
+  sampleSetCompletionImportColorAtPoint,
+  suggestSetCompletionImportColorSample,
+  type SetCompletionImportColorSample,
   type SetCompletionImportCrop,
   type SetCompletionScreenshotOcrRow,
   type SetCompletionScreenshotProgress,
@@ -482,6 +485,7 @@ function SetCompletionScreenshotImportModal({
   fileInputRef,
   previewUrl,
   crop,
+  colorSample,
   rows,
   plannerCatalog,
   processing,
@@ -495,6 +499,7 @@ function SetCompletionScreenshotImportModal({
   onClose,
   onPickFile,
   onCropChange,
+  onSelectColorSample,
   onReprocess,
   onToggleRemove,
   onRemapQueryChange,
@@ -507,6 +512,7 @@ function SetCompletionScreenshotImportModal({
   fileInputRef: { current: HTMLInputElement | null };
   previewUrl: string | null;
   crop: SetCompletionImportCrop;
+  colorSample: SetCompletionImportColorSample | null;
   rows: ScreenshotImportPreviewRow[];
   plannerCatalog: PlannerCatalogItem[];
   processing: boolean;
@@ -520,6 +526,7 @@ function SetCompletionScreenshotImportModal({
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onCropChange: (nextCrop: SetCompletionImportCrop) => void;
+  onSelectColorSample: (x: number, y: number) => Promise<void>;
   onReprocess: () => Promise<void>;
   onToggleRemove: (rowId: string) => void;
   onRemapQueryChange: (rowId: string, value: string) => void;
@@ -625,7 +632,18 @@ function SetCompletionScreenshotImportModal({
             {previewUrl ? (
               <>
                 <div className="screenshot-import-preview-shell">
-                  <img src={previewUrl} alt="Prime components screenshot preview" />
+                  <button
+                    type="button"
+                    className="screenshot-import-preview-hitbox"
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      const x = (event.clientX - rect.left) / rect.width;
+                      const y = (event.clientY - rect.top) / rect.height;
+                      void onSelectColorSample(x, y);
+                    }}
+                  >
+                    <img src={previewUrl} alt="Prime components screenshot preview" />
+                  </button>
                   <div
                     className="screenshot-import-crop-overlay"
                     style={{
@@ -635,6 +653,15 @@ function SetCompletionScreenshotImportModal({
                       bottom: `${crop.bottom * 100}%`,
                     }}
                   />
+                  {colorSample ? (
+                    <div
+                      className="screenshot-import-sample-marker"
+                      style={{
+                        left: `${colorSample.x * 100}%`,
+                        top: `${colorSample.y * 100}%`,
+                      }}
+                    />
+                  ) : null}
                 </div>
 
                 <div className="screenshot-import-crop-grid">
@@ -667,6 +694,41 @@ function SetCompletionScreenshotImportModal({
                 <div className="watchlist-form-note">
                   Adjust the crop only so the blue guide cleanly wraps the fixed 7-column by 3-row
                   inventory grid, then click <strong>Run Scan</strong>.
+                </div>
+                <div className="screenshot-import-color-picker">
+                  <div className="screenshot-import-color-picker-copy">
+                    <span className="panel-title-eyebrow">Text Color Picker</span>
+                    <strong>Click the screenshot to move the crosshair onto the gold item text</strong>
+                    <span>
+                      OCR now isolates the sampled text color first. If the later tiles struggle,
+                      move the crosshair onto a clean letter and rerun the scan.
+                    </span>
+                  </div>
+                  <div className="screenshot-import-color-picker-row">
+                    <div
+                      className="screenshot-import-zoom-preview"
+                      style={{
+                        backgroundImage: `url(${previewUrl})`,
+                        backgroundPosition: `${(colorSample?.x ?? 0.5) * 100}% ${(colorSample?.y ?? 0.5) * 100}%`,
+                      }}
+                    >
+                      <div className="screenshot-import-zoom-crosshair" />
+                    </div>
+                    <div className="screenshot-import-color-readout">
+                      <span
+                        className="screenshot-import-color-swatch"
+                        style={{ background: colorSample?.hex ?? '#000000' }}
+                      />
+                      <div>
+                        <strong>{colorSample?.hex ?? 'No color selected'}</strong>
+                        <span>
+                          {colorSample
+                            ? `RGB ${colorSample.red}, ${colorSample.green}, ${colorSample.blue}`
+                            : 'The importer will try to pick a default gold text pixel.'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </>
             ) : (
@@ -860,6 +922,8 @@ export function OpportunitiesPage() {
   );
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
   const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
+  const [screenshotImportColorSample, setScreenshotImportColorSample] =
+    useState<SetCompletionImportColorSample | null>(null);
   const [screenshotImportRows, setScreenshotImportRows] = useState<ScreenshotImportPreviewRow[]>([]);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportApplying, setScreenshotImportApplying] = useState(false);
@@ -1268,6 +1332,7 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(null);
+    setScreenshotImportColorSample(null);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1300,9 +1365,14 @@ export function OpportunitiesPage() {
     });
 
     try {
-      const ocrRows = await processSetCompletionInventoryScreenshot(file, crop, (progress) => {
-        setScreenshotImportProgress(progress);
-      });
+      const ocrRows = await processSetCompletionInventoryScreenshot(
+        file,
+        crop,
+        screenshotImportColorSample,
+        (progress) => {
+          setScreenshotImportProgress(progress);
+        },
+      );
       const matchRows = await matchSetCompletionScreenshotRows({
         rows: ocrRows.map((row) => ({
           rowId: row.rowId,
@@ -1340,12 +1410,22 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(file);
+    setScreenshotImportColorSample(null);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
       }
       return previewUrl;
     });
+    try {
+      const suggestedSample = await suggestSetCompletionImportColorSample(
+        file,
+        getDefaultSetCompletionImportCrop(),
+      );
+      setScreenshotImportColorSample(suggestedSample);
+    } catch {
+      setScreenshotImportColorSample(null);
+    }
   };
 
   const reprocessScreenshotImport = async () => {
@@ -1363,6 +1443,24 @@ export function OpportunitiesPage() {
     setScreenshotImportProgress(null);
     setActiveRemapRowId(null);
     setExpandedImportDebugRowId(null);
+  };
+
+  const handleScreenshotImportColorSampleSelect = async (x: number, y: number) => {
+    if (!screenshotImportFile) {
+      return;
+    }
+    try {
+      const sample = await sampleSetCompletionImportColorAtPoint(screenshotImportFile, x, y);
+      if (sample) {
+        setScreenshotImportColorSample(sample);
+        setScreenshotImportRows([]);
+        setScreenshotImportError(null);
+        setScreenshotImportProgress(null);
+        setExpandedImportDebugRowId(null);
+      }
+    } catch (error) {
+      setScreenshotImportError(toErrorMessage(error));
+    }
   };
 
   const updateScreenshotImportRow = (
@@ -2067,6 +2165,7 @@ export function OpportunitiesPage() {
         fileInputRef={screenshotFileInputRef}
         previewUrl={screenshotImportPreviewUrl}
         crop={screenshotImportCrop}
+        colorSample={screenshotImportColorSample}
         rows={screenshotImportRows}
         plannerCatalog={plannerCatalog}
         processing={screenshotImportProcessing}
@@ -2080,6 +2179,7 @@ export function OpportunitiesPage() {
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
         onCropChange={handleScreenshotImportCropChange}
+        onSelectColorSample={handleScreenshotImportColorSampleSelect}
         onReprocess={reprocessScreenshotImport}
         onToggleRemove={(rowId) => {
           updateScreenshotImportRow(rowId, (row) => ({ ...row, removed: !row.removed }));
