@@ -350,6 +350,7 @@ function analyzeTileMask(
   }
   previewContext.fillStyle = '#000000';
   previewContext.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+  previewContext.drawImage(tileMask, 0, 0, previewCanvas.width, previewCanvas.height);
 
   const badgeRegionRect = toPixelRegion(tileMask, BADGE_REGION);
   const badgeMask = extractPixelCanvas(
@@ -389,30 +390,29 @@ function analyzeTileMask(
     : null;
 
   const nameRegionRect = toPixelRegion(tileMask, NAME_REGION);
-  const nameMask = removeWideMaskComponents(
-    cleanupMaskCanvas(
-      extractPixelCanvas(
-        tileMask,
-        nameRegionRect.x,
-        nameRegionRect.y,
-        nameRegionRect.width,
-        nameRegionRect.height,
-      ),
+  const nameMask = cleanupNameDetectionMask(
+    extractPixelCanvas(
+      tileMask,
+      nameRegionRect.x,
+      nameRegionRect.y,
+      nameRegionRect.width,
+      nameRegionRect.height,
     ),
-  );
-  trimMaskToDenseColumns(nameMask);
-  previewContext.drawImage(
-    nameMask,
-    nameRegionRect.x,
-    nameRegionRect.y,
-    nameRegionRect.width,
-    nameRegionRect.height,
   );
   const localNameBounds = findMaskBounds(nameMask, {
     minArea: Math.max(12, Math.round(nameMask.width * nameMask.height * 0.004)),
   });
   const nameBox = localNameBounds
-    ? translateBox(localNameBounds, nameRegionRect.x, nameRegionRect.y)
+    ? translateBox(
+        expandBounds(localNameBounds, nameMask.width, nameMask.height, {
+          left: Math.max(2, Math.round(nameMask.width * 0.01)),
+          right: Math.max(2, Math.round(nameMask.width * 0.01)),
+          top: Math.max(2, Math.round(nameMask.height * 0.02)),
+          bottom: Math.max(8, Math.round(nameMask.height * 0.08)),
+        }),
+        nameRegionRect.x,
+        nameRegionRect.y,
+      )
     : null;
 
   const detected = nameBox !== null || quantityBox !== null || ignoreBox !== null;
@@ -675,7 +675,31 @@ function cleanupMaskCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   return canvas;
 }
 
-function trimMaskToDenseRows(canvas: HTMLCanvasElement): void {
+function cleanupNameDetectionMask(source: HTMLCanvasElement): HTMLCanvasElement {
+  const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
+  trimMaskToDenseRows(canvas, {
+    thresholdRatio: 0.08,
+    minThreshold: 1,
+    padding: 8,
+  });
+  removeThinMaskComponents(canvas);
+  const trimmed = removeWideMaskComponents(canvas);
+  trimMaskToDenseColumns(trimmed, {
+    thresholdRatio: 0.08,
+    minThreshold: 1,
+    padding: 4,
+  });
+  return trimmed;
+}
+
+function trimMaskToDenseRows(
+  canvas: HTMLCanvasElement,
+  options?: {
+    thresholdRatio?: number;
+    minThreshold?: number;
+    padding?: number;
+  },
+): void {
   const context = canvas.getContext('2d');
   if (!context) {
     return;
@@ -699,14 +723,18 @@ function trimMaskToDenseRows(canvas: HTMLCanvasElement): void {
   if (maxScore === 0) {
     return;
   }
-  const threshold = Math.max(2, Math.round(maxScore * 0.16));
+  const threshold = Math.max(
+    options?.minThreshold ?? 2,
+    Math.round(maxScore * (options?.thresholdRatio ?? 0.16)),
+  );
   let start = rowScores.findIndex((score) => score >= threshold);
   let end = rowScores.length - 1 - [...rowScores].reverse().findIndex((score) => score >= threshold);
   if (start < 0 || end < start) {
     return;
   }
-  start = clamp(start - 4, 0, canvas.height - 1);
-  end = clamp(end + 4, start, canvas.height - 1);
+  const padding = options?.padding ?? 4;
+  start = clamp(start - padding, 0, canvas.height - 1);
+  end = clamp(end + padding, start, canvas.height - 1);
 
   for (let y = 0; y < canvas.height; y += 1) {
     if (y >= start && y <= end) {
@@ -724,7 +752,14 @@ function trimMaskToDenseRows(canvas: HTMLCanvasElement): void {
   context.putImageData(imageData, 0, 0);
 }
 
-function trimMaskToDenseColumns(canvas: HTMLCanvasElement): void {
+function trimMaskToDenseColumns(
+  canvas: HTMLCanvasElement,
+  options?: {
+    thresholdRatio?: number;
+    minThreshold?: number;
+    padding?: number;
+  },
+): void {
   const context = canvas.getContext('2d');
   if (!context) {
     return;
@@ -750,15 +785,19 @@ function trimMaskToDenseColumns(canvas: HTMLCanvasElement): void {
     return;
   }
 
-  const threshold = Math.max(1, Math.round(maxScore * 0.12));
+  const threshold = Math.max(
+    options?.minThreshold ?? 1,
+    Math.round(maxScore * (options?.thresholdRatio ?? 0.12)),
+  );
   let start = columnScores.findIndex((score) => score >= threshold);
   let end =
     columnScores.length - 1 - [...columnScores].reverse().findIndex((score) => score >= threshold);
   if (start < 0 || end < start) {
     return;
   }
-  start = clamp(start - 3, 0, canvas.width - 1);
-  end = clamp(end + 3, start, canvas.width - 1);
+  const padding = options?.padding ?? 3;
+  start = clamp(start - padding, 0, canvas.width - 1);
+  end = clamp(end + padding, start, canvas.width - 1);
 
   for (let x = 0; x < canvas.width; x += 1) {
     if (x >= start && x <= end) {
@@ -907,6 +946,37 @@ function findMaskBounds(
     y: minY,
     width: maxFoundX - minX + 1,
     height: maxFoundY - minY + 1,
+  };
+}
+
+function expandBounds(
+  bounds: SetCompletionDetectionBox,
+  maxWidth: number,
+  maxHeight: number,
+  padding: {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  },
+): SetCompletionDetectionBox {
+  const left = clamp(bounds.x - padding.left, 0, Math.max(0, maxWidth - 1));
+  const top = clamp(bounds.y - padding.top, 0, Math.max(0, maxHeight - 1));
+  const right = clamp(
+    bounds.x + bounds.width - 1 + padding.right,
+    left,
+    Math.max(0, maxWidth - 1),
+  );
+  const bottom = clamp(
+    bounds.y + bounds.height - 1 + padding.bottom,
+    top,
+    Math.max(0, maxHeight - 1),
+  );
+  return {
+    x: left,
+    y: top,
+    width: right - left + 1,
+    height: bottom - top + 1,
   };
 }
 
