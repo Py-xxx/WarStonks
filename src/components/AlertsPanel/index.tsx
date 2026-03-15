@@ -100,33 +100,39 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                   <div className="alert-copy">
                     <div className="alert-topline">
                       <span className="alert-item-name">{alert.title}</span>
-                      <span className="badge badge-amber">
-                        {alert.sourceKeys.length} feeds
-                      </span>
+                      {alert.kind === 'worldstate-offline' ? (
+                        <span className="badge badge-amber">{alert.sourceKeys?.length ?? 0} feeds</span>
+                      ) : (
+                        <span className="badge badge-amber">Stale</span>
+                      )}
                     </div>
                     <div className="alert-meta">
                       <span>{alert.message}</span>
-                      <span>
-                        {alert.sourceKeys
-                          .map((sourceKey) => WORLDSTATE_ENDPOINT_LABELS[sourceKey])
-                          .join(', ')}
-                      </span>
+                      {alert.kind === 'worldstate-offline' && alert.sourceKeys?.length ? (
+                        <span>
+                          {alert.sourceKeys
+                            .map((sourceKey) => WORLDSTATE_ENDPOINT_LABELS[sourceKey])
+                            .join(', ')}
+                        </span>
+                      ) : null}
                       <span>{formatAlertTimestamp(alert.createdAt)}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="alert-actions">
-                  <button
-                    className="act-btn"
-                    type="button"
-                    onClick={() => {
-                      void retryWorldStateSystemAlert(alert.sourceKeys);
-                    }}
-                  >
-                    Retry
-                  </button>
-                </div>
+                {alert.kind === 'worldstate-offline' && alert.sourceKeys?.length ? (
+                  <div className="alert-actions">
+                    <button
+                      className="act-btn"
+                      type="button"
+                      onClick={() => {
+                        void retryWorldStateSystemAlert(alert.sourceKeys ?? []);
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

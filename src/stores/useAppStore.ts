@@ -255,6 +255,8 @@ function extractQuickViewSparklinePoints(chartPoints: Awaited<ReturnType<typeof 
 }
 
 const WORLDSTATE_SYSTEM_ALERT_ID = 'system:worldstate-offline';
+const SCANNER_STALE_SYSTEM_ALERT_ID = 'system:scanner-stale';
+const SCANNER_STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000;
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -408,6 +410,16 @@ function buildWorldStateSystemAlert(sourceKeys: WorldStateEndpointKey[]): System
   };
 }
 
+function buildScannerStaleSystemAlert(scanFinishedAt: string): SystemAlert {
+  return {
+    id: SCANNER_STALE_SYSTEM_ALERT_ID,
+    kind: 'scanner-stale',
+    title: 'Scanner data is stale',
+    message: 'The latest scanner run is over 48 hours old. A rescan is highly recommended.',
+    createdAt: scanFinishedAt,
+  };
+}
+
 function upsertWorldStateSystemAlert(
   alerts: SystemAlert[],
   sourceKey: WorldStateEndpointKey,
@@ -435,13 +447,34 @@ function clearWorldStateSystemAlertSource(
     return alerts;
   }
 
-  const remainingSourceKeys = existingAlert.sourceKeys.filter((key) => key !== sourceKey);
+  const remainingSourceKeys = (existingAlert.sourceKeys ?? []).filter((key) => key !== sourceKey);
   if (remainingSourceKeys.length === 0) {
     return alerts.filter((alert) => alert.id !== WORLDSTATE_SYSTEM_ALERT_ID);
   }
 
   const nextAlert = buildWorldStateSystemAlert(remainingSourceKeys);
   return [nextAlert, ...alerts.filter((alert) => alert.id !== WORLDSTATE_SYSTEM_ALERT_ID)];
+}
+
+function upsertScannerStaleSystemAlert(
+  alerts: SystemAlert[],
+  scanFinishedAt: string | null,
+): SystemAlert[] {
+  const filteredAlerts = alerts.filter((alert) => alert.id !== SCANNER_STALE_SYSTEM_ALERT_ID);
+  if (!scanFinishedAt) {
+    return filteredAlerts;
+  }
+
+  const finishedAtMs = Date.parse(scanFinishedAt);
+  if (!Number.isFinite(finishedAtMs)) {
+    return filteredAlerts;
+  }
+
+  if (Date.now() - finishedAtMs < SCANNER_STALE_THRESHOLD_MS) {
+    return filteredAlerts;
+  }
+
+  return [buildScannerStaleSystemAlert(scanFinishedAt), ...filteredAlerts];
 }
 
 async function persistWorldStateSnapshot<T>(
@@ -912,6 +945,7 @@ interface AppStore {
   dismissSystemAlert: (id: string) => void;
   clearAllSystemAlerts: () => void;
   retryWorldStateSystemAlert: (sourceKeys: WorldStateEndpointKey[]) => Promise<void>;
+  syncScannerStaleAlert: (scanFinishedAt: string | null) => void;
   refreshWatchlistItem: (id: string) => Promise<WatchlistRefreshResult>;
 
   quickView: QuickViewSelection;
@@ -2143,6 +2177,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }),
     );
   },
+  syncScannerStaleAlert: (scanFinishedAt) =>
+    set((state) => ({
+      systemAlerts: upsertScannerStaleSystemAlert(state.systemAlerts, scanFinishedAt),
+    })),
   refreshWatchlistItem: async (id) => {
     const currentState = get();
     const item = currentState.watchlist.find((entry) => entry.id === id);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ensureTradeSetMap,
+  getArbitrageScannerState,
   initializeAppCatalogOnce,
   isTauriRuntime,
   listenToStartupProgress,
@@ -83,6 +84,7 @@ export function useStartupInitialization(): StartupState {
   );
   const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
   const loadTradeAccount = useAppStore((state) => state.loadTradeAccount);
+  const syncScannerStaleAlert = useAppStore((state) => state.syncScannerStaleAlert);
 
   useEffect(() => {
     activeAttemptRef.current += 1;
@@ -194,6 +196,16 @@ export function useStartupInitialization(): StartupState {
           await refreshOwnedRelicInventory();
         } catch (error) {
           console.warn('[startup] owned relic inventory refresh failed', error);
+        }
+
+        try {
+          const scannerState = await getArbitrageScannerState();
+          if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+            return;
+          }
+          syncScannerStaleAlert(scannerState.latestScan?.scanFinishedAt ?? null);
+        } catch (error) {
+          console.warn('[startup] scanner stale check failed', error);
         }
 
         const startupWorldStateTasks = [
