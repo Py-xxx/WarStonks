@@ -163,7 +163,7 @@
 }
 
 .screenshot-import-modal {
-  width: min(1120px, calc(100vw - 32px));
+  width: min(2240px, calc(100vw - 32px));
 }
 
 .screenshot-import-body {

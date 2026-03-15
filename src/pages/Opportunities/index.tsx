@@ -9,6 +9,7 @@ import {
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
 import {
+  getDefaultSetCompletionImportColorSample,
   getDefaultSetCompletionImportCrop,
   processSetCompletionInventoryScreenshot,
   suggestSetCompletionImportColorSample,
@@ -121,7 +122,7 @@ function mergeScreenshotImportRows(
   }>,
 ): ScreenshotImportPreviewRow[] {
   const byId = new Map(matchRows.map((row) => [row.rowId, row]));
-  return ocrRows.map((row) => {
+  return sortScreenshotImportRows(ocrRows.map((row) => {
     const matched = byId.get(row.rowId);
     return {
       ...row,
@@ -135,6 +136,32 @@ function mergeScreenshotImportRows(
       removed: false,
       remapQuery: matched?.matchedItem?.name ?? matched?.chosenOcrText ?? row.detectedName,
     };
+  }));
+}
+
+function screenshotImportRowPriority(row: ScreenshotImportPreviewRow): number {
+  if (row.removed) {
+    return 5;
+  }
+  if (row.quantityState === 'unresolved') {
+    return 0;
+  }
+  if (row.matchStatus === 'unmatched' || !row.matchedItem) {
+    return 1;
+  }
+  if (row.matchStatus === 'matched-low-confidence') {
+    return 2;
+  }
+  return 3;
+}
+
+function sortScreenshotImportRows(rows: ScreenshotImportPreviewRow[]): ScreenshotImportPreviewRow[] {
+  return [...rows].sort((left, right) => {
+    const priorityDelta = screenshotImportRowPriority(left) - screenshotImportRowPriority(right);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return left.tileIndex - right.tileIndex;
   });
 }
 
@@ -237,9 +264,7 @@ function sampleColorFromPreviewImage(
     red: data[0],
     green: data[1],
     blue: data[2],
-    hex: `#${[data[0], data[1], data[2]]
-      .map((value) => value.toString(16).padStart(2, '0'))
-      .join('')}`,
+    hex: `#${[data[0], data[1], data[2]].map((value) => value.toString(16).padStart(2, '0')).join('')}`,
   };
 }
 
@@ -1040,7 +1065,7 @@ export function OpportunitiesPage() {
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
   const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
   const [screenshotImportColorSample, setScreenshotImportColorSample] =
-    useState<SetCompletionImportColorSample | null>(null);
+    useState<SetCompletionImportColorSample | null>(getDefaultSetCompletionImportColorSample);
   const [screenshotImportRows, setScreenshotImportRows] = useState<ScreenshotImportPreviewRow[]>([]);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportApplying, setScreenshotImportApplying] = useState(false);
@@ -1449,7 +1474,7 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(null);
-    setScreenshotImportColorSample(null);
+    setScreenshotImportColorSample(getDefaultSetCompletionImportColorSample());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1527,7 +1552,7 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(file);
-    setScreenshotImportColorSample(null);
+    setScreenshotImportColorSample(getDefaultSetCompletionImportColorSample());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1539,9 +1564,11 @@ export function OpportunitiesPage() {
         file,
         getDefaultSetCompletionImportCrop(),
       );
-      setScreenshotImportColorSample(suggestedSample);
+      setScreenshotImportColorSample(
+        suggestedSample ?? getDefaultSetCompletionImportColorSample(),
+      );
     } catch {
-      setScreenshotImportColorSample(null);
+      setScreenshotImportColorSample(getDefaultSetCompletionImportColorSample());
     }
   };
 
@@ -1575,7 +1602,7 @@ export function OpportunitiesPage() {
     updater: (row: ScreenshotImportPreviewRow) => ScreenshotImportPreviewRow,
   ) => {
     setScreenshotImportRows((current) =>
-      current.map((row) => (row.rowId === rowId ? updater(row) : row)),
+      sortScreenshotImportRows(current.map((row) => (row.rowId === rowId ? updater(row) : row))),
     );
   };
 
