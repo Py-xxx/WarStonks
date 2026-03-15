@@ -770,38 +770,6 @@ export function ScannersPage() {
         </div>
         {(activeTab === 'arbitrage' || activeTab === 'relic-roi') ? (
           <div className="subnav-right">
-            {activeTab === 'relic-roi' ? (
-              <>
-                <input
-                  className="settings-text-input scanner-search-input"
-                  type="search"
-                  value={relicSearch}
-                  onChange={(event) => setRelicSearch(event.target.value)}
-                  placeholder="Search relic or drop item"
-                />
-                <label className="toggle-wrap" htmlFor="relic-unvaulted-toggle">
-                  <span>Unvaulted Only</span>
-                  <button
-                    id="relic-unvaulted-toggle"
-                    className={`toggle${showOnlyUnvaulted ? ' on' : ''}`}
-                    type="button"
-                    aria-pressed={showOnlyUnvaulted}
-                    onClick={() => setShowOnlyUnvaulted((current) => !current)}
-                  />
-                </label>
-                <select
-                  className="market-variant-select scanner-refinement-select"
-                  value={relicRefinement}
-                  onChange={(event) => setRelicRefinement(event.target.value as RelicRefinementKey)}
-                >
-                  {RELIC_REFINEMENT_OPTIONS.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </>
-            ) : null}
             <button
               className="scanner-action-button"
               type="button"
@@ -909,13 +877,16 @@ export function ScannersPage() {
             {activeTab === 'arbitrage' && arbitrage ? (
               <div className="scanner-results-list">
                 <div className="scanner-results-toolbar">
-                  <input
-                    className="settings-text-input scanner-search-input"
-                    type="search"
-                    value={arbitrageSearch}
-                    onChange={(event) => setArbitrageSearch(event.target.value)}
-                    placeholder="Search set"
-                  />
+                  <div className="scanner-search-shell" role="search">
+                    <span className="scanner-search-icon" aria-hidden="true">⌕</span>
+                    <input
+                      className="scanner-search-input"
+                      type="search"
+                      value={arbitrageSearch}
+                      onChange={(event) => setArbitrageSearch(event.target.value)}
+                      placeholder="Search set"
+                    />
+                  </div>
                 </div>
                 {arbitrageResults.length > 0 ? (
                   arbitrageResults.map((entry, index) => (
@@ -941,6 +912,41 @@ export function ScannersPage() {
             ) : activeTab === 'relic-roi' && arbitrage ? (
               relicResults.length > 0 ? (
                 <div className="scanner-results-list">
+                  <div className="scanner-results-toolbar scanner-results-toolbar-split">
+                    <div className="scanner-search-shell" role="search">
+                      <span className="scanner-search-icon" aria-hidden="true">⌕</span>
+                      <input
+                        className="scanner-search-input"
+                        type="search"
+                        value={relicSearch}
+                        onChange={(event) => setRelicSearch(event.target.value)}
+                        placeholder="Search relic or drop item"
+                      />
+                    </div>
+                    <div className="scanner-results-toolbar-actions">
+                      <label className="toggle-wrap" htmlFor="relic-unvaulted-toggle">
+                        <span>Unvaulted Only</span>
+                        <button
+                          id="relic-unvaulted-toggle"
+                          className={`toggle${showOnlyUnvaulted ? ' on' : ''}`}
+                          type="button"
+                          aria-pressed={showOnlyUnvaulted}
+                          onClick={() => setShowOnlyUnvaulted((current) => !current)}
+                        />
+                      </label>
+                      <select
+                        className="market-variant-select scanner-refinement-select"
+                        value={relicRefinement}
+                        onChange={(event) => setRelicRefinement(event.target.value as RelicRefinementKey)}
+                      >
+                        {RELIC_REFINEMENT_OPTIONS.map((option) => (
+                          <option key={option.key} value={option.key}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                   <div className="scanner-list-header scanner-list-header-relic">
                     <div className="scanner-list-header-primary" />
                     <span>Run Value</span>
