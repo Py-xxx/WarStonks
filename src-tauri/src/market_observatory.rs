@@ -34,6 +34,10 @@ const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
 const SCANNER_WFM_STATS_TIMEOUT_SECONDS: u64 = 5;
 const SCANNER_ITEM_MAX_ATTEMPTS: usize = 3;
 const SCANNER_ITEM_TOTAL_DEADLINE_SECONDS: u64 = 25;
+// Number of items to prefetch statistics for ahead of the current scan position.
+// Keeps up to SCANNER_PREFETCH_LOOKAHEAD + 1 concurrent HTTP slots occupied at once,
+// fully saturating the 3-req/s rate window instead of leaving it half-idle.
+const SCANNER_PREFETCH_LOOKAHEAD: usize = 2;
 const WFM_DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 20;
 const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ARBITRAGE_SCANNER_HEARTBEAT_SECONDS: u64 = 3;
@@ -1461,6 +1465,16 @@ where
                 .with_context(|| format!("failed to {}", action_label_owned))?;
             let status = response.status();
             let retry_after = parse_retry_after_seconds(response.headers());
+            let headers = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .to_str()
+                        .ok()
+                        .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+                })
+                .collect();
             let body = response
                 .bytes()
                 .with_context(|| format!("failed to read {} response body", action_label_owned))?
@@ -1469,6 +1483,7 @@ where
                 status: status.as_u16(),
                 body,
                 retry_after,
+                headers,
             })
         },
     )
@@ -7111,6 +7126,47 @@ fn build_arbitrage_scanner_inner(
 ) -> Result<ArbitrageScannerRunOutcome> {
     let catalog_connection = open_catalog_database(&app)?;
     let observatory_connection = open_market_observatory_database(&app)?;
+
+    // Resolve the DB path once so prefetch threads can open their own connections
+    // without needing the AppHandle (avoids cloning a non-trivial handle per thread).
+    let observatory_db_path = resolve_market_observatory_db_path(&app)?;
+
+    // AtomicBool shared with prefetch threads so we can cancel them when the scanner stops.
+    let prefetch_stop = Arc::new(AtomicBool::new(false));
+
+    // Tracks which item_ids currently have an in-flight prefetch thread so we never
+    // spin up duplicate fetches for the same item.
+    let prefetch_in_flight: Arc<Mutex<HashSet<i64>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    // Spawn a one-shot background thread that prefetches statistics for `item_id` into the
+    // SQLite cache at Background priority.  When the main loop later reaches that item it
+    // finds the cache warm and skips the network call entirely.
+    let kick_prefetch = |item_id: i64, slug: String| {
+        {
+            let mut in_flight = prefetch_in_flight.lock().expect("prefetch_in_flight lock poisoned");
+            if in_flight.contains(&item_id) {
+                return;
+            }
+            in_flight.insert(item_id);
+        }
+        let db_path = observatory_db_path.clone();
+        let in_flight_arc = Arc::clone(&prefetch_in_flight);
+        let stopped = Arc::clone(&prefetch_stop);
+        std::thread::spawn(move || {
+            if let Ok(conn) = Connection::open(&db_path) {
+                let _ = conn.busy_timeout(Duration::from_secs(30));
+                let _ = ensure_statistics_cached_for_scan(
+                    &conn,
+                    item_id,
+                    &slug,
+                    "base",
+                    || stopped.load(AtomicOrdering::Relaxed),
+                );
+            }
+            in_flight_arc.lock().expect("prefetch_in_flight lock poisoned").remove(&item_id);
+        });
+    };
+
     let scanned_sets = load_scanner_sets_from_map(&app, &catalog_connection)?;
     let relic_roots = list_relic_roots_from_catalog(&catalog_connection)?;
     let started_at = format_timestamp(now_utc())?;
@@ -7188,7 +7244,20 @@ fn build_arbitrage_scanner_inner(
     }
 
     while let Some(mut work_unit) = work_queue.pop_front() {
+        // Kick background prefetch threads for upcoming items before blocking on the
+        // current one.  Each thread fetches statistics into the SQLite cache so the
+        // main loop's ensure_statistics_cached_for_scan call returns immediately
+        // (cache hit) instead of waiting on the network.  This keeps up to
+        // SCANNER_PREFETCH_LOOKAHEAD + 1 concurrent HTTP requests in flight, which
+        // saturates the full 3-req/s rate window rather than using only 1 slot at a time.
+        for ahead in work_queue.iter().take(SCANNER_PREFETCH_LOOKAHEAD) {
+            if let Some(ahead_item_id) = ahead.item_id {
+                kick_prefetch(ahead_item_id, ahead.slug.clone());
+            }
+        }
+
         if arbitrage_scanner_stop_requested(&observatory_connection)? {
+            prefetch_stop.store(true, AtomicOrdering::Relaxed);
             was_stopped = true;
             break;
         }
@@ -7340,6 +7409,10 @@ fn build_arbitrage_scanner_inner(
             }
         }
     }
+
+    // Prefetch threads are only useful during the sets/components phase.
+    // Signal them to exit before the pure-computation relic ROI phase begins.
+    prefetch_stop.store(true, AtomicOrdering::Relaxed);
 
     let mut results = Vec::new();
     for (set_root, components) in &scanned_sets {

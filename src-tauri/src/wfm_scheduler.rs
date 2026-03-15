@@ -14,7 +14,7 @@ const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const NORMAL_PRIORITY_COUNT: usize = 4;
 const PRIORITY_QUANTA: [i32; NORMAL_PRIORITY_COUNT] = [8, 4, 2, 1];
 const MAX_DEFICIT_MULTIPLIER: i32 = 4;
-const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const COALESCED_SUCCESS_TTL: Duration = Duration::from_millis(1);
 const COALESCED_ERROR_TTL: Duration = Duration::from_millis(1);
 const COALESCED_IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -98,6 +98,7 @@ pub struct WfmHttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
     pub retry_after: Option<Duration>,
+    pub headers: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]

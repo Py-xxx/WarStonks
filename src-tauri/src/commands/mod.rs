@@ -272,6 +272,16 @@ fn execute_wfm_bytes_request(
             .with_context(|| format!("failed to {}", action_label_owned))?;
         let status = response.status();
         let retry_after = parse_retry_after_seconds(response.headers());
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+            })
+            .collect();
         let body = response
             .bytes()
             .with_context(|| format!("failed to read {} response body", action_label_owned))?
@@ -280,6 +290,7 @@ fn execute_wfm_bytes_request(
             status: status.as_u16(),
             body,
             retry_after,
+            headers,
         })
     })
 }
