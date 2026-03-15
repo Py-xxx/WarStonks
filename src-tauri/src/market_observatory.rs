@@ -1209,7 +1209,7 @@ fn normalize_set_completion_import_lookup_value(value: &str) -> Option<String> {
 }
 
 fn apply_set_completion_ocr_corrections(value: &str) -> String {
-    value
+    let corrected = value
         .replace("pr1me", "prime")
         .replace("prlme", "prime")
         .replace("systerns", "systems")
@@ -1218,7 +1218,78 @@ fn apply_set_completion_ocr_corrections(value: &str) -> String {
         .replace("recelver", "receiver")
         .replace("grlp", "grip")
         .replace("neuroptlcs", "neuroptics")
-        .replace("neuropticss", "neuroptics")
+        .replace("neuropticss", "neuroptics");
+
+    corrected
+        .split_whitespace()
+        .map(correct_set_completion_ocr_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn correct_set_completion_ocr_token(token: &str) -> String {
+    let normalized = token.to_ascii_lowercase();
+    if normalized.is_empty() {
+        return token.to_string();
+    }
+
+    if is_likely_blueprint_ocr_token(&normalized) {
+        return "blueprint".to_string();
+    }
+
+    const COMPONENT_TOKENS: &[&str] = &[
+        "barrel",
+        "receiver",
+        "stock",
+        "grip",
+        "handle",
+        "blade",
+        "systems",
+        "chassis",
+        "neuroptics",
+        "blueprint",
+        "hilt",
+        "string",
+        "disc",
+        "link",
+        "guard",
+        "motor",
+    ];
+
+    let mut best_match = None::<(&str, f64)>;
+    for candidate in COMPONENT_TOKENS {
+        let similarity = normalized_similarity(&normalized, candidate);
+        let threshold = if *candidate == "blueprint" { 0.42 } else { 0.58 };
+        if similarity < threshold {
+            continue;
+        }
+        match best_match {
+            Some((_, current_similarity)) if similarity <= current_similarity => {}
+            _ => {
+                best_match = Some((candidate, similarity));
+            }
+        }
+    }
+
+    best_match
+        .map(|(candidate, _)| candidate.to_string())
+        .unwrap_or_else(|| token.to_string())
+}
+
+fn is_likely_blueprint_ocr_token(token: &str) -> bool {
+    if token == "blueprint" {
+        return true;
+    }
+
+    let has_lue = token.contains("lue") || token.contains("lven") || token.contains("luen");
+    let blueprint_tail = token.ends_with("rint")
+        || token.ends_with("orint")
+        || token.ends_with("oint")
+        || token.ends_with("print");
+
+    (has_lue && blueprint_tail)
+        || token.starts_with("blu") && (token.ends_with("rint") || token.ends_with("oint"))
+        || normalized_similarity(token, "blueprint") >= 0.42
 }
 
 fn slug_to_set_completion_lookup_value(slug: &str) -> Option<String> {
@@ -11165,6 +11236,43 @@ mod tests {
             matched.matched_item.as_ref().map(|item| item.slug.as_str()),
             Some("saryn_prime_systems")
         );
+    }
+
+    #[test]
+    fn set_completion_import_recovers_blueprint_ocr_noise() {
+        let profile = SetCompletionImportCandidateProfile {
+            candidate: SetCompletionImportCandidate {
+                item_id: Some(100),
+                slug: "mesa_prime_blueprint".to_string(),
+                name: "Mesa Prime Blueprint".to_string(),
+                image_path: None,
+            },
+            name_tokens: vec![
+                "mesa".to_string(),
+                "prime".to_string(),
+                "blueprint".to_string(),
+            ],
+            normalized_name: "mesa prime blueprint".to_string(),
+            normalized_slug: "mesa prime blueprint".to_string(),
+            aliases: Vec::new(),
+        };
+
+        let matched = match_set_completion_detected_name(
+            "row-3",
+            &[SetCompletionScreenshotOcrVariant {
+                key: "fallback".to_string(),
+                label: "Fallback Contrast".to_string(),
+                text: "Mesa Prime Rluenrint".to_string(),
+                confidence: 0.98,
+            }],
+            &[profile],
+        );
+
+        assert_eq!(
+            matched.matched_item.as_ref().map(|item| item.slug.as_str()),
+            Some("mesa_prime_blueprint")
+        );
+        assert!(matched.status == "matched" || matched.status == "matched-low-confidence");
     }
 
     #[test]
