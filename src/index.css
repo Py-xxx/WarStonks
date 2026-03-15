@@ -6013,42 +6013,37 @@ body {
 
 .scanner-summary-card {
   display: grid;
-  gap: 8px;
-  padding: 14px;
+  gap: 6px;
+  padding: 12px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(13, 18, 28, 0.9);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  justify-items: start;
+  align-content: start;
 }
 
 .scanner-summary-card strong {
-  font-size: 15px;
-  line-height: 1.25;
-}
-
-.scanner-summary-copy {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.15;
 }
 
 .scanner-summary-stat-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .scanner-summary-stat {
   display: inline-flex;
   align-items: center;
-  min-height: 26px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 0 9px;
   border-radius: 999px;
   border: 1px solid rgba(74, 158, 255, 0.18);
   background: rgba(18, 34, 60, 0.82);
   color: #cfe6ff;
-  font-size: 10px;
+  font-size: 9px;
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;

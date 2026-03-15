@@ -742,9 +742,6 @@ export function ScannersPage() {
   const scanSummaryCounts = arbitrage
     ? `${arbitrage.scannedSetCount} sets · ${arbitrage.scannedComponentCount} components · ${arbitrage.scannedRelicCount} relics`
     : null;
-  const scanSummaryOutcome = arbitrage
-    ? `Scanned ${arbitrage.scannedSetCount} sets and ${arbitrage.scannedRelicCount} relics. ${arbitrage.results.length} set opportunities and ${arbitrage.relicRoiResults.length} positive relic ROI entries.`
-    : null;
 
   return (
     <>
@@ -856,20 +853,16 @@ export function ScannersPage() {
                   ) : null}
                 </div>
                 <div className="scanner-summary-card">
-                  <span className="panel-title-eyebrow">Saved Scan</span>
-                  <strong>{activeTab === 'arbitrage' ? 'Arbitrage Snapshot' : 'Relic ROI Snapshot'}</strong>
-                  {scanSummaryOutcome ? (
-                    <p className="scanner-summary-copy">{scanSummaryOutcome}</p>
-                  ) : (
-                    <p className="scanner-summary-copy">
-                      No saved scanner snapshot yet. Start a scan to cache arbitrage and relic ROI results.
-                    </p>
-                  )}
+                  <strong>Saved Snapshot</strong>
                   {scanSummaryCounts ? (
                     <div className="scanner-summary-stat-grid">
                       <span className="scanner-summary-stat">{scanSummaryCounts}</span>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="scanner-summary-stat-grid">
+                      <span className="scanner-summary-stat">No saved scan</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
