@@ -1,5 +1,4 @@
 import ssQtyAssetUrl from '../assets/set-completion/ss-qty.png';
-import { runSetCompletionPaddleOcr } from './tauriClient';
 
 export interface SetCompletionImportCrop {
   left: number;
@@ -35,14 +34,6 @@ export interface SetCompletionScreenshotDetectionPreview {
   quantityCount: number;
   nameCount: number;
   cells: SetCompletionDetectionCell[];
-  readings: SetCompletionDetectedReading[];
-}
-
-export interface SetCompletionDetectedReading {
-  rowId: string;
-  tileIndex: number;
-  detectedText: string;
-  detectedQuantity: string | null;
 }
 
 interface TileDescriptor {
@@ -189,8 +180,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
 
   drawOverlayBoxes(previewContext, cells);
 
-  const readings = await readDetectedTextFromCells(maskedCanvas, cells, onProgress);
-
   onProgress?.({
     progress: 1,
     stage: 'complete',
@@ -203,7 +192,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
     quantityCount: cells.filter((cell) => cell.quantityBox !== null).length,
     nameCount: cells.filter((cell) => cell.nameBox !== null).length,
     cells,
-    readings,
   };
 }
 
@@ -326,32 +314,6 @@ function buildTileDescriptors(
   }
 
   return tiles;
-}
-
-async function readDetectedTextFromCells(
-  maskedCanvas: HTMLCanvasElement,
-  cells: SetCompletionDetectionCell[],
-  onProgress?: (progress: SetCompletionScreenshotProgress) => void,
-): Promise<SetCompletionDetectedReading[]> {
-  if (!cells.length) {
-    return [];
-  }
-
-  onProgress?.({
-    progress: 1,
-    stage: 'read',
-    detail: `Running PaddleOCR on ${cells.length} detected cells…`,
-  });
-
-  return runSetCompletionPaddleOcr({
-    imageDataUrl: maskedCanvas.toDataURL('image/png'),
-    cells: cells.map((cell) => ({
-      rowId: cell.rowId,
-      tileIndex: cell.tileIndex,
-      nameBox: cell.nameBox,
-      quantityBox: cell.quantityBox,
-    })),
-  });
 }
 
 function analyzeTileMask(
