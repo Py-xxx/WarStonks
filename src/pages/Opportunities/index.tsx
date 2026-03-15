@@ -576,7 +576,7 @@ function SetCompletionScreenshotImportModal({
                 }}
                 disabled={!previewUrl || processing}
               >
-                {processing ? 'Processing…' : 'Reprocess Crop'}
+                {processing ? 'Scanning…' : 'Run Scan'}
               </button>
               <input
                 ref={fileInputRef}
@@ -594,6 +594,9 @@ function SetCompletionScreenshotImportModal({
               the visible items in the image will be overwritten. The importer is now locked to a
               fixed <strong>7 × 3</strong> visible grid and will only process up to <strong>21 items</strong>{' '}
               per screenshot.
+            </p>
+            <p className="watchlist-form-note">
+              Workflow: choose the screenshot, manually adjust the crop guide, then click <strong>Run Scan</strong>.
             </p>
 
             <div className="screenshot-import-example">
@@ -663,13 +666,13 @@ function SetCompletionScreenshotImportModal({
                 </div>
                 <div className="watchlist-form-note">
                   Adjust the crop only so the blue guide cleanly wraps the fixed 7-column by 3-row
-                  inventory grid.
+                  inventory grid, then click <strong>Run Scan</strong>.
                 </div>
               </>
             ) : (
               <div className="opportunities-placeholder">
-                Choose a screenshot to start local OCR and preview up to 21 visible prime
-                components.
+                Choose a screenshot first, then manually crop it before running OCR on up to 21
+                visible prime components.
               </div>
             )}
           </div>
@@ -1328,8 +1331,21 @@ export function OpportunitiesPage() {
       return;
     }
     const previewUrl = URL.createObjectURL(file);
+    setScreenshotImportRows([]);
+    setScreenshotImportError(null);
+    setScreenshotImportProgress(null);
+    setScreenshotImportProcessing(false);
+    setScreenshotImportApplying(false);
+    setActiveRemapRowId(null);
+    setExpandedImportDebugRowId(null);
+    setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(file);
-    await processScreenshotImportFile(file, screenshotImportCrop, previewUrl);
+    setScreenshotImportPreviewUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+      return previewUrl;
+    });
   };
 
   const reprocessScreenshotImport = async () => {
@@ -1338,6 +1354,15 @@ export function OpportunitiesPage() {
     }
     const previewUrl = screenshotImportPreviewUrl ?? URL.createObjectURL(screenshotImportFile);
     await processScreenshotImportFile(screenshotImportFile, screenshotImportCrop, previewUrl);
+  };
+
+  const handleScreenshotImportCropChange = (nextCrop: SetCompletionImportCrop) => {
+    setScreenshotImportCrop(nextCrop);
+    setScreenshotImportRows([]);
+    setScreenshotImportError(null);
+    setScreenshotImportProgress(null);
+    setActiveRemapRowId(null);
+    setExpandedImportDebugRowId(null);
   };
 
   const updateScreenshotImportRow = (
@@ -2054,7 +2079,7 @@ export function OpportunitiesPage() {
         expandedDebugRowId={expandedImportDebugRowId}
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
-        onCropChange={setScreenshotImportCrop}
+        onCropChange={handleScreenshotImportCropChange}
         onReprocess={reprocessScreenshotImport}
         onToggleRemove={(rowId) => {
           updateScreenshotImportRow(rowId, (row) => ({ ...row, removed: !row.removed }));

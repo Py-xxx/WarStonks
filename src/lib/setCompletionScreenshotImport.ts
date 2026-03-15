@@ -26,10 +26,10 @@ export interface SetCompletionScreenshotProgress {
 }
 
 const DEFAULT_CROP: SetCompletionImportCrop = {
-  left: 0.005,
-  top: 0.12,
-  right: 0.235,
-  bottom: 0.165,
+  left: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
 };
 
 const GRID_COLUMNS = 7;
