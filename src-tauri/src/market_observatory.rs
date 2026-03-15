@@ -755,6 +755,7 @@ pub(crate) struct OwnedSetComponentDelta {
 struct ArbitrageScannerRunOutcome {
     response: ArbitrageScannerResponse,
     was_stopped: bool,
+    skipped_entry_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6765,6 +6766,7 @@ fn build_arbitrage_scanner_inner(
     // Shared across Arbitrage and Relic ROI so each prime item price model is derived once per scan run.
     let mut shared_price_model_cache = HashMap::<i64, Option<ScannerPriceModel>>::new();
     let mut was_stopped = false;
+    let mut skipped_entry_count = 0usize;
 
     on_progress(ArbitrageScannerProgress {
         scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
@@ -6810,42 +6812,55 @@ fn build_arbitrage_scanner_inner(
             last_error: None,
         });
 
-        let (components, did_refresh_set) =
-            ensure_set_components_cached(&catalog_connection, &observatory_connection, set_root)?;
-        if did_refresh_set {
-            refreshed_set_count += 1;
+        let set_entry = (|| -> Result<ArbitrageScannerSetEntry> {
+            let (components, did_refresh_set) =
+                ensure_set_components_cached(&catalog_connection, &observatory_connection, set_root)?;
+            if did_refresh_set {
+                refreshed_set_count += 1;
+            }
+
+            let set_model = get_or_build_scanner_price_model(
+                &observatory_connection,
+                &mut shared_price_model_cache,
+                set_root.item_id,
+                &set_root.slug,
+                &mut refreshed_statistics_count,
+            )?;
+
+            let mut component_models = Vec::new();
+            for component in &components {
+                let model = if let Some(component_item_id) = component.component_item_id {
+                    get_or_build_scanner_price_model(
+                        &observatory_connection,
+                        &mut shared_price_model_cache,
+                        component_item_id,
+                        &component.component_slug,
+                        &mut refreshed_statistics_count,
+                    )?
+                } else {
+                    None
+                };
+                component_models.push(model);
+            }
+
+            Ok(build_arbitrage_set_entry(
+                set_root,
+                set_model.as_ref(),
+                &components,
+                &component_models,
+            ))
+        })();
+
+        match set_entry {
+            Ok(entry) => results.push(entry),
+            Err(error) => {
+                skipped_entry_count += 1;
+                eprintln!(
+                    "[scanner] failed to process set '{}' (item_id={}): {}",
+                    set_root.slug, set_root.item_id, error
+                );
+            }
         }
-
-        let set_model = get_or_build_scanner_price_model(
-            &observatory_connection,
-            &mut shared_price_model_cache,
-            set_root.item_id,
-            &set_root.slug,
-            &mut refreshed_statistics_count,
-        )?;
-
-        let mut component_models = Vec::new();
-        for component in &components {
-            let model = if let Some(component_item_id) = component.component_item_id {
-                get_or_build_scanner_price_model(
-                    &observatory_connection,
-                    &mut shared_price_model_cache,
-                    component_item_id,
-                    &component.component_slug,
-                    &mut refreshed_statistics_count,
-                )?
-            } else {
-                None
-            };
-            component_models.push(model);
-        }
-
-        results.push(build_arbitrage_set_entry(
-            set_root,
-            set_model.as_ref(),
-            &components,
-            &component_models,
-        ));
     }
 
     let relic_roi_results = if was_stopped {
@@ -6880,14 +6895,22 @@ fn build_arbitrage_scanner_inner(
                 last_completed_at: None,
                 last_error: None,
             });
-            if let Some(entry) = build_relic_roi_entry(
+            match build_relic_roi_entry(
                 &catalog_connection,
                 relic_root,
                 &observatory_connection,
                 &mut shared_price_model_cache,
                 &mut refreshed_statistics_count,
-            )? {
-                relic_entries.push(entry);
+            ) {
+                Ok(Some(entry)) => relic_entries.push(entry),
+                Ok(None) => {}
+                Err(error) => {
+                    skipped_entry_count += 1;
+                    eprintln!(
+                        "[scanner] failed to process relic '{}' (item_id={}): {}",
+                        relic_root.slug, relic_root.item_id, error
+                    );
+                }
             }
         }
 
@@ -6960,6 +6983,7 @@ fn build_arbitrage_scanner_inner(
             relic_roi_results,
         },
         was_stopped,
+        skipped_entry_count,
     })
 }
 
@@ -7961,7 +7985,9 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
     emit_arbitrage_scanner_progress(&app, &initial_progress);
 
     let worker_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let _ = std::thread::Builder::new()
+        .name("warstonks-arbitrage-scanner".to_string())
+        .spawn(move || {
         let progress_connection = match open_market_observatory_database(&worker_app) {
             Ok(connection) => connection,
             Err(_) => return,
@@ -7996,6 +8022,7 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                 }
 
                 let response = outcome.response;
+                let skipped_entry_count = outcome.skipped_entry_count;
                 let _ = persist_arbitrage_scanner_cache(&progress_connection, &response);
                 let progress = ArbitrageScannerProgress {
                     scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
@@ -8003,11 +8030,16 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                     progress_value: 100.0,
                     stage_label: "Complete".to_string(),
                     status_text: format!(
-                        "Scanned {} sets and {} relics. {} set opportunities and {} positive relic ROI entries.",
+                        "Scanned {} sets and {} relics. {} set opportunities and {} positive relic ROI entries{}.",
                         response.scanned_set_count,
                         response.scanned_relic_count,
                         response.opportunity_count,
-                        response.relic_opportunity_count
+                        response.relic_opportunity_count,
+                        if skipped_entry_count > 0 {
+                            format!(" ({skipped_entry_count} entries skipped)")
+                        } else {
+                            String::new()
+                        }
                     ),
                     updated_at: response.computed_at.clone(),
                     started_at: Some(started_at.clone()),
