@@ -436,6 +436,12 @@ pub struct TimeOfDayLiquidityBucket {
     pub avg_visible_quantity: f64,
     pub avg_sell_orders: f64,
     pub avg_spread_pct: Option<f64>,
+    pub avg_liquidity_score: f64,
+    pub avg_hourly_volume: f64,
+    pub sample_count: usize,
+    pub normalized_liquidity: f64,
+    pub normalized_volume: f64,
+    pub heat_score: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4712,88 +4718,199 @@ fn build_time_of_day_liquidity(
 ) -> Result<TimeOfDayLiquiditySummary> {
     let cutoff = format_timestamp(now_utc() - TimeDuration::days(30))?;
     let mut statement = connection.prepare(
-        "SELECT captured_at, sell_quantity + buy_quantity AS visible_quantity, sell_order_count, spread_pct
+        "SELECT
+           captured_at,
+           lowest_sell,
+           median_sell,
+           highest_buy,
+           spread,
+           spread_pct,
+           sell_order_count,
+           sell_quantity,
+           buy_order_count,
+           buy_quantity,
+           near_floor_seller_count,
+           near_floor_quantity,
+           unique_sell_users,
+           unique_buy_users,
+           pressure_ratio,
+           entry_depth,
+           exit_depth
          FROM orderbook_snapshots
          WHERE item_id = ?1
            AND variant_key = ?2
            AND seller_mode = ?3
-           AND captured_at >= ?4
+         AND captured_at >= ?4
          ORDER BY captured_at ASC",
     )?;
     let rows = statement.query_map(params![item_id, variant_key, seller_mode, cutoff], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, Option<f64>>(3)?,
-        ))
+        Ok(MarketSnapshot {
+            captured_at: row.get(0)?,
+            lowest_sell: row.get(1)?,
+            median_sell: row.get(2)?,
+            highest_buy: row.get(3)?,
+            spread: row.get(4)?,
+            spread_pct: row.get(5)?,
+            sell_order_count: row.get(6)?,
+            sell_quantity: row.get(7)?,
+            buy_order_count: row.get(8)?,
+            buy_quantity: row.get(9)?,
+            near_floor_seller_count: row.get(10)?,
+            near_floor_quantity: row.get(11)?,
+            unique_sell_users: row.get(12)?,
+            unique_buy_users: row.get(13)?,
+            pressure_ratio: row.get(14)?,
+            entry_depth: row.get(15)?,
+            exit_depth: row.get(16)?,
+            depth_levels: Vec::new(),
+        })
     })?;
 
-    let mut per_hour = BTreeMap::<i64, Vec<(f64, f64, Option<f64>)>>::new();
-    for row in rows {
-        let (captured_at, visible_quantity, sell_orders, spread_pct) = row?;
-        let Some(timestamp) = parse_timestamp(&captured_at) else {
-            continue;
-        };
-        per_hour.entry(timestamp.hour() as i64).or_default().push((
-            visible_quantity as f64,
-            sell_orders as f64,
-            spread_pct,
-        ));
+    #[derive(Default)]
+    struct TimeOfDayAccumulator {
+        liquidity_sum: f64,
+        visible_quantity_sum: f64,
+        sell_order_sum: f64,
+        spread_sum: f64,
+        spread_count: usize,
+        volume_sum: f64,
+        volume_sample_count: usize,
+        sample_count: usize,
     }
 
-    let sample_count = per_hour
+    let mut per_hour = BTreeMap::<i64, TimeOfDayAccumulator>::new();
+    for row in rows {
+        let snapshot = row?;
+        let Some(timestamp) = parse_timestamp(&snapshot.captured_at) else {
+            continue;
+        };
+        let entry = per_hour.entry(timestamp.hour() as i64).or_default();
+        entry.sample_count += 1;
+        entry.liquidity_sum += liquidity_score_percent(&snapshot);
+        entry.visible_quantity_sum += (snapshot.sell_quantity + snapshot.buy_quantity) as f64;
+        entry.sell_order_sum += snapshot.sell_order_count as f64;
+        if let Some(spread_pct) = snapshot.spread_pct {
+            entry.spread_sum += spread_pct;
+            entry.spread_count += 1;
+        }
+    }
+
+    let (closed_rows, _, _) =
+        load_statistics_rows_for_domain(connection, item_id, variant_key, "48hours")?;
+    for row in closed_rows {
+        let hour = row.bucket_at.hour() as i64;
+        let entry = per_hour.entry(hour).or_default();
+        entry.volume_sum += row.volume.max(0.0);
+        entry.volume_sample_count += 1;
+    }
+
+    let total_sample_count = per_hour
         .values()
-        .map(|entries| entries.len())
+        .map(|entry| entry.sample_count)
         .sum::<usize>();
-    let buckets = per_hour
-        .into_iter()
-        .map(|(hour, entries)| {
-            let avg_visible_quantity =
-                entries.iter().map(|entry| entry.0).sum::<f64>() / entries.len() as f64;
-            let avg_sell_orders =
-                entries.iter().map(|entry| entry.1).sum::<f64>() / entries.len() as f64;
-            let spread_values = entries
-                .iter()
-                .filter_map(|entry| entry.2)
-                .collect::<Vec<_>>();
+    let populated_bucket_count = per_hour
+        .values()
+        .filter(|entry| entry.sample_count > 0 || entry.volume_sample_count > 0)
+        .count();
+
+    let mut raw_buckets = (0_i64..24_i64)
+        .map(|hour| {
+            let entry = per_hour.remove(&hour).unwrap_or_default();
+            let avg_liquidity_score = if entry.sample_count > 0 {
+                entry.liquidity_sum / entry.sample_count as f64
+            } else {
+                0.0
+            };
+            let avg_visible_quantity = if entry.sample_count > 0 {
+                entry.visible_quantity_sum / entry.sample_count as f64
+            } else {
+                0.0
+            };
+            let avg_sell_orders = if entry.sample_count > 0 {
+                entry.sell_order_sum / entry.sample_count as f64
+            } else {
+                0.0
+            };
+            let avg_hourly_volume = if entry.volume_sample_count > 0 {
+                entry.volume_sum / entry.volume_sample_count as f64
+            } else {
+                0.0
+            };
 
             TimeOfDayLiquidityBucket {
                 hour,
                 label: format!("{hour:02}:00"),
                 avg_visible_quantity,
                 avg_sell_orders,
-                avg_spread_pct: if spread_values.is_empty() {
-                    None
+                avg_spread_pct: if entry.spread_count > 0 {
+                    Some(entry.spread_sum / entry.spread_count as f64)
                 } else {
-                    Some(spread_values.iter().sum::<f64>() / spread_values.len() as f64)
+                    None
                 },
+                avg_liquidity_score,
+                avg_hourly_volume,
+                sample_count: entry.sample_count.max(entry.volume_sample_count),
+                normalized_liquidity: 0.0,
+                normalized_volume: 0.0,
+                heat_score: 0.0,
             }
         })
         .collect::<Vec<_>>();
 
-    let strongest_window_label = buckets
+    let max_liquidity = raw_buckets
         .iter()
-        .max_by(|left, right| {
-            left.avg_visible_quantity
-                .total_cmp(&right.avg_visible_quantity)
-        })
+        .map(|bucket| bucket.avg_liquidity_score)
+        .reduce(f64::max)
+        .unwrap_or(0.0)
+        .max(0.0);
+    let max_volume = raw_buckets
+        .iter()
+        .map(|bucket| bucket.avg_hourly_volume)
+        .reduce(f64::max)
+        .unwrap_or(0.0)
+        .max(0.0);
+
+    let mut strongest_raw_score = 0.0_f64;
+    for bucket in &mut raw_buckets {
+        bucket.normalized_liquidity = if max_liquidity > 0.0 {
+            (bucket.avg_liquidity_score / max_liquidity).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        bucket.normalized_volume = if max_volume > 0.0 {
+            (bucket.avg_hourly_volume / max_volume).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let raw_score = (bucket.normalized_liquidity * 0.65) + (bucket.normalized_volume * 0.35);
+        strongest_raw_score = strongest_raw_score.max(raw_score);
+        bucket.heat_score = raw_score;
+    }
+
+    for bucket in &mut raw_buckets {
+        bucket.heat_score = if strongest_raw_score > 0.0 {
+            (bucket.heat_score / strongest_raw_score).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    let strongest_window_label = raw_buckets
+        .iter()
+        .max_by(|left, right| left.heat_score.total_cmp(&right.heat_score))
         .map(|bucket| bucket.label.clone());
-    let weakest_window_label = buckets
+    let weakest_window_label = raw_buckets
         .iter()
-        .min_by(|left, right| {
-            left.avg_visible_quantity
-                .total_cmp(&right.avg_visible_quantity)
-        })
+        .min_by(|left, right| left.heat_score.total_cmp(&right.heat_score))
         .map(|bucket| bucket.label.clone());
     let current_hour_label = format!("{:02}:00", now_utc().hour());
-    let confidence_summary = build_time_of_day_confidence(buckets.len(), sample_count);
+    let confidence_summary = build_time_of_day_confidence(populated_bucket_count, total_sample_count);
 
     Ok(TimeOfDayLiquiditySummary {
         current_hour_label,
         strongest_window_label,
         weakest_window_label,
-        buckets,
+        buckets: raw_buckets,
         confidence_summary,
     })
 }
@@ -8810,12 +8927,14 @@ mod tests {
         build_action_card, build_confidence_summary, build_entry_exit_zone_overview,
         build_liquidity_confidence, build_manipulation_risk, build_market_snapshot,
         build_orderbook_pressure, build_relic_roi_score, build_supply_confidence,
-        build_trend_quality_breakdown, chance_for_refinement, compute_pressure_ratio,
+        build_time_of_day_liquidity, build_trend_quality_breakdown, chance_for_refinement,
+        compute_pressure_ratio,
         compute_zone_bands, extract_rank_stat_highlights, initialize_market_observatory_schema,
-        insert_statistics_rows_for_domain, normalize_variant_key, pressure_label, resample_rows,
-        scoped_wfm_coalesce_key, stale_arbitrage_scanner_progress, AnalyticsBucketSizeKey,
-        AnalyticsChartPoint, AnalyticsDomainKey, ArbitrageScannerProgress, InternalStatsRow,
-        MarketConfidenceSummary, MarketSnapshot, RelicRefinementChanceProfile, WfmDetailedOrder,
+        insert_statistics_rows_for_domain, normalize_variant_key, persist_snapshot,
+        pressure_label, resample_rows, scoped_wfm_coalesce_key,
+        stale_arbitrage_scanner_progress, AnalyticsBucketSizeKey, AnalyticsChartPoint,
+        AnalyticsDomainKey, ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary,
+        MarketSnapshot, RelicRefinementChanceProfile, WfmDetailedOrder, WfmStatisticsRowApi,
     };
     use crate::wfm_scheduler::RequestPriority;
     use rusqlite::Connection;
@@ -9441,6 +9560,78 @@ mod tests {
 
         assert_eq!(sparse_confidence.level, "low");
         assert_eq!(dense_confidence.level, "high");
+    }
+
+    #[test]
+    fn time_of_day_liquidity_builds_all_24_hours_with_normalized_heat_scores() {
+        let connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        let item_id = 42_i64;
+        let variant_key = "base";
+        let seller_mode = "ingame";
+        let slug = "test_item";
+        let first_snapshot = sample_snapshot("2026-03-10T00:15:00Z");
+        let second_snapshot = sample_snapshot("2026-03-10T12:30:00Z");
+
+        persist_snapshot(&connection, item_id, slug, variant_key, seller_mode, &first_snapshot)
+            .expect("persist first snapshot");
+        persist_snapshot(&connection, item_id, slug, variant_key, seller_mode, &second_snapshot)
+            .expect("persist second snapshot");
+
+        let stat_rows = vec![
+            InternalStatsRow {
+                bucket_at: super::parse_timestamp("2026-03-10T00:00:00Z").expect("timestamp"),
+                source_kind: "closed".to_string(),
+                volume: 18.0,
+                min_price: Some(10.0),
+                max_price: Some(12.0),
+                open_price: Some(10.0),
+                closed_price: Some(11.0),
+                avg_price: Some(11.0),
+                wa_price: Some(11.0),
+                median: Some(11.0),
+                moving_avg: Some(11.0),
+                donch_top: Some(12.0),
+                donch_bot: Some(10.0),
+            },
+            InternalStatsRow {
+                bucket_at: super::parse_timestamp("2026-03-10T12:00:00Z").expect("timestamp"),
+                source_kind: "closed".to_string(),
+                volume: 36.0,
+                min_price: Some(10.0),
+                max_price: Some(12.0),
+                open_price: Some(10.0),
+                closed_price: Some(11.0),
+                avg_price: Some(11.0),
+                wa_price: Some(11.0),
+                median: Some(11.0),
+                moving_avg: Some(11.0),
+                donch_top: Some(12.0),
+                donch_bot: Some(10.0),
+            },
+        ];
+
+        insert_statistics_rows_for_domain(
+            &connection,
+            item_id,
+            slug,
+            variant_key,
+            "48hours",
+            &stat_rows,
+            "2026-03-10T13:00:00Z",
+        )
+        .expect("insert 48h stats");
+
+        let summary = build_time_of_day_liquidity(&connection, item_id, variant_key, seller_mode)
+            .expect("time of day summary");
+
+        assert_eq!(summary.buckets.len(), 24);
+        assert!(summary.buckets.iter().all(|bucket| (0.0..=1.0).contains(&bucket.heat_score)));
+        assert_eq!(summary.buckets[0].sample_count, 1);
+        assert_eq!(summary.buckets[12].sample_count, 1);
+        assert!(summary.buckets[12].avg_hourly_volume > summary.buckets[0].avg_hourly_volume);
+        assert!(summary.buckets[12].heat_score >= summary.buckets[0].heat_score);
     }
 
     #[test]
