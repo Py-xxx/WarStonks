@@ -166,9 +166,17 @@
   grid-template-columns: minmax(0, 1.18fr) minmax(520px, 1fr);
 }
 
+.screenshot-import-body-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .screenshot-import-left,
 .screenshot-import-right {
   min-width: 0;
+}
+
+.screenshot-import-left-single {
+  width: 100%;
 }
 
 .screenshot-import-toolbar {
@@ -289,6 +297,31 @@
   border: 1px solid rgba(74, 158, 255, 0.16);
   border-radius: 14px;
   background: rgba(10, 14, 22, 0.72);
+}
+
+.screenshot-import-original-preview {
+  display: grid;
+  gap: 12px;
+}
+
+.screenshot-import-original-preview-shell {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(5, 7, 10, 0.92);
+}
+
+.screenshot-import-original-image,
+.screenshot-import-overlay-image {
+  display: block;
+  width: 100%;
+}
+
+.screenshot-import-overlay-image {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 .screenshot-import-mask-copy {

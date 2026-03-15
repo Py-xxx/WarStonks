@@ -9,8 +9,6 @@ import {
 import {
   analyzeSetCompletionInventoryScreenshot,
   getDefaultSetCompletionImportCrop,
-  getDefaultSetCompletionTraceSettings,
-  getSetCompletionImportStrictColors,
   type SetCompletionImportCrop,
   type SetCompletionScreenshotDetectionPreview,
   type SetCompletionScreenshotProgress,
@@ -362,53 +360,25 @@ function SetCompletionScreenshotImportModal({
   fileInputRef,
   previewUrl,
   detectionPreview,
-  crop,
   processing,
   progress,
   errorMessage,
-  traceSettings,
   onClose,
   onPickFile,
-  onCropChange,
-  onTraceSettingsChange,
-  onReprocess,
 }: {
   open: boolean;
   fileInputRef: { current: HTMLInputElement | null };
   previewUrl: string | null;
   detectionPreview: SetCompletionScreenshotDetectionPreview | null;
-  crop: SetCompletionImportCrop;
   processing: boolean;
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
-  traceSettings: SetCompletionTraceSettings;
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
-  onCropChange: (nextCrop: SetCompletionImportCrop) => void;
-  onTraceSettingsChange: (next: SetCompletionTraceSettings) => void;
-  onReprocess: () => Promise<void>;
 }) {
-  const [zoomLevel, setZoomLevel] = useState(3);
-  const [previewFocus, setPreviewFocus] = useState({ x: 0.5, y: 0.5 });
-
-  useEffect(() => {
-    setPreviewFocus({ x: 0.5, y: 0.5 });
-  }, [detectionPreview?.annotatedPreviewDataUrl]);
-
   if (!open) {
     return null;
   }
-  const strictPalette = getSetCompletionImportStrictColors();
-  const handlePreviewPointerMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) {
-      return;
-    }
-    setPreviewFocus({
-      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
-    });
-  };
 
   return (
     <>
@@ -436,8 +406,8 @@ function SetCompletionScreenshotImportModal({
           </div>
         </div>
 
-        <div className="settings-modal-body screenshot-import-body">
-          <div className="settings-form-card screenshot-import-left">
+        <div className="settings-modal-body screenshot-import-body screenshot-import-body-single">
+          <div className="settings-form-card screenshot-import-left screenshot-import-left-single">
             <div className="screenshot-import-example">
               <div className="screenshot-import-example-copy">
                 <span className="panel-title-eyebrow">Example Only</span>
@@ -458,18 +428,9 @@ function SetCompletionScreenshotImportModal({
                 type="button"
                 className="settings-primary-btn"
                 onClick={() => fileInputRef.current?.click()}
+                disabled={processing}
               >
-                Choose Screenshot
-              </button>
-              <button
-                type="button"
-                className="settings-secondary-btn"
-                onClick={() => {
-                  void onReprocess();
-                }}
-                disabled={!previewUrl || processing}
-              >
-                {processing ? 'Scanning…' : 'Run Scan'}
+                {processing ? 'Processing…' : 'Choose Screenshot'}
               </button>
               <input
                 ref={fileInputRef}
@@ -484,11 +445,11 @@ function SetCompletionScreenshotImportModal({
 
             <p className="watchlist-form-note">
               Use a single screenshot from the in-game <strong>Prime Components</strong> tab. This
-              restart is detection-only for now and does not import, OCR, or match any items yet.
+              is detection-only for now and does not import, OCR, or match any items yet.
             </p>
             <p className="watchlist-form-note">
-              Workflow: choose the screenshot, adjust the crop guide, then click <strong>Run Scan</strong>{' '}
-              to generate the annotated detection preview.
+              Workflow: choose the screenshot and the detector will immediately extract the fixed
+              palette, build the overlays, and display them over the original image.
             </p>
 
             {progress ? (
@@ -502,221 +463,28 @@ function SetCompletionScreenshotImportModal({
 
             {previewUrl ? (
               <>
-                <div className="screenshot-import-preview-shell">
-                  <div className="screenshot-import-preview-hitbox">
+                <div className="screenshot-import-original-preview">
+                  <div className="screenshot-import-original-preview-shell">
                     <img
+                      className="screenshot-import-original-image"
                       src={previewUrl}
                       alt="Prime components screenshot preview"
                     />
-                  </div>
-                  <div
-                    className="screenshot-import-crop-overlay"
-                    style={{
-                      left: `${crop.left * 100}%`,
-                      top: `${crop.top * 100}%`,
-                      right: `${crop.right * 100}%`,
-                      bottom: `${crop.bottom * 100}%`,
-                    }}
-                  />
-                </div>
-
-                <div className="screenshot-import-crop-grid">
-                  {(
-                    [
-                      ['left', 'Left'],
-                      ['top', 'Top'],
-                      ['right', 'Right'],
-                      ['bottom', 'Bottom'],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <label key={key} className="settings-field">
-                      <span className="settings-field-label">{label} Crop</span>
-                      <input
-                        type="range"
-                        min={0}
-                        max={key === 'top' || key === 'bottom' ? 25 : 40}
-                        step={1}
-                        value={Math.round(crop[key] * 100)}
-                        onChange={(event) =>
-                          onCropChange({
-                            ...crop,
-                            [key]: Number(event.target.value) / 100,
-                          })
-                        }
-                      />
-                    </label>
-                  ))}
-                </div>
-                <div className="watchlist-form-note">
-                  Adjust the crop only so the blue guide cleanly wraps the fixed 7-column by 3-row
-                  inventory grid.
-                </div>
-                <div className="screenshot-import-mask-preview">
-                  <div className="screenshot-import-mask-copy">
-                    <span className="panel-title-eyebrow">Detection Palette</span>
-                    <strong>Only these colors survive the preview mask</strong>
-                    <span>Fixed tolerance: 4</span>
-                    <div className="screenshot-import-palette-list">
-                      {strictPalette.map((hex) => (
-                        <span key={hex} className="screenshot-import-palette-pill">
-                          <span className="screenshot-import-palette-swatch" style={{ background: hex }} />
-                          {hex}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="screenshot-import-trace-controls">
-                    {(
-                      [
-                        ['smoothness', 'Trace Smoothness', 0, 4],
-                        ['thickness', 'Trace Thickness', 1, 4],
-                        ['noiseCutoff', 'Noise Cutoff', 4, 24],
-                      ] as const
-                    ).map(([key, label, min, max]) => (
-                      <label key={key} className="settings-field screenshot-import-trace-field">
-                        <span className="settings-field-label">
-                          {label}
-                          <span className="screenshot-import-trace-value">{traceSettings[key]}</span>
-                        </span>
-                        <input
-                          type="range"
-                          min={min}
-                          max={max}
-                          step={1}
-                          value={traceSettings[key]}
-                          onChange={(event) =>
-                            onTraceSettingsChange({
-                              ...traceSettings,
-                              [key]: Number(event.target.value),
-                            })
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                  <div className="screenshot-import-mask-image-shell">
                     {detectionPreview ? (
-                      <div className="screenshot-import-preview-grid">
-                        <div
-                          className="screenshot-import-annotated-shell"
-                          onMouseMove={handlePreviewPointerMove}
-                          onClick={handlePreviewPointerMove}
-                        >
-                          <img
-                            className="screenshot-import-mask-image"
-                            src={detectionPreview.annotatedPreviewDataUrl}
-                            alt="Annotated screenshot detection preview"
-                          />
-                          <span
-                            className="screenshot-import-preview-cursor"
-                            style={{
-                              left: `${previewFocus.x * 100}%`,
-                              top: `${previewFocus.y * 100}%`,
-                            }}
-                          />
-                        </div>
-                        <div className="screenshot-import-zoom-panel">
-                          <div className="screenshot-import-zoom-head">
-                            <span className="panel-title-eyebrow">Zoomed Preview</span>
-                            <span className="screenshot-import-trace-value">{zoomLevel.toFixed(1)}x</span>
-                          </div>
-                          <div className="screenshot-import-zoom-shell">
-                            <div
-                              className="screenshot-import-zoom-image"
-                              style={{
-                                backgroundImage: `url(${detectionPreview.annotatedPreviewDataUrl})`,
-                                backgroundSize: `${zoomLevel * 100}%`,
-                                backgroundPosition: `${previewFocus.x * 100}% ${previewFocus.y * 100}%`,
-                              }}
-                            />
-                            <span className="screenshot-import-zoom-crosshair" />
-                          </div>
-                          <label className="settings-field screenshot-import-trace-field">
-                            <span className="settings-field-label">
-                              Zoom
-                              <span className="screenshot-import-trace-value">{zoomLevel.toFixed(1)}x</span>
-                            </span>
-                            <input
-                              type="range"
-                              min={2}
-                              max={30}
-                              step={0.5}
-                              value={zoomLevel}
-                              onChange={(event) => setZoomLevel(Number(event.target.value))}
-                            />
-                          </label>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="watchlist-form-note">
-                        The annotated masked preview will appear here after you run the detector.
-                      </div>
-                    )}
+                      <img
+                        className="screenshot-import-overlay-image"
+                        src={detectionPreview.annotatedPreviewDataUrl}
+                        alt="Detection overlay preview"
+                      />
+                    ) : null}
                   </div>
                 </div>
               </>
             ) : (
               <div className="opportunities-placeholder">
-                Choose a screenshot first, then manually crop it before running the detector on up
-                to 21 visible prime components.
+                Choose a screenshot first to generate the overlay preview on the original image.
               </div>
             )}
-          </div>
-
-          <div className="settings-form-card screenshot-import-right">
-            <div className="screenshot-import-summary">
-              <div>
-                <span className="panel-title-eyebrow">Detection Summary</span>
-                <h3>{detectionPreview ? `${detectionPreview.detectedItemCount} item cells detected` : 'No preview generated yet'}</h3>
-              </div>
-              <div className="scanner-run-summary">
-                <span className="scanner-run-pill scanner-run-pill-red">
-                  {detectionPreview?.detectedItemCount ?? 0} ITEMS
-                </span>
-                <span className="scanner-run-pill scanner-run-pill-blue">
-                  {detectionPreview?.nameCount ?? 0} NAMES
-                </span>
-                <span className="scanner-run-pill scanner-run-pill-green">
-                  {detectionPreview?.quantityCount ?? 0} QTY
-                </span>
-              </div>
-            </div>
-
-            <div className="screenshot-import-summary-panel">
-              {detectionPreview ? (
-                <>
-                  <div className="watchlist-form-note">
-                    The preview shows the masked image with overlay boxes:
-                  </div>
-                  <div className="screenshot-import-legend">
-                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red">Red: item cell</span>
-                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-blue">Blue: item name</span>
-                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-green">Green: quantity</span>
-                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red-trace">Red trace: letters</span>
-                  </div>
-                  <div className="watchlist-form-note">
-                    OCR and import are disabled. This panel now only shows the masked preview, the
-                    detected overlay boxes, and the configurable red letter trace inside each blue
-                    text box.
-                  </div>
-                </>
-              ) : (
-                <div className="watchlist-form-note">
-                  Run the detector to generate the annotated preview and the detection overlays.
-                </div>
-              )}
-            </div>
-
-            <div className="settings-nav-footer screenshot-import-footer">
-              <button
-                type="button"
-                className="settings-secondary-btn"
-                onClick={onClose}
-                disabled={processing}
-              >
-                Close
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -748,13 +516,7 @@ export function OpportunitiesPage() {
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
   const [plannerTargetInputs, setPlannerTargetInputs] = useState<Record<string, string>>({});
   const [screenshotImportOpen, setScreenshotImportOpen] = useState(false);
-  const [screenshotImportCrop, setScreenshotImportCrop] = useState<SetCompletionImportCrop>(
-    getDefaultSetCompletionImportCrop,
-  );
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
-  const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
-  const [screenshotImportTraceSettings, setScreenshotImportTraceSettings] =
-    useState<SetCompletionTraceSettings>(getDefaultSetCompletionTraceSettings);
   const [screenshotImportDetectionPreview, setScreenshotImportDetectionPreview] =
     useState<SetCompletionScreenshotDetectionPreview | null>(null);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
@@ -762,6 +524,15 @@ export function OpportunitiesPage() {
     useState<SetCompletionScreenshotProgress | null>(null);
   const [screenshotImportError, setScreenshotImportError] = useState<string | null>(null);
   const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const screenshotImportTraceSettings = useMemo<SetCompletionTraceSettings>(
+    () => ({
+      smoothness: 4,
+      thickness: 3,
+      noiseCutoff: 10,
+    }),
+    [],
+  );
 
   const setActivePage = useAppStore((state) => state.setActivePage);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
@@ -1135,8 +906,6 @@ export function OpportunitiesPage() {
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
-    setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
-    setScreenshotImportFile(null);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1201,41 +970,17 @@ export function OpportunitiesPage() {
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
-    setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
-    setScreenshotImportTraceSettings(getDefaultSetCompletionTraceSettings());
-    setScreenshotImportFile(file);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
       }
       return previewUrl;
     });
-  };
-
-  const reprocessScreenshotImport = async () => {
-    if (!screenshotImportFile) {
-      return;
-    }
-    const previewUrl = screenshotImportPreviewUrl ?? URL.createObjectURL(screenshotImportFile);
     await processScreenshotImportFile(
-      screenshotImportFile,
-      screenshotImportCrop,
+      file,
+      getDefaultSetCompletionImportCrop(),
       previewUrl,
     );
-  };
-
-  const handleScreenshotImportCropChange = (nextCrop: SetCompletionImportCrop) => {
-    setScreenshotImportCrop(nextCrop);
-    setScreenshotImportDetectionPreview(null);
-    setScreenshotImportError(null);
-    setScreenshotImportProgress(null);
-  };
-
-  const handleScreenshotImportTraceSettingsChange = (next: SetCompletionTraceSettings) => {
-    setScreenshotImportTraceSettings(next);
-    setScreenshotImportDetectionPreview(null);
-    setScreenshotImportError(null);
-    setScreenshotImportProgress(null);
   };
 
   const handlePlannerTargetChange = (
@@ -1911,16 +1656,11 @@ export function OpportunitiesPage() {
         fileInputRef={screenshotFileInputRef}
         previewUrl={screenshotImportPreviewUrl}
         detectionPreview={screenshotImportDetectionPreview}
-        crop={screenshotImportCrop}
         processing={screenshotImportProcessing}
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
-        traceSettings={screenshotImportTraceSettings}
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
-        onCropChange={handleScreenshotImportCropChange}
-        onTraceSettingsChange={handleScreenshotImportTraceSettingsChange}
-        onReprocess={reprocessScreenshotImport}
       />
     </>
   );
