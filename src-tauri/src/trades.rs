@@ -26,10 +26,7 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::wfm_scheduler::{
-    acquire_wfm_slot, execute_coalesced_wfm_request, record_wfm_response, RequestPriority,
-    WfmHttpResponse,
-};
+use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
@@ -1192,6 +1189,16 @@ fn execute_wfm_bytes_request(
             .with_context(|| format!("failed to {}", action_label_owned))?;
         let status = response.status();
         let retry_after = parse_retry_after_seconds(response.headers());
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+            })
+            .collect();
         let body = response
             .bytes()
             .with_context(|| format!("failed to read {} response body", action_label_owned))?
@@ -1200,6 +1207,7 @@ fn execute_wfm_bytes_request(
             status: status.as_u16(),
             body,
             retry_after,
+            headers,
         })
     })
 }
@@ -1208,29 +1216,12 @@ fn execute_wfm_request_with_priority(
     builder: reqwest::blocking::RequestBuilder,
     action_label: &str,
     priority: RequestPriority,
-) -> Result<reqwest::blocking::Response> {
-    acquire_wfm_slot(priority, action_label);
-    let response = builder
-        .send()
-        .with_context(|| format!("failed to {action_label}"))?;
-
-    let retry_after = parse_retry_after_seconds(response.headers());
-    record_wfm_response(response.status().as_u16(), retry_after, action_label);
-
-    if response.status().is_success() {
+) -> Result<WfmHttpResponse> {
+    let response = execute_wfm_bytes_request(builder, priority, action_label, None)?;
+    if response.status >= 200 && response.status < 300 {
         return Ok(response);
     }
-
-    let status = response.status();
-    let body = response.text().unwrap_or_default();
-    let trimmed_body = body.trim();
-    if trimmed_body.is_empty() {
-        return Err(anyhow!("{action_label} failed with status {status}"));
-    }
-
-    Err(anyhow!(
-        "{action_label} failed with status {status}: {trimmed_body}"
-    ))
+    Err(extract_wfm_bytes_error(action_label, &response))
 }
 
 fn extract_wfm_bytes_error(action_label: &str, response: &WfmHttpResponse) -> anyhow::Error {
@@ -5317,9 +5308,9 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     )?;
 
     let auth_header = response
-        .headers()
-        .get("Authorization")
-        .and_then(|value| value.to_str().ok())
+        .headers
+        .get("authorization")
+        .map(String::as_str)
         .ok_or_else(|| anyhow!("WFM sign-in succeeded but did not return an auth token"))?
         .to_string();
 
