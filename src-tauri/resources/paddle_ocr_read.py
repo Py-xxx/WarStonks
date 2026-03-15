@@ -38,10 +38,18 @@ def crop_box(image: Image.Image, box: dict[str, int] | None) -> Image.Image | No
 def crop_quantity_box(image: Image.Image, box: dict[str, int] | None) -> Image.Image | None:
     if not box:
         return None
-    left = max(0, int(box["x"]) + 3)
-    top = max(0, int(box["y"]) - 6)
-    right = min(image.width, max(left + 1, int(box["x"]) + int(box["width"]) + 10))
-    bottom = min(image.height, max(top + 1, int(box["y"]) + int(box["height"]) + 6))
+    width = int(box["width"])
+    height = int(box["height"])
+    left = max(0, int(box["x"]) + max(2, round(width * 0.12)))
+    top = max(0, int(box["y"]) - max(6, round(height * 0.2)))
+    right = min(
+        image.width,
+        max(left + 1, int(box["x"]) + width + max(12, round(width * 0.7))),
+    )
+    bottom = min(
+        image.height,
+        max(top + 1, int(box["y"]) + height + max(6, round(height * 0.2))),
+    )
     return image.crop((left, top, right, bottom))
 
 
@@ -189,9 +197,38 @@ def build_quantity_text(segments: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def prepare_quantity_image(image: Image.Image | None) -> Image.Image | None:
+    if image is None:
+        return None
+    grayscale = image.convert("L")
+    thresholded = grayscale.point(lambda value: 255 if value > 96 else 0, mode="L")
+    width, height = thresholded.size
+    return thresholded.resize((max(1, width * 4), max(1, height * 4)), Image.Resampling.NEAREST)
+
+
 def run_ocr(ocr: PaddleOCR, image: Image.Image | None, mode: str) -> str | None:
     if image is None:
         return None
+    if mode == "quantity":
+        quantity_variants = [image, prepare_quantity_image(image)]
+        for variant in quantity_variants:
+            if variant is None:
+                continue
+            array = np.array(variant.convert("RGB"))
+            result = None
+            if hasattr(ocr, "ocr"):
+                try:
+                    result = ocr.ocr(array, cls=False)
+                except TypeError:
+                    result = ocr.ocr(array)
+            if result is None and hasattr(ocr, "predict"):
+                result = ocr.predict(array)
+            segments = parse_recognition_segments(result)
+            quantity_text = build_quantity_text(segments)
+            if quantity_text:
+                return quantity_text
+        return None
+
     array = np.array(image.convert("RGB"))
     result = None
     if hasattr(ocr, "ocr"):
@@ -202,8 +239,6 @@ def run_ocr(ocr: PaddleOCR, image: Image.Image | None, mode: str) -> str | None:
     if result is None and hasattr(ocr, "predict"):
         result = ocr.predict(array)
     segments = parse_recognition_segments(result)
-    if mode == "quantity":
-        return build_quantity_text(segments)
     return build_name_text(segments)
 
 
