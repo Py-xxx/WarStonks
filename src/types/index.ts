@@ -904,6 +904,12 @@ export interface TimeOfDayLiquidityBucket {
   avgVisibleQuantity: number;
   avgSellOrders: number;
   avgSpreadPct: number | null;
+  avgLiquidityScore: number;
+  avgHourlyVolume: number;
+  sampleCount: number;
+  normalizedLiquidity: number;
+  normalizedVolume: number;
+  heatScore: number;
 }
 
 export interface TimeOfDayLiquiditySummary {

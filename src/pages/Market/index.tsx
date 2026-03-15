@@ -15,6 +15,7 @@ import type {
   ItemAnalyticsResponse,
   ItemDetailSummary,
   MarketConfidenceSummary,
+  TimeOfDayLiquidityBucket,
   WfmAutocompleteItem,
 } from '../../types';
 
@@ -74,6 +75,21 @@ interface ChartSeriesOption {
   key: ChartSeriesKey;
   label: string;
   colorClass: string;
+}
+
+interface LocalTimeOfDayBucket extends TimeOfDayLiquidityBucket {
+  localHour: number;
+  localLabel: string;
+  isCurrentHour: boolean;
+  inStrongestWindow: boolean;
+  inWeakestWindow: boolean;
+}
+
+interface TimeOfDayDisplayModel {
+  buckets: LocalTimeOfDayBucket[];
+  currentHourLabel: string;
+  strongestWindowLabel: string | null;
+  weakestWindowLabel: string | null;
 }
 
 function createRevealState<T extends string>(keys: readonly T[]): Record<T, boolean> {
@@ -919,6 +935,127 @@ function formatDropChancePercent(value: number | null | undefined): string {
   }
 
   return `${formatNumber(percentValue, digits)}%`;
+}
+
+function formatHourLabel(hour: number): string {
+  return `${hour.toString().padStart(2, '0')}:00`;
+}
+
+function toLocalHourFromUtcHour(utcHour: number): number {
+  const now = new Date();
+  const localDate = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      utcHour,
+      0,
+      0,
+      0,
+    ),
+  );
+
+  return localDate.getHours();
+}
+
+function buildWindowLabel(startHour: number, windowSize: number): string {
+  const endHour = (startHour + windowSize - 1) % 24;
+  return `${formatHourLabel(startHour)} - ${formatHourLabel(endHour)}`;
+}
+
+function findBestTimeWindow(
+  buckets: LocalTimeOfDayBucket[],
+  windowSize: number,
+  direction: 'max' | 'min',
+): { startHour: number; label: string } | null {
+  if (buckets.length === 0) {
+    return null;
+  }
+
+  let selectedStart = 0;
+  let selectedScore = direction === 'max' ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+
+  for (let start = 0; start < buckets.length; start += 1) {
+    const windowBuckets = Array.from({ length: windowSize }, (_, offset) => buckets[(start + offset) % buckets.length]);
+    const windowScore =
+      windowBuckets.reduce((total, bucket) => total + bucket.heatScore, 0) / windowBuckets.length;
+
+    if (
+      (direction === 'max' && windowScore > selectedScore) ||
+      (direction === 'min' && windowScore < selectedScore)
+    ) {
+      selectedScore = windowScore;
+      selectedStart = start;
+    }
+  }
+
+  return {
+    startHour: buckets[selectedStart]?.localHour ?? 0,
+    label: buildWindowLabel(buckets[selectedStart]?.localHour ?? 0, windowSize),
+  };
+}
+
+function buildTimeOfDayDisplayModel(
+  summary: ItemAnalysisResponse['timeOfDayLiquidity'] | null | undefined,
+): TimeOfDayDisplayModel {
+  const rawBuckets = summary?.buckets ?? [];
+  const localHourMap = new Map<number, TimeOfDayLiquidityBucket>();
+
+  rawBuckets.forEach((bucket) => {
+    localHourMap.set(toLocalHourFromUtcHour(bucket.hour), bucket);
+  });
+
+  const currentLocalHour = new Date().getHours();
+  const buckets = Array.from({ length: 24 }, (_, localHour) => {
+    const bucket = localHourMap.get(localHour);
+    return {
+      hour: bucket?.hour ?? localHour,
+      label: bucket?.label ?? formatHourLabel(localHour),
+      avgVisibleQuantity: bucket?.avgVisibleQuantity ?? 0,
+      avgSellOrders: bucket?.avgSellOrders ?? 0,
+      avgSpreadPct: bucket?.avgSpreadPct ?? null,
+      avgLiquidityScore: bucket?.avgLiquidityScore ?? 0,
+      avgHourlyVolume: bucket?.avgHourlyVolume ?? 0,
+      sampleCount: bucket?.sampleCount ?? 0,
+      normalizedLiquidity: bucket?.normalizedLiquidity ?? 0,
+      normalizedVolume: bucket?.normalizedVolume ?? 0,
+      heatScore: bucket?.heatScore ?? 0,
+      localHour,
+      localLabel: formatHourLabel(localHour),
+      isCurrentHour: localHour === currentLocalHour,
+      inStrongestWindow: false,
+      inWeakestWindow: false,
+    };
+  });
+
+  const hasAnyData = buckets.some((bucket) => bucket.sampleCount > 0 || bucket.avgHourlyVolume > 0);
+  const strongestWindow = hasAnyData ? findBestTimeWindow(buckets, 3, 'max') : null;
+  const weakestWindow = hasAnyData ? findBestTimeWindow(buckets, 3, 'min') : null;
+
+  if (strongestWindow) {
+    for (let offset = 0; offset < 3; offset += 1) {
+      const index = (strongestWindow.startHour + offset) % 24;
+      if (buckets[index]) {
+        buckets[index].inStrongestWindow = true;
+      }
+    }
+  }
+
+  if (weakestWindow) {
+    for (let offset = 0; offset < 3; offset += 1) {
+      const index = (weakestWindow.startHour + offset) % 24;
+      if (buckets[index]) {
+        buckets[index].inWeakestWindow = true;
+      }
+    }
+  }
+
+  return {
+    buckets,
+    currentHourLabel: formatHourLabel(currentLocalHour),
+    strongestWindowLabel: strongestWindow?.label ?? null,
+    weakestWindowLabel: weakestWindow?.label ?? null,
+  };
 }
 
 function formatRelativeTimestamp(value: string | null | undefined): string {
@@ -1972,10 +2109,7 @@ function AnalysisTab() {
       : getRiskTone(analysis?.manipulationRisk.riskLevel) === 'green'
         ? 0.18
         : 0.35;
-  const maxTimeOfDayQuantity = Math.max(
-    ...(analysis?.timeOfDayLiquidity.buckets ?? []).map((bucket) => bucket.avgVisibleQuantity ?? 0),
-    1,
-  );
+  const timeOfDayDisplay = buildTimeOfDayDisplayModel(analysis?.timeOfDayLiquidity);
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
@@ -2573,41 +2707,46 @@ function AnalysisTab() {
             loading={!revealedPanels.timeOfDay && !analysisError}
             errorMessage={!revealedPanels.timeOfDay ? analysisError : null}
             loadingLabel="Aggregating observatory tape"
-            className="market-panel-tone-blue"
-            headerAside={
-              <div className="market-badge-stack">
-                <span className="market-panel-badge tone-blue">
-                  {analysis?.timeOfDayLiquidity.strongestWindowLabel ?? 'Building'}
-                </span>
-                <ConfidenceBadge confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
-              </div>
-            }
-          >
+              className="market-panel-tone-blue"
+              headerAside={
+                <div className="market-badge-stack">
+                  <span className="market-panel-badge tone-blue">
+                    {timeOfDayDisplay.strongestWindowLabel ?? 'Building'}
+                  </span>
+                  <ConfidenceBadge confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
+                </div>
+              }
+            >
             <div className="market-pressure-row">
               <div>
                 <span className="market-copy-title">Current Hour</span>
-                <span>{analysis?.timeOfDayLiquidity.currentHourLabel ?? '—'}</span>
+                <span>{timeOfDayDisplay.currentHourLabel}</span>
               </div>
               <div>
                 <span className="market-copy-title">Strongest Window</span>
-                <span>{analysis?.timeOfDayLiquidity.strongestWindowLabel ?? '—'}</span>
+                <span>{timeOfDayDisplay.strongestWindowLabel ?? '—'}</span>
               </div>
               <div>
                 <span className="market-copy-title">Weakest Window</span>
-                <span>{analysis?.timeOfDayLiquidity.weakestWindowLabel ?? '—'}</span>
+                <span>{timeOfDayDisplay.weakestWindowLabel ?? '—'}</span>
               </div>
             </div>
             <div className="market-time-grid market-time-heat-grid">
-              {(analysis?.timeOfDayLiquidity.buckets ?? []).map((bucket) => (
+              {timeOfDayDisplay.buckets.map((bucket) => (
                 <div
-                  key={bucket.hour}
-                  className="market-time-card market-time-card-heat"
-                  style={{ '--heat-strength': `${Math.round(((bucket.avgVisibleQuantity ?? 0) / maxTimeOfDayQuantity) * 100)}%` } as CSSProperties}
+                  key={bucket.localHour}
+                  className={`market-time-card market-time-card-heat${bucket.isCurrentHour ? ' is-current' : ''}${bucket.inStrongestWindow ? ' is-strongest' : ''}${bucket.inWeakestWindow ? ' is-weakest' : ''}`}
+                  style={{ '--heat-strength': `${Math.round((bucket.heatScore ?? 0) * 100)}%` } as CSSProperties}
+                  title={[
+                    bucket.localLabel,
+                    `Heat ${formatPercent((bucket.heatScore ?? 0) * 100)}`,
+                    `Liquidity ${formatPercent(bucket.avgLiquidityScore)}`,
+                    `Volume ${formatNumber(bucket.avgHourlyVolume, 0)}`,
+                    `Visible Qty ${formatNumber(bucket.avgVisibleQuantity, 0)}`,
+                  ].join('\n')}
                 >
-                  <span className="market-copy-title">{bucket.label}</span>
-                  <span>{formatNumber(bucket.avgVisibleQuantity, 0)} visible qty</span>
-                  <span>{formatNumber(bucket.avgSellOrders, 1)} avg sell orders</span>
-                  <span>Spread {formatPercent(bucket.avgSpreadPct)}</span>
+                  <span className="market-copy-title">{bucket.localLabel}</span>
+                  <span className="market-time-heat-score">{Math.round((bucket.heatScore ?? 0) * 100)}%</span>
                 </div>
               ))}
             </div>
