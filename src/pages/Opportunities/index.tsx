@@ -11,7 +11,6 @@ import {
 import {
   getDefaultSetCompletionImportCrop,
   processSetCompletionInventoryScreenshot,
-  sampleSetCompletionImportColorAtPoint,
   suggestSetCompletionImportColorSample,
   type SetCompletionImportColorSample,
   type SetCompletionImportCrop,
@@ -97,6 +96,8 @@ type ScreenshotImportPreviewRow = SetCompletionScreenshotOcrRow & {
   removed: boolean;
   remapQuery: string;
 };
+
+const SCREENSHOT_IMPORT_ZOOM_SCALE = 1700;
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -212,6 +213,34 @@ function filterPlannerCandidates(
   return candidates
     .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
     .slice(0, 6);
+}
+
+function sampleColorFromPreviewImage(
+  image: HTMLImageElement,
+  x: number,
+  y: number,
+): SetCompletionImportColorSample | null {
+  const sampleX = Math.max(0, Math.min(image.naturalWidth - 1, Math.round(x * image.naturalWidth)));
+  const sampleY = Math.max(0, Math.min(image.naturalHeight - 1, Math.round(y * image.naturalHeight)));
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return null;
+  }
+  context.drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight);
+  const { data } = context.getImageData(sampleX, sampleY, 1, 1);
+  return {
+    x,
+    y,
+    red: data[0],
+    green: data[1],
+    blue: data[2],
+    hex: `#${[data[0], data[1], data[2]]
+      .map((value) => value.toString(16).padStart(2, '0'))
+      .join('')}`,
+  };
 }
 
 function formatPlat(value: number | null | undefined): string {
@@ -526,7 +555,7 @@ function SetCompletionScreenshotImportModal({
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onCropChange: (nextCrop: SetCompletionImportCrop) => void;
-  onSelectColorSample: (x: number, y: number) => Promise<void>;
+  onSelectColorSample: (sample: SetCompletionImportColorSample) => void;
   onReprocess: () => Promise<void>;
   onToggleRemove: (rowId: string) => void;
   onRemapQueryChange: (rowId: string, value: string) => void;
@@ -535,9 +564,40 @@ function SetCompletionScreenshotImportModal({
   onToggleDebugRow: (rowId: string) => void;
   onApply: () => Promise<void>;
 }) {
+  const previewImageRef = useRef<HTMLImageElement | null>(null);
+  const [zoomDragging, setZoomDragging] = useState(false);
+  const zoomDraggingRef = useRef(false);
+
   if (!open) {
     return null;
   }
+
+  const updateSampleFromPreviewPoint = (x: number, y: number) => {
+    const image = previewImageRef.current;
+    if (!image) {
+      return;
+    }
+    const sample = sampleColorFromPreviewImage(image, x, y);
+    if (sample) {
+      onSelectColorSample(sample);
+    }
+  };
+
+  const updateSampleFromZoomEvent = (event: {
+    currentTarget: HTMLDivElement;
+    clientX: number;
+    clientY: number;
+  }) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const currentX = colorSample?.x ?? 0.5;
+    const currentY = colorSample?.y ?? 0.5;
+    const deltaX = (event.clientX - rect.left - rect.width / 2) / (rect.width * (SCREENSHOT_IMPORT_ZOOM_SCALE / 100));
+    const deltaY = (event.clientY - rect.top - rect.height / 2) / (rect.height * (SCREENSHOT_IMPORT_ZOOM_SCALE / 100));
+    updateSampleFromPreviewPoint(
+      Math.max(0, Math.min(1, currentX + deltaX)),
+      Math.max(0, Math.min(1, currentY + deltaY)),
+    );
+  };
 
   return (
     <>
@@ -639,10 +699,14 @@ function SetCompletionScreenshotImportModal({
                       const rect = event.currentTarget.getBoundingClientRect();
                       const x = (event.clientX - rect.left) / rect.width;
                       const y = (event.clientY - rect.top) / rect.height;
-                      void onSelectColorSample(x, y);
+                      updateSampleFromPreviewPoint(x, y);
                     }}
                   >
-                    <img src={previewUrl} alt="Prime components screenshot preview" />
+                    <img
+                      ref={previewImageRef}
+                      src={previewUrl}
+                      alt="Prime components screenshot preview"
+                    />
                   </button>
                   <div
                     className="screenshot-import-crop-overlay"
@@ -706,10 +770,31 @@ function SetCompletionScreenshotImportModal({
                   </div>
                   <div className="screenshot-import-color-picker-row">
                     <div
-                      className="screenshot-import-zoom-preview"
+                      className={`screenshot-import-zoom-preview${zoomDragging ? ' dragging' : ''}`}
                       style={{
                         backgroundImage: `url(${previewUrl})`,
                         backgroundPosition: `${(colorSample?.x ?? 0.5) * 100}% ${(colorSample?.y ?? 0.5) * 100}%`,
+                        backgroundSize: `${SCREENSHOT_IMPORT_ZOOM_SCALE}%`,
+                      }}
+                      onPointerDown={(event) => {
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        zoomDraggingRef.current = true;
+                        setZoomDragging(true);
+                        updateSampleFromZoomEvent(event);
+                      }}
+                      onPointerMove={(event) => {
+                        if (!zoomDraggingRef.current) {
+                          return;
+                        }
+                        updateSampleFromZoomEvent(event);
+                      }}
+                      onPointerUp={() => {
+                        zoomDraggingRef.current = false;
+                        setZoomDragging(false);
+                      }}
+                      onPointerCancel={() => {
+                        zoomDraggingRef.current = false;
+                        setZoomDragging(false);
                       }}
                     >
                       <div className="screenshot-import-zoom-crosshair" />
@@ -1445,22 +1530,12 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
   };
 
-  const handleScreenshotImportColorSampleSelect = async (x: number, y: number) => {
-    if (!screenshotImportFile) {
-      return;
-    }
-    try {
-      const sample = await sampleSetCompletionImportColorAtPoint(screenshotImportFile, x, y);
-      if (sample) {
-        setScreenshotImportColorSample(sample);
-        setScreenshotImportRows([]);
-        setScreenshotImportError(null);
-        setScreenshotImportProgress(null);
-        setExpandedImportDebugRowId(null);
-      }
-    } catch (error) {
-      setScreenshotImportError(toErrorMessage(error));
-    }
+  const handleScreenshotImportColorSampleSelect = (sample: SetCompletionImportColorSample) => {
+    setScreenshotImportColorSample(sample);
+    setScreenshotImportRows([]);
+    setScreenshotImportError(null);
+    setScreenshotImportProgress(null);
+    setExpandedImportDebugRowId(null);
   };
 
   const updateScreenshotImportRow = (
