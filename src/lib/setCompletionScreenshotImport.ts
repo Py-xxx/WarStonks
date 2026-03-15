@@ -392,7 +392,8 @@ function analyzeTileMask(
     nameBox,
     quantityBox,
   });
-  applyLetterTraceOverlay(previewCanvas, tileMask, nameBox, traceSettings);
+  applyTraceOverlay(previewCanvas, tileMask, nameBox, traceSettings);
+  applyTraceOverlay(previewCanvas, tileMask, quantityBox, traceSettings);
   const detected = nameBox !== null || quantityBox !== null;
   return {
     detected,
@@ -700,22 +701,22 @@ function cleanupPreviewMask(
   return canvas;
 }
 
-function applyLetterTraceOverlay(
+function applyTraceOverlay(
   previewCanvas: HTMLCanvasElement,
   sourceMask: HTMLCanvasElement,
-  nameBox: SetCompletionDetectionBox | null,
+  traceBox: SetCompletionDetectionBox | null,
   traceSettings: SetCompletionTraceSettings,
 ): void {
-  if (!nameBox) {
+  if (!traceBox) {
     return;
   }
 
   const traceRegion = extractPixelCanvas(
     sourceMask,
-    nameBox.x,
-    nameBox.y,
-    nameBox.width,
-    nameBox.height,
+    traceBox.x,
+    traceBox.y,
+    traceBox.width,
+    traceBox.height,
   );
   const tracePixels = extractBinaryPixels(traceRegion);
   const filteredPixels = filterTracePixels(
@@ -729,8 +730,8 @@ function applyLetterTraceOverlay(
     filteredPixels,
     traceRegion.width,
     traceRegion.height,
-    nameBox.x,
-    nameBox.y,
+    traceBox.x,
+    traceBox.y,
     traceSettings.thickness,
   );
 }
