@@ -612,7 +612,7 @@ function SetCompletionScreenshotImportModal({
                           .sort((left, right) => left.tileIndex - right.tileIndex)
                           .map((reading) => (
                             <li key={reading.rowId}>
-                              <strong>{reading.detectedText || 'Unreadable text'}</strong>
+                              <strong>{reading.detectedText || 'No text detected'}</strong>
                               {reading.detectedQuantity ? ` · Qty ${reading.detectedQuantity}` : ''}
                             </li>
                           ))}
