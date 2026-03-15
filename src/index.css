@@ -7265,8 +7265,10 @@ body {
 .market-time-card-heat {
   position: relative;
   overflow: hidden;
-  min-height: 62px;
-  justify-content: space-between;
+  min-height: 36px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 8px;
   transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
   background:
     linear-gradient(
@@ -7280,14 +7282,20 @@ body {
 .market-time-card-heat::after {
   content: '';
   position: absolute;
-  inset: auto 0 0 0;
-  height: 4px;
-  background: linear-gradient(90deg, rgba(72, 200, 255, 0.72), rgba(116, 237, 177, 0.95));
-  width: var(--heat-strength, 0%);
+  inset: 0;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(72, 200, 255, calc(var(--heat-strength, 0%) / 150)),
+      rgba(116, 237, 177, calc(var(--heat-strength, 0%) / 105))
+    );
+  opacity: 1;
 }
 
 .market-time-heat-grid {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 4px;
 }
 
 .market-time-card-heat:hover {
@@ -7308,11 +7316,23 @@ body {
   border-color: rgba(255, 166, 107, 0.34);
 }
 
-.market-time-heat-score {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+.market-time-axis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
   color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.market-time-axis span:nth-child(2),
+.market-time-axis span:nth-child(3) {
+  text-align: center;
+}
+
+.market-time-axis span:last-child {
+  text-align: right;
 }
 
 .market-component-list {
@@ -7481,13 +7501,13 @@ body {
   }
 
   .market-time-heat-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(12, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 860px) {
   .market-time-heat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
   }
 
   .market-component-card {
