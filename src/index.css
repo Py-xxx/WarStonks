@@ -174,7 +174,14 @@
 .screenshot-import-toolbar {
   display: flex;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.screenshot-import-toolbar .settings-primary-btn,
+.screenshot-import-toolbar .settings-secondary-btn {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .screenshot-import-file-input {
