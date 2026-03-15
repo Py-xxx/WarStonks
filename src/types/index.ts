@@ -994,6 +994,7 @@ export interface SetComponentAnalysisEntry {
   slug: string;
   name: string;
   imagePath: string | null;
+  quantityInSet: number;
   currentLowestPrice: number | null;
   recommendedEntryPrice: number | null;
   variantKey: string;
