@@ -2235,27 +2235,35 @@ fn build_statistics_price_model(
     let current_stats_price =
         latest_live_sell_reference_price(connection, item_id, variant_key)?.map(round_platinum);
     let (liquidity_score, sale_state) = score_stats_liquidity(&closed_rows);
+    let recommended_entry_price = recommended_entry_price_from_zone(zone_bands.as_ref());
+    let shared_exit_pricing = build_shared_exit_pricing(
+        recommended_entry_price,
+        &closed_rows,
+        zone_bands.as_ref(),
+        None,
+        None,
+        &[],
+    );
 
     Ok(Some(ScannerPriceModel {
-        entry_low: zone_bands
+        entry_low: shared_exit_pricing
+            .zone_bands
             .as_ref()
             .map(|entry| round_platinum(entry.entry_low)),
-        entry_high: zone_bands
+        entry_high: shared_exit_pricing
+            .zone_bands
             .as_ref()
             .map(|entry| round_platinum(entry.entry_high)),
-        recommended_entry_price: recommended_entry_price_from_zone(zone_bands.as_ref()),
-        exit_low: zone_bands
+        recommended_entry_price,
+        exit_low: shared_exit_pricing
+            .zone_bands
             .as_ref()
             .map(|entry| round_platinum(entry.exit_low)),
-        exit_high: zone_bands
+        exit_high: shared_exit_pricing
+            .zone_bands
             .as_ref()
             .map(|entry| round_platinum(entry.exit_high)),
-        recommended_exit_price: historical_recommended_exit_price(
-            recommended_entry_price_from_zone(zone_bands.as_ref()),
-            &closed_rows,
-            zone_bands.as_ref(),
-            None,
-        ),
+        recommended_exit_price: shared_exit_pricing.recommended_exit_price,
         current_stats_price,
         liquidity_score,
         sale_state,
@@ -3335,6 +3343,12 @@ struct HistoricalExitProfile {
     relative_volume: Option<f64>,
 }
 
+#[derive(Debug, Clone)]
+struct SharedExitPricing {
+    zone_bands: Option<ZoneBands>,
+    recommended_exit_price: Option<f64>,
+}
+
 fn round_platinum(value: f64) -> f64 {
     value.round()
 }
@@ -3728,6 +3742,101 @@ fn choose_live_exit_percentile(snapshot: &MarketSnapshot, liquidity_score: f64) 
     }
 
     percentile.clamp(25.0, 58.0)
+}
+
+fn live_exit_cap_price(
+    snapshot: Option<&MarketSnapshot>,
+    sell_orders: &[WfmDetailedOrder],
+) -> Option<f64> {
+    let snapshot = snapshot?;
+    let liquidity_score = liquidity_score_percent(snapshot);
+    let live_percentile = choose_live_exit_percentile(snapshot, liquidity_score);
+    let live_target = weighted_sell_percentile_price(sell_orders, live_percentile)?;
+    let execution_cushion = if snapshot.sell_order_count < 10 {
+        1.0
+    } else if snapshot.sell_order_count < 24 {
+        2.0
+    } else {
+        3.0
+    };
+
+    Some(round_platinum(live_target + execution_cushion))
+}
+
+fn align_exit_zone_bands_to_target(
+    zone_bands: &ZoneBands,
+    exit_target: f64,
+    live_cap: Option<f64>,
+) -> ZoneBands {
+    let half_width = ((zone_bands.exit_high - zone_bands.exit_low) / 2.0)
+        .ceil()
+        .max(1.0);
+    let min_exit_low = round_platinum(zone_bands.entry_high + 1.0);
+    let min_exit_high = round_platinum(zone_bands.entry_high + 2.0);
+
+    let mut exit_high = round_platinum((exit_target + half_width).min(zone_bands.exit_high));
+    if let Some(cap) = live_cap {
+        exit_high = exit_high.min(round_platinum(cap + 1.0));
+    }
+    exit_high = exit_high.max(min_exit_high);
+
+    let mut exit_low = round_platinum((exit_target - half_width).min(zone_bands.exit_low));
+    exit_low = exit_low.max(min_exit_low);
+
+    if exit_low >= exit_high {
+        exit_low = round_platinum((exit_high - 1.0).max(min_exit_low));
+    }
+    if exit_low >= exit_high {
+        exit_high = round_platinum(exit_low + 1.0);
+    }
+
+    ZoneBands {
+        entry_low: zone_bands.entry_low,
+        entry_high: zone_bands.entry_high,
+        entry_target: zone_bands.entry_target,
+        exit_low,
+        exit_high,
+        exit_target: round_platinum(exit_target.clamp(exit_low, exit_high)),
+    }
+}
+
+fn build_shared_exit_pricing(
+    entry_price: Option<f64>,
+    rows: &[InternalStatsRow],
+    zone_bands: Option<&ZoneBands>,
+    zone_overview: Option<&EntryExitZoneOverview>,
+    snapshot: Option<&MarketSnapshot>,
+    sell_orders: &[WfmDetailedOrder],
+) -> SharedExitPricing {
+    let historical_target =
+        historical_recommended_exit_price(entry_price, rows, zone_bands, zone_overview);
+    let live_cap = live_exit_cap_price(snapshot, sell_orders);
+    let mut recommended_exit_price = match (historical_target, live_cap) {
+        (Some(history), Some(cap)) => Some(history.min(cap)),
+        (Some(history), None) => Some(history),
+        (None, Some(cap)) => Some(cap),
+        (None, None) => entry_price,
+    };
+
+    if let Some(entry) = entry_price {
+        recommended_exit_price =
+            recommended_exit_price.map(|price| round_platinum(price.max(round_platinum(entry + 1.0))));
+    } else {
+        recommended_exit_price = recommended_exit_price.map(round_platinum);
+    }
+
+    let resolved_zone_bands = match (zone_bands, recommended_exit_price) {
+        (Some(zone_bands), Some(exit_target)) => {
+            Some(align_exit_zone_bands_to_target(zone_bands, exit_target, live_cap))
+        }
+        (Some(zone_bands), None) => Some(zone_bands.clone()),
+        (None, _) => None,
+    };
+
+    SharedExitPricing {
+        zone_bands: resolved_zone_bands,
+        recommended_exit_price,
+    }
 }
 
 fn last_defined_value(
@@ -4675,28 +4784,15 @@ fn recommended_exit_price(
     stats_rows: &[InternalStatsRow],
     zone_overview: &EntryExitZoneOverview,
 ) -> Option<f64> {
-    let liquidity_score = liquidity_score_percent(snapshot);
-    let live_percentile = choose_live_exit_percentile(snapshot, liquidity_score);
-    let live_target = weighted_sell_percentile_price(sell_orders, live_percentile);
-    let historical_target =
-        historical_recommended_exit_price(entry_price, stats_rows, None, Some(zone_overview));
-    let execution_cushion = if snapshot.sell_order_count < 10 {
-        1.0
-    } else if snapshot.sell_order_count < 24 {
-        2.0
-    } else {
-        3.0
-    };
-
-    let candidate = match (historical_target, live_target) {
-        (Some(history), Some(live)) => history.min(live + execution_cushion),
-        (Some(history), None) => history,
-        (None, Some(live)) => live,
-        (None, None) => return entry_price,
-    };
-
-    let candidate = round_platinum(candidate);
-    Some(candidate.max(round_platinum(entry_price.unwrap_or(candidate) + 1.0)))
+    build_shared_exit_pricing(
+        entry_price,
+        stats_rows,
+        None,
+        Some(zone_overview),
+        Some(snapshot),
+        sell_orders,
+    )
+    .recommended_exit_price
 }
 
 fn efficiency_score_percent(
@@ -8132,7 +8228,7 @@ fn build_item_analysis_inner(
         headline: AnalysisHeadline {
             entry_price,
             exit_price,
-            exit_percentile_label: "P60".to_string(),
+            exit_percentile_label: "Adaptive".to_string(),
             net_margin,
             liquidity_score: Some(liquidity_score),
             liquidity_label: liquidity_label(liquidity_score),
@@ -8345,6 +8441,14 @@ fn build_item_analytics_inner(
             anchors.fair_center,
         )
     });
+    let shared_exit_pricing = build_shared_exit_pricing(
+        recommended_entry_price_from_zone(historical_zone_bands.as_ref()),
+        &support_closed_rows,
+        historical_zone_bands.as_ref(),
+        None,
+        Some(&snapshot),
+        &live_sell_orders,
+    );
     let mut chart_points = merge_snapshot_chart_points(
         resample_rows(
             &chart_closed_rows,
@@ -8366,6 +8470,12 @@ fn build_item_analytics_inner(
         for point in &mut chart_points {
             point.entry_zone = Some(zone_bands.entry_target);
             point.exit_zone = Some(zone_bands.exit_target);
+        }
+    }
+    if let Some(zone_bands) = shared_exit_pricing.zone_bands.as_ref() {
+        if let Some(last_point) = chart_points.last_mut() {
+            last_point.entry_zone = Some(zone_bands.entry_target);
+            last_point.exit_zone = Some(zone_bands.exit_target);
         }
     }
     let latest_stats_fetched_at =
@@ -8390,7 +8500,7 @@ fn build_item_analytics_inner(
     let zone_overview = build_entry_exit_zone_overview(
         Some(&snapshot),
         &trend_points,
-        historical_zone_bands.as_ref(),
+        shared_exit_pricing.zone_bands.as_ref(),
     );
     let orderbook_pressure = build_orderbook_pressure(Some(&snapshot));
     let trend_quality_breakdown = build_trend_quality_breakdown(&trend_points);
@@ -10690,5 +10800,189 @@ mod tests {
                 .expect("recommended exit");
 
         assert_eq!(recommended, 68.0);
+    }
+
+    #[test]
+    fn shared_exit_pricing_caps_zone_and_target_with_live_ladder() {
+        let base_time = super::now_utc() - time::Duration::days(10);
+        let rows = vec![
+            InternalStatsRow {
+                bucket_at: base_time,
+                source_kind: "closed".to_string(),
+                volume: 12.0,
+                min_price: Some(61.0),
+                max_price: Some(69.0),
+                open_price: Some(62.0),
+                closed_price: Some(64.0),
+                avg_price: Some(64.0),
+                wa_price: Some(64.0),
+                median: Some(64.0),
+                moving_avg: Some(64.0),
+                donch_top: Some(69.0),
+                donch_bot: Some(61.0),
+            },
+            InternalStatsRow {
+                bucket_at: base_time + time::Duration::days(2),
+                source_kind: "closed".to_string(),
+                volume: 10.0,
+                min_price: Some(63.0),
+                max_price: Some(70.0),
+                open_price: Some(64.0),
+                closed_price: Some(65.0),
+                avg_price: Some(65.0),
+                wa_price: Some(65.0),
+                median: Some(65.0),
+                moving_avg: Some(65.0),
+                donch_top: Some(70.0),
+                donch_bot: Some(63.0),
+            },
+            InternalStatsRow {
+                bucket_at: base_time + time::Duration::days(4),
+                source_kind: "closed".to_string(),
+                volume: 10.0,
+                min_price: Some(64.0),
+                max_price: Some(71.0),
+                open_price: Some(65.0),
+                closed_price: Some(66.0),
+                avg_price: Some(66.0),
+                wa_price: Some(66.0),
+                median: Some(66.0),
+                moving_avg: Some(66.0),
+                donch_top: Some(71.0),
+                donch_bot: Some(64.0),
+            },
+        ];
+
+        let zone = super::ZoneBands {
+            entry_low: 57.0,
+            entry_high: 60.0,
+            exit_low: 67.0,
+            exit_high: 71.0,
+            entry_target: 59.0,
+            exit_target: 69.0,
+        };
+        let snapshot = MarketSnapshot {
+            captured_at: "2026-03-11T00:00:00Z".to_string(),
+            lowest_sell: Some(61.0),
+            median_sell: Some(67.0),
+            highest_buy: Some(58.0),
+            spread: Some(3.0),
+            spread_pct: Some(4.7),
+            sell_order_count: 9,
+            sell_quantity: 9,
+            buy_order_count: 6,
+            buy_quantity: 8,
+            near_floor_seller_count: 2,
+            near_floor_quantity: 2,
+            unique_sell_users: 9,
+            unique_buy_users: 6,
+            pressure_ratio: Some(0.82),
+            entry_depth: 8.0,
+            exit_depth: 5.0,
+            depth_levels: Vec::new(),
+        };
+        let sell_orders = vec![
+            WfmDetailedOrder {
+                order_id: "1".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 61.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "a".to_string(),
+                user_slug: Some("a".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "2".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 62.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "b".to_string(),
+                user_slug: Some("b".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "3".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 63.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "c".to_string(),
+                user_slug: Some("c".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+            WfmDetailedOrder {
+                order_id: "4".to_string(),
+                order_type: "sell".to_string(),
+                platinum: 64.0,
+                quantity: 1,
+                per_trade: 1,
+                rank: None,
+                username: "d".to_string(),
+                user_slug: Some("d".to_string()),
+                status: Some("ingame".to_string()),
+                updated_at: None,
+            },
+        ];
+
+        let pricing = super::build_shared_exit_pricing(
+            Some(59.0),
+            &rows,
+            Some(&zone),
+            None,
+            Some(&snapshot),
+            &sell_orders,
+        );
+
+        assert_eq!(pricing.recommended_exit_price, Some(63.0));
+        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_high), Some(64.0));
+        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_target), Some(63.0));
+    }
+
+    #[test]
+    fn shared_exit_pricing_preserves_historical_zone_without_live_cap() {
+        let rows = vec![InternalStatsRow {
+            bucket_at: super::now_utc() - time::Duration::days(2),
+            source_kind: "closed".to_string(),
+            volume: 10.0,
+            min_price: Some(62.0),
+            max_price: Some(70.0),
+            open_price: Some(63.0),
+            closed_price: Some(65.0),
+            avg_price: Some(65.0),
+            wa_price: Some(65.0),
+            median: Some(65.0),
+            moving_avg: Some(65.0),
+            donch_top: Some(70.0),
+            donch_bot: Some(62.0),
+        }];
+        let zone = super::ZoneBands {
+            entry_low: 57.0,
+            entry_high: 60.0,
+            exit_low: 67.0,
+            exit_high: 71.0,
+            entry_target: 59.0,
+            exit_target: 69.0,
+        };
+
+        let pricing = super::build_shared_exit_pricing(
+            Some(59.0),
+            &rows,
+            Some(&zone),
+            None,
+            None,
+            &[],
+        );
+
+        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_high), Some(69.0));
+        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_target), Some(67.0));
+        assert_eq!(pricing.recommended_exit_price, Some(67.0));
     }
 }
