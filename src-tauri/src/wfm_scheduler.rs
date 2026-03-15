@@ -16,6 +16,7 @@ const MAX_DEFICIT_MULTIPLIER: i32 = 4;
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const COALESCED_SUCCESS_TTL: Duration = Duration::from_millis(1);
 const COALESCED_ERROR_TTL: Duration = Duration::from_millis(1);
+const COALESCED_IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(8);
 const BASE_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(15);
 const SLOW_WAIT_LOG_THRESHOLD: Duration = Duration::from_millis(250);
@@ -119,7 +120,10 @@ struct RateLimitedBucket {
 
 #[derive(Debug, Clone)]
 enum CoalescedEntry {
-    InFlight,
+    InFlight {
+        started_at: Instant,
+        generation: u64,
+    },
     Ready(CachedResponse),
 }
 
@@ -185,6 +189,7 @@ struct SchedulerState {
     total_grants: u64,
     total_coalesced_hits: u64,
     total_coalesced_leaders: u64,
+    total_coalesced_stale_evictions: u64,
     total_rate_limited_responses: u64,
     debug_log_path: Option<PathBuf>,
     health_log_path: Option<PathBuf>,
@@ -192,6 +197,7 @@ struct SchedulerState {
     blocked_by_instant_queue: u64,
     blocked_by_reserved_instant_slot: u64,
     rate_limited_buckets: VecDeque<RateLimitedBucket>,
+    next_coalesced_generation: u64,
 }
 
 impl Default for SchedulerState {
@@ -214,6 +220,7 @@ impl Default for SchedulerState {
             total_grants: 0,
             total_coalesced_hits: 0,
             total_coalesced_leaders: 0,
+            total_coalesced_stale_evictions: 0,
             total_rate_limited_responses: 0,
             debug_log_path: None,
             health_log_path: None,
@@ -221,6 +228,7 @@ impl Default for SchedulerState {
             blocked_by_instant_queue: 0,
             blocked_by_reserved_instant_slot: 0,
             rate_limited_buckets: VecDeque::new(),
+            next_coalesced_generation: 1,
         }
     }
 }
@@ -407,6 +415,7 @@ where
     };
 
     let mut request_fn = Some(request_fn);
+    let mut leader_generation: Option<u64> = None;
     loop {
         if is_cancelled() {
             return Err(anyhow!("{label} cancelled before request coalesced"));
@@ -419,6 +428,28 @@ where
             let now = Instant::now();
             prune_old_grants(&mut state, now);
             cleanup_expired_coalesced(&mut state, now);
+
+            if let Some(stale_generation) = stale_in_flight_generation(&state, &coalesce_key, now) {
+                state.coalesced.remove(&coalesce_key);
+                state.total_coalesced_stale_evictions =
+                    state.total_coalesced_stale_evictions.saturating_add(1);
+                log_scheduler_event(
+                    &mut state,
+                    now,
+                    "coalesced-stale-evicted",
+                    label,
+                    priority,
+                    None,
+                    Some(coalesce_key.clone()),
+                    Some(format!("stale-generation:{stale_generation}")),
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                condvar.notify_all();
+            }
 
             match state.coalesced.get(&coalesce_key) {
                 Some(CoalescedEntry::Ready(cached)) => {
@@ -442,13 +473,23 @@ where
                     condvar.notify_all();
                     return cached_response;
                 }
-                Some(CoalescedEntry::InFlight) => {
+                Some(CoalescedEntry::InFlight { .. }) => {
                     wait_for_existing = true;
                 }
                 None => {
+                    let generation = state.next_coalesced_generation;
+                    state.next_coalesced_generation =
+                        state.next_coalesced_generation.wrapping_add(1);
                     state
                         .coalesced
-                        .insert(coalesce_key.clone(), CoalescedEntry::InFlight);
+                        .insert(
+                            coalesce_key.clone(),
+                            CoalescedEntry::InFlight {
+                                started_at: now,
+                                generation,
+                            },
+                        );
+                    leader_generation = Some(generation);
                     log_scheduler_event(
                         &mut state,
                         now,
@@ -457,7 +498,7 @@ where
                         priority,
                         None,
                         Some(coalesce_key.clone()),
-                        None,
+                        Some(format!("generation:{generation}")),
                         false,
                         None,
                         None,
@@ -513,12 +554,19 @@ where
 
         let (lock, condvar) = scheduler_state();
         let mut state = lock.lock().expect("wfm scheduler lock poisoned");
-        if cached.expires_at > Instant::now() {
-            state
-                .coalesced
-                .insert(coalesce_key.clone(), CoalescedEntry::Ready(cached));
-        } else {
-            state.coalesced.remove(&coalesce_key);
+        let still_own_leader = matches!(
+            state.coalesced.get(&coalesce_key),
+            Some(CoalescedEntry::InFlight { generation, .. })
+                if Some(*generation) == leader_generation
+        );
+        if still_own_leader {
+            if cached.expires_at > Instant::now() {
+                state
+                    .coalesced
+                    .insert(coalesce_key.clone(), CoalescedEntry::Ready(cached));
+            } else {
+                state.coalesced.remove(&coalesce_key);
+            }
         }
         let reserved_instant_capacity = reserved_instant_capacity_in_use(&state);
         log_scheduler_event(
@@ -605,6 +653,22 @@ pub fn wfm_scheduler_snapshot() -> WfmSchedulerSnapshot {
 
 fn clone_cached_response(cached: &CachedResponse) -> Result<WfmHttpResponse> {
     cached.result.clone().map_err(|error| anyhow!(error))
+}
+
+fn stale_in_flight_generation(
+    state: &SchedulerState,
+    coalesce_key: &str,
+    now: Instant,
+) -> Option<u64> {
+    match state.coalesced.get(coalesce_key) {
+        Some(CoalescedEntry::InFlight {
+            started_at,
+            generation,
+        }) if now.saturating_duration_since(*started_at) >= COALESCED_IN_FLIGHT_TIMEOUT => {
+            Some(*generation)
+        }
+        _ => None,
+    }
 }
 
 struct SchedulerWaitReason {
@@ -751,6 +815,10 @@ fn write_scheduler_health_report(state: &SchedulerState, now: Instant) {
         state.total_coalesced_hits
     ));
     report.push_str(&format!(
+        "- Stale coalesced evictions: `{}`\n",
+        state.total_coalesced_stale_evictions
+    ));
+    report.push_str(&format!(
         "- Hit/leader ratio: `{:.2}`\n\n",
         if state.total_coalesced_leaders == 0 {
             0.0
@@ -784,7 +852,7 @@ fn write_scheduler_health_report(state: &SchedulerState, now: Instant) {
 
 fn cleanup_expired_coalesced(state: &mut SchedulerState, now: Instant) {
     state.coalesced.retain(|_, entry| match entry {
-        CoalescedEntry::InFlight => true,
+        CoalescedEntry::InFlight { .. } => true,
         CoalescedEntry::Ready(cached) => cached.expires_at > now,
     });
 }
@@ -994,7 +1062,7 @@ fn build_snapshot(state: &SchedulerState, now: Instant) -> WfmSchedulerSnapshot 
     let in_flight_coalesced_keys = state
         .coalesced
         .values()
-        .filter(|entry| matches!(entry, CoalescedEntry::InFlight))
+        .filter(|entry| matches!(entry, CoalescedEntry::InFlight { .. }))
         .count();
     let cached_coalesced_keys = state
         .coalesced
@@ -1273,5 +1341,23 @@ mod tests {
 
         let granted = try_grant(&mut state, now).expect("expected low ticket");
         assert_eq!(granted.priority, RequestPriority::Low);
+    }
+
+    #[test]
+    fn detects_stale_in_flight_coalesced_entries() {
+        let now = Instant::now();
+        let mut state = SchedulerState::default();
+        state.coalesced.insert(
+            "statistics:instant:wisp_prime_set".to_string(),
+            CoalescedEntry::InFlight {
+                started_at: now - COALESCED_IN_FLIGHT_TIMEOUT - Duration::from_millis(1),
+                generation: 7,
+            },
+        );
+
+        assert_eq!(
+            stale_in_flight_generation(&state, "statistics:instant:wisp_prime_set", now),
+            Some(7)
+        );
     }
 }
