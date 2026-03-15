@@ -801,7 +801,7 @@ pub struct SetCompletionImportCandidate {
 #[serde(rename_all = "camelCase")]
 pub struct SetCompletionScreenshotMatchInputRow {
     pub row_id: String,
-    pub detected_name: String,
+    pub ocr_variants: Vec<SetCompletionScreenshotOcrVariant>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -813,6 +813,8 @@ pub struct SetCompletionScreenshotMatchRow {
     pub match_kind: String,
     pub status: String,
     pub reason: String,
+    pub chosen_ocr_text: Option<String>,
+    pub chosen_ocr_confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -825,12 +827,22 @@ pub struct SetCompletionScreenshotApplyRow {
     pub quantity: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionScreenshotOcrVariant {
+    pub key: String,
+    pub label: String,
+    pub text: String,
+    pub confidence: f64,
+}
+
 #[derive(Debug, Clone)]
 struct SetCompletionImportCandidateProfile {
     candidate: SetCompletionImportCandidate,
     normalized_name: String,
     normalized_slug: String,
     aliases: Vec<String>,
+    name_tokens: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1196,8 +1208,29 @@ fn normalize_set_completion_import_lookup_value(value: &str) -> Option<String> {
     }
 }
 
+fn apply_set_completion_ocr_corrections(value: &str) -> String {
+    value
+        .replace("pr1me", "prime")
+        .replace("prlme", "prime")
+        .replace("systerns", "systems")
+        .replace("systens", "systems")
+        .replace("recelver", "receiver")
+        .replace("recelver", "receiver")
+        .replace("grlp", "grip")
+        .replace("neuroptlcs", "neuroptics")
+        .replace("neuropticss", "neuroptics")
+}
+
 fn slug_to_set_completion_lookup_value(slug: &str) -> Option<String> {
     normalize_set_completion_import_lookup_value(&slug.replace('_', " "))
+}
+
+fn tokenize_set_completion_lookup_value(value: &str) -> Vec<String> {
+    value
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_string())
+        .collect()
 }
 
 fn levenshtein_distance(left: &str, right: &str) -> usize {
@@ -1235,6 +1268,16 @@ fn normalized_similarity(left: &str, right: &str) -> f64 {
 
     let distance = levenshtein_distance(left, right) as f64;
     (1.0 - distance / longest as f64).clamp(0.0, 1.0)
+}
+
+fn set_completion_component_token_weight(token: &str) -> f64 {
+    match token {
+        "prime" => 1.35,
+        "barrel" | "receiver" | "stock" | "grip" | "handle" | "blade" | "systems"
+        | "chassis" | "neuroptics" | "blueprint" | "hilt" | "string" | "disc"
+        | "link" | "guard" | "motor" => 1.6,
+        _ => 1.0,
+    }
 }
 
 pub(crate) fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
@@ -6773,7 +6816,9 @@ fn build_set_completion_import_candidate_profiles(
 
     let mut profiles = Vec::new();
     for item in allowed_items {
-        let normalized_name = normalize_set_completion_import_lookup_value(&item.name)
+        let normalized_name = normalize_set_completion_import_lookup_value(
+            &apply_set_completion_ocr_corrections(&item.name),
+        )
             .ok_or_else(|| anyhow!("allowed import candidate name is required"))?;
         let normalized_slug =
             slug_to_set_completion_lookup_value(&item.slug).unwrap_or_else(|| normalized_name.clone());
@@ -6788,6 +6833,7 @@ fn build_set_completion_import_candidate_profiles(
 
         profiles.push(SetCompletionImportCandidateProfile {
             candidate: item.clone(),
+            name_tokens: tokenize_set_completion_lookup_value(&normalized_name),
             normalized_name,
             normalized_slug,
             aliases,
@@ -6797,92 +6843,68 @@ fn build_set_completion_import_candidate_profiles(
     Ok(profiles)
 }
 
+fn score_set_completion_token_match(
+    detected_tokens: &[String],
+    profile: &SetCompletionImportCandidateProfile,
+    normalized_detected_name: &str,
+) -> f64 {
+    if detected_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let mut total_weight = 0.0f64;
+    let mut matched_weight = 0.0f64;
+    for token in &profile.name_tokens {
+        let token_weight = set_completion_component_token_weight(token);
+        total_weight += token_weight;
+        if detected_tokens.iter().any(|detected| detected == token) {
+            matched_weight += token_weight;
+        }
+    }
+
+    let token_ratio = if total_weight > 0.0 {
+        matched_weight / total_weight
+    } else {
+        0.0
+    };
+    let string_similarity = normalized_similarity(normalized_detected_name, &profile.normalized_name)
+        .max(normalized_similarity(normalized_detected_name, &profile.normalized_slug));
+
+    let mut score = string_similarity * 0.55 + token_ratio * 0.45;
+    if detected_tokens.iter().any(|token| token == "prime")
+        && profile.name_tokens.iter().any(|token| token == "prime")
+    {
+        score += 0.05;
+    }
+
+    let missing_core_token = profile.name_tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "barrel"
+                | "receiver"
+                | "stock"
+                | "grip"
+                | "handle"
+                | "blade"
+                | "systems"
+                | "chassis"
+                | "neuroptics"
+                | "blueprint"
+        ) && !detected_tokens.iter().any(|detected| detected == token)
+    });
+    if missing_core_token {
+        score -= 0.08;
+    }
+
+    score.clamp(0.0, 1.0)
+}
+
 fn match_set_completion_detected_name(
     row_id: &str,
-    detected_name: &str,
+    ocr_variants: &[SetCompletionScreenshotOcrVariant],
     profiles: &[SetCompletionImportCandidateProfile],
 ) -> SetCompletionScreenshotMatchRow {
-    let Some(normalized_detected_name) =
-        normalize_set_completion_import_lookup_value(detected_name)
-    else {
-        return SetCompletionScreenshotMatchRow {
-            row_id: row_id.to_string(),
-            matched_item: None,
-            confidence: 0.0,
-            match_kind: "none".to_string(),
-            status: "unmatched".to_string(),
-            reason: "No readable item name detected.".to_string(),
-        };
-    };
-
-    for profile in profiles {
-        if normalized_detected_name == profile.normalized_name {
-            return SetCompletionScreenshotMatchRow {
-                row_id: row_id.to_string(),
-                matched_item: Some(profile.candidate.clone()),
-                confidence: 1.0,
-                match_kind: "exact".to_string(),
-                status: "matched".to_string(),
-                reason: "Exact normalized item name match.".to_string(),
-            };
-        }
-
-        if normalized_detected_name == profile.normalized_slug {
-            return SetCompletionScreenshotMatchRow {
-                row_id: row_id.to_string(),
-                matched_item: Some(profile.candidate.clone()),
-                confidence: 0.95,
-                match_kind: "slug".to_string(),
-                status: "matched".to_string(),
-                reason: "Matched the planner component slug.".to_string(),
-            };
-        }
-
-        if profile
-            .aliases
-            .iter()
-            .any(|alias| alias == &normalized_detected_name)
-        {
-            return SetCompletionScreenshotMatchRow {
-                row_id: row_id.to_string(),
-                matched_item: Some(profile.candidate.clone()),
-                confidence: 0.98,
-                match_kind: "alias".to_string(),
-                status: "matched".to_string(),
-                reason: "Matched a catalog alias for this prime component.".to_string(),
-            };
-        }
-    }
-
-    let mut best_match: Option<(&SetCompletionImportCandidateProfile, f64)> = None;
-    let mut second_best_score = 0.0f64;
-    for profile in profiles {
-        let mut best_profile_score =
-            normalized_similarity(&normalized_detected_name, &profile.normalized_name);
-        best_profile_score = best_profile_score
-            .max(normalized_similarity(&normalized_detected_name, &profile.normalized_slug));
-        for alias in &profile.aliases {
-            best_profile_score =
-                best_profile_score.max(normalized_similarity(&normalized_detected_name, alias));
-        }
-
-        match best_match {
-            Some((_, current_score)) if best_profile_score > current_score => {
-                second_best_score = current_score;
-                best_match = Some((profile, best_profile_score));
-            }
-            Some(_) => {
-                if best_profile_score > second_best_score {
-                    second_best_score = best_profile_score;
-                }
-            }
-            None => {
-                best_match = Some((profile, best_profile_score));
-            }
-        }
-    }
-
-    let Some((profile, best_score)) = best_match else {
+    if profiles.is_empty() {
         return SetCompletionScreenshotMatchRow {
             row_id: row_id.to_string(),
             matched_item: None,
@@ -6890,22 +6912,148 @@ fn match_set_completion_detected_name(
             match_kind: "none".to_string(),
             status: "unmatched".to_string(),
             reason: "No planner component candidates were available for matching.".to_string(),
+            chosen_ocr_text: None,
+            chosen_ocr_confidence: None,
+        };
+    }
+
+    let prepared_variants = ocr_variants
+        .iter()
+        .filter_map(|variant| {
+            let corrected_text = apply_set_completion_ocr_corrections(&variant.text);
+            let normalized = normalize_set_completion_import_lookup_value(&corrected_text)?;
+            Some((
+                variant,
+                corrected_text,
+                normalized.clone(),
+                tokenize_set_completion_lookup_value(&normalized),
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    if prepared_variants.is_empty() {
+        return SetCompletionScreenshotMatchRow {
+            row_id: row_id.to_string(),
+            matched_item: None,
+            confidence: 0.0,
+            match_kind: "none".to_string(),
+            status: "unmatched".to_string(),
+            reason: "No readable item name detected.".to_string(),
+            chosen_ocr_text: None,
+            chosen_ocr_confidence: None,
+        };
+    }
+
+    for (variant, corrected_text, normalized_detected_name, _) in &prepared_variants {
+        for profile in profiles {
+            if normalized_detected_name == &profile.normalized_name {
+                return SetCompletionScreenshotMatchRow {
+                    row_id: row_id.to_string(),
+                    matched_item: Some(profile.candidate.clone()),
+                    confidence: 1.0,
+                    match_kind: "exact".to_string(),
+                    status: "matched".to_string(),
+                    reason: "Exact normalized item name match.".to_string(),
+                    chosen_ocr_text: Some(corrected_text.clone()),
+                    chosen_ocr_confidence: Some(variant.confidence),
+                };
+            }
+
+            if normalized_detected_name == &profile.normalized_slug {
+                return SetCompletionScreenshotMatchRow {
+                    row_id: row_id.to_string(),
+                    matched_item: Some(profile.candidate.clone()),
+                    confidence: 0.95,
+                    match_kind: "slug".to_string(),
+                    status: "matched".to_string(),
+                    reason: "Matched the planner component slug.".to_string(),
+                    chosen_ocr_text: Some(corrected_text.clone()),
+                    chosen_ocr_confidence: Some(variant.confidence),
+                };
+            }
+
+            if profile.aliases.iter().any(|alias| alias == normalized_detected_name) {
+                return SetCompletionScreenshotMatchRow {
+                    row_id: row_id.to_string(),
+                    matched_item: Some(profile.candidate.clone()),
+                    confidence: 0.98,
+                    match_kind: "alias".to_string(),
+                    status: "matched".to_string(),
+                    reason: "Matched a catalog alias for this prime component.".to_string(),
+                    chosen_ocr_text: Some(corrected_text.clone()),
+                    chosen_ocr_confidence: Some(variant.confidence),
+                };
+            }
+        }
+    }
+
+    let mut best_match: Option<(
+        &SetCompletionImportCandidateProfile,
+        f64,
+        &SetCompletionScreenshotOcrVariant,
+        String,
+    )> = None;
+    let mut second_best_score = 0.0f64;
+    for (variant, corrected_text, normalized_detected_name, detected_tokens) in &prepared_variants {
+        for profile in profiles {
+            let score = score_set_completion_token_match(
+                detected_tokens,
+                profile,
+                normalized_detected_name,
+            )
+            .max(
+                profile
+                    .aliases
+                    .iter()
+                    .map(|alias| normalized_similarity(normalized_detected_name, alias))
+                    .fold(0.0, f64::max),
+            );
+
+            match best_match {
+                Some((_, current_score, _, _)) if score > current_score => {
+                    second_best_score = current_score;
+                    best_match = Some((profile, score, variant, corrected_text.clone()));
+                }
+                Some(_) => {
+                    if score > second_best_score {
+                        second_best_score = score;
+                    }
+                }
+                None => {
+                    best_match = Some((profile, score, variant, corrected_text.clone()));
+                }
+            }
+        }
+    }
+
+    let Some((profile, best_score, variant, chosen_text)) = best_match else {
+        return SetCompletionScreenshotMatchRow {
+            row_id: row_id.to_string(),
+            matched_item: None,
+            confidence: 0.0,
+            match_kind: "none".to_string(),
+            status: "unmatched".to_string(),
+            reason: "No planner component candidates were available for matching.".to_string(),
+            chosen_ocr_text: None,
+            chosen_ocr_confidence: None,
         };
     };
 
-    if best_score < 0.72 {
+    if best_score < 0.74 {
         return SetCompletionScreenshotMatchRow {
             row_id: row_id.to_string(),
             matched_item: None,
             confidence: best_score,
             match_kind: "none".to_string(),
             status: "unmatched".to_string(),
-            reason: "Detected name did not match any prime component strongly enough.".to_string(),
+            reason: "OCR variants did not match any prime component strongly enough.".to_string(),
+            chosen_ocr_text: Some(chosen_text),
+            chosen_ocr_confidence: Some(variant.confidence),
         };
     }
 
     let confidence_gap = best_score - second_best_score;
-    let status = if best_score >= 0.86 || confidence_gap >= 0.08 {
+    let status = if best_score >= 0.88 || confidence_gap >= 0.08 {
         "matched"
     } else {
         "matched-low-confidence"
@@ -6918,9 +7066,12 @@ fn match_set_completion_detected_name(
         match_kind: "fuzzy".to_string(),
         status: status.to_string(),
         reason: format!(
-            "Closest OCR-tolerant match for this visible prime component ({:.0}% confidence).",
+            "Best prime-component token match using OCR variant '{}' ({:.0}% confidence).",
+            variant.label,
             best_score * 100.0
         ),
+        chosen_ocr_text: Some(chosen_text),
+        chosen_ocr_confidence: Some(variant.confidence),
     }
 }
 
@@ -6932,7 +7083,7 @@ fn match_set_completion_screenshot_rows_inner(
     let profiles = build_set_completion_import_candidate_profiles(catalog_connection, allowed_items)?;
     Ok(rows
         .iter()
-        .map(|row| match_set_completion_detected_name(&row.row_id, &row.detected_name, &profiles))
+        .map(|row| match_set_completion_detected_name(&row.row_id, &row.ocr_variants, &profiles))
         .collect())
 }
 
@@ -9865,8 +10016,8 @@ mod tests {
         AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey,
         ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary, MarketSnapshot,
         RelicRefinementChanceProfile, SetCompletionImportCandidate,
-        SetCompletionImportCandidateProfile, SetCompletionScreenshotApplyRow, WfmDetailedOrder,
-        WfmStatisticsRowApi,
+        SetCompletionImportCandidateProfile, SetCompletionScreenshotApplyRow,
+        SetCompletionScreenshotOcrVariant, WfmDetailedOrder, WfmStatisticsRowApi,
     };
     use crate::wfm_scheduler::RequestPriority;
     use rusqlite::Connection;
@@ -10949,13 +11100,26 @@ mod tests {
                 name: "Wisp Prime Chassis".to_string(),
                 image_path: None,
             },
+            name_tokens: vec![
+                "wisp".to_string(),
+                "prime".to_string(),
+                "chassis".to_string(),
+            ],
             normalized_name: "wisp prime chassis".to_string(),
             normalized_slug: "wisp prime chassis".to_string(),
             aliases: vec!["wisp p chassis".to_string()],
         };
 
-        let matched =
-            match_set_completion_detected_name("row-1", "Wisp   Prime   Chassis", &[profile]);
+        let matched = match_set_completion_detected_name(
+            "row-1",
+            &[SetCompletionScreenshotOcrVariant {
+                key: "standard".to_string(),
+                label: "Standard Crop".to_string(),
+                text: "Wisp   Prime   Chassis".to_string(),
+                confidence: 0.92,
+            }],
+            &[profile],
+        );
 
         assert_eq!(matched.match_kind, "exact");
         assert_eq!(matched.status, "matched");
@@ -10974,13 +11138,26 @@ mod tests {
                 name: "Saryn Prime Systems".to_string(),
                 image_path: None,
             },
+            name_tokens: vec![
+                "saryn".to_string(),
+                "prime".to_string(),
+                "systems".to_string(),
+            ],
             normalized_name: "saryn prime systems".to_string(),
             normalized_slug: "saryn prime systems".to_string(),
             aliases: Vec::new(),
         };
 
-        let matched =
-            match_set_completion_detected_name("row-2", "Saryn Pr1me Systerns", &[profile]);
+        let matched = match_set_completion_detected_name(
+            "row-2",
+            &[SetCompletionScreenshotOcrVariant {
+                key: "strong".to_string(),
+                label: "High Contrast".to_string(),
+                text: "Saryn Pr1me Systerns".to_string(),
+                confidence: 0.74,
+            }],
+            &[profile],
+        );
 
         assert_eq!(matched.match_kind, "fuzzy");
         assert!(matched.status == "matched" || matched.status == "matched-low-confidence");

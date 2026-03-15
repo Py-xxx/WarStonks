@@ -1175,7 +1175,7 @@ export interface SetCompletionImportCandidate {
 
 export interface SetCompletionScreenshotMatchInputRow {
   rowId: string;
-  detectedName: string;
+  ocrVariants: SetCompletionScreenshotOcrVariant[];
 }
 
 export interface SetCompletionScreenshotMatchRow {
@@ -1185,6 +1185,8 @@ export interface SetCompletionScreenshotMatchRow {
   matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none';
   status: 'matched' | 'matched-low-confidence' | 'unmatched';
   reason: string;
+  chosenOcrText: string | null;
+  chosenOcrConfidence: number | null;
 }
 
 export interface SetCompletionScreenshotApplyRow {
@@ -1193,6 +1195,13 @@ export interface SetCompletionScreenshotApplyRow {
   name: string;
   imagePath: string | null;
   quantity: number;
+}
+
+export interface SetCompletionScreenshotOcrVariant {
+  key: string;
+  label: string;
+  text: string;
+  confidence: number;
 }
 
 export interface OwnedRelicRefinementCounts {
