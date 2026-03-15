@@ -2883,23 +2883,32 @@ fn fetch_wfm_to_file(
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()?;
-    let response = execute_coalesced_wfm_request(priority, action_label, coalesce_key, || false, || {
-        let response = client
-            .get(url)
-            .send()
-            .with_context(|| format!("failed to {action_label}"))?;
-        let status = response.status();
-        let retry_after = parse_retry_after_seconds(response.headers());
-        let body = response
-            .bytes()
-            .with_context(|| format!("failed to read {action_label} response body"))?
-            .to_vec();
-        Ok(WfmHttpResponse {
-            status: status.as_u16(),
-            body,
-            retry_after,
-        })
-    })?;
+    let action_label_owned = action_label.to_string();
+    let url_owned = url.to_string();
+    let response = execute_coalesced_wfm_request(
+        priority,
+        action_label,
+        coalesce_key,
+        None,
+        || false,
+        move || {
+            let response = client
+                .get(&url_owned)
+                .send()
+                .with_context(|| format!("failed to {}", action_label_owned))?;
+            let status = response.status();
+            let retry_after = parse_retry_after_seconds(response.headers());
+            let body = response
+                .bytes()
+                .with_context(|| format!("failed to read {} response body", action_label_owned))?
+                .to_vec();
+            Ok(WfmHttpResponse {
+                status: status.as_u16(),
+                body,
+                retry_after,
+            })
+        },
+    )?;
 
     if response.status < 200 || response.status >= 300 {
         let body = String::from_utf8_lossy(&response.body);

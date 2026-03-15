@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -388,18 +389,19 @@ pub fn execute_coalesced_wfm_request<C, F>(
     priority: RequestPriority,
     label: &str,
     coalesce_key: Option<String>,
+    request_timeout: Option<Duration>,
     mut is_cancelled: C,
     request_fn: F,
 ) -> Result<WfmHttpResponse>
 where
     C: FnMut() -> bool,
-    F: FnOnce() -> Result<WfmHttpResponse>,
+    F: FnOnce() -> Result<WfmHttpResponse> + Send + 'static,
 {
     let total_started_at = Instant::now();
     let Some(coalesce_key) = coalesce_key else {
         acquire_wfm_slot_interruptible(priority, label, || is_cancelled())?;
         let request_started_at = Instant::now();
-        let outcome = request_fn();
+        let outcome = run_wfm_request_with_timeout(label, request_timeout, request_fn);
         if let Ok(response) = &outcome {
             record_wfm_response(response.status, response.retry_after, label);
         }
@@ -533,9 +535,13 @@ where
         let request_started_at = Instant::now();
         let outcome = (|| {
             acquire_wfm_slot_interruptible(priority, label, || is_cancelled())?;
-            request_fn
-                .take()
-                .expect("coalesced WFM request already executed")()
+            run_wfm_request_with_timeout(
+                label,
+                request_timeout,
+                request_fn
+                    .take()
+                    .expect("coalesced WFM request already executed"),
+            )
         })();
 
         let cached = match &outcome {
@@ -586,6 +592,34 @@ where
         );
         condvar.notify_all();
         return outcome;
+    }
+}
+
+fn run_wfm_request_with_timeout<F>(
+    label: &str,
+    request_timeout: Option<Duration>,
+    request_fn: F,
+) -> Result<WfmHttpResponse>
+where
+    F: FnOnce() -> Result<WfmHttpResponse> + Send + 'static,
+{
+    let Some(timeout) = request_timeout else {
+        return request_fn();
+    };
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(request_fn());
+    });
+
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(anyhow!("{label} timed out after {} ms", timeout.as_millis()))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(anyhow!("{label} failed before returning a response"))
+        }
     }
 }
 

@@ -1421,27 +1421,36 @@ fn execute_wfm_bytes_request<C>(
     priority: RequestPriority,
     action_label: &str,
     coalesce_key: Option<String>,
+    request_timeout: Option<Duration>,
     mut is_cancelled: C,
 ) -> Result<WfmHttpResponse>
 where
     C: FnMut() -> bool,
 {
-    execute_coalesced_wfm_request(priority, action_label, coalesce_key, || is_cancelled(), || {
-        let response = builder
-            .send()
-            .with_context(|| format!("failed to {action_label}"))?;
-        let status = response.status();
-        let retry_after = parse_retry_after_seconds(response.headers());
-        let body = response
-            .bytes()
-            .with_context(|| format!("failed to read {action_label} response body"))?
-            .to_vec();
-        Ok(WfmHttpResponse {
-            status: status.as_u16(),
-            body,
-            retry_after,
-        })
-    })
+    let action_label_owned = action_label.to_string();
+    execute_coalesced_wfm_request(
+        priority,
+        action_label,
+        coalesce_key,
+        request_timeout,
+        || is_cancelled(),
+        move || {
+            let response = builder
+                .send()
+                .with_context(|| format!("failed to {}", action_label_owned))?;
+            let status = response.status();
+            let retry_after = parse_retry_after_seconds(response.headers());
+            let body = response
+                .bytes()
+                .with_context(|| format!("failed to read {} response body", action_label_owned))?
+                .to_vec();
+            Ok(WfmHttpResponse {
+                status: status.as_u16(),
+                body,
+                retry_after,
+            })
+        },
+    )
 }
 
 fn extract_wfm_error_body(action_label: &str, response: &WfmHttpResponse) -> anyhow::Error {
@@ -1667,6 +1676,7 @@ where
         priority,
         "request WFM statistics",
         Some(scoped_wfm_coalesce_key("statistics", priority, slug)),
+        request_timeout,
         || is_cancelled(),
     )?;
     if response.status < 200 || response.status >= 300 {
@@ -2599,6 +2609,7 @@ where
         priority,
         request_label,
         Some(scoped_wfm_coalesce_key("orders", priority, slug)),
+        None,
         || is_cancelled(),
     )?;
     if response.status < 200 || response.status >= 300 {
