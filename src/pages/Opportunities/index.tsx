@@ -219,7 +219,12 @@ function buildScreenshotImportApplyRows(
     if (row.removed) {
       continue;
     }
-    if (!row.matchedItem || row.quantity === null || row.quantityState === 'unresolved') {
+    if (
+      !row.matchedItem
+      || row.quantity === null
+      || row.quantityState === 'unresolved'
+      || row.matchStatus === 'matched-low-confidence'
+    ) {
       blockedRows.push(row);
       continue;
     }
