@@ -307,6 +307,23 @@
   line-height: 1.5;
 }
 
+.screenshot-import-tolerance-field {
+  gap: 8px;
+}
+
+.screenshot-import-tolerance-field .settings-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.screenshot-import-tolerance-value {
+  color: var(--accent-blue);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
 .screenshot-import-palette-list {
   display: flex;
   flex-wrap: wrap;

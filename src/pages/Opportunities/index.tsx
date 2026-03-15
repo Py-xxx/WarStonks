@@ -10,6 +10,7 @@ import {
 } from '../../lib/tauriClient';
 import {
   buildSetCompletionImportMaskPreview,
+  getDefaultSetCompletionImportTolerance,
   getDefaultSetCompletionImportCrop,
   getSetCompletionImportStrictColors,
   processSetCompletionInventoryScreenshot,
@@ -527,6 +528,7 @@ function SetCompletionScreenshotImportModal({
   previewUrl,
   maskPreviewUrl,
   crop,
+  tolerance,
   rows,
   plannerCatalog,
   processing,
@@ -540,6 +542,7 @@ function SetCompletionScreenshotImportModal({
   onClose,
   onPickFile,
   onCropChange,
+  onToleranceChange,
   onReprocess,
   onToggleRemove,
   onSetQuantity,
@@ -554,6 +557,7 @@ function SetCompletionScreenshotImportModal({
   previewUrl: string | null;
   maskPreviewUrl: string | null;
   crop: SetCompletionImportCrop;
+  tolerance: number;
   rows: ScreenshotImportPreviewRow[];
   plannerCatalog: PlannerCatalogItem[];
   processing: boolean;
@@ -567,6 +571,7 @@ function SetCompletionScreenshotImportModal({
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onCropChange: (nextCrop: SetCompletionImportCrop) => void;
+  onToleranceChange: (nextTolerance: number) => void;
   onReprocess: () => Promise<void>;
   onToggleRemove: (rowId: string) => void;
   onSetQuantity: (rowId: string, value: string) => void;
@@ -747,6 +752,20 @@ function SetCompletionScreenshotImportModal({
                   <div className="screenshot-import-mask-copy">
                     <span className="panel-title-eyebrow">Strict OCR Palette</span>
                     <strong>Only these exact colors survive the mask</strong>
+                    <label className="settings-field screenshot-import-tolerance-field">
+                      <span className="settings-field-label">
+                        Palette tolerance
+                        <strong className="screenshot-import-tolerance-value">{tolerance}</strong>
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={32}
+                        step={1}
+                        value={tolerance}
+                        onChange={(event) => onToleranceChange(Number(event.target.value))}
+                      />
+                    </label>
                     <div className="screenshot-import-palette-list">
                       {strictPalette.map((hex) => (
                         <span key={hex} className="screenshot-import-palette-pill">
@@ -985,6 +1004,9 @@ export function OpportunitiesPage() {
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
   const [screenshotImportMaskPreviewUrl, setScreenshotImportMaskPreviewUrl] = useState<string | null>(null);
   const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
+  const [screenshotImportTolerance, setScreenshotImportTolerance] = useState<number>(
+    getDefaultSetCompletionImportTolerance,
+  );
   const [screenshotImportRows, setScreenshotImportRows] = useState<ScreenshotImportPreviewRow[]>([]);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportApplying, setScreenshotImportApplying] = useState(false);
@@ -1393,6 +1415,7 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(null);
+    setScreenshotImportTolerance(getDefaultSetCompletionImportTolerance());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1413,6 +1436,7 @@ export function OpportunitiesPage() {
   const processScreenshotImportFile = async (
     file: File,
     crop: SetCompletionImportCrop,
+    tolerance: number,
     previewUrl: string,
   ) => {
     setScreenshotImportProcessing(true);
@@ -1429,6 +1453,7 @@ export function OpportunitiesPage() {
       const ocrRows = await processSetCompletionInventoryScreenshot(
         file,
         crop,
+        tolerance,
         (progress) => {
           setScreenshotImportProgress(progress);
         },
@@ -1470,6 +1495,7 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(file);
+    setScreenshotImportTolerance(getDefaultSetCompletionImportTolerance());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1480,6 +1506,7 @@ export function OpportunitiesPage() {
       const maskPreview = await buildSetCompletionImportMaskPreview(
         file,
         getDefaultSetCompletionImportCrop(),
+        getDefaultSetCompletionImportTolerance(),
       );
       setScreenshotImportMaskPreviewUrl(maskPreview);
     } catch {
@@ -1492,7 +1519,12 @@ export function OpportunitiesPage() {
       return;
     }
     const previewUrl = screenshotImportPreviewUrl ?? URL.createObjectURL(screenshotImportFile);
-    await processScreenshotImportFile(screenshotImportFile, screenshotImportCrop, previewUrl);
+    await processScreenshotImportFile(
+      screenshotImportFile,
+      screenshotImportCrop,
+      screenshotImportTolerance,
+      previewUrl,
+    );
   };
 
   const handleScreenshotImportCropChange = (nextCrop: SetCompletionImportCrop) => {
@@ -1506,7 +1538,35 @@ export function OpportunitiesPage() {
       setScreenshotImportMaskPreviewUrl(null);
       return;
     }
-    void buildSetCompletionImportMaskPreview(screenshotImportFile, nextCrop)
+    void buildSetCompletionImportMaskPreview(
+      screenshotImportFile,
+      nextCrop,
+      screenshotImportTolerance,
+    )
+      .then((maskPreview) => {
+        setScreenshotImportMaskPreviewUrl(maskPreview);
+      })
+      .catch(() => {
+        setScreenshotImportMaskPreviewUrl(null);
+      });
+  };
+
+  const handleScreenshotImportToleranceChange = (nextTolerance: number) => {
+    setScreenshotImportTolerance(nextTolerance);
+    setScreenshotImportRows([]);
+    setScreenshotImportError(null);
+    setScreenshotImportProgress(null);
+    setActiveRemapRowId(null);
+    setExpandedImportDebugRowId(null);
+    if (!screenshotImportFile) {
+      setScreenshotImportMaskPreviewUrl(null);
+      return;
+    }
+    void buildSetCompletionImportMaskPreview(
+      screenshotImportFile,
+      screenshotImportCrop,
+      nextTolerance,
+    )
       .then((maskPreview) => {
         setScreenshotImportMaskPreviewUrl(maskPreview);
       })
@@ -2218,6 +2278,7 @@ export function OpportunitiesPage() {
         previewUrl={screenshotImportPreviewUrl}
         maskPreviewUrl={screenshotImportMaskPreviewUrl}
         crop={screenshotImportCrop}
+        tolerance={screenshotImportTolerance}
         rows={screenshotImportRows}
         plannerCatalog={plannerCatalog}
         processing={screenshotImportProcessing}
@@ -2231,6 +2292,7 @@ export function OpportunitiesPage() {
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
         onCropChange={handleScreenshotImportCropChange}
+        onToleranceChange={handleScreenshotImportToleranceChange}
         onReprocess={reprocessScreenshotImport}
         onToggleRemove={(rowId) => {
           updateScreenshotImportRow(rowId, (row) => ({ ...row, removed: !row.removed }));

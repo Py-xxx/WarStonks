@@ -31,6 +31,7 @@ const STRICT_SET_COMPLETION_IMPORT_COLORS = [
   { red: 0xbb, green: 0xa6, blue: 0x65, hex: '#bba665' },
   { red: 0xad, green: 0x9a, blue: 0x5f, hex: '#ad9a5f' },
 ] as const;
+const DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE = 0;
 
 const DEFAULT_CROP: SetCompletionImportCrop = {
   left: 0,
@@ -52,9 +53,14 @@ export function getDefaultSetCompletionImportCrop(): SetCompletionImportCrop {
   return { ...DEFAULT_CROP };
 }
 
+export function getDefaultSetCompletionImportTolerance(): number {
+  return DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE;
+}
+
 export async function processSetCompletionInventoryScreenshot(
   file: File,
   crop: SetCompletionImportCrop,
+  tolerance: number,
   onProgress?: (progress: SetCompletionScreenshotProgress) => void,
 ): Promise<SetCompletionScreenshotOcrRow[]> {
   const [{ createWorker, PSM }, image] = await Promise.all([
@@ -91,6 +97,7 @@ export async function processSetCompletionInventoryScreenshot(
         worker,
         PSM,
         tileCanvas,
+        tolerance,
       );
       const { quantity, quantityConfidence, quantityState } = quantityResult;
 
@@ -98,6 +105,7 @@ export async function processSetCompletionInventoryScreenshot(
         worker,
         PSM,
         tileCanvas,
+        tolerance,
       );
       const bestVariant = chooseBestOcrVariant(ocrVariants);
       const detectedName = bestVariant?.text ?? '';
@@ -106,7 +114,7 @@ export async function processSetCompletionInventoryScreenshot(
       if (
         !detectedName &&
         quantityState === 'defaulted' &&
-        !tileHasNameSignal(tileCanvas)
+        !tileHasNameSignal(tileCanvas, tolerance)
       ) {
         continue;
       }
@@ -138,6 +146,7 @@ export async function processSetCompletionInventoryScreenshot(
 export async function buildSetCompletionImportMaskPreview(
   file: File,
   crop: SetCompletionImportCrop,
+  tolerance: number,
 ): Promise<string> {
   const image = await loadFileImage(file);
   const sourceCanvas = createCanvas(image.naturalWidth, image.naturalHeight);
@@ -152,7 +161,7 @@ export async function buildSetCompletionImportMaskPreview(
   const cropWidth = Math.max(1, Math.round(image.naturalWidth * (1 - crop.left - crop.right)));
   const cropHeight = Math.max(1, Math.round(image.naturalHeight * (1 - crop.top - crop.bottom)));
   const croppedCanvas = extractPixelCanvas(sourceCanvas, cropX, cropY, cropWidth, cropHeight);
-  return buildColorMaskCanvas(croppedCanvas).toDataURL('image/png');
+  return buildColorMaskCanvas(croppedCanvas, tolerance).toDataURL('image/png');
 }
 
 export function getSetCompletionImportStrictColors(): string[] {
@@ -289,6 +298,7 @@ function preprocessForOcr(
 
 function buildColorMaskCanvas(
   source: HTMLCanvasElement,
+  tolerance: number,
 ): HTMLCanvasElement {
   const scale = 4;
   const canvas = createCanvas(source.width * scale, source.height * scale);
@@ -304,9 +314,9 @@ function buildColorMaskCanvas(
   for (let index = 0; index < data.length; index += 4) {
     const matches = STRICT_SET_COMPLETION_IMPORT_COLORS.some(
       (color) =>
-        data[index] === color.red &&
-        data[index + 1] === color.green &&
-        data[index + 2] === color.blue,
+        Math.abs(data[index] - color.red) <= tolerance &&
+        Math.abs(data[index + 1] - color.green) <= tolerance &&
+        Math.abs(data[index + 2] - color.blue) <= tolerance,
     );
     const value = matches ? 255 : 0;
     data[index] = value;
@@ -398,6 +408,7 @@ async function recognizeNameVariants(
   worker: any,
   PSM: any,
   tileCanvas: HTMLCanvasElement,
+  tolerance: number,
 ): Promise<SetCompletionScreenshotOcrVariant[]> {
   const baseRegion = extractRegionCanvas(tileCanvas, {
     left: 0.05,
@@ -405,34 +416,34 @@ async function recognizeNameVariants(
     width: 0.9,
     height: 0.58,
   });
-  const tightBand = detectTextBandCanvas(baseRegion) ?? baseRegion;
+  const tightBand = detectTextBandCanvas(baseRegion, tolerance) ?? baseRegion;
 
   const passes = [
     {
       key: 'color-exact',
       label: 'Strict Palette Mask',
-      canvas: buildColorMaskCanvas(tightBand),
+      canvas: buildColorMaskCanvas(tightBand, tolerance),
       psm: PSM.SPARSE_TEXT,
       splitLines: false,
     },
     {
       key: 'color-clean',
       label: 'Cleaned Palette Mask',
-      canvas: cleanupMaskCanvas(buildColorMaskCanvas(tightBand)),
+      canvas: cleanupMaskCanvas(buildColorMaskCanvas(tightBand, tolerance)),
       psm: PSM.SPARSE_TEXT,
       splitLines: false,
     },
     {
       key: 'split-lines',
       label: 'Split Line Recovery',
-      canvas: cleanupMaskCanvas(buildColorMaskCanvas(tightBand)),
+      canvas: cleanupMaskCanvas(buildColorMaskCanvas(tightBand, tolerance)),
       psm: PSM.SINGLE_LINE,
       splitLines: true,
     },
     {
       key: 'line-clean',
       label: 'Icon Line Cleanup',
-      canvas: removeWideMaskComponents(cleanupMaskCanvas(buildColorMaskCanvas(tightBand))),
+      canvas: removeWideMaskComponents(cleanupMaskCanvas(buildColorMaskCanvas(tightBand, tolerance))),
       psm: PSM.SPARSE_TEXT,
       splitLines: false,
     },
@@ -568,6 +579,7 @@ async function recognizeQuantityFromTile(
   worker: any,
   PSM: any,
   tileCanvas: HTMLCanvasElement,
+  tolerance: number,
 ): Promise<{
   quantity: number | null;
   quantityConfidence: number;
@@ -579,7 +591,7 @@ async function recognizeQuantityFromTile(
     width: 0.3,
     height: 0.22,
   });
-  const tightMask = cleanupMaskCanvas(buildColorMaskCanvas(badgeRegion));
+  const tightMask = cleanupMaskCanvas(buildColorMaskCanvas(badgeRegion, tolerance));
   const anchorBounds = findMaskBounds(tightMask, { maxXRatio: 0.62, minArea: 24 });
   const anchorRight = anchorBounds
     ? clamp(
@@ -607,8 +619,9 @@ async function recognizeQuantityFromTile(
         height: 0.88,
       });
 
-  const exactDigitMask = focusDigitMaskCanvas(buildColorMaskCanvas(digitRegion));
-  const cleanedDigitMask = focusDigitMaskCanvas(cleanupMaskCanvas(buildColorMaskCanvas(digitRegion)));
+  const exactDigitMask = focusDigitMaskCanvas(buildColorMaskCanvas(digitRegion, tolerance));
+  const cleanedDigitMask =
+    focusDigitMaskCanvas(cleanupMaskCanvas(buildColorMaskCanvas(digitRegion, tolerance)));
   const grayscaleDigitMask = focusDigitMaskCanvas(preprocessForOcr(digitRegion, 'digits'));
 
   const digitPasses = [
@@ -703,8 +716,9 @@ function scoreDigitCandidate(
 
 function detectTextBandCanvas(
   source: HTMLCanvasElement,
+  tolerance: number,
 ): HTMLCanvasElement | null {
-  const maskCanvas = buildColorMaskCanvas(source);
+  const maskCanvas = buildColorMaskCanvas(source, tolerance);
   const context = maskCanvas.getContext('2d');
   if (!context) {
     return null;
@@ -968,6 +982,7 @@ function removeThinMaskComponents(canvas: HTMLCanvasElement): void {
 
 function tileHasNameSignal(
   tileCanvas: HTMLCanvasElement,
+  tolerance: number,
 ): boolean {
   const nameRegion = extractRegionCanvas(tileCanvas, {
     left: 0.05,
@@ -975,7 +990,7 @@ function tileHasNameSignal(
     width: 0.9,
     height: 0.58,
   });
-  return regionHasSignal(buildColorMaskCanvas(nameRegion));
+  return regionHasSignal(buildColorMaskCanvas(nameRegion, tolerance));
 }
 
 function removeWideMaskComponents(source: HTMLCanvasElement): HTMLCanvasElement {
