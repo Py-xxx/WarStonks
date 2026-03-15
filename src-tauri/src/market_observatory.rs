@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -31,8 +31,10 @@ const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
 const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
-const SCANNER_WFM_STATS_TIMEOUT_SECONDS: u64 = 8;
+const SCANNER_WFM_STATS_TIMEOUT_SECONDS: u64 = 5;
 const SCANNER_ITEM_MAX_ATTEMPTS: usize = 3;
+const SCANNER_ITEM_TOTAL_DEADLINE_SECONDS: u64 = 25;
+const WFM_DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 20;
 const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ARBITRAGE_SCANNER_HEARTBEAT_SECONDS: u64 = 3;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
@@ -1771,7 +1773,7 @@ fn fetch_and_cache_statistics(
         slug,
         variant_key,
         priority,
-        None,
+        Some(Duration::from_secs(WFM_DEFAULT_REQUEST_TIMEOUT_SECONDS)),
         || false,
     )
 }
@@ -2016,12 +2018,16 @@ fn latest_statistics_fetch_timestamp(
     Ok(fetched_at.and_then(|value| parse_timestamp(&value)))
 }
 
-fn ensure_statistics_cached_for_scan(
+fn ensure_statistics_cached_for_scan<C>(
     connection: &Connection,
     item_id: i64,
     slug: &str,
     variant_key: &str,
-) -> Result<bool> {
+    mut is_cancelled: C,
+) -> Result<bool>
+where
+    C: FnMut() -> bool,
+{
     let needs_refresh = !statistics_cache_is_usable(
         connection,
         item_id,
@@ -2042,7 +2048,7 @@ fn ensure_statistics_cached_for_scan(
         variant_key,
         RequestPriority::Low,
         Some(Duration::from_secs(SCANNER_WFM_STATS_TIMEOUT_SECONDS)),
-        || arbitrage_scanner_stop_requested(connection).unwrap_or(false),
+        || is_cancelled(),
     ) {
         if statistics_cache_is_usable(
             connection,
@@ -6682,19 +6688,29 @@ fn build_arbitrage_set_entry(
     }
 }
 
-fn get_or_build_scanner_price_model(
+fn get_or_build_scanner_price_model<C>(
     observatory_connection: &Connection,
     price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
     item_id: i64,
     slug: &str,
     refreshed_statistics_count: &mut usize,
-) -> Result<Option<ScannerPriceModel>> {
+    mut is_cancelled: C,
+) -> Result<Option<ScannerPriceModel>>
+where
+    C: FnMut() -> bool,
+{
     if let Some(existing) = price_model_cache.get(&item_id) {
         return Ok(existing.clone());
     }
 
     let model = (|| -> Result<Option<ScannerPriceModel>> {
-        if ensure_statistics_cached_for_scan(observatory_connection, item_id, slug, "base")? {
+        if ensure_statistics_cached_for_scan(
+            observatory_connection,
+            item_id,
+            slug,
+            "base",
+            || is_cancelled(),
+        )? {
             *refreshed_statistics_count += 1;
         }
         build_statistics_price_model(observatory_connection, item_id, "base")
@@ -7218,6 +7234,7 @@ fn build_arbitrage_scanner_inner(
             },
         )?;
 
+        let item_started = Instant::now();
         let resolution = match work_unit.item_id {
             Some(item_id) => get_or_build_scanner_price_model(
                 &observatory_connection,
@@ -7225,6 +7242,11 @@ fn build_arbitrage_scanner_inner(
                 item_id,
                 &work_unit.slug,
                 &mut refreshed_statistics_count,
+                || {
+                    item_started.elapsed().as_secs() >= SCANNER_ITEM_TOTAL_DEADLINE_SECONDS
+                        || arbitrage_scanner_stop_requested(&observatory_connection)
+                            .unwrap_or(false)
+                },
             ),
             None => Ok(None),
         };
@@ -9684,6 +9706,7 @@ mod tests {
             42,
             "example_prime_part",
             &mut refreshed_statistics_count,
+            || false,
         )
         .expect("cached model should resolve");
 
