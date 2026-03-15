@@ -25,6 +25,15 @@ export interface SetCompletionScreenshotProgress {
   detail: string;
 }
 
+export interface SetCompletionImportColorSample {
+  x: number;
+  y: number;
+  red: number;
+  green: number;
+  blue: number;
+  hex: string;
+}
+
 const DEFAULT_CROP: SetCompletionImportCrop = {
   left: 0,
   top: 0,
@@ -48,6 +57,7 @@ export function getDefaultSetCompletionImportCrop(): SetCompletionImportCrop {
 export async function processSetCompletionInventoryScreenshot(
   file: File,
   crop: SetCompletionImportCrop,
+  colorSample: SetCompletionImportColorSample | null,
   onProgress?: (progress: SetCompletionScreenshotProgress) => void,
 ): Promise<SetCompletionScreenshotOcrRow[]> {
   const [{ createWorker, PSM }, image] = await Promise.all([
@@ -56,6 +66,8 @@ export async function processSetCompletionInventoryScreenshot(
   ]);
 
   const tileCanvases = extractTileCanvases(image, crop);
+  const resolvedColorSample =
+    colorSample ?? suggestSetCompletionImportColorSampleFromImage(image, crop);
   const worker = await createWorker('eng', 1, {
     logger: (message) => {
       if (!onProgress) {
@@ -80,45 +92,29 @@ export async function processSetCompletionInventoryScreenshot(
         detail: `Reading visible tile ${index + 1}/${tileCanvases.length}…`,
       });
 
-      const quantityCanvas = preprocessForOcr(
-        extractRegionCanvas(tileCanvas, {
-          left: 0.02,
-          top: 0.01,
-          width: 0.27,
-          height: 0.22,
-        }),
-        'digits',
+      const quantityResult = await recognizeQuantityFromTile(
+        worker,
+        PSM,
+        tileCanvas,
+        resolvedColorSample,
       );
+      const { quantity, quantityConfidence, quantityState } = quantityResult;
 
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_WORD,
-        tessedit_char_whitelist: '0123456789',
-      });
-      const quantityResult = await worker.recognize(quantityCanvas);
-      const quantityText = quantityResult.data.text.trim();
-      const quantityDigits = quantityText.replace(/\D/g, '');
-      const quantityConfidence = (quantityResult.data.confidence ?? 0) / 100;
-      const hasBadgeSignal = regionHasSignal(quantityCanvas);
-
-      let quantity: number | null = null;
-      let quantityState: SetCompletionScreenshotOcrRow['quantityState'] = 'defaulted';
-      if (quantityDigits) {
-        quantity = Math.max(Number.parseInt(quantityDigits, 10) || 1, 1);
-        quantityState = 'detected';
-      } else if (!hasBadgeSignal) {
-        quantity = 1;
-        quantityState = 'defaulted';
-      } else {
-        quantity = null;
-        quantityState = 'unresolved';
-      }
-
-      const ocrVariants = await recognizeNameVariants(worker, PSM, tileCanvas);
+      const ocrVariants = await recognizeNameVariants(
+        worker,
+        PSM,
+        tileCanvas,
+        resolvedColorSample,
+      );
       const bestVariant = chooseBestOcrVariant(ocrVariants);
       const detectedName = bestVariant?.text ?? '';
       const nameConfidence = bestVariant?.confidence ?? 0;
 
-      if (!detectedName && quantityState === 'defaulted' && !tileHasNameSignal(tileCanvas)) {
+      if (
+        !detectedName &&
+        quantityState === 'defaulted' &&
+        !tileHasNameSignal(tileCanvas, resolvedColorSample)
+      ) {
         continue;
       }
 
@@ -144,6 +140,39 @@ export async function processSetCompletionInventoryScreenshot(
   } finally {
     await worker.terminate();
   }
+}
+
+export async function suggestSetCompletionImportColorSample(
+  file: File,
+  crop: SetCompletionImportCrop,
+): Promise<SetCompletionImportColorSample | null> {
+  const image = await loadFileImage(file);
+  return suggestSetCompletionImportColorSampleFromImage(image, crop);
+}
+
+export async function sampleSetCompletionImportColorAtPoint(
+  file: File,
+  x: number,
+  y: number,
+): Promise<SetCompletionImportColorSample | null> {
+  const image = await loadFileImage(file);
+  const sampleX = clamp(Math.round(x * image.naturalWidth), 0, image.naturalWidth - 1);
+  const sampleY = clamp(Math.round(y * image.naturalHeight), 0, image.naturalHeight - 1);
+  const canvas = createCanvas(image.naturalWidth, image.naturalHeight);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return null;
+  }
+  context.drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight);
+  const { data } = context.getImageData(sampleX, sampleY, 1, 1);
+  return {
+    x,
+    y,
+    red: data[0],
+    green: data[1],
+    blue: data[2],
+    hex: rgbToHex(data[0], data[1], data[2]),
+  };
 }
 
 async function loadFileImage(file: File): Promise<HTMLImageElement> {
@@ -274,6 +303,41 @@ function preprocessForOcr(
   return canvas;
 }
 
+function buildColorMaskCanvas(
+  source: HTMLCanvasElement,
+  sample: SetCompletionImportColorSample | null,
+  tolerance: number,
+): HTMLCanvasElement {
+  const scale = 4;
+  const canvas = createCanvas(source.width * scale, source.height * scale);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Could not create color mask canvas.');
+  }
+
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imageData;
+  const target = sample
+    ? [sample.red, sample.green, sample.blue]
+    : [214, 186, 112];
+
+  for (let index = 0; index < data.length; index += 4) {
+    const matches =
+      Math.abs(data[index] - target[0]) <= tolerance &&
+      Math.abs(data[index + 1] - target[1]) <= tolerance &&
+      Math.abs(data[index + 2] - target[2]) <= tolerance;
+    const value = matches ? 255 : 0;
+    data[index] = value;
+    data[index + 1] = value;
+    data[index + 2] = value;
+    data[index + 3] = 255;
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
 function regionHasSignal(canvas: HTMLCanvasElement): boolean {
   const context = canvas.getContext('2d');
   if (!context) {
@@ -294,6 +358,52 @@ function regionHasSignal(canvas: HTMLCanvasElement): boolean {
   return sampledPixels > 0 && brightPixels / sampledPixels > 0.03;
 }
 
+function findMaskBounds(
+  canvas: HTMLCanvasElement,
+  options?: { maxXRatio?: number; minArea?: number },
+): { x: number; y: number; width: number; height: number; area: number } | null {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return null;
+  }
+  const maxX = options?.maxXRatio ? Math.floor(canvas.width * options.maxXRatio) : canvas.width;
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  let minX = canvas.width;
+  let minY = canvas.height;
+  let maxFoundX = -1;
+  let maxFoundY = -1;
+  let area = 0;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < maxX; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      if (data[index] > 180) {
+        area += 1;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxFoundX = Math.max(maxFoundX, x);
+        maxFoundY = Math.max(maxFoundY, y);
+      }
+    }
+  }
+
+  if (
+    maxFoundX < 0 ||
+    maxFoundY < 0 ||
+    area < (options?.minArea ?? Math.max(18, Math.round(canvas.width * canvas.height * 0.01)))
+  ) {
+    return null;
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxFoundX - minX + 1,
+    height: maxFoundY - minY + 1,
+    area,
+  };
+}
+
 function cleanupDetectedName(value: string): string {
   return value
     .replace(/\s+/g, ' ')
@@ -307,52 +417,73 @@ async function recognizeNameVariants(
   worker: any,
   PSM: any,
   tileCanvas: HTMLCanvasElement,
+  colorSample: SetCompletionImportColorSample | null,
 ): Promise<SetCompletionScreenshotOcrVariant[]> {
+  const baseRegion = extractRegionCanvas(tileCanvas, {
+    left: 0.05,
+    top: 0.38,
+    width: 0.9,
+    height: 0.58,
+  });
+  const tightBand = detectTextBandCanvas(baseRegion, colorSample) ?? baseRegion;
+
   const passes = [
     {
-      key: 'standard',
-      label: 'Standard Crop',
-      region: { left: 0.08, top: 0.47, width: 0.84, height: 0.47 },
-      mode: 'text' as const,
-      psm: PSM.SINGLE_BLOCK,
-    },
-    {
-      key: 'tall',
-      label: 'Tall Crop',
-      region: { left: 0.06, top: 0.42, width: 0.88, height: 0.54 },
-      mode: 'text' as const,
-      psm: PSM.SINGLE_BLOCK,
-    },
-    {
-      key: 'strong',
-      label: 'High Contrast',
-      region: { left: 0.06, top: 0.44, width: 0.88, height: 0.5 },
-      mode: 'text-strong' as const,
+      key: 'color-exact',
+      label: 'Exact Color Mask',
+      canvas: buildColorMaskCanvas(tightBand, colorSample, 0),
       psm: PSM.SPARSE_TEXT,
+      splitLines: false,
+    },
+    {
+      key: 'color-tight',
+      label: 'Tight Color Mask',
+      canvas: buildColorMaskCanvas(tightBand, colorSample, 16),
+      psm: PSM.SPARSE_TEXT,
+      splitLines: false,
+    },
+    {
+      key: 'color-clean',
+      label: 'Cleaned Color Mask',
+      canvas: cleanupMaskCanvas(buildColorMaskCanvas(tightBand, colorSample, 24)),
+      psm: PSM.SPARSE_TEXT,
+      splitLines: false,
+    },
+    {
+      key: 'split-lines',
+      label: 'Split Line Recovery',
+      canvas: cleanupMaskCanvas(buildColorMaskCanvas(tightBand, colorSample, 24)),
+      psm: PSM.SINGLE_LINE,
+      splitLines: true,
+    },
+    {
+      key: 'fallback-contrast',
+      label: 'Fallback Contrast',
+      canvas: preprocessForOcr(tightBand, 'text-strong'),
+      psm: PSM.SPARSE_TEXT,
+      splitLines: false,
     },
   ];
 
   const variants: SetCompletionScreenshotOcrVariant[] = [];
   for (const pass of passes) {
-    const nameCanvas = preprocessForOcr(extractRegionCanvas(tileCanvas, pass.region), pass.mode);
     await worker.setParameters({
       tessedit_pageseg_mode: pass.psm as unknown as string,
       preserve_interword_spaces: '1',
       tessedit_char_whitelist:
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '-",
     });
-    const result = await worker.recognize(nameCanvas, {}, { blocks: true });
-    const linesText = extractBlockLinesText(result.data.blocks);
-    const rawText = cleanupDetectedName(result.data.text);
-    const mergedText = cleanupDetectedName(linesText || rawText);
-    if (!mergedText && !regionHasSignal(nameCanvas)) {
+    const mergedText = pass.splitLines
+      ? await recognizeSplitNameLines(worker, PSM, pass.canvas)
+      : await recognizeNameCanvas(worker, pass.canvas);
+    if (!mergedText && !regionHasSignal(pass.canvas)) {
       continue;
     }
     variants.push({
       key: pass.key,
       label: pass.label,
       text: mergedText,
-      confidence: (result.data.confidence ?? 0) / 100,
+      confidence: mergedText ? estimateOcrConfidence(mergedText, pass.canvas) : 0,
     });
   }
 
@@ -393,6 +524,46 @@ function dedupeOcrVariants(
   return [...byText.values()].sort((left, right) => right.confidence - left.confidence);
 }
 
+async function recognizeNameCanvas(worker: any, canvas: HTMLCanvasElement): Promise<string> {
+  const result = await worker.recognize(canvas, {}, { blocks: true });
+  const linesText = extractBlockLinesText(result.data.blocks);
+  const rawText = cleanupDetectedName(result.data.text);
+  return cleanupDetectedName(linesText || rawText);
+}
+
+async function recognizeSplitNameLines(
+  worker: any,
+  PSM: any,
+  canvas: HTMLCanvasElement,
+): Promise<string> {
+  const bounds = findMaskBounds(canvas);
+  if (!bounds) {
+    return '';
+  }
+  const lineSplit = clamp(bounds.y + Math.round(bounds.height * 0.52), 1, canvas.height - 1);
+  const upperCanvas = extractPixelCanvas(canvas, 0, 0, canvas.width, lineSplit);
+  const lowerCanvas = extractPixelCanvas(canvas, 0, lineSplit, canvas.width, canvas.height - lineSplit);
+
+  await worker.setParameters({
+    tessedit_pageseg_mode: PSM.SINGLE_LINE as unknown as string,
+    preserve_interword_spaces: '1',
+    tessedit_char_whitelist:
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '-",
+  });
+
+  const [upperText, lowerText] = await Promise.all([
+    regionHasSignal(upperCanvas) ? recognizeNameCanvas(worker, upperCanvas) : Promise.resolve(''),
+    regionHasSignal(lowerCanvas) ? recognizeNameCanvas(worker, lowerCanvas) : Promise.resolve(''),
+  ]);
+
+  return cleanupDetectedName([upperText, lowerText].filter(Boolean).join(' '));
+}
+
+function estimateOcrConfidence(value: string, canvas: HTMLCanvasElement): number {
+  const base = Math.min(0.98, 0.45 + value.length * 0.03);
+  return regionHasSignal(canvas) ? base : Math.min(base, 0.35);
+}
+
 function extractBlockLinesText(blocks: Array<{ paragraphs?: Array<{ lines?: Array<{ text: string }> }> }> | null): string {
   if (!blocks?.length) {
     return '';
@@ -413,15 +584,371 @@ function extractBlockLinesText(blocks: Array<{ paragraphs?: Array<{ lines?: Arra
   return lines.join(' ');
 }
 
-function tileHasNameSignal(tileCanvas: HTMLCanvasElement): boolean {
-  return regionHasSignal(
-    extractRegionCanvas(tileCanvas, {
-      left: 0.06,
-      top: 0.42,
-      width: 0.88,
-      height: 0.54,
-    }),
-  );
+async function recognizeQuantityFromTile(
+  worker: any,
+  PSM: any,
+  tileCanvas: HTMLCanvasElement,
+  colorSample: SetCompletionImportColorSample | null,
+): Promise<{
+  quantity: number | null;
+  quantityConfidence: number;
+  quantityState: SetCompletionScreenshotOcrRow['quantityState'];
+}> {
+  const badgeRegion = extractRegionCanvas(tileCanvas, {
+    left: 0.015,
+    top: 0.01,
+    width: 0.3,
+    height: 0.22,
+  });
+  const tightMask = buildColorMaskCanvas(badgeRegion, colorSample, 18);
+  const anchorBounds = findMaskBounds(tightMask, { maxXRatio: 0.62, minArea: 24 });
+  const digitRegion = anchorBounds
+    ? extractPixelCanvas(
+        badgeRegion,
+        clamp(Math.floor(anchorBounds.x / 4 + anchorBounds.width / 4 + 2), 0, badgeRegion.width - 1),
+        0,
+        Math.max(1, badgeRegion.width - clamp(Math.floor(anchorBounds.x / 4 + anchorBounds.width / 4 + 2), 0, badgeRegion.width - 1)),
+        badgeRegion.height,
+      )
+    : extractRegionCanvas(badgeRegion, {
+        left: 0.34,
+        top: 0,
+        width: 0.62,
+        height: 1,
+      });
+
+  const digitPasses = [
+    buildColorMaskCanvas(digitRegion, colorSample, 0),
+    buildColorMaskCanvas(digitRegion, colorSample, 18),
+    preprocessForOcr(digitRegion, 'digits'),
+  ];
+
+  const candidates: Array<{ digits: string; confidence: number }> = [];
+  await worker.setParameters({
+    tessedit_pageseg_mode: PSM.SINGLE_WORD as unknown as string,
+    tessedit_char_whitelist: '0123456789',
+  });
+  for (const pass of digitPasses) {
+    const result = await worker.recognize(pass);
+    const digits = result.data.text.trim().replace(/\D/g, '');
+    if (digits) {
+      candidates.push({
+        digits,
+        confidence: (result.data.confidence ?? 0) / 100,
+      });
+    }
+  }
+
+  const digitSignal = digitPasses.some((pass) => regionHasSignal(pass));
+  const best = chooseBestDigitCandidate(candidates);
+  if (best) {
+    return {
+      quantity: Math.max(Number.parseInt(best.digits, 10) || 1, 1),
+      quantityConfidence: best.confidence,
+      quantityState: 'detected',
+    };
+  }
+  if (!anchorBounds || !digitSignal) {
+    return {
+      quantity: 1,
+      quantityConfidence: 0,
+      quantityState: 'defaulted',
+    };
+  }
+  return {
+    quantity: null,
+    quantityConfidence: 0,
+    quantityState: 'unresolved',
+  };
+}
+
+function chooseBestDigitCandidate(
+  candidates: Array<{ digits: string; confidence: number }>,
+): { digits: string; confidence: number } | null {
+  if (!candidates.length) {
+    return null;
+  }
+  const byDigits = new Map<string, { digits: string; confidence: number; count: number }>();
+  for (const candidate of candidates) {
+    const existing = byDigits.get(candidate.digits);
+    if (existing) {
+      existing.count += 1;
+      existing.confidence += candidate.confidence;
+    } else {
+      byDigits.set(candidate.digits, { ...candidate, count: 1 });
+    }
+  }
+  return [...byDigits.values()].sort((left, right) => {
+    const countDelta = right.count - left.count;
+    if (countDelta !== 0) {
+      return countDelta;
+    }
+    return right.confidence - left.confidence;
+  })[0] ?? null;
+}
+
+function detectTextBandCanvas(
+  source: HTMLCanvasElement,
+  colorSample: SetCompletionImportColorSample | null,
+): HTMLCanvasElement | null {
+  const maskCanvas = buildColorMaskCanvas(source, colorSample, 24);
+  const context = maskCanvas.getContext('2d');
+  if (!context) {
+    return null;
+  }
+  const { data } = context.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+  const rowScores = new Array(maskCanvas.height).fill(0);
+  let maxScore = 0;
+
+  for (let y = 0; y < maskCanvas.height; y += 1) {
+    let score = 0;
+    for (let x = 0; x < maskCanvas.width; x += 1) {
+      const index = (y * maskCanvas.width + x) * 4;
+      if (data[index] > 180) {
+        score += 1;
+      }
+    }
+    rowScores[y] = score;
+    maxScore = Math.max(maxScore, score);
+  }
+
+  if (maxScore === 0) {
+    return null;
+  }
+
+  const threshold = Math.max(2, Math.round(maxScore * 0.12));
+  let start = rowScores.findIndex((score) => score >= threshold);
+  let end = rowScores.length - 1 - [...rowScores].reverse().findIndex((score) => score >= threshold);
+  if (start < 0 || end < start) {
+    return null;
+  }
+
+  start = clamp(start - 6, 0, maskCanvas.height - 1);
+  end = clamp(end + 6, start + 1, maskCanvas.height);
+  const unscaledStart = clamp(Math.floor(start / 4), 0, source.height - 1);
+  const unscaledEnd = clamp(Math.ceil(end / 4), unscaledStart + 1, source.height);
+  return extractPixelCanvas(source, 0, unscaledStart, source.width, unscaledEnd - unscaledStart);
+}
+
+function cleanupMaskCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
+  trimMaskToDenseRows(canvas);
+  removeThinMaskComponents(canvas);
+  return canvas;
+}
+
+function trimMaskToDenseRows(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return;
+  }
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imageData;
+  const rowScores = new Array(canvas.height).fill(0);
+  let maxScore = 0;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    let score = 0;
+    for (let x = 0; x < canvas.width; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      if (data[index] > 180) {
+        score += 1;
+      }
+    }
+    rowScores[y] = score;
+    maxScore = Math.max(maxScore, score);
+  }
+  if (maxScore === 0) {
+    return;
+  }
+  const threshold = Math.max(2, Math.round(maxScore * 0.16));
+  let start = rowScores.findIndex((score) => score >= threshold);
+  let end = rowScores.length - 1 - [...rowScores].reverse().findIndex((score) => score >= threshold);
+  if (start < 0 || end < start) {
+    return;
+  }
+  start = clamp(start - 4, 0, canvas.height - 1);
+  end = clamp(end + 4, start, canvas.height - 1);
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    if (y >= start && y <= end) {
+      continue;
+    }
+    for (let x = 0; x < canvas.width; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      data[index] = 0;
+      data[index + 1] = 0;
+      data[index + 2] = 0;
+      data[index + 3] = 255;
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+}
+
+function removeThinMaskComponents(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return;
+  }
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imageData;
+  const visited = new Uint8Array(canvas.width * canvas.height);
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      const flatIndex = y * canvas.width + x;
+      if (visited[flatIndex]) {
+        continue;
+      }
+      visited[flatIndex] = 1;
+      const pixelIndex = flatIndex * 4;
+      if (data[pixelIndex] <= 180) {
+        continue;
+      }
+
+      const queue = [flatIndex];
+      const component: number[] = [];
+      let minX = x;
+      let minY = y;
+      let maxX = x;
+      let maxY = y;
+
+      while (queue.length) {
+        const current = queue.pop()!;
+        component.push(current);
+        const cx = current % canvas.width;
+        const cy = Math.floor(current / canvas.width);
+        minX = Math.min(minX, cx);
+        minY = Math.min(minY, cy);
+        maxX = Math.max(maxX, cx);
+        maxY = Math.max(maxY, cy);
+
+        const neighbors = [
+          [cx - 1, cy],
+          [cx + 1, cy],
+          [cx, cy - 1],
+          [cx, cy + 1],
+        ];
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || nx >= canvas.width || ny < 0 || ny >= canvas.height) {
+            continue;
+          }
+          const neighbor = ny * canvas.width + nx;
+          if (visited[neighbor]) {
+            continue;
+          }
+          visited[neighbor] = 1;
+          const neighborPixelIndex = neighbor * 4;
+          if (data[neighborPixelIndex] > 180) {
+            queue.push(neighbor);
+          }
+        }
+      }
+
+      const componentWidth = maxX - minX + 1;
+      const componentHeight = maxY - minY + 1;
+      const fill = component.length / Math.max(1, componentWidth * componentHeight);
+      const aspect = componentWidth / Math.max(1, componentHeight);
+      const shouldRemove =
+        component.length < 10 ||
+        ((aspect > 6 || aspect < 0.16) && fill < 0.35);
+      if (!shouldRemove) {
+        continue;
+      }
+
+      for (const pixel of component) {
+        const index = pixel * 4;
+        data[index] = 0;
+        data[index + 1] = 0;
+        data[index + 2] = 0;
+        data[index + 3] = 255;
+      }
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+}
+
+function tileHasNameSignal(
+  tileCanvas: HTMLCanvasElement,
+  colorSample: SetCompletionImportColorSample | null,
+): boolean {
+  const nameRegion = extractRegionCanvas(tileCanvas, {
+    left: 0.05,
+    top: 0.38,
+    width: 0.9,
+    height: 0.58,
+  });
+  return regionHasSignal(buildColorMaskCanvas(nameRegion, colorSample, 24));
+}
+
+function suggestSetCompletionImportColorSampleFromImage(
+  image: HTMLImageElement,
+  crop: SetCompletionImportCrop,
+): SetCompletionImportColorSample | null {
+  const canvas = createCanvas(image.naturalWidth, image.naturalHeight);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return null;
+  }
+  context.drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight);
+  const cropX = Math.round(image.naturalWidth * crop.left);
+  const cropY = Math.round(image.naturalHeight * crop.top);
+  const cropWidth = Math.max(1, Math.round(image.naturalWidth * (1 - crop.left - crop.right)));
+  const cropHeight = Math.max(1, Math.round(image.naturalHeight * (1 - crop.top - crop.bottom)));
+  const { data } = context.getImageData(cropX, cropY, cropWidth, cropHeight);
+
+  let bestScore = 0;
+  let bestX = Math.round(cropWidth * 0.5);
+  let bestY = Math.round(cropHeight * 0.7);
+  let bestColor = [214, 186, 112];
+
+  for (let y = Math.round(cropHeight * 0.28); y < cropHeight; y += 2) {
+    for (let x = 0; x < cropWidth; x += 2) {
+      const index = (y * cropWidth + x) * 4;
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      const score = scorePotentialTextPixel(red, green, blue);
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+        bestY = y;
+        bestColor = [red, green, blue];
+      }
+    }
+  }
+
+  return {
+    x: (cropX + bestX) / image.naturalWidth,
+    y: (cropY + bestY) / image.naturalHeight,
+    red: bestColor[0],
+    green: bestColor[1],
+    blue: bestColor[2],
+    hex: rgbToHex(bestColor[0], bestColor[1], bestColor[2]),
+  };
+}
+
+function scorePotentialTextPixel(red: number, green: number, blue: number): number {
+  if (red < 120 || green < 90 || blue > 170) {
+    return 0;
+  }
+  if (red < green || Math.abs(red - green) > 70) {
+    return 0;
+  }
+  const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
+  return red * 0.5 + green * 0.4 - blue * 0.25 + chroma * 0.35;
+}
+
+function rgbToHex(red: number, green: number, blue: number): string {
+  return `#${[red, green, blue]
+    .map((value) => clamp(value, 0, 255).toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function createCanvas(width: number, height: number): HTMLCanvasElement {
