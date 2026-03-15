@@ -37,6 +37,14 @@ function formatPlat(value: number | null): string {
   return `${Math.round(value)}p`;
 }
 
+function formatPlatPrecise(value: number | null): string {
+  if (value === null) {
+    return '—';
+  }
+
+  return `${value.toFixed(2).replace(/\.?0+$/, '')}p`;
+}
+
 function formatPercent(value: number | null): string {
   if (value === null) {
     return '—';
@@ -421,7 +429,7 @@ function RelicRoiRow({
         </div>
         <div className="scanner-list-metrics-relic">
           <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{formatPlat(summary?.runValue ?? null)}</strong>
+            <strong>{formatPlatPrecise(summary?.runValue ?? null)}</strong>
           </div>
           <div className="scanner-list-metric scanner-list-metric-inline">
             <strong>{Math.round(summary?.liquidityScore ?? 0)}%</strong>
@@ -458,7 +466,7 @@ function RelicRoiRow({
             </span>
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">Run Value</span>
-              <span className="scanner-stat-pill-value">{formatPlat(summary?.runValue ?? null)}</span>
+              <span className="scanner-stat-pill-value">{formatPlatPrecise(summary?.runValue ?? null)}</span>
             </span>
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">Liquidity</span>
