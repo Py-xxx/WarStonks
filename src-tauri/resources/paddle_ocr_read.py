@@ -197,20 +197,25 @@ def build_quantity_text(segments: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def prepare_quantity_image(image: Image.Image | None) -> Image.Image | None:
+def prepare_quantity_image(image: Image.Image | None, threshold: int) -> Image.Image | None:
     if image is None:
         return None
     grayscale = image.convert("L")
-    thresholded = grayscale.point(lambda value: 255 if value > 96 else 0, mode="L")
+    thresholded = grayscale.point(lambda value: 255 if value > threshold else 0, mode="L")
     width, height = thresholded.size
-    return thresholded.resize((max(1, width * 4), max(1, height * 4)), Image.Resampling.NEAREST)
+    return thresholded.resize((max(1, width * 5), max(1, height * 5)), Image.Resampling.NEAREST)
 
 
 def run_ocr(ocr: PaddleOCR, image: Image.Image | None, mode: str) -> str | None:
     if image is None:
         return None
     if mode == "quantity":
-        quantity_variants = [image, prepare_quantity_image(image)]
+        quantity_variants = [
+            image,
+            prepare_quantity_image(image, 72),
+            prepare_quantity_image(image, 96),
+            prepare_quantity_image(image, 120),
+        ]
         for variant in quantity_variants:
             if variant is None:
                 continue
