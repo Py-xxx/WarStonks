@@ -147,8 +147,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
   if (!previewContext) {
     throw new Error('Could not create annotated preview canvas.');
   }
-  previewContext.fillStyle = '#000000';
-  previewContext.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
 
   const tiles = buildTileDescriptors(croppedCanvas.width, croppedCanvas.height);
   const cells: SetCompletionDetectionCell[] = [];
@@ -342,6 +340,7 @@ function analyzeTileMask(
   nameBox: SetCompletionDetectionBox | null;
   quantityBox: SetCompletionDetectionBox | null;
 } {
+  const previewCanvas = createCanvas(tileMask.width, tileMask.height);
   const badgeRegionRect = toPixelRegion(tileMask, BADGE_REGION);
   const badgeMask = extractPixelCanvas(
     tileMask,
@@ -388,10 +387,6 @@ function analyzeTileMask(
       )
     : null;
 
-  const previewCanvas = cleanupPreviewMask(tileMask, {
-    nameBox,
-    quantityBox,
-  });
   applyTraceOverlay(previewCanvas, tileMask, nameBox, traceSettings);
   applyTraceOverlay(previewCanvas, tileMask, quantityBox, traceSettings);
   const detected = nameBox !== null || quantityBox !== null;
@@ -651,56 +646,6 @@ function cleanupMaskCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   return canvas;
 }
 
-function cleanupPreviewMask(
-  source: HTMLCanvasElement,
-  boxes: {
-    nameBox: SetCompletionDetectionBox | null;
-    quantityBox: SetCompletionDetectionBox | null;
-  },
-): HTMLCanvasElement {
-  const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return canvas;
-  }
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const { data } = imageData;
-  const visited = new Uint8Array(canvas.width * canvas.height);
-  const keepRegions = buildPreviewKeepRegions(canvas, boxes);
-
-  for (let y = 0; y < canvas.height; y += 1) {
-    for (let x = 0; x < canvas.width; x += 1) {
-      const flatIndex = y * canvas.width + x;
-      if (visited[flatIndex]) {
-        continue;
-      }
-      visited[flatIndex] = 1;
-      const pixelIndex = flatIndex * 4;
-      if (data[pixelIndex] <= 180) {
-        continue;
-      }
-
-      const component = collectMaskComponent(canvas.width, canvas.height, data, visited, flatIndex);
-      const bounds = componentBounds(canvas.width, component);
-      const shouldKeep = shouldKeepPreviewComponent(bounds, component.length, keepRegions);
-      if (shouldKeep) {
-        continue;
-      }
-
-      for (const pixel of component) {
-        const index = pixel * 4;
-        data[index] = 0;
-        data[index + 1] = 0;
-        data[index + 2] = 0;
-        data[index + 3] = 255;
-      }
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
 function applyTraceOverlay(
   previewCanvas: HTMLCanvasElement,
   sourceMask: HTMLCanvasElement,
@@ -914,103 +859,6 @@ function isTraceEdgePixel(
     }
   }
   return false;
-}
-
-function buildPreviewKeepRegions(
-  canvas: HTMLCanvasElement,
-  boxes: {
-    nameBox: SetCompletionDetectionBox | null;
-    quantityBox: SetCompletionDetectionBox | null;
-  },
-): SetCompletionDetectionBox[] {
-  const keepRegions: SetCompletionDetectionBox[] = [];
-
-  if (boxes.nameBox) {
-    keepRegions.push(
-      expandPreviewBox(boxes.nameBox, canvas.width, canvas.height, {
-        left: Math.max(8, Math.round(boxes.nameBox.width * 0.08)),
-        right: Math.max(8, Math.round(boxes.nameBox.width * 0.08)),
-        top: Math.max(8, Math.round(boxes.nameBox.height * 0.08)),
-        bottom: 0,
-      }),
-    );
-  }
-
-  if (boxes.quantityBox) {
-    keepRegions.push(
-      expandPreviewBox(boxes.quantityBox, canvas.width, canvas.height, {
-        left: Math.max(3, Math.round(boxes.quantityBox.width * 0.12)),
-        right: Math.max(8, Math.round(boxes.quantityBox.width * 0.22)),
-        top: Math.max(3, Math.round(boxes.quantityBox.height * 0.2)),
-        bottom: Math.max(3, Math.round(boxes.quantityBox.height * 0.2)),
-      }),
-    );
-  }
-
-  return keepRegions;
-}
-
-function expandPreviewBox(
-  box: SetCompletionDetectionBox,
-  maxWidth: number,
-  maxHeight: number,
-  padding: {
-    left: number;
-    right: number;
-    top: number;
-    bottom: number;
-  },
-): SetCompletionDetectionBox {
-  const left = clamp(box.x - padding.left, 0, Math.max(0, maxWidth - 1));
-  const top = clamp(box.y - padding.top, 0, Math.max(0, maxHeight - 1));
-  const right = clamp(
-    box.x + box.width - 1 + padding.right,
-    left,
-    Math.max(0, maxWidth - 1),
-  );
-  const bottom = clamp(
-    box.y + box.height - 1 + padding.bottom,
-    top,
-    Math.max(0, maxHeight - 1),
-  );
-  return {
-    x: left,
-    y: top,
-    width: right - left + 1,
-    height: bottom - top + 1,
-  };
-}
-
-function shouldKeepPreviewComponent(
-  bounds: SetCompletionDetectionBox,
-  area: number,
-  keepRegions: SetCompletionDetectionBox[],
-): boolean {
-  if (keepRegions.some((region) => boxesIntersect(bounds, region))) {
-    return true;
-  }
-
-  const fill = area / Math.max(1, bounds.width * bounds.height);
-  const aspect = bounds.width / Math.max(1, bounds.height);
-  if (area < 10) {
-    return false;
-  }
-  if ((aspect > 7 || aspect < 0.12) && fill < 0.4) {
-    return false;
-  }
-  return false;
-}
-
-function boxesIntersect(
-  left: SetCompletionDetectionBox,
-  right: SetCompletionDetectionBox,
-): boolean {
-  return !(
-    left.x + left.width <= right.x ||
-    right.x + right.width <= left.x ||
-    left.y + left.height <= right.y ||
-    right.y + right.height <= left.y
-  );
 }
 
 function trimMaskToDenseRows(
