@@ -35,6 +35,16 @@ def crop_box(image: Image.Image, box: dict[str, int] | None) -> Image.Image | No
     return image.crop((left, top, right, bottom))
 
 
+def crop_quantity_box(image: Image.Image, box: dict[str, int] | None) -> Image.Image | None:
+    if not box:
+        return None
+    left = max(0, int(box["x"]) + 3)
+    top = max(0, int(box["y"]) - 6)
+    right = min(image.width, max(left + 1, int(box["x"]) + int(box["width"]) + 10))
+    bottom = min(image.height, max(top + 1, int(box["y"]) + int(box["height"]) + 6))
+    return image.crop((left, top, right, bottom))
+
+
 def parse_recognition_segments(value: Any) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
     if value is None:
@@ -206,7 +216,7 @@ def main() -> int:
 
     for cell in payload["cells"]:
         name_text = run_ocr(ocr, crop_box(image, cell.get("nameBox")), "name")
-        quantity_text = run_ocr(ocr, crop_box(image, cell.get("quantityBox")), "quantity")
+        quantity_text = run_ocr(ocr, crop_quantity_box(image, cell.get("quantityBox")), "quantity")
         readings.append(
             {
                 "rowId": cell["rowId"],
