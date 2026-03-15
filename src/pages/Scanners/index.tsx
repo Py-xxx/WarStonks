@@ -258,7 +258,6 @@ function ArbitrageRow({
             {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
           </span>
           <div className="scanner-list-name">
-            <span className="panel-title-eyebrow">Statistics Arbitrage</span>
             <strong>{entry.name}</strong>
             <span className="scanner-list-note">{entry.note}</span>
           </div>
@@ -416,7 +415,6 @@ function RelicRoiRow({
             {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
           </span>
           <div className="scanner-list-name">
-            <span className="panel-title-eyebrow">Relic ROI</span>
             <strong>{entry.name}</strong>
             <span className="scanner-list-note">{summary?.note ?? entry.note}</span>
           </div>
