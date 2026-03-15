@@ -1,21 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  applySetCompletionScreenshotImport,
   getArbitrageScannerState,
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
   getSetCompletionOwnedItems,
-  matchSetCompletionScreenshotRows,
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
 import {
-  buildSetCompletionImportMaskPreview,
-  getDefaultSetCompletionImportTolerance,
+  analyzeSetCompletionInventoryScreenshot,
   getDefaultSetCompletionImportCrop,
   getSetCompletionImportStrictColors,
-  processSetCompletionInventoryScreenshot,
   type SetCompletionImportCrop,
-  type SetCompletionScreenshotOcrRow,
+  type SetCompletionScreenshotDetectionPreview,
   type SetCompletionScreenshotProgress,
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
@@ -31,7 +27,6 @@ import type {
   RelicRefinementChanceProfile,
   RelicRoiDropEntry,
   RelicRoiEntry,
-  SetCompletionImportCandidate,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
 } from '../../types';
@@ -86,174 +81,12 @@ type PlannerCatalogItem = {
   imagePath: string | null;
 };
 
-type ScreenshotImportPreviewRow = SetCompletionScreenshotOcrRow & {
-  matchedItem: SetCompletionImportCandidate | null;
-  matchConfidence: number;
-  matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none' | 'manual';
-  matchStatus: 'matched' | 'matched-low-confidence' | 'unmatched';
-  matchReason: string;
-  chosenOcrText: string | null;
-  chosenOcrConfidence: number | null;
-  removed: boolean;
-  remapQuery: string;
-};
-
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
 
   return String(error);
-}
-
-function mergeScreenshotImportRows(
-  ocrRows: SetCompletionScreenshotOcrRow[],
-  matchRows: Array<{
-    rowId: string;
-    matchedItem: SetCompletionImportCandidate | null;
-    confidence: number;
-    matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none';
-    status: 'matched' | 'matched-low-confidence' | 'unmatched';
-    reason: string;
-    chosenOcrText: string | null;
-    chosenOcrConfidence: number | null;
-  }>,
-): ScreenshotImportPreviewRow[] {
-  const byId = new Map(matchRows.map((row) => [row.rowId, row]));
-  return sortScreenshotImportRows(ocrRows.map((row) => {
-    const matched = byId.get(row.rowId);
-    return {
-      ...row,
-      matchedItem: matched?.matchedItem ?? null,
-      matchConfidence: matched?.confidence ?? 0,
-      matchKind: matched?.matchKind ?? 'none',
-      matchStatus: matched?.status ?? 'unmatched',
-      matchReason: matched?.reason ?? 'No planner component match found.',
-      chosenOcrText: matched?.chosenOcrText ?? row.detectedName,
-      chosenOcrConfidence: matched?.chosenOcrConfidence ?? row.nameConfidence,
-      removed: false,
-      remapQuery: matched?.matchedItem?.name ?? matched?.chosenOcrText ?? row.detectedName,
-    };
-  }));
-}
-
-function screenshotImportRowPriority(row: ScreenshotImportPreviewRow): number {
-  if (row.removed) {
-    return 5;
-  }
-  if (row.quantityState === 'unresolved') {
-    return 0;
-  }
-  if (row.matchStatus === 'unmatched' || !row.matchedItem) {
-    return 1;
-  }
-  if (row.matchStatus === 'matched-low-confidence') {
-    return 2;
-  }
-  return 3;
-}
-
-function sortScreenshotImportRows(rows: ScreenshotImportPreviewRow[]): ScreenshotImportPreviewRow[] {
-  return [...rows].sort((left, right) => {
-    const priorityDelta = screenshotImportRowPriority(left) - screenshotImportRowPriority(right);
-    if (priorityDelta !== 0) {
-      return priorityDelta;
-    }
-    return left.tileIndex - right.tileIndex;
-  });
-}
-
-function describeScreenshotImportRowState(row: ScreenshotImportPreviewRow): string {
-  if (row.removed) {
-    return 'Removed from import';
-  }
-  if (row.quantityState === 'unresolved') {
-    return 'Quantity unresolved';
-  }
-  if (row.matchStatus === 'unmatched' || !row.matchedItem) {
-    return 'Match required';
-  }
-  if (row.matchStatus === 'matched-low-confidence') {
-    return 'Low-confidence match';
-  }
-  return 'Ready to import';
-}
-
-function buildScreenshotImportApplyRows(
-  rows: ScreenshotImportPreviewRow[],
-): {
-  readyRows: Array<{
-    itemId: number | null;
-    slug: string;
-    name: string;
-    imagePath: string | null;
-    quantity: number;
-  }>;
-  blockedRows: ScreenshotImportPreviewRow[];
-} {
-  const readyRows: Array<{
-    itemId: number | null;
-    slug: string;
-    name: string;
-    imagePath: string | null;
-    quantity: number;
-  }> = [];
-  const blockedRows: ScreenshotImportPreviewRow[] = [];
-  const slugCounts = new Map<string, number>();
-
-  for (const row of rows) {
-    if (
-      row.removed ||
-      !row.matchedItem ||
-      row.quantity === null ||
-      row.quantityState === 'unresolved'
-    ) {
-      continue;
-    }
-    slugCounts.set(row.matchedItem.slug, (slugCounts.get(row.matchedItem.slug) ?? 0) + 1);
-  }
-
-  for (const row of rows) {
-    if (row.removed) {
-      continue;
-    }
-    if (
-      !row.matchedItem
-      || row.quantity === null
-      || row.quantityState === 'unresolved'
-      || row.matchStatus === 'matched-low-confidence'
-    ) {
-      blockedRows.push(row);
-      continue;
-    }
-    if ((slugCounts.get(row.matchedItem.slug) ?? 0) > 1) {
-      blockedRows.push(row);
-      continue;
-    }
-    readyRows.push({
-      itemId: row.matchedItem.itemId,
-      slug: row.matchedItem.slug,
-      name: row.matchedItem.name,
-      imagePath: row.matchedItem.imagePath,
-      quantity: row.quantity,
-    });
-  }
-
-  return { readyRows, blockedRows };
-}
-
-function filterPlannerCandidates(
-  candidates: PlannerCatalogItem[],
-  query: string,
-): PlannerCatalogItem[] {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) {
-    return candidates.slice(0, 6);
-  }
-
-  return candidates
-    .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
-    .slice(0, 6);
 }
 
 function formatPlat(value: number | null | undefined): string {
@@ -526,81 +359,29 @@ function SetCompletionScreenshotImportModal({
   open,
   fileInputRef,
   previewUrl,
-  maskPreviewUrl,
+  detectionPreview,
   crop,
-  tolerance,
-  rows,
-  plannerCatalog,
   processing,
-  applying,
   progress,
   errorMessage,
-  blockedRowCount,
-  readyRowCount,
-  activeRemapRowId,
-  expandedDebugRowId,
   onClose,
   onPickFile,
   onCropChange,
-  onToleranceChange,
   onReprocess,
-  onToggleRemove,
-  onSetQuantity,
-  onRemapQueryChange,
-  onSelectRemap,
-  onSetActiveRemapRow,
-  onToggleDebugRow,
-  onApply,
 }: {
   open: boolean;
   fileInputRef: { current: HTMLInputElement | null };
   previewUrl: string | null;
-  maskPreviewUrl: string | null;
+  detectionPreview: SetCompletionScreenshotDetectionPreview | null;
   crop: SetCompletionImportCrop;
-  tolerance: number;
-  rows: ScreenshotImportPreviewRow[];
-  plannerCatalog: PlannerCatalogItem[];
   processing: boolean;
-  applying: boolean;
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
-  blockedRowCount: number;
-  readyRowCount: number;
-  activeRemapRowId: string | null;
-  expandedDebugRowId: string | null;
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onCropChange: (nextCrop: SetCompletionImportCrop) => void;
-  onToleranceChange: (nextTolerance: number) => void;
   onReprocess: () => Promise<void>;
-  onToggleRemove: (rowId: string) => void;
-  onSetQuantity: (rowId: string, value: string) => void;
-  onRemapQueryChange: (rowId: string, value: string) => void;
-  onSelectRemap: (rowId: string, item: PlannerCatalogItem) => void;
-  onSetActiveRemapRow: (rowId: string | null) => void;
-  onToggleDebugRow: (rowId: string) => void;
-  onApply: () => Promise<void>;
 }) {
-  const blockedRowIdSet = useMemo(
-    () => new Set(buildScreenshotImportApplyRows(rows).blockedRows.map((row) => row.rowId)),
-    [rows],
-  );
-  const sortedRows = useMemo(
-    () =>
-      [...rows].sort((left, right) => {
-        const leftBlocked = blockedRowIdSet.has(left.rowId);
-        const rightBlocked = blockedRowIdSet.has(right.rowId);
-        if (leftBlocked !== rightBlocked) {
-          return leftBlocked ? -1 : 1;
-        }
-        if (left.removed !== right.removed) {
-          return left.removed ? 1 : -1;
-        }
-        return left.tileIndex - right.tileIndex;
-      }),
-    [blockedRowIdSet, rows],
-  );
-
   if (!open) {
     return null;
   }
@@ -679,13 +460,12 @@ function SetCompletionScreenshotImportModal({
             </div>
 
             <p className="watchlist-form-note">
-              Use a single screenshot from the in-game <strong>Prime Components</strong> tab. Only
-              the visible items in the image will be overwritten. The importer is now locked to a
-              fixed <strong>7 × 3</strong> visible grid and will only process up to <strong>21 items</strong>{' '}
-              per screenshot.
+              Use a single screenshot from the in-game <strong>Prime Components</strong> tab. This
+              restart is detection-only for now and does not import, OCR, or match any items yet.
             </p>
             <p className="watchlist-form-note">
-              Workflow: choose the screenshot, manually adjust the crop guide, then click <strong>Run Scan</strong>.
+              Workflow: choose the screenshot, adjust the crop guide, then click <strong>Run Scan</strong>{' '}
+              to generate the annotated detection preview.
             </p>
 
             {progress ? (
@@ -746,26 +526,13 @@ function SetCompletionScreenshotImportModal({
                 </div>
                 <div className="watchlist-form-note">
                   Adjust the crop only so the blue guide cleanly wraps the fixed 7-column by 3-row
-                  inventory grid, then click <strong>Run Scan</strong>.
+                  inventory grid.
                 </div>
                 <div className="screenshot-import-mask-preview">
                   <div className="screenshot-import-mask-copy">
-                    <span className="panel-title-eyebrow">Strict OCR Palette</span>
-                    <strong>Only these exact colors survive the mask</strong>
-                    <label className="settings-field screenshot-import-tolerance-field">
-                      <span className="settings-field-label">
-                        Palette tolerance
-                        <strong className="screenshot-import-tolerance-value">{tolerance}</strong>
-                      </span>
-                      <input
-                        type="range"
-                        min={0}
-                        max={32}
-                        step={1}
-                        value={tolerance}
-                        onChange={(event) => onToleranceChange(Number(event.target.value))}
-                      />
-                    </label>
+                    <span className="panel-title-eyebrow">Detection Palette</span>
+                    <strong>Only these colors survive the preview mask</strong>
+                    <span>Fixed tolerance: 4</span>
                     <div className="screenshot-import-palette-list">
                       {strictPalette.map((hex) => (
                         <span key={hex} className="screenshot-import-palette-pill">
@@ -776,15 +543,15 @@ function SetCompletionScreenshotImportModal({
                     </div>
                   </div>
                   <div className="screenshot-import-mask-image-shell">
-                    {maskPreviewUrl ? (
+                    {detectionPreview ? (
                       <img
                         className="screenshot-import-mask-image"
-                        src={maskPreviewUrl}
-                        alt="Strict palette mask preview"
+                        src={detectionPreview.annotatedPreviewDataUrl}
+                        alt="Annotated screenshot detection preview"
                       />
                     ) : (
                       <div className="watchlist-form-note">
-                        The strict palette preview will appear here after you choose a screenshot.
+                        The annotated masked preview will appear here after you run the detector.
                       </div>
                     )}
                   </div>
@@ -801,149 +568,46 @@ function SetCompletionScreenshotImportModal({
           <div className="settings-form-card screenshot-import-right">
             <div className="screenshot-import-summary">
               <div>
-                <span className="panel-title-eyebrow">Preview</span>
-                <h3>{rows.length ? `${rows.length} rows detected` : 'No rows detected yet'}</h3>
+                <span className="panel-title-eyebrow">Detection Summary</span>
+                <h3>{detectionPreview ? `${detectionPreview.detectedItemCount} item cells detected` : 'No preview generated yet'}</h3>
               </div>
               <div className="scanner-run-summary">
-                <span className="scanner-run-pill">{readyRowCount} READY</span>
-                <span className="scanner-run-pill scanner-run-pill-warning">
-                  {blockedRowCount} NEED REVIEW
+                <span className="scanner-run-pill scanner-run-pill-red">
+                  {detectionPreview?.detectedItemCount ?? 0} ITEMS
+                </span>
+                <span className="scanner-run-pill scanner-run-pill-blue">
+                  {detectionPreview?.nameCount ?? 0} NAMES
+                </span>
+                <span className="scanner-run-pill scanner-run-pill-green">
+                  {detectionPreview?.quantityCount ?? 0} QTY
+                </span>
+                <span className="scanner-run-pill scanner-run-pill-purple">
+                  {detectionPreview?.ignoreCount ?? 0} IGNORE
                 </span>
               </div>
             </div>
 
-            <div className="screenshot-import-rows">
-              {rows.length === 0 ? (
-                <div className="watchlist-form-note">
-                  After OCR finishes, each visible inventory tile will appear here for review.
-                </div>
+            <div className="screenshot-import-summary-panel">
+              {detectionPreview ? (
+                <>
+                  <div className="watchlist-form-note">
+                    The preview shows the masked image with overlay boxes only:
+                  </div>
+                  <div className="screenshot-import-legend">
+                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red">Red: item cell</span>
+                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-blue">Blue: item name</span>
+                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-green">Green: quantity</span>
+                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-purple">Purple: ignore icon</span>
+                  </div>
+                  <div className="watchlist-form-note">
+                    OCR, matching, remapping, and apply are temporarily disabled until the visual
+                    detector is correct.
+                  </div>
+                </>
               ) : (
-                sortedRows.map((row) => {
-                  const needsReview = blockedRowIdSet.has(row.rowId);
-                  const suggestions = activeRemapRowId === row.rowId
-                    ? filterPlannerCandidates(plannerCatalog, row.remapQuery || row.detectedName)
-                    : [];
-                  return (
-                    <article
-                      key={row.rowId}
-                      className={`screenshot-import-row${
-                        row.removed ? ' removed' : ''
-                      }${needsReview ? ' needs-review' : ''}`}
-                    >
-                      <div className="screenshot-import-row-main">
-                        <span className="screenshot-import-row-thumb">
-                          <img src={row.thumbnailDataUrl} alt="" />
-                        </span>
-                        <div className="screenshot-import-row-copy">
-                          <div className="screenshot-import-row-topline">
-                            <strong>{row.matchedItem?.name ?? (row.chosenOcrText || row.detectedName || 'Unreadable tile')}</strong>
-                            {!row.removed ? (
-                              <label className="screenshot-import-qty-field">
-                                <span>Qty</span>
-                                <input
-                                  className="screenshot-import-qty-input"
-                                  type="number"
-                                  min={1}
-                                  step={1}
-                                  value={row.quantity === null ? '' : row.quantity}
-                                  onChange={(event) => onSetQuantity(row.rowId, event.target.value)}
-                                  placeholder="Qty"
-                                />
-                              </label>
-                            ) : null}
-                          </div>
-                          <span>
-                            OCR: {row.chosenOcrText || row.detectedName || 'No text detected'} · Qty:{' '}
-                            {row.quantity === null ? 'Unreadable' : row.quantity}
-                          </span>
-                          <span>{describeScreenshotImportRowState(row)}</span>
-                          {needsReview ? (
-                            <span className="screenshot-import-row-review-badge">Needs review</span>
-                          ) : null}
-                        </div>
-                        <div className="screenshot-import-row-actions">
-                          <button
-                            type="button"
-                            className="settings-secondary-btn screenshot-import-row-toggle"
-                            onClick={() => onToggleDebugRow(row.rowId)}
-                          >
-                            {expandedDebugRowId === row.rowId ? 'Hide OCR' : 'Show OCR'}
-                          </button>
-                          <button
-                            type="button"
-                            className="settings-secondary-btn screenshot-import-row-toggle"
-                            onClick={() => onToggleRemove(row.rowId)}
-                          >
-                            {row.removed ? 'Restore' : 'Remove'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {!row.removed ? (
-                        <div className="screenshot-import-row-editor">
-                          <label className="settings-field">
-                            <span className="settings-field-label">Remap matched component</span>
-                            <input
-                              className="settings-input"
-                              type="text"
-                              value={row.remapQuery}
-                              onFocus={() => onSetActiveRemapRow(row.rowId)}
-                              onChange={(event) => onRemapQueryChange(row.rowId, event.target.value)}
-                              placeholder="Search planner components…"
-                            />
-                          </label>
-                          {suggestions.length > 0 ? (
-                            <div className="trade-listing-autocomplete-list">
-                              {suggestions.map((item) => {
-                                const imageUrl = resolveWfmAssetUrl(item.imagePath);
-                                return (
-                                  <button
-                                    key={`${row.rowId}-${item.slug}`}
-                                    type="button"
-                                    className="trade-listing-autocomplete-option"
-                                    onClick={() => onSelectRemap(row.rowId, item)}
-                                  >
-                                    <span className="trade-listing-autocomplete-thumb">
-                                      {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : item.name[0]}
-                                    </span>
-                                    <span className="trade-listing-autocomplete-copy">
-                                      <span className="trade-listing-autocomplete-name">{item.name}</span>
-                                      <span className="trade-listing-autocomplete-meta">{item.slug}</span>
-                                    </span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : null}
-                          <div className="watchlist-form-note">{row.matchReason}</div>
-                        </div>
-                      ) : null}
-                      {!row.removed && expandedDebugRowId === row.rowId ? (
-                        <div className="screenshot-import-row-debug">
-                          <div className="screenshot-import-row-debug-head">
-                            <span className="panel-title-eyebrow">OCR Diagnostics</span>
-                            <span className="watchlist-form-note">
-                              Chosen OCR: {row.chosenOcrText || '—'} · Match {Math.round(row.matchConfidence * 100)}%
-                            </span>
-                          </div>
-                          <div className="screenshot-import-ocr-variants">
-                            {row.ocrVariants.length === 0 ? (
-                              <div className="watchlist-form-note">No OCR variants were captured for this tile.</div>
-                            ) : (
-                              row.ocrVariants.map((variant) => (
-                                <div key={`${row.rowId}-${variant.key}`} className="screenshot-import-ocr-variant">
-                                  <strong>{variant.label}</strong>
-                                  <span>{variant.text || 'No readable text'}</span>
-                                  <span>{Math.round(variant.confidence * 100)}% OCR confidence</span>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-                    </article>
-                  );
-                })
+                <div className="watchlist-form-note">
+                  Run the detector to generate the annotated preview and box counts.
+                </div>
               )}
             </div>
 
@@ -952,19 +616,9 @@ function SetCompletionScreenshotImportModal({
                 type="button"
                 className="settings-secondary-btn"
                 onClick={onClose}
-                disabled={processing || applying}
+                disabled={processing}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="settings-primary-btn"
-                onClick={() => {
-                  void onApply();
-                }}
-                disabled={processing || applying || !rows.length}
-              >
-                {applying ? 'Applying…' : 'Apply Visible Import'}
+                Close
               </button>
             </div>
           </div>
@@ -1002,19 +656,13 @@ export function OpportunitiesPage() {
     getDefaultSetCompletionImportCrop,
   );
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
-  const [screenshotImportMaskPreviewUrl, setScreenshotImportMaskPreviewUrl] = useState<string | null>(null);
   const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
-  const [screenshotImportTolerance, setScreenshotImportTolerance] = useState<number>(
-    getDefaultSetCompletionImportTolerance,
-  );
-  const [screenshotImportRows, setScreenshotImportRows] = useState<ScreenshotImportPreviewRow[]>([]);
+  const [screenshotImportDetectionPreview, setScreenshotImportDetectionPreview] =
+    useState<SetCompletionScreenshotDetectionPreview | null>(null);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
-  const [screenshotImportApplying, setScreenshotImportApplying] = useState(false);
   const [screenshotImportProgress, setScreenshotImportProgress] =
     useState<SetCompletionScreenshotProgress | null>(null);
   const [screenshotImportError, setScreenshotImportError] = useState<string | null>(null);
-  const [activeRemapRowId, setActiveRemapRowId] = useState<string | null>(null);
-  const [expandedImportDebugRowId, setExpandedImportDebugRowId] = useState<string | null>(null);
   const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const setActivePage = useAppStore((state) => state.setActivePage);
@@ -1163,17 +811,6 @@ export function OpportunitiesPage() {
 
     return [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
   }, [scannerResponse]);
-
-  const plannerImportCandidates = useMemo<SetCompletionImportCandidate[]>(
-    () =>
-      plannerCatalog.map((item) => ({
-        itemId: item.itemId,
-        slug: item.slug,
-        name: item.name,
-        imagePath: item.imagePath,
-      })),
-    [plannerCatalog],
-  );
 
   const ownedMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -1349,16 +986,6 @@ export function OpportunitiesPage() {
       .slice(0, 8);
   }, [componentQuery, plannerCatalog]);
 
-  const screenshotImportCandidateBlockedRows = useMemo(
-    () => buildScreenshotImportApplyRows(screenshotImportRows).blockedRows,
-    [screenshotImportRows],
-  );
-
-  const screenshotImportReadyRows = useMemo(
-    () => buildScreenshotImportApplyRows(screenshotImportRows).readyRows,
-    [screenshotImportRows],
-  );
-
   useEffect(() => {
     if (!screenshotImportPreviewUrl) {
       return undefined;
@@ -1406,23 +1033,18 @@ export function OpportunitiesPage() {
   };
 
   const resetScreenshotImportSession = () => {
-    setScreenshotImportRows([]);
+    setScreenshotImportDetectionPreview(null);
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
-    setScreenshotImportApplying(false);
-    setActiveRemapRowId(null);
-    setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(null);
-    setScreenshotImportTolerance(getDefaultSetCompletionImportTolerance());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
       }
       return null;
     });
-      setScreenshotImportMaskPreviewUrl(null);
     if (screenshotFileInputRef.current) {
       screenshotFileInputRef.current.value = '';
     }
@@ -1436,42 +1058,32 @@ export function OpportunitiesPage() {
   const processScreenshotImportFile = async (
     file: File,
     crop: SetCompletionImportCrop,
-    tolerance: number,
     previewUrl: string,
   ) => {
     setScreenshotImportProcessing(true);
-    setScreenshotImportApplying(false);
     setScreenshotImportError(null);
-    setScreenshotImportRows([]);
+    setScreenshotImportDetectionPreview(null);
     setScreenshotImportProgress({
       progress: 0,
       stage: 'prepare',
-      detail: 'Preparing local OCR worker…',
+      detail: 'Preparing screenshot detector…',
     });
 
     try {
-      const ocrRows = await processSetCompletionInventoryScreenshot(
+      const detectionPreview = await analyzeSetCompletionInventoryScreenshot(
         file,
         crop,
-        tolerance,
         (progress) => {
           setScreenshotImportProgress(progress);
         },
       );
-      const matchRows = await matchSetCompletionScreenshotRows({
-        rows: ocrRows.map((row) => ({
-          rowId: row.rowId,
-          ocrVariants: row.ocrVariants,
-        })),
-        allowedItems: plannerImportCandidates,
-      });
       setScreenshotImportPreviewUrl((current) => {
         if (current && current !== previewUrl) {
           URL.revokeObjectURL(current);
         }
         return previewUrl;
       });
-      setScreenshotImportRows(mergeScreenshotImportRows(ocrRows, matchRows));
+      setScreenshotImportDetectionPreview(detectionPreview);
     } catch (error) {
       URL.revokeObjectURL(previewUrl);
       setScreenshotImportPreviewUrl(null);
@@ -1486,32 +1098,18 @@ export function OpportunitiesPage() {
       return;
     }
     const previewUrl = URL.createObjectURL(file);
-    setScreenshotImportRows([]);
+    setScreenshotImportDetectionPreview(null);
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
-    setScreenshotImportApplying(false);
-    setActiveRemapRowId(null);
-    setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(file);
-    setScreenshotImportTolerance(getDefaultSetCompletionImportTolerance());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
       }
       return previewUrl;
     });
-    try {
-      const maskPreview = await buildSetCompletionImportMaskPreview(
-        file,
-        getDefaultSetCompletionImportCrop(),
-        getDefaultSetCompletionImportTolerance(),
-      );
-      setScreenshotImportMaskPreviewUrl(maskPreview);
-    } catch {
-      setScreenshotImportMaskPreviewUrl(null);
-    }
   };
 
   const reprocessScreenshotImport = async () => {
@@ -1522,86 +1120,15 @@ export function OpportunitiesPage() {
     await processScreenshotImportFile(
       screenshotImportFile,
       screenshotImportCrop,
-      screenshotImportTolerance,
       previewUrl,
     );
   };
 
   const handleScreenshotImportCropChange = (nextCrop: SetCompletionImportCrop) => {
     setScreenshotImportCrop(nextCrop);
-    setScreenshotImportRows([]);
+    setScreenshotImportDetectionPreview(null);
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
-    setActiveRemapRowId(null);
-    setExpandedImportDebugRowId(null);
-    if (!screenshotImportFile) {
-      setScreenshotImportMaskPreviewUrl(null);
-      return;
-    }
-    void buildSetCompletionImportMaskPreview(
-      screenshotImportFile,
-      nextCrop,
-      screenshotImportTolerance,
-    )
-      .then((maskPreview) => {
-        setScreenshotImportMaskPreviewUrl(maskPreview);
-      })
-      .catch(() => {
-        setScreenshotImportMaskPreviewUrl(null);
-      });
-  };
-
-  const handleScreenshotImportToleranceChange = (nextTolerance: number) => {
-    setScreenshotImportTolerance(nextTolerance);
-    setScreenshotImportRows([]);
-    setScreenshotImportError(null);
-    setScreenshotImportProgress(null);
-    setActiveRemapRowId(null);
-    setExpandedImportDebugRowId(null);
-    if (!screenshotImportFile) {
-      setScreenshotImportMaskPreviewUrl(null);
-      return;
-    }
-    void buildSetCompletionImportMaskPreview(
-      screenshotImportFile,
-      screenshotImportCrop,
-      nextTolerance,
-    )
-      .then((maskPreview) => {
-        setScreenshotImportMaskPreviewUrl(maskPreview);
-      })
-      .catch(() => {
-        setScreenshotImportMaskPreviewUrl(null);
-      });
-  };
-
-  const updateScreenshotImportRow = (
-    rowId: string,
-    updater: (row: ScreenshotImportPreviewRow) => ScreenshotImportPreviewRow,
-  ) => {
-    setScreenshotImportRows((current) =>
-      sortScreenshotImportRows(current.map((row) => (row.rowId === rowId ? updater(row) : row))),
-    );
-  };
-
-  const handleApplyScreenshotImport = async () => {
-    if (!screenshotImportReadyRows.length || screenshotImportCandidateBlockedRows.length) {
-      setScreenshotImportError(
-        'Resolve or remove every unmatched, duplicate, or unreadable row before applying the screenshot import.',
-      );
-      return;
-    }
-
-    setScreenshotImportApplying(true);
-    setScreenshotImportError(null);
-    try {
-      const nextOwnedItems = await applySetCompletionScreenshotImport(screenshotImportReadyRows);
-      setOwnedItems(nextOwnedItems);
-      closeScreenshotImport();
-    } catch (error) {
-      setScreenshotImportError(toErrorMessage(error));
-      setScreenshotImportApplying(false);
-    }
   };
 
   const handlePlannerTargetChange = (
@@ -2276,99 +1803,15 @@ export function OpportunitiesPage() {
         open={screenshotImportOpen}
         fileInputRef={screenshotFileInputRef}
         previewUrl={screenshotImportPreviewUrl}
-        maskPreviewUrl={screenshotImportMaskPreviewUrl}
+        detectionPreview={screenshotImportDetectionPreview}
         crop={screenshotImportCrop}
-        tolerance={screenshotImportTolerance}
-        rows={screenshotImportRows}
-        plannerCatalog={plannerCatalog}
         processing={screenshotImportProcessing}
-        applying={screenshotImportApplying}
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
-        blockedRowCount={screenshotImportCandidateBlockedRows.length}
-        readyRowCount={screenshotImportReadyRows.length}
-        activeRemapRowId={activeRemapRowId}
-        expandedDebugRowId={expandedImportDebugRowId}
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
         onCropChange={handleScreenshotImportCropChange}
-        onToleranceChange={handleScreenshotImportToleranceChange}
         onReprocess={reprocessScreenshotImport}
-        onToggleRemove={(rowId) => {
-          updateScreenshotImportRow(rowId, (row) => ({ ...row, removed: !row.removed }));
-        }}
-        onSetQuantity={(rowId, value) => {
-          updateScreenshotImportRow(rowId, (row) => {
-            const trimmed = value.trim();
-            if (!trimmed) {
-              return {
-                ...row,
-                quantity: null,
-                quantityState: 'unresolved',
-                quantityConfidence: 0,
-              };
-            }
-            const parsed = Number.parseInt(trimmed, 10);
-            if (!Number.isFinite(parsed) || parsed < 1) {
-              return {
-                ...row,
-                quantity: null,
-                quantityState: 'unresolved',
-                quantityConfidence: 0,
-              };
-            }
-            return {
-              ...row,
-              quantity: parsed,
-              quantityState: 'detected',
-              quantityConfidence: 1,
-            };
-          });
-        }}
-        onRemapQueryChange={(rowId, value) => {
-          updateScreenshotImportRow(rowId, (row) => ({
-            ...row,
-            remapQuery: value,
-            matchedItem:
-              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
-                ? row.matchedItem
-                : null,
-            matchStatus:
-              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
-                ? row.matchStatus
-                : 'unmatched',
-            matchKind:
-              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
-                ? row.matchKind
-                : 'none',
-            matchReason:
-              row.matchedItem && value.trim().toLowerCase() === row.matchedItem.name.toLowerCase()
-                ? row.matchReason
-                : 'Search for the correct planner component to continue.',
-          }));
-        }}
-        onSelectRemap={(rowId, item) => {
-          updateScreenshotImportRow(rowId, (row) => ({
-            ...row,
-            matchedItem: {
-              itemId: item.itemId,
-              slug: item.slug,
-              name: item.name,
-              imagePath: item.imagePath,
-            },
-            remapQuery: item.name,
-            matchConfidence: 1,
-            matchKind: 'manual',
-            matchStatus: 'matched',
-            matchReason: 'Manually remapped to the selected planner component.',
-          }));
-          setActiveRemapRowId(null);
-        }}
-        onSetActiveRemapRow={setActiveRemapRowId}
-        onToggleDebugRow={(rowId) =>
-          setExpandedImportDebugRowId((current) => (current === rowId ? null : rowId))
-        }
-        onApply={handleApplyScreenshotImport}
       />
     </>
   );
