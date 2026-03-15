@@ -351,9 +351,15 @@
   border-radius: 12px;
   border: 1px solid var(--border);
   background-repeat: no-repeat;
-  background-size: 680%;
   background-color: rgba(5, 7, 10, 0.92);
   overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.screenshot-import-zoom-preview.dragging {
+  cursor: grabbing;
 }
 
 .screenshot-import-zoom-crosshair,
