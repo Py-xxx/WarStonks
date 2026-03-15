@@ -841,7 +841,6 @@ export function ScannersPage() {
                 ) : null}
                 {arbitrage ? (
                   <div className="scanner-progress-meta">
-                    <span>Last scan {formatShortLocalDateTime(arbitrage.scanFinishedAt)}</span>
                     <span>
                       {arbitrage.scannedSetCount} sets · {arbitrage.scannedComponentCount} components · {arbitrage.scannedRelicCount} relics
                     </span>
