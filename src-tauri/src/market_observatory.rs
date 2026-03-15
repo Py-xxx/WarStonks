@@ -30,6 +30,7 @@ const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
 const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
+const SCANNER_WFM_STATS_TIMEOUT_SECONDS: u64 = 8;
 const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ANALYTICS_CACHE_VERSION: i64 = 5;
 const ARBITRAGE_SCANNER_KEY: &str = "arbitrage";
@@ -1540,41 +1541,30 @@ fn insert_statistics_rows_for_domain(
     Ok(())
 }
 
-fn fetch_and_cache_statistics_with_cancel<C>(
-    connection: &Connection,
-    item_id: i64,
-    slug: &str,
-    variant_key: &str,
-    priority: RequestPriority,
-    mut is_cancelled: C,
-) -> Result<()>
-where
-    C: FnMut() -> bool,
-{
-    fetch_and_cache_statistics_impl(connection, item_id, slug, variant_key, priority, || {
-        is_cancelled()
-    })
-}
-
 fn fetch_and_cache_statistics_impl<C>(
     connection: &Connection,
     item_id: i64,
     slug: &str,
     variant_key: &str,
     priority: RequestPriority,
+    request_timeout: Option<Duration>,
     mut is_cancelled: C,
 ) -> Result<()>
 where
     C: FnMut() -> bool,
 {
     let client = shared_wfm_client()?;
+    let mut builder = client
+        .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/statistics"))
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Language", WFM_LANGUAGE_HEADER)
+        .header("Platform", WFM_PLATFORM_HEADER)
+        .header("Crossplay", WFM_CROSSPLAY_HEADER);
+    if let Some(timeout) = request_timeout {
+        builder = builder.timeout(timeout);
+    }
     let response = execute_wfm_bytes_request(
-        client
-            .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/statistics"))
-            .header("User-Agent", WFM_USER_AGENT)
-            .header("Language", WFM_LANGUAGE_HEADER)
-            .header("Platform", WFM_PLATFORM_HEADER)
-            .header("Crossplay", WFM_CROSSPLAY_HEADER),
+        builder,
         priority,
         "request WFM statistics",
         Some(scoped_wfm_coalesce_key("statistics", priority, slug)),
@@ -1647,7 +1637,15 @@ fn fetch_and_cache_statistics(
     variant_key: &str,
     priority: RequestPriority,
 ) -> Result<()> {
-    fetch_and_cache_statistics_impl(connection, item_id, slug, variant_key, priority, || false)
+    fetch_and_cache_statistics_impl(
+        connection,
+        item_id,
+        slug,
+        variant_key,
+        priority,
+        None,
+        || false,
+    )
 }
 
 fn statistics_cache_is_usable(
@@ -1909,12 +1907,13 @@ fn ensure_statistics_cached_for_scan(
         return Ok(false);
     }
 
-    if let Err(error) = fetch_and_cache_statistics_with_cancel(
+    if let Err(error) = fetch_and_cache_statistics_impl(
         connection,
         item_id,
         slug,
         variant_key,
         RequestPriority::Low,
+        Some(Duration::from_secs(SCANNER_WFM_STATS_TIMEOUT_SECONDS)),
         || arbitrage_scanner_stop_requested(connection).unwrap_or(false),
     ) {
         if statistics_cache_is_usable(
