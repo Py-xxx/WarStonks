@@ -163,11 +163,11 @@
 }
 
 .screenshot-import-modal {
-  width: min(2240px, calc(100vw - 32px));
+  width: min(2800px, calc(100vw - 20px));
 }
 
 .screenshot-import-body {
-  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+  grid-template-columns: minmax(0, 1.18fr) minmax(520px, 1fr);
 }
 
 .screenshot-import-left,
@@ -484,8 +484,26 @@
   background: rgba(13, 15, 20, 0.58);
 }
 
+.screenshot-import-row.needs-review {
+  border-color: rgba(240, 160, 48, 0.4);
+  background:
+    linear-gradient(180deg, rgba(240, 160, 48, 0.1), rgba(13, 15, 20, 0.72) 55%),
+    rgba(13, 15, 20, 0.58);
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 160, 48, 0.12),
+    0 0 0 1px rgba(240, 160, 48, 0.08);
+}
+
 .screenshot-import-row.removed {
   opacity: 0.6;
+}
+
+.screenshot-import-row.needs-review .screenshot-import-row-copy strong {
+  color: #ffd28c;
+}
+
+.screenshot-import-row.needs-review .screenshot-import-row-copy span:last-child {
+  color: #ffcf82;
 }
 
 .screenshot-import-row-main {
