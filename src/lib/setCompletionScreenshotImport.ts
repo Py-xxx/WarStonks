@@ -81,7 +81,7 @@ const STRICT_SET_COMPLETION_IMPORT_COLORS = [
   { red: 0xbb, green: 0xa6, blue: 0x65, hex: '#bba665' },
   { red: 0xad, green: 0x9a, blue: 0x5f, hex: '#ad9a5f' },
 ] as const;
-const DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE = 4;
+const DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE = 5;
 const MASK_SCALE = 4;
 const GRID_COLUMNS = 7;
 const GRID_ROWS = 3;
@@ -168,7 +168,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
     croppedCanvas,
     DEFAULT_SET_COMPLETION_IMPORT_TOLERANCE,
   );
-  const scaledSourceCanvas = buildScaledCanvas(croppedCanvas, MASK_SCALE);
   const previewCanvas = createCanvas(maskedCanvas.width, maskedCanvas.height);
   const previewContext = previewCanvas.getContext('2d');
   if (!previewContext) {
@@ -226,12 +225,7 @@ export async function analyzeSetCompletionInventoryScreenshot(
 
   drawOverlayBoxes(previewContext, cells);
 
-  const readings = await readDetectedTextFromCells(
-    scaledSourceCanvas,
-    maskedCanvas,
-    cells,
-    onProgress,
-  );
+  const readings = await readDetectedTextFromCells(maskedCanvas, cells, onProgress);
 
   onProgress?.({
     progress: 1,
@@ -360,17 +354,6 @@ function extractBoxCanvas(
   return extractPixelCanvas(sourceCanvas, x, y, right - x + 1, bottom - y + 1);
 }
 
-function buildScaledCanvas(source: HTMLCanvasElement, scale: number): HTMLCanvasElement {
-  const canvas = createCanvas(source.width * scale, source.height * scale);
-  const context = canvas.getContext('2d');
-  if (!context) {
-    throw new Error('Could not create scaled screenshot canvas.');
-  }
-  context.imageSmoothingEnabled = false;
-  context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  return canvas;
-}
-
 function buildTileDescriptors(
   cropWidth: number,
   cropHeight: number,
@@ -419,7 +402,6 @@ function buildTileDescriptors(
 }
 
 async function readDetectedTextFromCells(
-  scaledSourceCanvas: HTMLCanvasElement,
   maskedCanvas: HTMLCanvasElement,
   cells: SetCompletionDetectionCell[],
   onProgress?: (progress: SetCompletionScreenshotProgress) => void,
@@ -441,10 +423,10 @@ async function readDetectedTextFromCells(
 
     const [detectedText, detectedQuantity] = await Promise.all([
       cell.nameBox
-        ? readNameText(worker, scaledSourceCanvas, maskedCanvas, cell.nameBox, cell.itemBox)
+        ? readNameText(worker, maskedCanvas, cell.nameBox, cell.itemBox)
         : Promise.resolve(''),
       cell.quantityBox
-        ? readQuantityText(worker, scaledSourceCanvas, maskedCanvas, cell.quantityBox)
+        ? readQuantityText(worker, maskedCanvas, cell.quantityBox)
         : Promise.resolve(null),
     ]);
 
@@ -461,7 +443,6 @@ async function readDetectedTextFromCells(
 
 async function readNameText(
   worker: Awaited<ReturnType<typeof createWorker>>,
-  scaledSourceCanvas: HTMLCanvasElement,
   maskedCanvas: HTMLCanvasElement,
   box: SetCompletionDetectionBox,
   itemBox: SetCompletionDetectionBox,
@@ -472,19 +453,23 @@ async function readNameText(
     top: 2,
     bottom: 2,
   });
-  const sourceRegion = extractBoxCanvas(scaledSourceCanvas, box, {
-    left: 6,
-    right: 6,
-    top: 2,
-    bottom: 2,
-  });
-  const itemRegion = extractBoxCanvas(scaledSourceCanvas, itemBox);
   const variants = [
     { canvas: upscaleCanvas(trimTransparentColumns(maskedRegion), 2), psm: PSM.SINGLE_BLOCK },
-    { canvas: upscaleCanvas(thickenMaskCanvas(trimTransparentColumns(maskedRegion)), 2), psm: PSM.SINGLE_BLOCK },
-    { canvas: upscaleCanvas(prepareSourceNameCanvas(sourceRegion), 2), psm: PSM.SINGLE_BLOCK },
-    { canvas: upscaleCanvas(prepareSourceNameCanvas(sourceRegion), 2), psm: PSM.SPARSE_TEXT },
-    { canvas: upscaleCanvas(prepareSourceNameCanvas(itemRegion), 2), psm: PSM.SPARSE_TEXT },
+    {
+      canvas: upscaleCanvas(thickenMaskCanvas(trimTransparentColumns(maskedRegion)), 2),
+      psm: PSM.SINGLE_BLOCK,
+    },
+    {
+      canvas: upscaleCanvas(thickenMaskCanvas(trimTransparentColumns(maskedRegion)), 2),
+      psm: PSM.SPARSE_TEXT,
+    },
+    {
+      canvas: upscaleCanvas(
+        thickenMaskCanvas(trimTransparentColumns(extractBoxCanvas(maskedCanvas, itemBox))),
+        2,
+      ),
+      psm: PSM.SPARSE_TEXT,
+    },
   ];
 
   const candidates: OcrTextCandidate[] = [];
@@ -504,7 +489,6 @@ async function readNameText(
 
 async function readQuantityText(
   worker: Awaited<ReturnType<typeof createWorker>>,
-  scaledSourceCanvas: HTMLCanvasElement,
   maskedCanvas: HTMLCanvasElement,
   box: SetCompletionDetectionBox,
 ): Promise<string | null> {
@@ -516,17 +500,11 @@ async function readQuantityText(
       bottom: 2,
     }),
   );
-  const sourceRegion = extractBoxCanvas(scaledSourceCanvas, box, {
-    left: 0,
-    right: 2,
-    top: 2,
-    bottom: 2,
-  });
   const variants = [
     { canvas: upscaleCanvas(maskedRegion, 3), psm: PSM.SINGLE_CHAR },
     { canvas: upscaleCanvas(maskedRegion, 3), psm: PSM.SINGLE_WORD },
-    { canvas: upscaleCanvas(prepareSourceDigitCanvas(sourceRegion), 3), psm: PSM.SINGLE_CHAR },
-    { canvas: upscaleCanvas(prepareSourceDigitCanvas(sourceRegion), 3), psm: PSM.SINGLE_WORD },
+    { canvas: upscaleCanvas(thickenMaskCanvas(maskedRegion), 3), psm: PSM.SINGLE_CHAR },
+    { canvas: upscaleCanvas(thickenMaskCanvas(maskedRegion), 3), psm: PSM.SINGLE_WORD },
   ];
 
   const candidates: OcrTextCandidate[] = [];
@@ -680,78 +658,6 @@ function thickenMaskCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   }
 
   context.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
-function prepareSourceNameCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
-  const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return canvas;
-  }
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const { data } = imageData;
-
-  for (let index = 0; index < data.length; index += 4) {
-    const red = data[index];
-    const green = data[index + 1];
-    const blue = data[index + 2];
-    const brightness = red * 0.299 + green * 0.587 + blue * 0.114;
-    const goldish = red > 100 && green > 85 && blue < 150 && green >= blue;
-    const value = goldish || brightness > 160 ? 255 : 0;
-    data[index] = value;
-    data[index + 1] = value;
-    data[index + 2] = value;
-    data[index + 3] = 255;
-  }
-
-  context.putImageData(imageData, 0, 0);
-  trimMaskToDenseRows(canvas, {
-    thresholdRatio: 0.03,
-    minThreshold: 1,
-    padding: 3,
-  });
-  trimMaskToDenseColumns(canvas, {
-    thresholdRatio: 0.03,
-    minThreshold: 1,
-    padding: 3,
-  });
-  return canvas;
-}
-
-function prepareSourceDigitCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
-  const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return canvas;
-  }
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const { data } = imageData;
-
-  for (let index = 0; index < data.length; index += 4) {
-    const red = data[index];
-    const green = data[index + 1];
-    const blue = data[index + 2];
-    const brightness = red * 0.299 + green * 0.587 + blue * 0.114;
-    const value = brightness > 155 || (red > 110 && green > 95 && blue < 150) ? 255 : 0;
-    data[index] = value;
-    data[index + 1] = value;
-    data[index + 2] = value;
-    data[index + 3] = 255;
-  }
-
-  context.putImageData(imageData, 0, 0);
-  trimMaskToDenseRows(canvas, {
-    thresholdRatio: 0.04,
-    minThreshold: 1,
-    padding: 2,
-  });
-  trimMaskToDenseColumns(canvas, {
-    thresholdRatio: 0.04,
-    minThreshold: 1,
-    padding: 1,
-  });
-  removeThinMaskComponents(canvas);
   return canvas;
 }
 
