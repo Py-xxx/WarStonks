@@ -87,7 +87,7 @@ const NAME_REGION = {
   left: 0.04,
   top: 0.36,
   width: 0.92,
-  height: 0.56,
+  height: 0.64,
 };
 const QTY_TEMPLATE_RATIOS = [0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3];
 const IGNORE_TEMPLATE_RATIOS = [0.15, 0.17, 0.19, 0.21, 0.23, 0.25];
@@ -404,11 +404,10 @@ function analyzeTileMask(
   });
   const nameBox = localNameBounds
     ? translateBox(
-        expandBounds(localNameBounds, nameMask.width, nameMask.height, {
+        expandBoundsToBottom(localNameBounds, nameMask.width, nameMask.height, {
           left: Math.max(2, Math.round(nameMask.width * 0.01)),
           right: Math.max(2, Math.round(nameMask.width * 0.01)),
           top: Math.max(2, Math.round(nameMask.height * 0.02)),
-          bottom: Math.max(8, Math.round(nameMask.height * 0.08)),
         }),
         nameRegionRect.x,
         nameRegionRect.y,
@@ -677,13 +676,9 @@ function cleanupMaskCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
 
 function cleanupNameDetectionMask(source: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = extractPixelCanvas(source, 0, 0, source.width, source.height);
-  trimMaskToDenseRows(canvas, {
-    thresholdRatio: 0.08,
-    minThreshold: 1,
-    padding: 8,
-  });
   removeThinMaskComponents(canvas);
   const trimmed = removeWideMaskComponents(canvas);
+  retainBottomTextBand(trimmed);
   trimMaskToDenseColumns(trimmed, {
     thresholdRatio: 0.08,
     minThreshold: 1,
@@ -949,7 +944,7 @@ function findMaskBounds(
   };
 }
 
-function expandBounds(
+function expandBoundsToBottom(
   bounds: SetCompletionDetectionBox,
   maxWidth: number,
   maxHeight: number,
@@ -957,7 +952,6 @@ function expandBounds(
     left: number;
     right: number;
     top: number;
-    bottom: number;
   },
 ): SetCompletionDetectionBox {
   const left = clamp(bounds.x - padding.left, 0, Math.max(0, maxWidth - 1));
@@ -967,17 +961,78 @@ function expandBounds(
     left,
     Math.max(0, maxWidth - 1),
   );
-  const bottom = clamp(
-    bounds.y + bounds.height - 1 + padding.bottom,
-    top,
-    Math.max(0, maxHeight - 1),
-  );
   return {
     x: left,
     y: top,
     width: right - left + 1,
-    height: bottom - top + 1,
+    height: maxHeight - top,
   };
+}
+
+function retainBottomTextBand(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return;
+  }
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imageData;
+  const rowScores = new Array(canvas.height).fill(0);
+  let maxScore = 0;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    let score = 0;
+    for (let x = 0; x < canvas.width; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      if (data[index] > 180) {
+        score += 1;
+      }
+    }
+    rowScores[y] = score;
+    maxScore = Math.max(maxScore, score);
+  }
+
+  if (maxScore === 0) {
+    return;
+  }
+
+  const threshold = Math.max(1, Math.round(maxScore * 0.06));
+  const activeRows: number[] = [];
+  for (let y = 0; y < rowScores.length; y += 1) {
+    if (rowScores[y] >= threshold) {
+      activeRows.push(y);
+    }
+  }
+
+  if (!activeRows.length) {
+    return;
+  }
+
+  let startRow = activeRows[activeRows.length - 1];
+  let previousRow = startRow;
+  const maxGap = Math.max(10, Math.round(canvas.height * 0.09));
+
+  for (let index = activeRows.length - 2; index >= 0; index -= 1) {
+    const row = activeRows[index];
+    if (previousRow - row > maxGap) {
+      break;
+    }
+    startRow = row;
+    previousRow = row;
+  }
+
+  startRow = clamp(startRow - Math.max(8, Math.round(canvas.height * 0.05)), 0, canvas.height - 1);
+
+  for (let y = 0; y < startRow; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      data[index] = 0;
+      data[index + 1] = 0;
+      data[index + 2] = 0;
+      data[index + 3] = 255;
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
 }
 
 function extractBinaryPixels(canvas: HTMLCanvasElement): Uint8Array {
