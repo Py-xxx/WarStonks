@@ -181,16 +181,6 @@ function describeScreenshotImportRowState(row: ScreenshotImportPreviewRow): stri
   return 'Ready to import';
 }
 
-function isScreenshotImportRowNeedsReview(row: ScreenshotImportPreviewRow): boolean {
-  return !row.removed
-    && (
-      row.quantityState === 'unresolved'
-      || row.matchStatus === 'unmatched'
-      || !row.matchedItem
-      || row.matchStatus === 'matched-low-confidence'
-    );
-}
-
 function buildScreenshotImportApplyRows(
   rows: ScreenshotImportPreviewRow[],
 ): {
@@ -605,6 +595,25 @@ function SetCompletionScreenshotImportModal({
   const dragStartPointRef = useRef<{ x: number; y: number } | null>(null);
   const dragStartSampleRef = useRef<{ x: number; y: number } | null>(null);
   const [previewAspectRatio, setPreviewAspectRatio] = useState(1.6);
+  const blockedRowIdSet = useMemo(
+    () => new Set(buildScreenshotImportApplyRows(rows).blockedRows.map((row) => row.rowId)),
+    [rows],
+  );
+  const sortedRows = useMemo(
+    () =>
+      [...rows].sort((left, right) => {
+        const leftBlocked = blockedRowIdSet.has(left.rowId);
+        const rightBlocked = blockedRowIdSet.has(right.rowId);
+        if (leftBlocked !== rightBlocked) {
+          return leftBlocked ? -1 : 1;
+        }
+        if (left.removed !== right.removed) {
+          return left.removed ? 1 : -1;
+        }
+        return left.tileIndex - right.tileIndex;
+      }),
+    [blockedRowIdSet, rows],
+  );
 
   if (!open) {
     return null;
@@ -911,7 +920,8 @@ function SetCompletionScreenshotImportModal({
                   After OCR finishes, each visible inventory tile will appear here for review.
                 </div>
               ) : (
-                rows.map((row) => {
+                sortedRows.map((row) => {
+                  const needsReview = blockedRowIdSet.has(row.rowId);
                   const suggestions = activeRemapRowId === row.rowId
                     ? filterPlannerCandidates(plannerCatalog, row.remapQuery || row.detectedName)
                     : [];
@@ -920,7 +930,7 @@ function SetCompletionScreenshotImportModal({
                       key={row.rowId}
                       className={`screenshot-import-row${
                         row.removed ? ' removed' : ''
-                      }${isScreenshotImportRowNeedsReview(row) ? ' needs-review' : ''}`}
+                      }${needsReview ? ' needs-review' : ''}`}
                     >
                       <div className="screenshot-import-row-main">
                         <span className="screenshot-import-row-thumb">
@@ -933,6 +943,9 @@ function SetCompletionScreenshotImportModal({
                             {row.quantity === null ? 'Unreadable' : row.quantity}
                           </span>
                           <span>{describeScreenshotImportRowState(row)}</span>
+                          {needsReview ? (
+                            <span className="screenshot-import-row-review-badge">Needs review</span>
+                          ) : null}
                         </div>
                         <div className="screenshot-import-row-actions">
                           <button
