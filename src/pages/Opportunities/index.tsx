@@ -559,8 +559,8 @@ function SetCompletionScreenshotImportModal({
               </>
             ) : (
               <div className="opportunities-placeholder">
-                Choose a screenshot first, then manually crop it before running OCR on up to 21
-                visible prime components.
+                Choose a screenshot first, then manually crop it before running the detector on up
+                to 21 visible prime components.
               </div>
             )}
           </div>
@@ -596,33 +596,13 @@ function SetCompletionScreenshotImportModal({
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-green">Green: quantity</span>
                   </div>
                   <div className="watchlist-form-note">
-                    OCR matching and import are still disabled. This panel now only shows the raw
-                    detected text and quantity reads from the highlighted boxes.
-                  </div>
-                  <div className="screenshot-import-readings">
-                    <span className="panel-title-eyebrow">Detected Text</span>
-                    {detectionPreview.readings.length ? (
-                      <ul className="screenshot-import-reading-list">
-                        {detectionPreview.readings
-                          .slice()
-                          .sort((left, right) => left.tileIndex - right.tileIndex)
-                          .map((reading) => (
-                            <li key={reading.rowId}>
-                              <strong>{reading.detectedText || 'No text detected'}</strong>
-                              {reading.detectedQuantity ? ` · Qty ${reading.detectedQuantity}` : ''}
-                            </li>
-                          ))}
-                      </ul>
-                    ) : (
-                      <div className="watchlist-form-note">
-                        No readable text was detected yet for the visible cells.
-                      </div>
-                    )}
+                    OCR and import are disabled. This panel now only shows the masked preview and
+                    the detected red, blue, and green overlay boxes.
                   </div>
                 </>
               ) : (
                 <div className="watchlist-form-note">
-                  Run the detector to generate the annotated preview and the raw text readout.
+                  Run the detector to generate the annotated preview and the detection overlays.
                 </div>
               )}
             </div>
