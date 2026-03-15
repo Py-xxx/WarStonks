@@ -504,6 +504,7 @@ export function ScannersPage() {
   const [relicRefinement, setRelicRefinement] = useState<RelicRefinementKey>('intact');
   const [showOnlyUnvaulted, setShowOnlyUnvaulted] = useState(false);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
+  const syncScannerStaleAlert = useAppStore((state) => state.syncScannerStaleAlert);
 
   const loadScannerState = useCallback(async (cancelled = false) => {
     try {
@@ -513,6 +514,7 @@ export function ScannersPage() {
       }
       setArbitrage(response.latestScan);
       setProgress(response.progress);
+      syncScannerStaleAlert(response.latestScan?.scanFinishedAt ?? null);
       setErrorMessage(response.progress.status === 'error' ? response.progress.lastError : null);
     } catch (error) {
       if (cancelled) {
@@ -520,7 +522,7 @@ export function ScannersPage() {
       }
       setErrorMessage(error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [syncScannerStaleAlert]);
 
   useEffect(() => {
     let cancelled = false;
