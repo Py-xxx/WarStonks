@@ -37,6 +37,17 @@ const RELIC_REFINEMENT_EXCEPTIONAL: &str = "exceptional";
 const RELIC_REFINEMENT_FLAWLESS: &str = "flawless";
 const RELIC_REFINEMENT_RADIANT: &str = "radiant";
 
+fn scoped_wfm_coalesce_key(prefix: &str, priority: RequestPriority, slug: &str) -> String {
+    let priority_scope = match priority {
+        RequestPriority::Instant => "instant",
+        RequestPriority::High => "high",
+        RequestPriority::Medium => "medium",
+        RequestPriority::Low => "low",
+        RequestPriority::Background => "background",
+    };
+    format!("{prefix}:{priority_scope}:{slug}")
+}
+
 #[derive(Debug, Clone)]
 struct RelicCatalogEntry {
     item_id: i64,
@@ -1528,7 +1539,7 @@ where
             .header("Crossplay", WFM_CROSSPLAY_HEADER),
         priority,
         "request WFM statistics",
-        Some(format!("statistics:{slug}")),
+        Some(scoped_wfm_coalesce_key("statistics", priority, slug)),
         || is_cancelled(),
     )?;
     if response.status < 200 || response.status >= 300 {
@@ -2451,7 +2462,7 @@ where
             .header("Crossplay", WFM_CROSSPLAY_HEADER),
         priority,
         request_label,
-        Some(format!("orders:{slug}")),
+        Some(scoped_wfm_coalesce_key("orders", priority, slug)),
         || is_cancelled(),
     )?;
     if response.status < 200 || response.status >= 300 {
@@ -8051,10 +8062,11 @@ mod tests {
         build_trend_quality_breakdown, chance_for_refinement, compute_pressure_ratio,
         compute_zone_bands, extract_rank_stat_highlights, initialize_market_observatory_schema,
         insert_statistics_rows_for_domain, normalize_variant_key, pressure_label, resample_rows,
-        stale_arbitrage_scanner_progress, AnalyticsBucketSizeKey, AnalyticsChartPoint,
-        AnalyticsDomainKey, ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary,
-        MarketSnapshot, RelicRefinementChanceProfile, WfmDetailedOrder,
+        scoped_wfm_coalesce_key, stale_arbitrage_scanner_progress, AnalyticsBucketSizeKey,
+        AnalyticsChartPoint, AnalyticsDomainKey, ArbitrageScannerProgress, InternalStatsRow,
+        MarketConfidenceSummary, MarketSnapshot, RelicRefinementChanceProfile, WfmDetailedOrder,
     };
+    use crate::wfm_scheduler::RequestPriority;
     use rusqlite::Connection;
     fn sample_order(
         order_type: &str,
@@ -8131,6 +8143,18 @@ mod tests {
         assert_eq!(normalize_variant_key(None), "base");
         assert_eq!(normalize_variant_key(Some("  ")), "base");
         assert_eq!(normalize_variant_key(Some("rank:5")), "rank:5");
+    }
+
+    #[test]
+    fn scopes_coalesce_keys_by_priority() {
+        assert_eq!(
+            scoped_wfm_coalesce_key("orders", RequestPriority::Instant, "wisp_prime_set"),
+            "orders:instant:wisp_prime_set"
+        );
+        assert_eq!(
+            scoped_wfm_coalesce_key("statistics", RequestPriority::Low, "wisp_prime_set"),
+            "statistics:low:wisp_prime_set"
+        );
     }
 
     #[test]
