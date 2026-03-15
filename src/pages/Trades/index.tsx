@@ -21,6 +21,7 @@ import type {
   TradeSellOrder,
   TradeUpdateListingInput,
   WfmAutocompleteItem,
+  SellerMode,
 } from '../../types';
 
 type ListingModalMode = 'create' | 'edit';
@@ -39,6 +40,29 @@ interface ListingModalState {
 }
 
 const DEFAULT_MARK_SOLD_QTY = '1';
+const tradeOverviewCache = new Map<SellerMode, TradeOverview>();
+const tradeOverviewLoadPromises = new Map<SellerMode, Promise<TradeOverview>>();
+
+async function loadTradeOverviewSnapshot(sellerMode: SellerMode): Promise<TradeOverview> {
+  const inFlight = tradeOverviewLoadPromises.get(sellerMode);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const loadPromise = getWfmTradeOverview(sellerMode)
+    .then((overview) => {
+      tradeOverviewCache.set(sellerMode, overview);
+      return overview;
+    })
+    .finally(() => {
+      if (tradeOverviewLoadPromises.get(sellerMode) === loadPromise) {
+        tradeOverviewLoadPromises.delete(sellerMode);
+      }
+    });
+
+  tradeOverviewLoadPromises.set(sellerMode, loadPromise);
+  return loadPromise;
+}
 
 function buildItemFromOrder(order: TradeSellOrder): WfmAutocompleteItem {
   return {
@@ -444,7 +468,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const setAutoWatchlistBuyOrdersEnabled = useAppStore((s) => s.setAutoWatchlistBuyOrdersEnabled);
   const signOutTradeAccount = useAppStore((s) => s.signOutTradeAccount);
 
-  const [overview, setOverview] = useState<TradeOverview | null>(null);
+  const [overview, setOverview] = useState<TradeOverview | null>(() => tradeOverviewCache.get(sellerMode) ?? null);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [autocompleteItems, setAutocompleteItems] = useState<WfmAutocompleteItem[]>([]);
@@ -474,12 +498,17 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     let cancelled = false;
 
     const loadOverview = async () => {
-      setOverviewLoading(true);
+      const cachedOverview = tradeOverviewCache.get(sellerMode) ?? null;
+      if (cachedOverview) {
+        setOverview(cachedOverview);
+      }
+      setOverviewLoading(!cachedOverview);
       setOverviewError(null);
       try {
-        const nextOverview = await getWfmTradeOverview(sellerMode);
+        const nextOverview = await loadTradeOverviewSnapshot(sellerMode);
         if (!cancelled) {
           setOverview(nextOverview);
+          setOverviewError(null);
         }
       } catch (error) {
         if (!cancelled) {
@@ -534,6 +563,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   }, [tradeAccount]);
 
   const applyOverview = (nextOverview: TradeOverview) => {
+    tradeOverviewCache.set(sellerMode, nextOverview);
     setOverview(nextOverview);
     setOverviewError(null);
   };

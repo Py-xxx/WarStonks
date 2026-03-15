@@ -1239,20 +1239,37 @@ fn execute_wfm_request_with_priority(
     ))
 }
 
+fn extract_wfm_bytes_error(action_label: &str, response: &WfmHttpResponse) -> anyhow::Error {
+    let body = String::from_utf8_lossy(&response.body);
+    let trimmed_body = body.trim();
+    if trimmed_body.is_empty() {
+        anyhow!("{action_label} failed with status {}", response.status)
+    } else {
+        anyhow!(
+            "{action_label} failed with status {}: {}",
+            response.status,
+            trimmed_body
+        )
+    }
+}
+
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
-    let response = execute_wfm_request_with_priority(
+    let response = execute_wfm_bytes_request(
         send_wfm_request(
             client,
             Method::GET,
             format!("{WFM_API_BASE_URL_V2}/me"),
             Some(token),
         ),
-        "request WFM profile",
         RequestPriority::Instant,
+        "request WFM profile",
+        Some("profile:me".to_string()),
     )?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_bytes_error("request WFM profile", &response));
+    }
 
-    let payload = response
-        .json::<Value>()
+    let payload = serde_json::from_slice::<Value>(&response.body)
         .context("failed to parse WFM profile response")?;
     let fetched_at = format_timestamp(now_utc())?;
     parse_account_summary(
@@ -5399,19 +5416,22 @@ fn resolve_catalog_trade_item_meta(
 }
 
 fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
-    let response = execute_wfm_request_with_priority(
+    let response = execute_wfm_bytes_request(
         send_wfm_request(
             client,
             Method::GET,
             format!("{WFM_API_BASE_URL_V2}/orders/my"),
             Some(token),
         ),
-        "load own orders",
         RequestPriority::Instant,
+        "load own orders",
+        Some("orders:my".to_string()),
     )?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_bytes_error("load own orders", &response));
+    }
 
-    let payload = response
-        .json::<WfmMyOrdersResponse>()
+    let payload = serde_json::from_slice::<WfmMyOrdersResponse>(&response.body)
         .context("failed to parse own orders response")?;
 
     Ok(payload.data)
