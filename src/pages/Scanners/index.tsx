@@ -511,6 +511,8 @@ export function ScannersPage() {
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
   const [relicRefinement, setRelicRefinement] = useState<RelicRefinementKey>('intact');
   const [showOnlyUnvaulted, setShowOnlyUnvaulted] = useState(false);
+  const [arbitrageSearch, setArbitrageSearch] = useState('');
+  const [relicSearch, setRelicSearch] = useState('');
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const syncScannerStaleAlert = useAppStore((state) => state.syncScannerStaleAlert);
 
@@ -646,30 +648,49 @@ export function ScannersPage() {
   const isRunning = progress?.status === 'running';
   const hasSavedScan = Boolean(arbitrage);
   const actionLabel = hasSavedScan ? 'Rescan' : 'Start Scan';
+  const normalizedArbitrageSearch = arbitrageSearch.trim().toLowerCase();
+  const normalizedRelicSearch = relicSearch.trim().toLowerCase();
+  const arbitrageResults = useMemo(() => {
+    const source = arbitrage?.results ?? [];
+    if (!normalizedArbitrageSearch) {
+      return source;
+    }
+
+    return source.filter((entry) => entry.name.toLowerCase().includes(normalizedArbitrageSearch));
+  }, [arbitrage?.results, normalizedArbitrageSearch]);
   const relicResults = useMemo(() => {
     const source = arbitrage?.relicRoiResults ?? [];
     const filtered = showOnlyUnvaulted
       ? source.filter((entry) => entry.isUnvaulted)
       : source;
-    return [...filtered].sort((left, right) => {
+    const searchFiltered = normalizedRelicSearch
+      ? filtered.filter((entry) => {
+          if (entry.name.toLowerCase().includes(normalizedRelicSearch)) {
+            return true;
+          }
+
+          return entry.drops.some((drop) => drop.name.toLowerCase().includes(normalizedRelicSearch));
+        })
+      : filtered;
+    return [...searchFiltered].sort((left, right) => {
       const rightSummary = getRelicRefinementSummary(right, relicRefinement);
       const leftSummary = getRelicRefinementSummary(left, relicRefinement);
       return (rightSummary?.relicRoiScore ?? 0) - (leftSummary?.relicRoiScore ?? 0);
     });
-  }, [arbitrage?.relicRoiResults, relicRefinement, showOnlyUnvaulted]);
+  }, [arbitrage?.relicRoiResults, normalizedRelicSearch, relicRefinement, showOnlyUnvaulted]);
 
   useEffect(() => {
-    if (!arbitrage?.results.length) {
+    if (!arbitrageResults.length) {
       setExpandedSlug(null);
       return;
     }
 
     setExpandedSlug((current) =>
-      current && arbitrage.results.some((entry) => entry.slug === current)
+      current && arbitrageResults.some((entry) => entry.slug === current)
         ? current
         : null,
     );
-  }, [arbitrage]);
+  }, [arbitrageResults]);
 
   useEffect(() => {
     if (!relicResults.length) {
@@ -718,6 +739,13 @@ export function ScannersPage() {
     addExplicitItemToWatchlist(item, 'base', 'Base Market', targetPrice);
   };
 
+  const scanSummaryCounts = arbitrage
+    ? `${arbitrage.scannedSetCount} sets · ${arbitrage.scannedComponentCount} components · ${arbitrage.scannedRelicCount} relics`
+    : null;
+  const scanSummaryOutcome = arbitrage
+    ? `Scanned ${arbitrage.scannedSetCount} sets and ${arbitrage.scannedRelicCount} relics. ${arbitrage.results.length} set opportunities and ${arbitrage.relicRoiResults.length} positive relic ROI entries.`
+    : null;
+
   return (
     <>
       <div className="subnav">
@@ -744,6 +772,13 @@ export function ScannersPage() {
           <div className="subnav-right">
             {activeTab === 'relic-roi' ? (
               <>
+                <input
+                  className="settings-text-input scanner-search-input"
+                  type="search"
+                  value={relicSearch}
+                  onChange={(event) => setRelicSearch(event.target.value)}
+                  placeholder="Search relic or drop item"
+                />
                 <label className="toggle-wrap" htmlFor="relic-unvaulted-toggle">
                   <span>Unvaulted Only</span>
                   <button
@@ -820,62 +855,88 @@ export function ScannersPage() {
                   </div>
                 ) : null}
               </div>
-              <div className="scanner-progress-block">
-                <div className="scanner-progress-meta">
-                  <span>{progress?.stageLabel ?? 'Ready'}</span>
-                  <span>{Math.round(progress?.progressValue ?? 0)}%</span>
+              <div className="scanner-progress-layout">
+                <div className="scanner-progress-block">
+                  <div className="scanner-progress-meta">
+                    <span>{progress?.stageLabel ?? 'Ready'}</span>
+                    <span>{Math.round(progress?.progressValue ?? 0)}%</span>
+                  </div>
+                  <div className="scanner-progress-track">
+                    <div
+                      className="scanner-progress-fill"
+                      style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
+                    />
+                  </div>
+                  <p className="scanner-progress-copy">
+                    {progress?.statusText ?? 'No saved scanner results yet. Start a scan to cache the results.'}
+                  </p>
+                  {buildScannerProgressDetails(progress).length > 0 ? (
+                    <div className="scanner-progress-meta">
+                      <span>{buildScannerProgressDetails(progress).join(' · ')}</span>
+                    </div>
+                  ) : null}
+                  {arbitrage?.skippedSummaryText ? (
+                    <div className="scanner-progress-meta">
+                      <span>{arbitrage.skippedSummaryText}</span>
+                    </div>
+                  ) : null}
+                  {errorMessage ? (
+                    <div className="scanner-inline-error" role="alert">
+                      <strong>Scanner failed</strong>
+                      <span>{errorMessage}</span>
+                    </div>
+                  ) : null}
                 </div>
-                <div className="scanner-progress-track">
-                  <div
-                    className="scanner-progress-fill"
-                    style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
-                  />
+                <div className="scanner-summary-card">
+                  <span className="panel-title-eyebrow">Saved Scan</span>
+                  <strong>{activeTab === 'arbitrage' ? 'Arbitrage Snapshot' : 'Relic ROI Snapshot'}</strong>
+                  {scanSummaryOutcome ? (
+                    <p className="scanner-summary-copy">{scanSummaryOutcome}</p>
+                  ) : (
+                    <p className="scanner-summary-copy">
+                      No saved scanner snapshot yet. Start a scan to cache arbitrage and relic ROI results.
+                    </p>
+                  )}
+                  {scanSummaryCounts ? (
+                    <div className="scanner-summary-stat-grid">
+                      <span className="scanner-summary-stat">{scanSummaryCounts}</span>
+                    </div>
+                  ) : null}
                 </div>
-                <p className="scanner-progress-copy">
-                  {progress?.statusText ?? 'No saved scanner results yet. Start a scan to cache the results.'}
-                </p>
-                {buildScannerProgressDetails(progress).length > 0 ? (
-                  <div className="scanner-progress-meta">
-                    <span>{buildScannerProgressDetails(progress).join(' · ')}</span>
-                  </div>
-                ) : null}
-                {arbitrage ? (
-                  <div className="scanner-progress-meta">
-                    <span>
-                      {arbitrage.scannedSetCount} sets · {arbitrage.scannedComponentCount} components · {arbitrage.scannedRelicCount} relics
-                    </span>
-                  </div>
-                ) : null}
-                {arbitrage?.skippedSummaryText ? (
-                  <div className="scanner-progress-meta">
-                    <span>{arbitrage.skippedSummaryText}</span>
-                  </div>
-                ) : null}
-                {errorMessage ? (
-                  <div className="scanner-inline-error" role="alert">
-                    <strong>Scanner failed</strong>
-                    <span>{errorMessage}</span>
-                  </div>
-                ) : null}
               </div>
             </div>
 
             {activeTab === 'arbitrage' && arbitrage ? (
               <div className="scanner-results-list">
-                {arbitrage.results.map((entry, index) => (
-                  <ArbitrageRow
-                    key={entry.slug}
-                    entry={entry}
-                    index={index}
-                    expanded={expandedSlug === entry.slug}
-                    onToggle={() =>
-                      setExpandedSlug((current) => (current === entry.slug ? null : entry.slug))
-                    }
-                    targetInputs={componentTargets}
-                    onTargetChange={updateComponentTarget}
-                    onAddToWatchlist={addComponentToWatchlist}
+                <div className="scanner-results-toolbar">
+                  <input
+                    className="settings-text-input scanner-search-input"
+                    type="search"
+                    value={arbitrageSearch}
+                    onChange={(event) => setArbitrageSearch(event.target.value)}
+                    placeholder="Search set"
                   />
-                ))}
+                </div>
+                {arbitrageResults.length > 0 ? (
+                  arbitrageResults.map((entry, index) => (
+                    <ArbitrageRow
+                      key={entry.slug}
+                      entry={entry}
+                      index={index}
+                      expanded={expandedSlug === entry.slug}
+                      onToggle={() =>
+                        setExpandedSlug((current) => (current === entry.slug ? null : entry.slug))
+                      }
+                      targetInputs={componentTargets}
+                      onTargetChange={updateComponentTarget}
+                      onAddToWatchlist={addComponentToWatchlist}
+                    />
+                  ))
+                ) : (
+                  <div className="scanners-empty-state scanner-results-empty-state">
+                    No sets match that search.
+                  </div>
+                )}
               </div>
             ) : activeTab === 'relic-roi' && arbitrage ? (
               relicResults.length > 0 ? (
@@ -903,14 +964,18 @@ export function ScannersPage() {
                 </div>
               ) : (
                 <div className="scanners-empty-state">
-                  {showOnlyUnvaulted
+                  {normalizedRelicSearch
+                    ? 'No relics match that relic or drop search.'
+                    : showOnlyUnvaulted
                     ? 'No unvaulted relic ROI results are available in the cached scan.'
                     : 'No relic ROI rows are available in the cached scan yet.'}
                 </div>
               )
             ) : !isRunning ? (
               <div className="scanners-empty-state">
-                No cached scanner results yet. Start a scan to build and save the first result set.
+                {normalizedArbitrageSearch
+                  ? 'No sets match that search.'
+                  : 'No cached scanner results yet. Start a scan to build and save the first result set.'}
               </div>
             ) : null}
         </div>

@@ -5905,6 +5905,10 @@ body {
   min-width: 128px;
 }
 
+.scanner-search-input {
+  min-width: 210px;
+}
+
 .scanner-action-button {
   min-height: 34px;
   padding: 0 14px;
@@ -5955,6 +5959,56 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.scanner-progress-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.scanner-summary-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(13, 18, 28, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.scanner-summary-card strong {
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.scanner-summary-copy {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.scanner-summary-stat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scanner-summary-stat {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(74, 158, 255, 0.18);
+  background: rgba(18, 34, 60, 0.82);
+  color: #cfe6ff;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .scanner-progress-meta {
@@ -6052,6 +6106,20 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.scanner-results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.scanner-results-empty-state {
+  min-height: 140px;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(9, 12, 18, 0.58);
 }
 
 .scanner-list-row {
@@ -7945,6 +8013,10 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .scanner-progress-layout {
+    grid-template-columns: 1fr;
+  }
+
   .scanner-list-button,
   .scanner-component-row {
     flex-direction: column;
@@ -7983,6 +8055,15 @@ body {
   }
 
   .scanner-component-input {
+    width: 100%;
+  }
+
+  .scanner-results-toolbar {
+    justify-content: stretch;
+  }
+
+  .scanner-search-input {
+    min-width: 0;
     width: 100%;
   }
 
