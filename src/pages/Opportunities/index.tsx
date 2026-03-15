@@ -581,9 +581,6 @@ function SetCompletionScreenshotImportModal({
                 <span className="scanner-run-pill scanner-run-pill-green">
                   {detectionPreview?.quantityCount ?? 0} QTY
                 </span>
-                <span className="scanner-run-pill scanner-run-pill-purple">
-                  {detectionPreview?.ignoreCount ?? 0} IGNORE
-                </span>
               </div>
             </div>
 
@@ -597,7 +594,6 @@ function SetCompletionScreenshotImportModal({
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red">Red: item cell</span>
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-blue">Blue: item name</span>
                     <span className="screenshot-import-legend-pill screenshot-import-legend-pill-green">Green: quantity</span>
-                    <span className="screenshot-import-legend-pill screenshot-import-legend-pill-purple">Purple: ignore icon</span>
                   </div>
                   <div className="watchlist-form-note">
                     OCR matching and import are still disabled. This panel now only shows the raw

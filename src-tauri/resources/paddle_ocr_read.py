@@ -40,15 +40,15 @@ def crop_quantity_box(image: Image.Image, box: dict[str, int] | None) -> Image.I
         return None
     width = int(box["width"])
     height = int(box["height"])
-    left = max(0, int(box["x"]) + max(2, round(width * 0.12)))
-    top = max(0, int(box["y"]) - max(6, round(height * 0.2)))
+    left = max(0, int(box["x"]) + max(1, round(width * 0.02)))
+    top = max(0, int(box["y"]) - max(6, round(height * 0.25)))
     right = min(
         image.width,
-        max(left + 1, int(box["x"]) + width + max(12, round(width * 0.7))),
+        max(left + 1, int(box["x"]) + width + max(14, round(width * 0.85))),
     )
     bottom = min(
         image.height,
-        max(top + 1, int(box["y"]) + height + max(6, round(height * 0.2))),
+        max(top + 1, int(box["y"]) + height + max(6, round(height * 0.25))),
     )
     return image.crop((left, top, right, bottom))
 
