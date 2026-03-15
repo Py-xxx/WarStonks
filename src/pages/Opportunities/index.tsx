@@ -181,6 +181,16 @@ function describeScreenshotImportRowState(row: ScreenshotImportPreviewRow): stri
   return 'Ready to import';
 }
 
+function isScreenshotImportRowNeedsReview(row: ScreenshotImportPreviewRow): boolean {
+  return !row.removed
+    && (
+      row.quantityState === 'unresolved'
+      || row.matchStatus === 'unmatched'
+      || !row.matchedItem
+      || row.matchStatus === 'matched-low-confidence'
+    );
+}
+
 function buildScreenshotImportApplyRows(
   rows: ScreenshotImportPreviewRow[],
 ): {
@@ -908,7 +918,9 @@ function SetCompletionScreenshotImportModal({
                   return (
                     <article
                       key={row.rowId}
-                      className={`screenshot-import-row${row.removed ? ' removed' : ''}`}
+                      className={`screenshot-import-row${
+                        row.removed ? ' removed' : ''
+                      }${isScreenshotImportRowNeedsReview(row) ? ' needs-review' : ''}`}
                     >
                       <div className="screenshot-import-row-main">
                         <span className="screenshot-import-row-thumb">
