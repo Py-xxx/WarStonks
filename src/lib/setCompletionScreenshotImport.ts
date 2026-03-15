@@ -468,7 +468,7 @@ function deriveQuantityBox(
   badgeRegionRect: SetCompletionDetectionBox,
 ): SetCompletionDetectionBox | null {
   const stripX = clamp(
-    quantityIconMatch.x + quantityIconMatch.width + Math.round(badgePreview.width * 0.015),
+    quantityIconMatch.x + quantityIconMatch.width + Math.round(badgePreview.width * 0.03),
     0,
     badgePreview.width - 1,
   );
@@ -504,9 +504,17 @@ function deriveQuantityBox(
   }
 
   return {
-    x: badgeRegionRect.x + stripX + digitsBounds.x,
+    x:
+      badgeRegionRect.x +
+      stripX +
+      digitsBounds.x +
+      Math.min(3, Math.max(1, Math.round(digitsBounds.width * 0.12))),
     y: badgeRegionRect.y + digitsBounds.y,
-    width: digitsBounds.width,
+    width: Math.max(
+      1,
+      digitsBounds.width -
+        Math.min(3, Math.max(1, Math.round(digitsBounds.width * 0.12))),
+    ),
     height: digitsBounds.height,
   };
 }
