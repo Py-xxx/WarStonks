@@ -844,7 +844,7 @@ struct SetCompletionImportCandidateProfile {
     aliases: Vec<String>,
     name_tokens: Vec<String>,
     family_tokens: Vec<String>,
-    component_token: Option<String>,
+    component_tokens: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1328,12 +1328,12 @@ fn is_set_completion_component_token(token: &str) -> bool {
     )
 }
 
-fn extract_set_completion_component_token(tokens: &[String]) -> Option<String> {
+fn extract_set_completion_component_tokens(tokens: &[String]) -> Vec<String> {
     tokens
         .iter()
-        .rev()
-        .find(|token| is_set_completion_component_token(token.as_str()))
+        .filter(|token| is_set_completion_component_token(token.as_str()))
         .cloned()
+        .collect()
 }
 
 fn extract_set_completion_family_tokens(tokens: &[String]) -> Vec<String> {
@@ -6944,7 +6944,7 @@ fn build_set_completion_import_candidate_profiles(
         profiles.push(SetCompletionImportCandidateProfile {
             candidate: item.clone(),
             family_tokens: extract_set_completion_family_tokens(&name_tokens),
-            component_token: extract_set_completion_component_token(&name_tokens),
+            component_tokens: extract_set_completion_component_tokens(&name_tokens),
             name_tokens,
             normalized_name,
             normalized_slug,
@@ -6962,12 +6962,13 @@ struct SetCompletionMatchScore {
     component_score: f64,
     string_score: f64,
     family_requires_review: bool,
+    family_hard_mismatch: bool,
 }
 
 fn score_set_completion_token_match(
     detected_tokens: &[String],
     detected_family_tokens: &[String],
-    detected_component_token: Option<&str>,
+    detected_component_tokens: &[String],
     profile: &SetCompletionImportCandidateProfile,
     normalized_detected_name: &str,
 ) -> SetCompletionMatchScore {
@@ -6978,6 +6979,7 @@ fn score_set_completion_token_match(
             component_score: 0.0,
             string_score: 0.0,
             family_requires_review: false,
+            family_hard_mismatch: false,
         };
     }
 
@@ -7033,14 +7035,58 @@ fn score_set_completion_token_match(
         (candidate_coverage * 0.45 + detected_coverage * 0.35 + joined_similarity * 0.20)
             .clamp(0.0, 1.0)
     };
-    let component_score = match (detected_component_token, profile.component_token.as_deref()) {
-        (Some(detected), Some(candidate)) => normalized_similarity(detected, candidate),
-        (None, Some(_)) | (Some(_), None) => 0.0,
-        (None, None) => 1.0,
+    let component_score = match (
+        detected_component_tokens.is_empty(),
+        profile.component_tokens.is_empty(),
+    ) {
+        (true, true) => 1.0,
+        (true, false) | (false, true) => 0.0,
+        (false, false) => {
+            let candidate_coverage = profile
+                .component_tokens
+                .iter()
+                .map(|candidate| {
+                    detected_component_tokens
+                        .iter()
+                        .map(|detected| normalized_similarity(detected, candidate))
+                        .fold(0.0, f64::max)
+                })
+                .sum::<f64>()
+                / profile.component_tokens.len() as f64;
+            let detected_coverage = detected_component_tokens
+                .iter()
+                .map(|detected| {
+                    profile
+                        .component_tokens
+                        .iter()
+                        .map(|candidate| normalized_similarity(detected, candidate))
+                        .fold(0.0, f64::max)
+                })
+                .sum::<f64>()
+                / detected_component_tokens.len() as f64;
+            let joined_detected = detected_component_tokens.join(" ");
+            let joined_candidate = profile.component_tokens.join(" ");
+            let joined_similarity = normalized_similarity(&joined_detected, &joined_candidate);
+            let last_token_similarity = match (
+                detected_component_tokens.last(),
+                profile.component_tokens.last(),
+            ) {
+                (Some(detected), Some(candidate)) => normalized_similarity(detected, candidate),
+                _ => 0.0,
+            };
+            (candidate_coverage * 0.30
+                + detected_coverage * 0.25
+                + joined_similarity * 0.30
+                + last_token_similarity * 0.15)
+                .clamp(0.0, 1.0)
+        }
     };
 
     let mut score =
-        string_similarity * 0.30 + token_ratio * 0.22 + family_string_similarity * 0.30 + component_score * 0.18;
+        string_similarity * 0.26
+            + token_ratio * 0.20
+            + family_string_similarity * 0.29
+            + component_score * 0.25;
     if detected_tokens.iter().any(|token| token == "prime")
         && profile.name_tokens.iter().any(|token| token == "prime")
     {
@@ -7059,9 +7105,17 @@ fn score_set_completion_token_match(
         && !profile.family_tokens.is_empty()
         && component_score >= 0.84
         && family_string_similarity < 0.58;
+    let family_hard_mismatch = !detected_family_tokens.is_empty()
+        && !profile.family_tokens.is_empty()
+        && component_score >= 0.82
+        && family_string_similarity < 0.30;
 
     if family_requires_review {
         score -= 0.18;
+    }
+
+    if family_hard_mismatch {
+        score -= 0.36;
     }
 
     if component_score < 0.62 {
@@ -7074,6 +7128,7 @@ fn score_set_completion_token_match(
         component_score,
         string_score: string_similarity,
         family_requires_review,
+        family_hard_mismatch,
     }
 }
 
@@ -7174,13 +7229,15 @@ fn match_set_completion_detected_name(
     let mut second_best_score = 0.0f64;
     for (variant, corrected_text, normalized_detected_name, detected_tokens) in &prepared_variants {
         let detected_family_tokens = extract_set_completion_family_tokens(detected_tokens);
-        let detected_component_token =
-            extract_set_completion_component_token(detected_tokens);
+        let detected_component_tokens =
+            extract_set_completion_component_tokens(detected_tokens);
+        let mut variant_scores = Vec::with_capacity(profiles.len());
+        let mut strongest_family_score = 0.0f64;
         for profile in profiles {
-            let score = score_set_completion_token_match(
+            let raw_score = score_set_completion_token_match(
                 detected_tokens,
                 &detected_family_tokens,
-                detected_component_token.as_deref(),
+                &detected_component_tokens,
                 profile,
                 normalized_detected_name,
             );
@@ -7189,15 +7246,30 @@ fn match_set_completion_detected_name(
                 .iter()
                 .map(|alias| normalized_similarity(normalized_detected_name, alias))
                 .fold(0.0, f64::max);
-            let candidate_score = score.overall.max(alias_similarity);
+            let score = SetCompletionMatchScore {
+                overall: raw_score.overall.max(alias_similarity),
+                ..raw_score
+            };
+            if score.component_score >= 0.82 {
+                strongest_family_score = strongest_family_score.max(score.family_score);
+            }
+            variant_scores.push((profile, score));
+        }
 
+        for (profile, mut score) in variant_scores {
+            if strongest_family_score >= 0.78
+                && score.component_score >= 0.82
+                && score.family_score + 0.18 < strongest_family_score
+            {
+                score.overall = (score.overall - 0.28).clamp(0.0, 1.0);
+                score.family_requires_review = true;
+            }
+
+            let candidate_score = score.overall;
             match best_match {
                 Some((_, current_score, _, _)) if candidate_score > current_score.overall => {
                     second_best_score = current_score.overall;
-                    best_match = Some((profile, SetCompletionMatchScore {
-                        overall: candidate_score,
-                        ..score
-                    }, variant, corrected_text.clone()));
+                    best_match = Some((profile, score, variant, corrected_text.clone()));
                 }
                 Some(_) => {
                     if candidate_score > second_best_score {
@@ -7205,10 +7277,7 @@ fn match_set_completion_detected_name(
                     }
                 }
                 None => {
-                    best_match = Some((profile, SetCompletionMatchScore {
-                        overall: candidate_score,
-                        ..score
-                    }, variant, corrected_text.clone()));
+                    best_match = Some((profile, score, variant, corrected_text.clone()));
                 }
             }
         }
@@ -7242,7 +7311,8 @@ fn match_set_completion_detected_name(
 
     let confidence_gap = best_score.overall - second_best_score;
     let family_gate_failed =
-        best_score.family_requires_review
+        best_score.family_hard_mismatch
+            || best_score.family_requires_review
             || (best_score.component_score >= 0.84
                 && best_score.family_score < 0.64
                 && best_score.string_score < 0.82);
@@ -11301,7 +11371,7 @@ mod tests {
                 "chassis".to_string(),
             ],
             family_tokens: vec!["wisp".to_string()],
-            component_token: Some("chassis".to_string()),
+            component_tokens: vec!["chassis".to_string()],
             normalized_name: "wisp prime chassis".to_string(),
             normalized_slug: "wisp prime chassis".to_string(),
             aliases: vec!["wisp p chassis".to_string()],
@@ -11341,7 +11411,7 @@ mod tests {
                 "systems".to_string(),
             ],
             family_tokens: vec!["saryn".to_string()],
-            component_token: Some("systems".to_string()),
+            component_tokens: vec!["systems".to_string()],
             normalized_name: "saryn prime systems".to_string(),
             normalized_slug: "saryn prime systems".to_string(),
             aliases: Vec::new(),
@@ -11381,7 +11451,7 @@ mod tests {
                 "blueprint".to_string(),
             ],
             family_tokens: vec!["mesa".to_string()],
-            component_token: Some("blueprint".to_string()),
+            component_tokens: vec!["blueprint".to_string()],
             normalized_name: "mesa prime blueprint".to_string(),
             normalized_slug: "mesa prime blueprint".to_string(),
             aliases: Vec::new(),
@@ -11420,7 +11490,7 @@ mod tests {
                 "receiver".to_string(),
             ],
             family_tokens: vec!["boar".to_string()],
-            component_token: Some("receiver".to_string()),
+            component_tokens: vec!["receiver".to_string()],
             normalized_name: "boar prime receiver".to_string(),
             normalized_slug: "boar prime receiver".to_string(),
             aliases: Vec::new(),
@@ -11438,7 +11508,7 @@ mod tests {
                 "receiver".to_string(),
             ],
             family_tokens: vec!["acceltra".to_string()],
-            component_token: Some("receiver".to_string()),
+            component_tokens: vec!["receiver".to_string()],
             normalized_name: "acceltra prime receiver".to_string(),
             normalized_slug: "acceltra prime receiver".to_string(),
             aliases: Vec::new(),
@@ -11477,7 +11547,7 @@ mod tests {
                 "receiver".to_string(),
             ],
             family_tokens: vec!["boar".to_string()],
-            component_token: Some("receiver".to_string()),
+            component_tokens: vec!["receiver".to_string()],
             normalized_name: "boar prime receiver".to_string(),
             normalized_slug: "boar prime receiver".to_string(),
             aliases: Vec::new(),
@@ -11495,7 +11565,7 @@ mod tests {
                 "receiver".to_string(),
             ],
             family_tokens: vec!["acceltra".to_string()],
-            component_token: Some("receiver".to_string()),
+            component_tokens: vec!["receiver".to_string()],
             normalized_name: "acceltra prime receiver".to_string(),
             normalized_slug: "acceltra prime receiver".to_string(),
             aliases: Vec::new(),
@@ -11513,6 +11583,64 @@ mod tests {
         );
 
         assert_eq!(matched.status, "matched-low-confidence");
+    }
+
+    #[test]
+    fn set_completion_import_preserves_multi_token_component_names() {
+        let gauss_blueprint_profile = SetCompletionImportCandidateProfile {
+            candidate: SetCompletionImportCandidate {
+                item_id: Some(201),
+                slug: "gauss_prime_blueprint".to_string(),
+                name: "Gauss Prime Blueprint".to_string(),
+                image_path: None,
+            },
+            name_tokens: vec![
+                "gauss".to_string(),
+                "prime".to_string(),
+                "blueprint".to_string(),
+            ],
+            family_tokens: vec!["gauss".to_string()],
+            component_tokens: vec!["blueprint".to_string()],
+            normalized_name: "gauss prime blueprint".to_string(),
+            normalized_slug: "gauss prime blueprint".to_string(),
+            aliases: Vec::new(),
+        };
+        let gauss_neuroptics_blueprint_profile = SetCompletionImportCandidateProfile {
+            candidate: SetCompletionImportCandidate {
+                item_id: Some(202),
+                slug: "gauss_prime_neuroptics_blueprint".to_string(),
+                name: "Gauss Prime Neuroptics Blueprint".to_string(),
+                image_path: None,
+            },
+            name_tokens: vec![
+                "gauss".to_string(),
+                "prime".to_string(),
+                "neuroptics".to_string(),
+                "blueprint".to_string(),
+            ],
+            family_tokens: vec!["gauss".to_string()],
+            component_tokens: vec!["neuroptics".to_string(), "blueprint".to_string()],
+            normalized_name: "gauss prime neuroptics blueprint".to_string(),
+            normalized_slug: "gauss prime neuroptics blueprint".to_string(),
+            aliases: Vec::new(),
+        };
+
+        let matched = match_set_completion_detected_name(
+            "row-6",
+            &[SetCompletionScreenshotOcrVariant {
+                key: "fallback".to_string(),
+                label: "Fallback Contrast".to_string(),
+                text: "Gauss Prime Neuroptics Blueprint".to_string(),
+                confidence: 0.98,
+            }],
+            &[gauss_blueprint_profile, gauss_neuroptics_blueprint_profile],
+        );
+
+        assert_eq!(
+            matched.matched_item.as_ref().map(|item| item.slug.as_str()),
+            Some("gauss_prime_neuroptics_blueprint")
+        );
+        assert_eq!(matched.status, "matched");
     }
 
     #[test]
