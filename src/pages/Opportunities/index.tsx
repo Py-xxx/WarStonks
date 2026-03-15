@@ -9,11 +9,10 @@ import {
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
 import {
-  getDefaultSetCompletionImportColorSample,
+  buildSetCompletionImportMaskPreview,
   getDefaultSetCompletionImportCrop,
+  getSetCompletionImportStrictColors,
   processSetCompletionInventoryScreenshot,
-  suggestSetCompletionImportColorSample,
-  type SetCompletionImportColorSample,
   type SetCompletionImportCrop,
   type SetCompletionScreenshotOcrRow,
   type SetCompletionScreenshotProgress,
@@ -97,8 +96,6 @@ type ScreenshotImportPreviewRow = SetCompletionScreenshotOcrRow & {
   removed: boolean;
   remapQuery: string;
 };
-
-const SCREENSHOT_IMPORT_ZOOM_SCALE = 2550;
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -256,32 +253,6 @@ function filterPlannerCandidates(
   return candidates
     .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
     .slice(0, 6);
-}
-
-function sampleColorFromPreviewImage(
-  image: HTMLImageElement,
-  x: number,
-  y: number,
-): SetCompletionImportColorSample | null {
-  const sampleX = Math.max(0, Math.min(image.naturalWidth - 1, Math.round(x * image.naturalWidth)));
-  const sampleY = Math.max(0, Math.min(image.naturalHeight - 1, Math.round(y * image.naturalHeight)));
-  const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return null;
-  }
-  context.drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight);
-  const { data } = context.getImageData(sampleX, sampleY, 1, 1);
-  return {
-    x,
-    y,
-    red: data[0],
-    green: data[1],
-    blue: data[2],
-    hex: `#${[data[0], data[1], data[2]].map((value) => value.toString(16).padStart(2, '0')).join('')}`,
-  };
 }
 
 function formatPlat(value: number | null | undefined): string {
@@ -554,8 +525,8 @@ function SetCompletionScreenshotImportModal({
   open,
   fileInputRef,
   previewUrl,
+  maskPreviewUrl,
   crop,
-  colorSample,
   rows,
   plannerCatalog,
   processing,
@@ -569,7 +540,6 @@ function SetCompletionScreenshotImportModal({
   onClose,
   onPickFile,
   onCropChange,
-  onSelectColorSample,
   onReprocess,
   onToggleRemove,
   onSetQuantity,
@@ -582,8 +552,8 @@ function SetCompletionScreenshotImportModal({
   open: boolean;
   fileInputRef: { current: HTMLInputElement | null };
   previewUrl: string | null;
+  maskPreviewUrl: string | null;
   crop: SetCompletionImportCrop;
-  colorSample: SetCompletionImportColorSample | null;
   rows: ScreenshotImportPreviewRow[];
   plannerCatalog: PlannerCatalogItem[];
   processing: boolean;
@@ -597,7 +567,6 @@ function SetCompletionScreenshotImportModal({
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onCropChange: (nextCrop: SetCompletionImportCrop) => void;
-  onSelectColorSample: (sample: SetCompletionImportColorSample) => void;
   onReprocess: () => Promise<void>;
   onToggleRemove: (rowId: string) => void;
   onSetQuantity: (rowId: string, value: string) => void;
@@ -607,12 +576,6 @@ function SetCompletionScreenshotImportModal({
   onToggleDebugRow: (rowId: string) => void;
   onApply: () => Promise<void>;
 }) {
-  const previewImageRef = useRef<HTMLImageElement | null>(null);
-  const [zoomDragging, setZoomDragging] = useState(false);
-  const zoomDraggingRef = useRef(false);
-  const dragStartPointRef = useRef<{ x: number; y: number } | null>(null);
-  const dragStartSampleRef = useRef<{ x: number; y: number } | null>(null);
-  const [previewAspectRatio, setPreviewAspectRatio] = useState(1.6);
   const blockedRowIdSet = useMemo(
     () => new Set(buildScreenshotImportApplyRows(rows).blockedRows.map((row) => row.rowId)),
     [rows],
@@ -636,37 +599,7 @@ function SetCompletionScreenshotImportModal({
   if (!open) {
     return null;
   }
-
-  const updateSampleFromPreviewPoint = (x: number, y: number) => {
-    const image = previewImageRef.current;
-    if (!image) {
-      return;
-    }
-    const sample = sampleColorFromPreviewImage(image, x, y);
-    if (sample) {
-      onSelectColorSample(sample);
-    }
-  };
-
-  const updateSampleFromZoomDrag = (event: {
-    currentTarget: HTMLDivElement;
-    clientX: number;
-    clientY: number;
-  }) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const dragStartPoint = dragStartPointRef.current;
-    const dragStartSample = dragStartSampleRef.current;
-    if (!dragStartPoint || !dragStartSample) {
-      return;
-    }
-    const zoomFactor = SCREENSHOT_IMPORT_ZOOM_SCALE / 100;
-    const deltaX = (event.clientX - dragStartPoint.x) / (rect.width * zoomFactor);
-    const deltaY = (event.clientY - dragStartPoint.y) / (rect.height * zoomFactor);
-    updateSampleFromPreviewPoint(
-      Math.max(0, Math.min(1, dragStartSample.x - deltaX)),
-      Math.max(0, Math.min(1, dragStartSample.y - deltaY)),
-    );
-  };
+  const strictPalette = getSetCompletionImportStrictColors();
 
   return (
     <>
@@ -762,28 +695,12 @@ function SetCompletionScreenshotImportModal({
             {previewUrl ? (
               <>
                 <div className="screenshot-import-preview-shell">
-                  <button
-                    type="button"
-                    className="screenshot-import-preview-hitbox"
-                    onClick={(event) => {
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      const x = (event.clientX - rect.left) / rect.width;
-                      const y = (event.clientY - rect.top) / rect.height;
-                      updateSampleFromPreviewPoint(x, y);
-                    }}
-                  >
+                  <div className="screenshot-import-preview-hitbox">
                     <img
-                      ref={previewImageRef}
                       src={previewUrl}
                       alt="Prime components screenshot preview"
-                      onLoad={(event) => {
-                        const image = event.currentTarget;
-                        if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-                          setPreviewAspectRatio(image.naturalWidth / image.naturalHeight);
-                        }
-                      }}
                     />
-                  </button>
+                  </div>
                   <div
                     className="screenshot-import-crop-overlay"
                     style={{
@@ -793,15 +710,6 @@ function SetCompletionScreenshotImportModal({
                       bottom: `${crop.bottom * 100}%`,
                     }}
                   />
-                  {colorSample ? (
-                    <div
-                      className="screenshot-import-sample-marker"
-                      style={{
-                        left: `${colorSample.x * 100}%`,
-                        top: `${colorSample.y * 100}%`,
-                      }}
-                    />
-                  ) : null}
                 </div>
 
                 <div className="screenshot-import-crop-grid">
@@ -835,79 +743,31 @@ function SetCompletionScreenshotImportModal({
                   Adjust the crop only so the blue guide cleanly wraps the fixed 7-column by 3-row
                   inventory grid, then click <strong>Run Scan</strong>.
                 </div>
-                <div className="screenshot-import-color-picker">
-                  <div className="screenshot-import-color-picker-copy">
-                    <span className="panel-title-eyebrow">Text Color Picker</span>
-                    <strong>Click the screenshot to move the crosshair onto the gold item text</strong>
-                    <span>
-                      OCR now isolates the sampled text color first. If the later tiles struggle,
-                      move the crosshair onto a clean letter and rerun the scan.
-                    </span>
-                  </div>
-                  <div className="screenshot-import-color-picker-row">
-                    <div
-                      className={`screenshot-import-zoom-preview${zoomDragging ? ' dragging' : ''}`}
-                      style={{ aspectRatio: `${previewAspectRatio}` }}
-                      onPointerDown={(event) => {
-                        event.currentTarget.setPointerCapture(event.pointerId);
-                        zoomDraggingRef.current = true;
-                        dragStartPointRef.current = {
-                          x: event.clientX,
-                          y: event.clientY,
-                        };
-                        dragStartSampleRef.current = {
-                          x: colorSample?.x ?? 0.5,
-                          y: colorSample?.y ?? 0.5,
-                        };
-                        setZoomDragging(true);
-                      }}
-                      onPointerMove={(event) => {
-                        if (!zoomDraggingRef.current) {
-                          return;
-                        }
-                        updateSampleFromZoomDrag(event);
-                      }}
-                      onPointerUp={() => {
-                        zoomDraggingRef.current = false;
-                        dragStartPointRef.current = null;
-                        dragStartSampleRef.current = null;
-                        setZoomDragging(false);
-                      }}
-                      onPointerCancel={() => {
-                        zoomDraggingRef.current = false;
-                        dragStartPointRef.current = null;
-                        dragStartSampleRef.current = null;
-                        setZoomDragging(false);
-                      }}
-                    >
-                      <img
-                        className="screenshot-import-zoom-image"
-                        src={previewUrl}
-                        alt=""
-                        draggable={false}
-                        style={{
-                          width: `${SCREENSHOT_IMPORT_ZOOM_SCALE}%`,
-                          height: `${SCREENSHOT_IMPORT_ZOOM_SCALE}%`,
-                          left: `calc(50% - ${(colorSample?.x ?? 0.5) * SCREENSHOT_IMPORT_ZOOM_SCALE}%)`,
-                          top: `calc(50% - ${(colorSample?.y ?? 0.5) * SCREENSHOT_IMPORT_ZOOM_SCALE}%)`,
-                        }}
-                      />
-                      <div className="screenshot-import-zoom-crosshair" />
-                    </div>
-                    <div className="screenshot-import-color-readout">
-                      <span
-                        className="screenshot-import-color-swatch"
-                        style={{ background: colorSample?.hex ?? '#000000' }}
-                      />
-                      <div>
-                        <strong>{colorSample?.hex ?? 'No color selected'}</strong>
-                        <span>
-                          {colorSample
-                            ? `RGB ${colorSample.red}, ${colorSample.green}, ${colorSample.blue}`
-                            : 'The importer will try to pick a default gold text pixel.'}
+                <div className="screenshot-import-mask-preview">
+                  <div className="screenshot-import-mask-copy">
+                    <span className="panel-title-eyebrow">Strict OCR Palette</span>
+                    <strong>Only these exact colors survive the mask</strong>
+                    <div className="screenshot-import-palette-list">
+                      {strictPalette.map((hex) => (
+                        <span key={hex} className="screenshot-import-palette-pill">
+                          <span className="screenshot-import-palette-swatch" style={{ background: hex }} />
+                          {hex}
                         </span>
-                      </div>
+                      ))}
                     </div>
+                  </div>
+                  <div className="screenshot-import-mask-image-shell">
+                    {maskPreviewUrl ? (
+                      <img
+                        className="screenshot-import-mask-image"
+                        src={maskPreviewUrl}
+                        alt="Strict palette mask preview"
+                      />
+                    ) : (
+                      <div className="watchlist-form-note">
+                        The strict palette preview will appear here after you choose a screenshot.
+                      </div>
+                    )}
                   </div>
                 </div>
               </>
@@ -1123,9 +983,8 @@ export function OpportunitiesPage() {
     getDefaultSetCompletionImportCrop,
   );
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
+  const [screenshotImportMaskPreviewUrl, setScreenshotImportMaskPreviewUrl] = useState<string | null>(null);
   const [screenshotImportFile, setScreenshotImportFile] = useState<File | null>(null);
-  const [screenshotImportColorSample, setScreenshotImportColorSample] =
-    useState<SetCompletionImportColorSample | null>(getDefaultSetCompletionImportColorSample);
   const [screenshotImportRows, setScreenshotImportRows] = useState<ScreenshotImportPreviewRow[]>([]);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportApplying, setScreenshotImportApplying] = useState(false);
@@ -1534,13 +1393,13 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(null);
-    setScreenshotImportColorSample(getDefaultSetCompletionImportColorSample());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
       }
       return null;
     });
+      setScreenshotImportMaskPreviewUrl(null);
     if (screenshotFileInputRef.current) {
       screenshotFileInputRef.current.value = '';
     }
@@ -1570,7 +1429,6 @@ export function OpportunitiesPage() {
       const ocrRows = await processSetCompletionInventoryScreenshot(
         file,
         crop,
-        screenshotImportColorSample,
         (progress) => {
           setScreenshotImportProgress(progress);
         },
@@ -1612,7 +1470,6 @@ export function OpportunitiesPage() {
     setExpandedImportDebugRowId(null);
     setScreenshotImportCrop(getDefaultSetCompletionImportCrop());
     setScreenshotImportFile(file);
-    setScreenshotImportColorSample(getDefaultSetCompletionImportColorSample());
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1620,15 +1477,13 @@ export function OpportunitiesPage() {
       return previewUrl;
     });
     try {
-      const suggestedSample = await suggestSetCompletionImportColorSample(
+      const maskPreview = await buildSetCompletionImportMaskPreview(
         file,
         getDefaultSetCompletionImportCrop(),
       );
-      setScreenshotImportColorSample(
-        suggestedSample ?? getDefaultSetCompletionImportColorSample(),
-      );
+      setScreenshotImportMaskPreviewUrl(maskPreview);
     } catch {
-      setScreenshotImportColorSample(getDefaultSetCompletionImportColorSample());
+      setScreenshotImportMaskPreviewUrl(null);
     }
   };
 
@@ -1647,14 +1502,17 @@ export function OpportunitiesPage() {
     setScreenshotImportProgress(null);
     setActiveRemapRowId(null);
     setExpandedImportDebugRowId(null);
-  };
-
-  const handleScreenshotImportColorSampleSelect = (sample: SetCompletionImportColorSample) => {
-    setScreenshotImportColorSample(sample);
-    setScreenshotImportRows([]);
-    setScreenshotImportError(null);
-    setScreenshotImportProgress(null);
-    setExpandedImportDebugRowId(null);
+    if (!screenshotImportFile) {
+      setScreenshotImportMaskPreviewUrl(null);
+      return;
+    }
+    void buildSetCompletionImportMaskPreview(screenshotImportFile, nextCrop)
+      .then((maskPreview) => {
+        setScreenshotImportMaskPreviewUrl(maskPreview);
+      })
+      .catch(() => {
+        setScreenshotImportMaskPreviewUrl(null);
+      });
   };
 
   const updateScreenshotImportRow = (
@@ -2358,8 +2216,8 @@ export function OpportunitiesPage() {
         open={screenshotImportOpen}
         fileInputRef={screenshotFileInputRef}
         previewUrl={screenshotImportPreviewUrl}
+        maskPreviewUrl={screenshotImportMaskPreviewUrl}
         crop={screenshotImportCrop}
-        colorSample={screenshotImportColorSample}
         rows={screenshotImportRows}
         plannerCatalog={plannerCatalog}
         processing={screenshotImportProcessing}
@@ -2373,7 +2231,6 @@ export function OpportunitiesPage() {
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
         onCropChange={handleScreenshotImportCropChange}
-        onSelectColorSample={handleScreenshotImportColorSampleSelect}
         onReprocess={reprocessScreenshotImport}
         onToggleRemove={(rowId) => {
           updateScreenshotImportRow(rowId, (row) => ({ ...row, removed: !row.removed }));
