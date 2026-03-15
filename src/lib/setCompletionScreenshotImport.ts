@@ -423,7 +423,7 @@ async function readDetectedTextFromCells(
 
     const [detectedText, detectedQuantity] = await Promise.all([
       cell.nameBox
-        ? readNameText(worker, maskedCanvas, cell.nameBox, cell.itemBox)
+        ? readNameText(worker, maskedCanvas, cell.nameBox)
         : Promise.resolve(''),
       cell.quantityBox
         ? readQuantityText(worker, maskedCanvas, cell.quantityBox)
@@ -445,13 +445,12 @@ async function readNameText(
   worker: Awaited<ReturnType<typeof createWorker>>,
   maskedCanvas: HTMLCanvasElement,
   box: SetCompletionDetectionBox,
-  itemBox: SetCompletionDetectionBox,
 ): Promise<string> {
   const maskedRegion = extractBoxCanvas(maskedCanvas, box, {
-    left: 6,
-    right: 6,
-    top: 2,
-    bottom: 2,
+    left: 10,
+    right: 10,
+    top: 4,
+    bottom: 6,
   });
   const variants = [
     { canvas: upscaleCanvas(trimTransparentColumns(maskedRegion), 2), psm: PSM.SINGLE_BLOCK },
@@ -461,13 +460,6 @@ async function readNameText(
     },
     {
       canvas: upscaleCanvas(thickenMaskCanvas(trimTransparentColumns(maskedRegion)), 2),
-      psm: PSM.SPARSE_TEXT,
-    },
-    {
-      canvas: upscaleCanvas(
-        thickenMaskCanvas(trimTransparentColumns(extractBoxCanvas(maskedCanvas, itemBox))),
-        2,
-      ),
       psm: PSM.SPARSE_TEXT,
     },
   ];
@@ -495,9 +487,9 @@ async function readQuantityText(
   const maskedRegion = trimTransparentColumns(
     extractBoxCanvas(maskedCanvas, box, {
       left: 0,
-      right: 2,
-      top: 2,
-      bottom: 2,
+      right: 4,
+      top: 4,
+      bottom: 4,
     }),
   );
   const variants = [
