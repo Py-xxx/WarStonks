@@ -49,7 +49,9 @@ Current global limit:
 
 Current scheduler behavior:
 - tracks recent grants in a rolling window
+- uses a dedicated `instant` lane plus a normal weighted scheduler
 - pauses grants if the window is full
+- reserves one slot for `instant` traffic
 - applies cooldown backoff after WFM rate-limit responses
 - logs queue state for debugging
 
@@ -78,7 +80,9 @@ Examples:
 - direct trade account/profile loads
 
 Behavior:
-- always cuts in front of non-instant queues once a slot is available
+- has a dedicated queue lane
+- drains ahead of all normal work
+- may use all 3 grants in the rolling window
 - should be used sparingly
 
 ### High
@@ -129,6 +133,11 @@ Meaning:
 - lower priorities still continue to get served
 
 This prevents starvation for long-running scanner or watchlist work.
+
+Reserved-capacity rule:
+- normal traffic may only consume 2 grants in the rolling window
+- the 3rd slot is reserved for `instant` traffic
+- this prevents scanners/watchlist/pollers from filling the whole window before a user action arrives
 
 ## Coalescing
 
@@ -286,6 +295,7 @@ Use `instant` when:
 
 Use `high` when:
 - the request is time-sensitive and overdue, but not direct click-path critical
+- startup WFM catalog fetch is required during bootstrap
 
 Use `medium` when:
 - it supports an active screen but is not blocking first paint
