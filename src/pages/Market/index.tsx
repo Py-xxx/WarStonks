@@ -2731,7 +2731,7 @@ function AnalysisTab() {
                 <span>{timeOfDayDisplay.weakestWindowLabel ?? '—'}</span>
               </div>
             </div>
-            <div className="market-time-grid market-time-heat-grid">
+            <div className="market-time-heat-grid">
               {timeOfDayDisplay.buckets.map((bucket) => (
                 <div
                   key={bucket.localHour}
@@ -2745,10 +2745,14 @@ function AnalysisTab() {
                     `Visible Qty ${formatNumber(bucket.avgVisibleQuantity, 0)}`,
                   ].join('\n')}
                 >
-                  <span className="market-copy-title">{bucket.localLabel}</span>
-                  <span className="market-time-heat-score">{Math.round((bucket.heatScore ?? 0) * 100)}%</span>
                 </div>
               ))}
+            </div>
+            <div className="market-time-axis" aria-hidden="true">
+              <span>00:00</span>
+              <span>06:00</span>
+              <span>12:00</span>
+              <span>18:00</span>
             </div>
             <ConfidenceNote confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
           </AnalyticsPanel>
