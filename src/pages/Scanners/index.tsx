@@ -851,17 +851,10 @@ export function ScannersPage() {
                     </div>
                   ) : null}
                 </div>
-                <div className="scanner-summary-card">
-                  <strong>Saved Snapshot</strong>
-                  {scanSummaryCounts ? (
-                    <div className="scanner-summary-stat-grid">
-                      <span className="scanner-summary-stat">{scanSummaryCounts}</span>
-                    </div>
-                  ) : (
-                    <div className="scanner-summary-stat-grid">
-                      <span className="scanner-summary-stat">No saved scan</span>
-                    </div>
-                  )}
+                <div className="scanner-summary-card scanner-summary-card--compact">
+                  <span className="scanner-summary-stat">
+                    {scanSummaryCounts ?? 'No saved scan'}
+                  </span>
                 </div>
               </div>
             </div>
