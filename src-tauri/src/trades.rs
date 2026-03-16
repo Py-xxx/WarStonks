@@ -6117,7 +6117,8 @@ pub async fn delete_wfm_buy_order(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
+        build_cost_basis_confidence, build_trade_log_entries_from_statistics,
+        build_trade_notification_fingerprint,
         collapse_grouped_trade_sets, compute_cost_basis_coverage, compute_current_value_coverage,
         derive_trade_log_entries_with_components, initialize_trades_cache_schema,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
@@ -6754,6 +6755,26 @@ mod tests {
         assert!((current_value_coverage - 25.0).abs() < f64::EPSILON);
         assert_eq!(compute_cost_basis_coverage(0, 0, 0), 100.0);
         assert_eq!(compute_current_value_coverage(0, 0), 100.0);
+    }
+
+    #[test]
+    fn classifies_sell_cost_basis_confidence_correctly() {
+        assert_eq!(
+            build_cost_basis_confidence("sell", 1, 0, 0),
+            (Some("none".to_string()), Some("No Cost Basis".to_string()))
+        );
+        assert_eq!(
+            build_cost_basis_confidence("sell", 2, 1, 25),
+            (
+                Some("partial".to_string()),
+                Some("Partial Cost Basis".to_string())
+            )
+        );
+        assert_eq!(
+            build_cost_basis_confidence("sell", 2, 2, 50),
+            (Some("full".to_string()), Some("Full Cost Basis".to_string()))
+        );
+        assert_eq!(build_cost_basis_confidence("buy", 1, 1, 10), (None, None));
     }
 
     #[test]

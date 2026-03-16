@@ -1739,10 +1739,6 @@ function PnlSummaryTab({
               <div className="info-card-val neutral">{summary.keptItems}</div>
             </div>
             <div className="info-card">
-              <div className="info-card-label">Unmatched Sell Revenue <InfoHint text="Sell revenue with no local buy cost basis match. This is the least trustworthy portion of realized profit." /></div>
-              <div className="info-card-val neutral">{formatPlatinumValue(summary.unmatchedSellRevenue)}</div>
-            </div>
-            <div className="info-card">
               <div className="info-card-label">Kept Inventory Value <InfoHint text="Estimated value of inventory marked Keep Item." /></div>
               <div className="info-card-val neutral">{formatPlatinumValue(summary.keptInventoryValue)}</div>
             </div>
