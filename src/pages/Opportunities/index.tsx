@@ -1409,6 +1409,9 @@ export function OpportunitiesPage() {
       const ownedCount = parsedRelic
         ? ownedByRelic.get(`${parsedRelic.tier}:${parsedRelic.code}`) ?? 0
         : 0;
+      if (!ownedCount) {
+        continue;
+      }
       const coveredSetNames = new Set<string>();
 
       const drops = relic.drops.map<FarmNowSetCompletionDrop>((drop) => {
@@ -2324,6 +2327,37 @@ export function OpportunitiesPage() {
                       Open Scanners
                     </button>
                   </div>
+                ) : ownedRelicsLoading ? (
+                  <div className="opportunities-placeholder">Loading owned relic inventory…</div>
+                ) : ownedRelicsLoaded && !ownedRelicsUpdatedAt ? (
+                  <div className="set-planner-empty">
+                    <div>
+                      <span className="panel-title-eyebrow">Owned Relics Required</span>
+                      <h3>Load relic inventory first</h3>
+                      <p>
+                        This view only ranks relics you already own. Open Owned Relics and press
+                        Refresh to load your inventory, then return here.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setActiveTab('owned-relics')}
+                    >
+                      Open Owned Relics
+                    </button>
+                  </div>
+                ) : ownedRelics.length === 0 ? (
+                  <div className="set-planner-empty">
+                    <div>
+                      <span className="panel-title-eyebrow">Owned Relics Required</span>
+                      <h3>No owned relics detected</h3>
+                      <p>
+                        Alecaframe returned an empty relic inventory. Make sure your public link is
+                        correct, then refresh in Owned Relics.
+                      </p>
+                    </div>
+                  </div>
                 ) : ownedItems.length === 0 ? (
                   <div className="set-planner-empty">
                     <div>
@@ -2344,7 +2378,7 @@ export function OpportunitiesPage() {
                   </div>
                 ) : farmNowSetCompletionRelics.length === 0 ? (
                   <div className="opportunities-placeholder">
-                    No relics in the cached scan currently cover your missing set-completion parts.
+                    None of your owned relics currently cover your missing set-completion parts.
                   </div>
                 ) : (
                   <div className="farm-now-list farm-now-list-set-completion">
