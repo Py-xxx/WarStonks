@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "node ./scripts/tauri-wrapper.mjs",
+    "version:sync": "node ./scripts/sync-version.mjs",
     "release:manifest": "node ./scripts/create-windows-updater-manifest.mjs",
     "test:wfm-presence": "node ./scripts/test-wfm-presence.mjs"
   },

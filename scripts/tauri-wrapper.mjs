@@ -3,6 +3,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { syncVersionFiles } from './sync-version.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,6 +104,7 @@ async function createGeneratedDevConfig(devPort) {
 }
 
 async function runTauriDev(args) {
+  await syncVersionFiles();
   const host = process.env.TAURI_DEV_HOST || '127.0.0.1';
   const allowedPorts = parseAllowedPorts(process.env.TAURI_DEV_ALLOWED_PORTS);
   const selectedPort = await selectAvailablePort(allowedPorts, host);
@@ -144,7 +146,10 @@ async function main() {
     const exitCode =
       subcommand === 'dev'
         ? await runTauriDev(restArgs)
-        : await runCommand(PNPM_COMMAND, ['exec', 'tauri', ...args]);
+        : await (async () => {
+            await syncVersionFiles();
+            return runCommand(PNPM_COMMAND, ['exec', 'tauri', ...args]);
+          })();
     process.exit(exitCode);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
