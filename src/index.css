@@ -8485,6 +8485,7 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+  margin: 10px 12px 12px;
 }
 
 .market-summary-card {
