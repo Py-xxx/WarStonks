@@ -7066,9 +7066,15 @@ body {
   min-height: 120px;
 }
 
+.scanners-intro-panel .market-panel-header-copy {
+  width: 100%;
+}
+
 .scanner-header-status-line {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  width: 100%;
   padding-top: 6px;
 }
 
