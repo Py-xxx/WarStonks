@@ -2216,7 +2216,7 @@ body {
 
 /* ── TOP BAR ── */
 .topbar {
-  height: 48px;
+  height: 56px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -2255,7 +2255,7 @@ body {
   flex: 1;
   max-width: 480px;
   min-width: 0;
-  height: 30px;
+  height: 34px;
   background: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -2383,7 +2383,7 @@ body {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  height: 28px;
+  height: 32px;
   padding: 0 7px 0 8px;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -2425,8 +2425,8 @@ body {
   position: relative;
 }
 .notification-btn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   position: relative;
   display: flex;
   align-items: center;
@@ -2498,7 +2498,7 @@ body {
 }
 
 .btn-connect {
-  height: 28px;
+  height: 32px;
   padding: 0 14px;
   border-radius: 4px;
   border: 1px solid var(--accent-blue);
@@ -2623,7 +2623,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 0 2px;
-  height: 32px;
+  height: 36px;
   flex-shrink: 0;
 }
 
@@ -2632,7 +2632,7 @@ body {
   align-items: center;
   gap: 5px;
   padding: 0 9px;
-  height: 26px;
+  height: 30px;
   border-radius: 3px;
   cursor: default;
   transition: background 0.12s;
@@ -2695,7 +2695,7 @@ body {
 .currency-val.no-data { color: var(--text-muted); }
 
 .settings-btn {
-  width: 32px; height: 32px;
+  width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 6px;
   background: var(--bg-elevated);
