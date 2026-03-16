@@ -127,27 +127,6 @@ export interface TrackingRefreshSummary {
   dueItems: number;
 }
 
-export interface SetCompletionOverlayOcrBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface SetCompletionOverlayOcrCell {
-  rowId: string;
-  tileIndex: number;
-  nameLineBoxes: SetCompletionOverlayOcrBox[];
-  quantityBox: SetCompletionOverlayOcrBox | null;
-}
-
-export interface SetCompletionOverlayOcrReading {
-  rowId: string;
-  tileIndex: number;
-  detectedText: string;
-  detectedQuantity: string | null;
-}
-
 export interface WorldStateMarketNewsResponse {
   news: WfstatNewsItem[];
   flashSales: WfstatFlashSale[];
@@ -595,16 +574,6 @@ export async function setSetCompletionOwnedItemQuantity(input: {
     name: input.name,
     imagePath: input.imagePath,
     quantity: input.quantity,
-  });
-}
-
-export async function runSetCompletionOverlayOcr(input: {
-  imageDataUrl: string;
-  cells: SetCompletionOverlayOcrCell[];
-}): Promise<SetCompletionOverlayOcrReading[]> {
-  return invoke<SetCompletionOverlayOcrReading[]>('run_set_completion_overlay_ocr', {
-    imageDataUrl: input.imageDataUrl,
-    cells: input.cells,
   });
 }
 

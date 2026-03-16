@@ -3,9 +3,7 @@ use reqwest::blocking::Client;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
@@ -63,33 +61,6 @@ pub struct WfmTopSellOrdersResponse {
 pub struct RelicTierIcon {
     pub tier: String,
     pub image_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetCompletionOverlayOcrBox {
-    pub x: i64,
-    pub y: i64,
-    pub width: i64,
-    pub height: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetCompletionOverlayOcrCell {
-    pub row_id: String,
-    pub tile_index: usize,
-    pub name_line_boxes: Vec<SetCompletionOverlayOcrBox>,
-    pub quantity_box: Option<SetCompletionOverlayOcrBox>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetCompletionOverlayOcrReading {
-    pub row_id: String,
-    pub tile_index: usize,
-    pub detected_text: String,
-    pub detected_quantity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,83 +221,6 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     webbrowser::open(validated_url)
         .map(|_| ())
         .map_err(|error| format!("Failed to open external URL: {error}"))
-}
-
-fn resolve_overlay_ocr_script_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let bundled_path = app
-        .path()
-        .resource_dir()
-        .map_err(|error| error.to_string())?
-        .join("paddle_ocr_read.py");
-    if bundled_path.exists() {
-        return Ok(bundled_path);
-    }
-
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join("paddle_ocr_read.py");
-    if dev_path.exists() {
-        return Ok(dev_path);
-    }
-
-    Err("Could not locate the PaddleOCR runner script.".to_string())
-}
-
-fn extract_data_url_payload(image_data_url: &str) -> Result<String, String> {
-    image_data_url
-        .split_once(',')
-        .map(|(_, payload)| payload.trim().to_string())
-        .filter(|payload| !payload.is_empty())
-        .ok_or_else(|| "Invalid screenshot overlay image payload.".to_string())
-}
-
-#[tauri::command]
-pub async fn run_set_completion_overlay_ocr(
-    app: tauri::AppHandle,
-    image_data_url: String,
-    cells: Vec<SetCompletionOverlayOcrCell>,
-) -> Result<Vec<SetCompletionOverlayOcrReading>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let script_path = resolve_overlay_ocr_script_path(&app)?;
-        let image_base64 = extract_data_url_payload(&image_data_url)?;
-        let payload = serde_json::json!({
-            "imageBase64": image_base64,
-            "cells": cells,
-        });
-
-        let mut child = Command::new("python3")
-            .arg(script_path)
-            .env("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("Failed to launch PaddleOCR: {error}"))?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(payload.to_string().as_bytes())
-                .map_err(|error| format!("Failed to send overlay OCR payload: {error}"))?;
-        }
-
-        let output = child
-            .wait_with_output()
-            .map_err(|error| format!("Failed to wait for PaddleOCR: {error}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(if stderr.is_empty() {
-                "PaddleOCR failed without an error message.".to_string()
-            } else {
-                stderr
-            });
-        }
-
-        serde_json::from_slice::<Vec<SetCompletionOverlayOcrReading>>(&output.stdout)
-            .map_err(|error| format!("Failed to parse overlay OCR output: {error}"))
-    })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
 fn build_wfstat_client() -> Result<Client, String> {
