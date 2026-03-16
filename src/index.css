@@ -70,6 +70,36 @@
   max-width: 720px;
 }
 
+.set-planner-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.set-planner-summary-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(74, 158, 255, 0.14);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(74, 158, 255, 0.08), rgba(7, 11, 18, 0.92)),
+    rgba(10, 14, 22, 0.8);
+}
+
+.set-planner-summary-card strong {
+  color: var(--text-primary);
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.set-planner-summary-card span:last-child {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* Collapsed: sticky narrow sidebar */
 .set-planner-drawer {
   position: sticky;
@@ -1877,6 +1907,10 @@
   .planner-set-pills,
   .planner-component-actions {
     justify-content: flex-start;
+  }
+
+  .set-planner-summary-grid {
+    grid-template-columns: 1fr;
   }
 
   .set-planner-owned-grid {
