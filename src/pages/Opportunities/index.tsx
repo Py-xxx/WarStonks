@@ -9,9 +9,11 @@ import {
 import {
   analyzeSetCompletionInventoryScreenshot,
   getDefaultSetCompletionImportCrop,
+  scanSetCompletionDetectionPreview,
   type SetCompletionImportCrop,
   type SetCompletionScreenshotDetectionPreview,
   type SetCompletionScreenshotProgress,
+  type SetCompletionScreenshotScanEntry,
   type SetCompletionTraceSettings,
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
@@ -361,20 +363,26 @@ function SetCompletionScreenshotImportModal({
   previewUrl,
   detectionPreview,
   processing,
+  scanning,
   progress,
   errorMessage,
+  scanResults,
   onClose,
   onPickFile,
+  onScan,
 }: {
   open: boolean;
   fileInputRef: { current: HTMLInputElement | null };
   previewUrl: string | null;
   detectionPreview: SetCompletionScreenshotDetectionPreview | null;
   processing: boolean;
+  scanning: boolean;
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
+  scanResults: SetCompletionScreenshotScanEntry[];
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
+  onScan: () => Promise<void>;
 }) {
   if (!open) {
     return null;
@@ -441,15 +449,25 @@ function SetCompletionScreenshotImportModal({
                   void onPickFile(event.target.files?.[0] ?? null);
                 }}
               />
+              <button
+                type="button"
+                className="settings-secondary-btn"
+                disabled={processing || scanning || !detectionPreview}
+                onClick={() => {
+                  void onScan();
+                }}
+              >
+                {scanning ? 'Scanning…' : 'Scan'}
+              </button>
             </div>
 
             <p className="watchlist-form-note">
               Use a single screenshot from the in-game <strong>Prime Components</strong> tab. This
-              is detection-only for now and does not import, OCR, or match any items yet.
+              prepares the image, exports the detected crops, and can OCR those crops on demand.
             </p>
             <p className="watchlist-form-note">
               Workflow: choose the screenshot and the detector will immediately extract the fixed
-              palette, build the overlays, and display them over the original image.
+              palette, build the overlays, export the crops, and display them over the original image.
             </p>
 
             {progress ? (
@@ -489,6 +507,37 @@ function SetCompletionScreenshotImportModal({
                     ) : null}
                   </div>
                 </div>
+
+                {scanResults.length ? (
+                  <div className="screenshot-import-summary-panel screenshot-import-readings">
+                    <div className="screenshot-import-summary">
+                      <div>
+                        <span className="card-label">OCR Readout</span>
+                        <h3>Tesseract Results</h3>
+                      </div>
+                    </div>
+                    <ul className="screenshot-import-reading-list">
+                      {scanResults.flatMap((entry) => {
+                        const originalQuantity = entry.hasQuantityBox
+                          ? entry.originalQuantity ?? '?'
+                          : '1';
+                        const processedQuantity = entry.hasQuantityBox
+                          ? entry.processedQuantity ?? '?'
+                          : '1';
+                        return [
+                          <li key={`${entry.rowId}-original`}>
+                            <strong>O</strong> {entry.originalText || 'No text detected'} · Qty{' '}
+                            {originalQuantity}
+                          </li>,
+                          <li key={`${entry.rowId}-processed`}>
+                            <strong>P</strong> {entry.processedText || 'No text detected'} · Qty{' '}
+                            {processedQuantity}
+                          </li>,
+                        ];
+                      })}
+                    </ul>
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="opportunities-placeholder">
@@ -530,9 +579,13 @@ export function OpportunitiesPage() {
   const [screenshotImportDetectionPreview, setScreenshotImportDetectionPreview] =
     useState<SetCompletionScreenshotDetectionPreview | null>(null);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
+  const [screenshotImportScanning, setScreenshotImportScanning] = useState(false);
   const [screenshotImportProgress, setScreenshotImportProgress] =
     useState<SetCompletionScreenshotProgress | null>(null);
   const [screenshotImportError, setScreenshotImportError] = useState<string | null>(null);
+  const [screenshotImportScanResults, setScreenshotImportScanResults] = useState<
+    SetCompletionScreenshotScanEntry[]
+  >([]);
   const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const screenshotImportTraceSettings = useMemo<SetCompletionTraceSettings>(
@@ -916,6 +969,8 @@ export function OpportunitiesPage() {
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
+    setScreenshotImportScanning(false);
+    setScreenshotImportScanResults([]);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -938,8 +993,10 @@ export function OpportunitiesPage() {
     previewUrl: string,
   ) => {
     setScreenshotImportProcessing(true);
+    setScreenshotImportScanning(false);
     setScreenshotImportError(null);
     setScreenshotImportDetectionPreview(null);
+    setScreenshotImportScanResults([]);
     setScreenshotImportProgress({
       progress: 0,
       stage: 'prepare',
@@ -980,6 +1037,8 @@ export function OpportunitiesPage() {
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
+    setScreenshotImportScanning(false);
+    setScreenshotImportScanResults([]);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -991,6 +1050,29 @@ export function OpportunitiesPage() {
       getDefaultSetCompletionImportCrop(),
       previewUrl,
     );
+  };
+
+  const handleScreenshotScan = async () => {
+    if (!screenshotImportDetectionPreview) {
+      return;
+    }
+
+    setScreenshotImportScanning(true);
+    setScreenshotImportError(null);
+    setScreenshotImportScanResults([]);
+    try {
+      const results = await scanSetCompletionDetectionPreview(
+        screenshotImportDetectionPreview,
+        (progress) => {
+          setScreenshotImportProgress(progress);
+        },
+      );
+      setScreenshotImportScanResults(results);
+    } catch (error) {
+      setScreenshotImportError(toErrorMessage(error));
+    } finally {
+      setScreenshotImportScanning(false);
+    }
   };
 
   const handlePlannerTargetChange = (
@@ -1667,10 +1749,13 @@ export function OpportunitiesPage() {
         previewUrl={screenshotImportPreviewUrl}
         detectionPreview={screenshotImportDetectionPreview}
         processing={screenshotImportProcessing}
+        scanning={screenshotImportScanning}
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
+        scanResults={screenshotImportScanResults}
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
+        onScan={handleScreenshotScan}
       />
     </>
   );
