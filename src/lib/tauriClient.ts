@@ -33,10 +33,6 @@ import type {
   TradeSignInInput,
   TradeUpdateListingInput,
   SetCompletionOwnedItem,
-  SetCompletionImportCandidate,
-  SetCompletionScreenshotApplyRow,
-  SetCompletionScreenshotMatchInputRow,
-  SetCompletionScreenshotMatchRow,
   OwnedRelicInventoryCache,
   PersistedWorldStateCacheEntry,
   SellerMode,
@@ -129,27 +125,6 @@ export interface WfmItemOrdersResponse {
 export interface TrackingRefreshSummary {
   refreshedItems: number;
   dueItems: number;
-}
-
-export interface SetCompletionPaddleOcrBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface SetCompletionPaddleOcrCell {
-  rowId: string;
-  tileIndex: number;
-  nameBox: SetCompletionPaddleOcrBox | null;
-  quantityBox: SetCompletionPaddleOcrBox | null;
-}
-
-export interface SetCompletionPaddleOcrReading {
-  rowId: string;
-  tileIndex: number;
-  detectedText: string;
-  detectedQuantity: string | null;
 }
 
 export interface WorldStateMarketNewsResponse {
@@ -599,34 +574,6 @@ export async function setSetCompletionOwnedItemQuantity(input: {
     name: input.name,
     imagePath: input.imagePath,
     quantity: input.quantity,
-  });
-}
-
-export async function matchSetCompletionScreenshotRows(input: {
-  rows: SetCompletionScreenshotMatchInputRow[];
-  allowedItems: SetCompletionImportCandidate[];
-}): Promise<SetCompletionScreenshotMatchRow[]> {
-  return invoke<SetCompletionScreenshotMatchRow[]>('match_set_completion_screenshot_rows', {
-    rows: input.rows,
-    allowedItems: input.allowedItems,
-  });
-}
-
-export async function applySetCompletionScreenshotImport(
-  rows: SetCompletionScreenshotApplyRow[],
-): Promise<SetCompletionOwnedItem[]> {
-  return invoke<SetCompletionOwnedItem[]>('apply_set_completion_screenshot_import', {
-    rows,
-  });
-}
-
-export async function runSetCompletionPaddleOcr(input: {
-  imageDataUrl: string;
-  cells: SetCompletionPaddleOcrCell[];
-}): Promise<SetCompletionPaddleOcrReading[]> {
-  return invoke<SetCompletionPaddleOcrReading[]>('run_set_completion_paddle_ocr', {
-    imageDataUrl: input.imageDataUrl,
-    cells: input.cells,
   });
 }
 

@@ -1166,44 +1166,6 @@ export interface SetCompletionOwnedItem {
   updatedAt: string;
 }
 
-export interface SetCompletionImportCandidate {
-  itemId: number | null;
-  slug: string;
-  name: string;
-  imagePath: string | null;
-}
-
-export interface SetCompletionScreenshotMatchInputRow {
-  rowId: string;
-  ocrVariants: SetCompletionScreenshotOcrVariant[];
-}
-
-export interface SetCompletionScreenshotMatchRow {
-  rowId: string;
-  matchedItem: SetCompletionImportCandidate | null;
-  confidence: number;
-  matchKind: 'exact' | 'alias' | 'slug' | 'fuzzy' | 'none';
-  status: 'matched' | 'matched-low-confidence' | 'unmatched';
-  reason: string;
-  chosenOcrText: string | null;
-  chosenOcrConfidence: number | null;
-}
-
-export interface SetCompletionScreenshotApplyRow {
-  itemId: number | null;
-  slug: string;
-  name: string;
-  imagePath: string | null;
-  quantity: number;
-}
-
-export interface SetCompletionScreenshotOcrVariant {
-  key: string;
-  label: string;
-  text: string;
-  confidence: number;
-}
-
 export interface OwnedRelicRefinementCounts {
   intact: number;
   exceptional: number;
