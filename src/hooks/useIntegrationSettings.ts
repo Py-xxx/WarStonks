@@ -7,7 +7,7 @@ export function useIntegrationSettings() {
   const alecaframeEnabled = useAppStore((state) => state.appSettings.alecaframe.enabled);
   const alecaframePublicLink = useAppStore((state) => state.appSettings.alecaframe.publicLink);
   const loadAppSettings = useAppStore((state) => state.loadAppSettings);
-  const refreshWalletSnapshot = useAppStore((state) => state.refreshWalletSnapshot);
+  const refreshWalletSnapshotSilently = useAppStore((state) => state.refreshWalletSnapshotSilently);
 
   useEffect(() => {
     void loadAppSettings();
@@ -18,12 +18,12 @@ export function useIntegrationSettings() {
       return undefined;
     }
 
-    void refreshWalletSnapshot();
+    void refreshWalletSnapshotSilently();
 
     const intervalId = window.setInterval(() => {
-      void refreshWalletSnapshot();
+      void refreshWalletSnapshotSilently();
     }, WALLET_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [alecaframeEnabled, alecaframePublicLink, refreshWalletSnapshot]);
+  }, [alecaframeEnabled, alecaframePublicLink, refreshWalletSnapshotSilently]);
 }

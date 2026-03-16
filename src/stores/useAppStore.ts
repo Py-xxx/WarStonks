@@ -8,7 +8,7 @@ import {
   getAppSettings,
   getItemAnalytics,
   getItemAnalysis,
-  getCurrencyBalances,
+  refreshAlecaframeWalletSnapshot,
   getItemVariantsForMarket,
   getWfmTradeOverview,
   getWfmItemOrders,
@@ -109,6 +109,7 @@ let worldStateInvasionsRefreshPromise: Promise<void> | null = null;
 let worldStateSyndicateMissionsRefreshPromise: Promise<void> | null = null;
 let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
 let tradeAccountLoadPromise: Promise<void> | null = null;
+let backgroundWalletRefreshPromise: Promise<void> | null = null;
 const watchlistRefreshGenerations = new Map<string, number>();
 
 const defaultAppSettings: AppSettings = {
@@ -902,6 +903,7 @@ interface AppStore {
   closeDiscordWebhookModal: () => void;
   loadAppSettings: () => Promise<void>;
   refreshWalletSnapshot: () => Promise<void>;
+  refreshWalletSnapshotSilently: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
   saveDiscordWebhookConfiguration: (input: DiscordWebhookSettingsInput) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
@@ -1110,7 +1112,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ walletLoading: true });
 
     try {
-      const snapshot = await getCurrencyBalances();
+      const snapshot = await refreshAlecaframeWalletSnapshot();
       set({
         walletSnapshot: snapshot,
         walletLoading: false,
@@ -1125,6 +1127,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
     }
   },
+  refreshWalletSnapshotSilently: async () => {
+    if (backgroundWalletRefreshPromise) {
+      return backgroundWalletRefreshPromise;
+    }
+
+    backgroundWalletRefreshPromise = (async () => {
+      try {
+        const snapshot = await refreshAlecaframeWalletSnapshot();
+        set({ walletSnapshot: snapshot });
+      } catch (error) {
+        console.warn('[alecaframe] background wallet refresh failed', error);
+      } finally {
+        backgroundWalletRefreshPromise = null;
+      }
+    })();
+
+    return backgroundWalletRefreshPromise;
+  },
   saveAlecaframeConfiguration: async (input) => {
     set({ settingsLoading: true, settingsError: null });
 
@@ -1138,7 +1158,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         walletLoading: true,
       });
 
-      const snapshot = await getCurrencyBalances();
+      const snapshot = await refreshAlecaframeWalletSnapshot();
       set({
         walletSnapshot: snapshot,
         walletLoading: false,

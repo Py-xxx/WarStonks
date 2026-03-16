@@ -90,6 +90,7 @@ pub fn run() {
             settings::save_discord_webhook_settings,
             settings::send_watchlist_found_discord_notification,
             settings::get_currency_balances,
+            settings::refresh_alecaframe_wallet_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

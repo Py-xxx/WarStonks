@@ -637,6 +637,43 @@ fn validate_public_link_inner(public_link: String) -> Result<AlecaframeValidatio
     })
 }
 
+fn get_currency_balances_inner(app: &tauri::AppHandle) -> Result<WalletSnapshot> {
+    let settings = load_settings_inner(app)?;
+    let alecaframe_settings = settings.alecaframe;
+
+    if !alecaframe_settings.enabled {
+        return Ok(WalletSnapshot::default());
+    }
+
+    let Some(public_link) = alecaframe_settings.public_link else {
+        return Ok(WalletSnapshot {
+            enabled: true,
+            configured: false,
+            error_message: Some(
+                "Alecaframe is enabled but no public link is configured.".to_string(),
+            ),
+            ..WalletSnapshot::default()
+        });
+    };
+
+    match validate_public_link_inner(public_link) {
+        Ok(result) => Ok(WalletSnapshot {
+            enabled: true,
+            configured: true,
+            balances: result.balances,
+            username_when_public: result.username_when_public,
+            last_update: result.last_update,
+            error_message: None,
+        }),
+        Err(error) => Ok(WalletSnapshot {
+            enabled: true,
+            configured: true,
+            error_message: Some(error.to_string()),
+            ..WalletSnapshot::default()
+        }),
+    }
+}
+
 #[tauri::command]
 pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     load_settings_inner(&app).map_err(|error| error.to_string())
@@ -773,41 +810,33 @@ pub fn send_watchlist_found_discord_notification(
 }
 
 #[tauri::command]
-pub fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapshot, String> {
-    let settings = load_settings_inner(&app).map_err(|error| error.to_string())?;
-    let alecaframe_settings = settings.alecaframe;
+pub async fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_currency_balances_inner(&app).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
 
-    if !alecaframe_settings.enabled {
-        return Ok(WalletSnapshot::default());
-    }
-
-    let Some(public_link) = alecaframe_settings.public_link else {
-        return Ok(WalletSnapshot {
-            enabled: true,
-            configured: false,
-            error_message: Some(
-                "Alecaframe is enabled but no public link is configured.".to_string(),
-            ),
-            ..WalletSnapshot::default()
-        });
-    };
-
-    match validate_public_link_inner(public_link) {
-        Ok(result) => Ok(WalletSnapshot {
-            enabled: true,
-            configured: true,
-            balances: result.balances,
-            username_when_public: result.username_when_public,
-            last_update: result.last_update,
-            error_message: None,
-        }),
-        Err(error) => Ok(WalletSnapshot {
-            enabled: true,
-            configured: true,
-            error_message: Some(error.to_string()),
-            ..WalletSnapshot::default()
-        }),
-    }
+#[tauri::command]
+pub async fn refresh_alecaframe_wallet_snapshot(
+    app: tauri::AppHandle,
+) -> Result<WalletSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let snapshot = get_currency_balances_inner(&app).map_err(|error| error.to_string())?;
+        if snapshot.enabled && snapshot.configured && snapshot.error_message.is_none() {
+            if let Err(error) =
+                crate::market_observatory::refresh_owned_relic_inventory_cache_inner(&app)
+            {
+                eprintln!(
+                    "[alecaframe] background owned relic cache refresh failed: {error}"
+                );
+            }
+        }
+        Ok(snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]

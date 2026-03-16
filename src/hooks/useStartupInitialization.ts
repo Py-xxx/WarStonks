@@ -5,7 +5,6 @@ import {
   initializeAppCatalogOnce,
   isTauriRuntime,
   listenToStartupProgress,
-  refreshOwnedRelicInventory,
   tryAutoSignInWfmTradeAccount,
   type StartupProgress,
   type StartupSummary,
@@ -190,12 +189,6 @@ export function useStartupInitialization(): StartupState {
         await loadTradeAccount();
         if (!isMounted || activeAttemptRef.current !== currentAttempt) {
           return;
-        }
-
-        try {
-          await refreshOwnedRelicInventory();
-        } catch (error) {
-          console.warn('[startup] owned relic inventory refresh failed', error);
         }
 
         try {
