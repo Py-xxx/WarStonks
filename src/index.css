@@ -1857,7 +1857,13 @@
 .planner-component-relics {
   display: grid;
   gap: 8px;
-  margin-top: 10px;
+}
+
+.planner-component-relics-middle {
+  min-width: 220px;
+  max-width: 280px;
+  flex: 0 0 240px;
+  align-content: center;
 }
 
 .planner-component-relics-label {
@@ -1945,6 +1951,12 @@
   .planner-set-pills,
   .planner-component-actions {
     justify-content: flex-start;
+  }
+
+  .planner-component-relics-middle {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 auto;
   }
 
   .set-planner-summary-grid {
