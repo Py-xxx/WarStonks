@@ -12,6 +12,7 @@ import type { ItemAnalysisResponse, WfmTopSellOrder } from '../../types';
 
 const COPY_RESET_DELAY_MS = 1800;
 const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
+const QUICK_VIEW_ORDER_HINT = 'Click a seller card to copy the whisper message.';
 const colorMap = {
   green: 'var(--accent-green)',
   amber: 'var(--accent-amber)',
@@ -604,6 +605,9 @@ function QuickViewCard() {
                 </button>
               ))}
             </div>
+            {compactOrders.length > 0 ? (
+              <div className="qv-order-hint">{QUICK_VIEW_ORDER_HINT}</div>
+            ) : null}
 
             {copyFeedback ? <div className="qv-copy-feedback">{copyFeedback}</div> : null}
 
