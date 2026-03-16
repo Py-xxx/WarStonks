@@ -1114,9 +1114,11 @@ export function OpportunitiesPage() {
 
     const expectedMarginPct =
       expectedInvestment > 0 ? (expectedProfit / expectedInvestment) * 100 : null;
+    const expectedValue = expectedInvestment + expectedProfit;
 
     return {
       expectedInvestment,
+      expectedValue,
       expectedProfit,
       expectedMarginPct,
       profitableSetCount,
@@ -1537,20 +1539,22 @@ export function OpportunitiesPage() {
                   <article className="set-planner-summary-card">
                     <span className="card-label">Expected Investment</span>
                     <strong>{formatPlat(plannerPositiveSummary.expectedInvestment)}</strong>
-                    <span>
-                      Total capital across {plannerPositiveSummary.profitableSetCount}{' '}
-                      {plannerPositiveSummary.profitableSetCount === 1 ? 'profitable set' : 'profitable sets'}
-                    </span>
+                  </article>
+                  <article className="set-planner-summary-card">
+                    <span className="card-label">Expected Value</span>
+                    <strong>{formatPlat(plannerPositiveSummary.expectedValue)}</strong>
                   </article>
                   <article className="set-planner-summary-card">
                     <span className="card-label">Expected Profit</span>
-                    <strong>{formatPlat(plannerPositiveSummary.expectedProfit)}</strong>
-                    <span>Total projected profit from positive-profit completions</span>
+                    <strong className="set-planner-summary-value-positive">
+                      {formatPlat(plannerPositiveSummary.expectedProfit)}
+                    </strong>
                   </article>
                   <article className="set-planner-summary-card">
                     <span className="card-label">Expected Margin</span>
-                    <strong>{formatPercent(plannerPositiveSummary.expectedMarginPct)}</strong>
-                    <span>Profit as a percentage of total expected investment</span>
+                    <strong className="set-planner-summary-value-positive">
+                      {formatPercent(plannerPositiveSummary.expectedMarginPct)}
+                    </strong>
                   </article>
                 </div>
               ) : null}
