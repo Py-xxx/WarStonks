@@ -1854,6 +1854,46 @@
   flex-wrap: wrap;
 }
 
+.planner-component-relics {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.planner-component-relics-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.planner-component-relic-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.planner-component-relic-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(61, 214, 140, 0.24);
+  background: rgba(61, 214, 140, 0.1);
+  color: var(--accent-green);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.planner-component-relic-pill-more {
+  border-color: rgba(74, 158, 255, 0.22);
+  background: rgba(74, 158, 255, 0.1);
+  color: var(--accent-blue);
+}
+
 .planner-component-actions {
   display: flex;
   align-items: center;
