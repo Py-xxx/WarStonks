@@ -19,8 +19,8 @@ export function HomePage() {
   ];
 
   return (
-    <>
-      <div className="subnav">
+    <div className="home-page-shell">
+      <div className="subnav home-page-subnav">
         <div className="subnav-left">
           <span className="page-title">Dashboard</span>
           {tabs.map((tab) => (
@@ -71,6 +71,6 @@ export function HomePage() {
       {homeSubTab === 'overview'    && <Overview />}
       {homeSubTab === 'watchlist'   && <WatchlistTab />}
       {homeSubTab === 'alerts'      && <AlertsTab />}
-    </>
+    </div>
   );
 }

@@ -1728,14 +1728,14 @@ export function PortfolioPage() {
 
   return (
     <>
-      <div className="subnav">
+      <div className="subnav portfolio-page-subnav">
         <div className="subnav-left">
           <span className="page-title">Portfolio</span>
           <span className={`subtab${portfolioTab === 'pnl' ? ' active' : ''}`} onClick={() => setPortfolioTab('pnl')} role="tab" tabIndex={0}>P&amp;L Summary</span>
           <span className={`subtab${portfolioTab === 'log' ? ' active' : ''}`} onClick={() => setPortfolioTab('log')} role="tab" tabIndex={0}>Trade Log</span>
         </div>
       </div>
-      <div className="page-content">
+      <div className="page-content portfolio-page-content">
         {portfolioTab === 'log' ? (
           <TradeLogTab username={tradeAccount?.name ?? null} />
         ) : (

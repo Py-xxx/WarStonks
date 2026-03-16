@@ -2773,7 +2773,7 @@ export function MarketPage() {
 
   return (
     <>
-      <div className="subnav">
+      <div className="subnav market-page-subnav">
         <div className="subnav-left">
           <span className="page-title">Market</span>
           {(['analysis', 'analytics'] as const).map((tab) => (
