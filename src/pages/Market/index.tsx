@@ -101,6 +101,66 @@ function clearRevealTimeouts(timeoutsRef: MutableRefObject<number[]>) {
   timeoutsRef.current = [];
 }
 
+function AdaptiveInfoHint({ text }: { text: string }) {
+  const hintRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipRef = useRef<HTMLSpanElement | null>(null);
+  const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({
+    bottom: 'calc(100% + 8px)',
+    left: 0,
+  });
+
+  const updatePlacement = () => {
+    const hintRect = hintRef.current?.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current?.getBoundingClientRect();
+    if (!hintRect || !tooltipRect) {
+      return;
+    }
+
+    const viewportPadding = 12;
+    const tooltipGap = 8;
+    const placeBelow = hintRect.top < tooltipRect.height + 24;
+    let nextStyle: CSSProperties = placeBelow
+      ? { top: `calc(100% + ${tooltipGap}px)`, bottom: 'auto' }
+      : { bottom: `calc(100% + ${tooltipGap}px)`, top: 'auto' };
+
+    const shouldAlignRight = hintRect.left + tooltipRect.width > window.innerWidth - viewportPadding;
+    if (shouldAlignRight) {
+      nextStyle.right = 0;
+      nextStyle.left = 'auto';
+      const projectedLeft = hintRect.right - tooltipRect.width;
+      if (projectedLeft < viewportPadding) {
+        nextStyle.left = `${viewportPadding - hintRect.left}px`;
+        nextStyle.right = 'auto';
+      }
+    } else {
+      nextStyle.left = 0;
+      nextStyle.right = 'auto';
+    }
+
+    setTooltipStyle(nextStyle);
+  };
+
+  return (
+    <span
+      ref={hintRef}
+      className="info-hint market-info-hint"
+      tabIndex={0}
+      aria-label={text}
+      onMouseEnter={updatePlacement}
+      onFocus={updatePlacement}
+    >
+      <span className="info-hint-glyph" aria-hidden="true">i</span>
+      <span
+        ref={tooltipRef}
+        className="info-hint-tooltip market-info-hint-tooltip"
+        style={tooltipStyle}
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
 function queuePanelReveal<T extends string>(
   keys: readonly T[],
   setState: Dispatch<SetStateAction<Record<T, boolean>>>,
@@ -1547,6 +1607,7 @@ function PanelOverlay({
 function AnalyticsPanel({
   title,
   eyebrow,
+  info,
   children,
   loading = false,
   errorMessage = null,
@@ -1556,6 +1617,7 @@ function AnalyticsPanel({
 }: {
   title: string;
   eyebrow: string;
+  info?: string;
   children: ReactNode;
   loading?: boolean;
   errorMessage?: string | null;
@@ -1569,7 +1631,10 @@ function AnalyticsPanel({
         <div className="market-panel-header">
           <div className="market-panel-header-copy">
             <span className="panel-title-eyebrow">{eyebrow}</span>
-            <span className="card-label">{title}</span>
+            <span className="card-label market-panel-title-row">
+              <span>{title}</span>
+              {info ? <AdaptiveInfoHint text={info} /> : null}
+            </span>
           </div>
           {headerAside ? <div className="market-panel-header-aside">{headerAside}</div> : null}
         </div>
@@ -2150,7 +2215,10 @@ function AnalysisTab() {
             <div className="market-hero-strip">
               <div className="market-hero-copy">
                 <div className="market-hero-title-row">
-                  <span className="market-hero-kicker">Trade Posture</span>
+                  <span className="market-hero-kicker market-hero-kicker-row">
+                    <span>Trade Posture</span>
+                    <AdaptiveInfoHint text="High-level trading readout combining current entry, exit, margin, liquidity, trend confidence, and risk posture." />
+                  </span>
                   <div className="market-badge-stack">
                     <span className={`market-panel-badge tone-${heroState.tone}`}>{heroState.label}</span>
                     <ConfidenceBadge confidence={analysis?.headline.confidenceSummary} />
@@ -2226,6 +2294,7 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Flip Analysis"
             eyebrow="Execution Model"
+            info="Execution-focused pricing and margin view for a simple buy-then-sell flip at the current market posture."
             loading={!revealedPanels.flip && !analysisError}
             errorMessage={!revealedPanels.flip ? analysisError : null}
             loadingLabel="Calculating flip margins"
@@ -2269,6 +2338,7 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Liquidity Detail"
             eyebrow="Market Structure"
+            info="Live orderbook depth, undercut behavior, and demand pressure showing how easy this market is to enter and exit."
             loading={!revealedPanels.liquidity && !analysisError}
             errorMessage={!revealedPanels.liquidity ? analysisError : null}
             loadingLabel="Profiling live liquidity"
@@ -2343,6 +2413,7 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Trend"
             eyebrow="Analytics Carryover"
+            info="Recent direction, slope, and confidence signals derived from the latest analytics history."
             loading={!revealedPanels.trend && !analysisError}
             errorMessage={!revealedPanels.trend ? analysisError : null}
             loadingLabel="Summarizing the current trend"
@@ -2416,6 +2487,7 @@ function AnalysisTab() {
                   : 'Drop Sources / Set Components'
             }
             eyebrow="Supply Context"
+            info="Local item-catalog context explaining how this item is supplied, either through set components or drop sources."
             loading={!revealedPanels.supply && !analysisError}
             errorMessage={!revealedPanels.supply ? analysisError : null}
             loadingLabel="Building supply context"
@@ -2533,6 +2605,7 @@ function AnalysisTab() {
               <AnalyticsPanel
                 title="Item Details"
                 eyebrow="Reference"
+                info="Reference data from the local catalog, including description, rank scaling, and item metadata."
                 loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
                 errorMessage={itemDetailsError}
                 loadingLabel="Loading item details from the local catalog"
@@ -2616,6 +2689,7 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Event Context"
             eyebrow="World State"
+            info="Current worldstate hooks and event signals that may be affecting demand, supply, or timing for this item."
             loading={!revealedPanels.eventContext && !analysisError}
             errorMessage={!revealedPanels.eventContext ? analysisError : null}
             loadingLabel="Matching worldstate context"
@@ -2650,6 +2724,7 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Manipulation Risk"
             eyebrow="Safety"
+            info="Risk signals for spoofing, shallow books, and other market behavior that can distort apparent edge."
             loading={!revealedPanels.manipulation && !analysisError}
             errorMessage={!revealedPanels.manipulation ? analysisError : null}
             loadingLabel="Scanning manipulation signals"
@@ -2708,6 +2783,7 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Time of Day Liquidity"
             eyebrow="Observatory Tape"
+            info="Hourly liquidity profile showing when this market is historically strongest or weakest throughout the day."
             loading={!revealedPanels.timeOfDay && !analysisError}
             errorMessage={!revealedPanels.timeOfDay ? analysisError : null}
             loadingLabel="Aggregating observatory tape"

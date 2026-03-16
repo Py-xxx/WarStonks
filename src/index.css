@@ -8073,6 +8073,17 @@ body {
   right: auto;
 }
 
+.market-info-hint {
+  width: 15px;
+  height: 15px;
+  padding-top: 1px;
+}
+
+.market-info-hint-tooltip {
+  width: 252px;
+  z-index: 340;
+}
+
 .market-chart-hover-header {
   display: grid;
   gap: 2px;
@@ -8392,6 +8403,13 @@ body {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.market-hero-kicker-row,
+.market-panel-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .market-hero-kicker {
