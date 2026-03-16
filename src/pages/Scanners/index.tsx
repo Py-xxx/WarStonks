@@ -106,6 +106,18 @@ function getDefaultComponentTarget(component: ArbitrageScannerComponentEntry): s
   return '';
 }
 
+function getRepresentativeZonePrice(
+  low: number | null,
+  high: number | null,
+  fallback: number | null,
+): number | null {
+  if (low !== null && high !== null) {
+    return (low + high) / 2;
+  }
+
+  return fallback;
+}
+
 function chanceForRefinement(
   chanceProfile: RelicRefinementChanceProfile,
   refinementKey: RelicRefinementKey,
@@ -199,16 +211,8 @@ function ArbitrageComponentRow({
             </span>
           </div>
           <div className="scanner-component-pill-row">
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Stats price</span>
-              <span className="scanner-stat-pill-value">{formatPlat(component.currentStatsPrice)}</span>
-            </span>
             <span className="scanner-stat-pill scanner-stat-pill-highlight">
-              <span className="scanner-stat-pill-label">Entry</span>
-              <span className="scanner-stat-pill-value">{formatPlat(component.recommendedEntryPrice)}</span>
-            </span>
-            <span className="scanner-stat-pill scanner-stat-pill-highlight">
-              <span className="scanner-stat-pill-label">Zone</span>
+              <span className="scanner-stat-pill-label">Entry Zone</span>
               <span className="scanner-stat-pill-value">
                 {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
               </span>
@@ -354,9 +358,14 @@ function RelicDropRow({
   const imageUrl = resolveWfmAssetUrl(drop.imagePath);
   const chance = chanceForRefinement(drop.chanceProfile, refinementKey);
   const normalizedChance = normalizeRelicChance(chance);
+  const representativeExitPrice = getRepresentativeZonePrice(
+    drop.recommendedExitLow,
+    drop.recommendedExitHigh,
+    drop.recommendedExitPrice,
+  );
   const expectedContribution =
-    normalizedChance !== null && drop.recommendedExitPrice !== null
-      ? Math.round(normalizedChance * drop.recommendedExitPrice)
+    normalizedChance !== null && representativeExitPrice !== null
+      ? Math.round(normalizedChance * representativeExitPrice)
       : null;
 
   return (
@@ -380,11 +389,9 @@ function RelicDropRow({
             </span>
             <span className="scanner-stat-pill scanner-stat-pill-highlight">
               <span className="scanner-stat-pill-label">Optimal Exit</span>
-              <span className="scanner-stat-pill-value">{formatPlat(drop.recommendedExitPrice)}</span>
-            </span>
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Current</span>
-              <span className="scanner-stat-pill-value">{formatPlat(drop.currentStatsPrice)}</span>
+              <span className="scanner-stat-pill-value">
+                {formatPlat(drop.recommendedExitLow)} - {formatPlat(drop.recommendedExitHigh)}
+              </span>
             </span>
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">EV</span>
