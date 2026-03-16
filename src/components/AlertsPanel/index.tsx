@@ -64,27 +64,21 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
 
   return (
     <div className={`alerts-panel${compact ? ' compact' : ''}`}>
-      {!compact ? (
-        <div className="alerts-panel-header">
-          <span className="card-label">Active Alerts</span>
-          <div className="alert-header-actions">
-            {systemAlerts.length > 0 ? (
-              <button className="text-btn" type="button" onClick={clearAllSystemAlerts}>
-                Clear System
-              </button>
-            ) : null}
-            {alerts.length > 0 ? (
-              <button className="text-btn" type="button" onClick={clearAllAlerts}>
-                Clear Market
-              </button>
+      {visibleSystemAlerts.length > 0 ? (
+        <div className="alerts-section alerts-section-card">
+          <div className="alerts-section-header">
+            <div className="alerts-section-title-wrap">
+              <span className="alerts-section-title">System</span>
+              <span className="badge badge-amber">{visibleSystemAlerts.length}</span>
+            </div>
+            {!compact ? (
+              <div className="alert-header-actions">
+                <button className="text-btn" type="button" onClick={clearAllSystemAlerts}>
+                  Clear System
+                </button>
+              </div>
             ) : null}
           </div>
-        </div>
-      ) : null}
-
-      {visibleSystemAlerts.length > 0 ? (
-        <div className="alerts-section">
-          <div className="alerts-section-title">System</div>
           <div className="alerts-list">
             {visibleSystemAlerts.map((alert) => (
               <div key={alert.id} className="alert-item alert-item-system">
@@ -187,10 +181,20 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
       ) : null}
 
       {visibleAlerts.length > 0 ? (
-        <div className="alerts-section">
-          {visibleSystemAlerts.length > 0 ? (
-            <div className="alerts-section-title">Market</div>
-          ) : null}
+        <div className="alerts-section alerts-section-card">
+          <div className="alerts-section-header">
+            <div className="alerts-section-title-wrap">
+              <span className="alerts-section-title">Market</span>
+              <span className="badge badge-green">{visibleAlerts.length}</span>
+            </div>
+            {!compact ? (
+              <div className="alert-header-actions">
+                <button className="text-btn" type="button" onClick={clearAllAlerts}>
+                  Clear Market
+                </button>
+              </div>
+            ) : null}
+          </div>
           <div className="alerts-list">
             {visibleAlerts.map((alert) => {
               const imageUrl = resolveWfmAssetUrl(alert.itemImagePath);

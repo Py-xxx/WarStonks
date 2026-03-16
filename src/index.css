@@ -2469,18 +2469,20 @@ body {
   width: min(460px, calc(100vw - 40px));
   max-height: min(70vh, 640px);
   overflow: auto;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.26);
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(108, 174, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(17, 24, 38, 0.98), rgba(10, 14, 22, 0.98)),
+    var(--bg-surface);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.3);
   z-index: 260;
 }
 .notification-panel-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .strategy-pill {
@@ -3867,12 +3869,6 @@ body {
   flex-direction: column;
   gap: 12px;
 }
-.alerts-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
 .alert-header-actions {
   display: flex;
   align-items: center;
@@ -3883,12 +3879,31 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+.alerts-section-card {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(8, 13, 22, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+.alerts-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.alerts-section-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .alerts-section-title {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 .alerts-list {
   display: grid;
@@ -3901,10 +3916,11 @@ body {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 12px;
-  padding: 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-base);
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(12, 17, 27, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 .alert-main {
   min-width: 0;
@@ -3921,9 +3937,9 @@ body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 80%, black);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(17, 24, 36, 0.92);
   color: var(--text-secondary);
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
@@ -3935,8 +3951,8 @@ body {
   object-fit: cover;
 }
 .alert-item-thumb-system {
-  background: rgba(255, 193, 92, 0.12);
-  border-color: rgba(255, 193, 92, 0.25);
+  background: rgba(255, 193, 92, 0.14);
+  border-color: rgba(255, 193, 92, 0.32);
   color: var(--accent-amber);
   font-weight: 700;
 }
@@ -3951,7 +3967,7 @@ body {
   gap: 4px;
 }
 .alert-system-notes {
-  margin-top: 2px;
+  margin-top: 4px;
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.45;
@@ -3960,9 +3976,11 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: space-between;
+  flex-wrap: wrap;
 }
 .alert-item-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -3983,22 +4001,24 @@ body {
   grid-column: 2;
   justify-self: end;
   align-self: end;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .alert-actions > .act-btn {
   width: auto;
+  min-height: 28px;
+  padding: 0 10px;
 }
 .alert-clear-btn {
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: transparent;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 17, 27, 0.72);
   color: var(--text-secondary);
   cursor: pointer;
 }
 .alert-clear-btn-floating {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 12px;
+  right: 12px;
   width: 26px;
   height: 26px;
   display: inline-flex;
@@ -4008,11 +4028,14 @@ body {
 }
 .alert-clear-btn:hover {
   color: var(--text-primary);
-  background: var(--bg-elevated);
+  background: rgba(23, 31, 45, 0.98);
 }
 .alerts-panel.compact .alerts-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+.alerts-panel.compact .alerts-section-card {
+  padding: 10px;
 }
 .alerts-panel.compact .alert-item {
   gap: 10px;
