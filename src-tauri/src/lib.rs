@@ -27,7 +27,6 @@ pub fn run() {
             commands::get_app_version,
             commands::get_wfm_scheduler_snapshot,
             commands::open_external_url,
-            commands::run_set_completion_overlay_ocr,
             commands::initialize_app_catalog,
             commands::get_wfm_autocomplete_items,
             commands::get_relic_tier_icons,
