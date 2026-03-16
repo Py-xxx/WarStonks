@@ -4060,6 +4060,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  padding-right: 32px;
 }
 .alert-item-system .alert-meta {
   display: grid;
@@ -4100,12 +4101,14 @@ body {
   grid-column: 2;
   justify-self: end;
   align-self: end;
-  margin-top: 6px;
+  margin-top: 8px;
+  margin-left: 10px;
 }
 .alert-actions > .act-btn {
   width: auto;
   min-height: 28px;
   padding: 0 10px;
+  margin: 2px 0;
 }
 .alert-clear-btn {
   border-radius: 8px;
@@ -4142,6 +4145,7 @@ body {
 }
 .alerts-panel.compact .alert-actions {
   gap: 4px;
+  margin-left: 8px;
 }
 .alerts-panel.compact .act-btn {
   height: 24px;
