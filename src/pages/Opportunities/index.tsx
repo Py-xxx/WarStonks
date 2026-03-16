@@ -85,8 +85,18 @@ type PlannerCatalogItem = {
   imagePath: string | null;
 };
 
+type ScreenshotImportPreparedScreenshot = {
+  id: string;
+  fileName: string;
+  previewUrl: string;
+  detectionPreview: SetCompletionScreenshotDetectionPreview;
+};
+
 type ScreenshotImportRowState = {
   rowId: string;
+  screenshotId: string;
+  screenshotFileName: string;
+  screenshotIndex: number;
   tileIndex: number;
   originalCellDataUrl: string;
   originalText: string;
@@ -131,9 +141,14 @@ function normalizeScreenshotImportMatchValue(value: string): string {
 
 function buildScreenshotImportRowState(
   entry: SetCompletionScreenshotReviewEntry,
+  screenshot: ScreenshotImportPreparedScreenshot,
+  screenshotIndex: number,
 ): ScreenshotImportRowState {
   return {
-    rowId: entry.rowId,
+    rowId: `${screenshot.id}:${entry.rowId}`,
+    screenshotId: screenshot.id,
+    screenshotFileName: screenshot.fileName,
+    screenshotIndex,
     tileIndex: entry.tileIndex,
     originalCellDataUrl: entry.originalCellDataUrl,
     originalText: entry.originalText,
@@ -471,8 +486,7 @@ function SetPlannerRow({
 function SetCompletionScreenshotImportModal({
   open,
   fileInputRef,
-  previewUrl,
-  detectionPreview,
+  screenshots,
   processing,
   scanning,
   confirming,
@@ -491,8 +505,7 @@ function SetCompletionScreenshotImportModal({
 }: {
   open: boolean;
   fileInputRef: { current: HTMLInputElement | null };
-  previewUrl: string | null;
-  detectionPreview: SetCompletionScreenshotDetectionPreview | null;
+  screenshots: ScreenshotImportPreparedScreenshot[];
   processing: boolean;
   scanning: boolean;
   confirming: boolean;
@@ -503,7 +516,7 @@ function SetCompletionScreenshotImportModal({
   hasBlockedRows: boolean;
   candidateOptions: PlannerCatalogItem[];
   onClose: () => void;
-  onPickFile: (file: File | null) => Promise<void>;
+  onPickFile: (files: File[]) => Promise<void>;
   onScan: () => Promise<void>;
   onNameChange: (rowId: string, value: string) => void;
   onQuantityChange: (rowId: string, value: string) => void;
@@ -570,14 +583,15 @@ function SetCompletionScreenshotImportModal({
                 className="screenshot-import-file-input"
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
+                multiple
                 onChange={(event) => {
-                  void onPickFile(event.target.files?.[0] ?? null);
+                  void onPickFile(event.target.files ? Array.from(event.target.files) : []);
                 }}
               />
               <button
                 type="button"
                 className="settings-secondary-btn"
-                disabled={processing || scanning || confirming || !detectionPreview}
+                disabled={processing || scanning || confirming || !screenshots.length}
                 onClick={() => {
                   void onScan();
                 }}
@@ -587,13 +601,14 @@ function SetCompletionScreenshotImportModal({
             </div>
 
             <p className="watchlist-form-note">
-              Use a single screenshot from the in-game <strong>Prime Components</strong> tab. This
-              prepares the image and builds OCR-ready crops for review.
+              Use one or more screenshots from the in-game <strong>Prime Components</strong> tab.
+              Each screenshot is prepared independently and then merged into one review list.
             </p>
             <p className="watchlist-form-note">
-              Workflow: choose the screenshot and the detector will immediately extract the fixed
-              palette and build the overlays. Then press <strong>Scan</strong> to OCR the cell crops,
-              match them against the set map, review any flagged rows, and confirm them into the planner.
+              Workflow: choose the screenshots and the detector will immediately extract the fixed
+              palette and isolate the OCR crops for each one. Then press <strong>Scan</strong> to OCR
+              each screenshot separately, match the rows against the set map, review any flagged rows,
+              and confirm them into the planner.
             </p>
 
             {progress ? (
@@ -604,26 +619,27 @@ function SetCompletionScreenshotImportModal({
             ) : null}
 
             {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
-            {previewUrl ? (
-              <div className="screenshot-import-original-preview">
-                <div className="screenshot-import-original-preview-shell">
-                  <img
-                    className="screenshot-import-original-image"
-                    src={previewUrl}
-                    alt="Prime components screenshot preview"
-                  />
-                  {detectionPreview ? (
-                    <img
-                      className="screenshot-import-overlay-image"
-                      src={detectionPreview.annotatedPreviewDataUrl}
-                      alt="Detection overlay preview"
-                    />
-                  ) : null}
-                </div>
+            {screenshots.length ? (
+              <div className="screenshot-import-preview-list">
+                {screenshots.map((screenshot, index) => (
+                  <div key={screenshot.id} className="screenshot-import-original-preview">
+                    <div className="screenshot-import-original-preview-meta">
+                      <span className="card-label">Screenshot {index + 1}</span>
+                      <strong>{screenshot.fileName}</strong>
+                    </div>
+                    <div className="screenshot-import-original-preview-shell">
+                      <img
+                        className="screenshot-import-original-image"
+                        src={screenshot.previewUrl}
+                        alt={`Prime components screenshot preview ${index + 1}`}
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="opportunities-placeholder">
-                Choose a screenshot first to generate the overlay preview on the original image.
+                Choose one or more screenshots first to generate the preview list.
               </div>
             )}
           </div>
@@ -669,6 +685,9 @@ function SetCompletionScreenshotImportModal({
                         <div className="screenshot-import-row-editor">
                           <div className="screenshot-import-row-copy">
                             <strong>Matched name</strong>
+                            <span className="screenshot-import-row-source">
+                              Screenshot {row.state.screenshotIndex + 1}: {row.state.screenshotFileName}
+                            </span>
                             <input
                               className="set-planner-search-input"
                               list="set-completion-screenshot-candidates"
@@ -750,9 +769,9 @@ export function OpportunitiesPage() {
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
   const [plannerTargetInputs, setPlannerTargetInputs] = useState<Record<string, string>>({});
   const [screenshotImportOpen, setScreenshotImportOpen] = useState(false);
-  const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
-  const [screenshotImportDetectionPreview, setScreenshotImportDetectionPreview] =
-    useState<SetCompletionScreenshotDetectionPreview | null>(null);
+  const [screenshotImportScreenshots, setScreenshotImportScreenshots] = useState<
+    ScreenshotImportPreparedScreenshot[]
+  >([]);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportScanning, setScreenshotImportScanning] = useState(false);
   const [screenshotImportConfirming, setScreenshotImportConfirming] = useState(false);
@@ -946,6 +965,9 @@ export function OpportunitiesPage() {
         if (left.sortWeight !== right.sortWeight) {
           return left.sortWeight - right.sortWeight;
         }
+        if (left.state.screenshotIndex !== right.state.screenshotIndex) {
+          return left.state.screenshotIndex - right.state.screenshotIndex;
+        }
         return left.state.tileIndex - right.state.tileIndex;
       });
   }, [screenshotImportCatalogMap, screenshotImportRows]);
@@ -1134,14 +1156,17 @@ export function OpportunitiesPage() {
   }, [componentQuery, plannerCatalog]);
 
   useEffect(() => {
-    if (!screenshotImportPreviewUrl) {
+    if (!screenshotImportScreenshots.length) {
       return undefined;
     }
 
+    const urls = screenshotImportScreenshots.map((screenshot) => screenshot.previewUrl);
     return () => {
-      URL.revokeObjectURL(screenshotImportPreviewUrl);
+      for (const url of urls) {
+        URL.revokeObjectURL(url);
+      }
     };
-  }, [screenshotImportPreviewUrl]);
+  }, [screenshotImportScreenshots]);
 
   const upsertOwnedItem = async (item: PlannerCatalogItem, quantity: number) => {
     setSavingSlug(item.slug);
@@ -1180,19 +1205,18 @@ export function OpportunitiesPage() {
   };
 
   const resetScreenshotImportSession = () => {
-    setScreenshotImportDetectionPreview(null);
+    setScreenshotImportScreenshots((current) => {
+      for (const screenshot of current) {
+        URL.revokeObjectURL(screenshot.previewUrl);
+      }
+      return [];
+    });
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
     setScreenshotImportScanning(false);
     setScreenshotImportConfirming(false);
     setScreenshotImportRows([]);
-    setScreenshotImportPreviewUrl((current) => {
-      if (current) {
-        URL.revokeObjectURL(current);
-      }
-      return null;
-    });
     if (screenshotFileInputRef.current) {
       screenshotFileInputRef.current.value = '';
     }
@@ -1203,16 +1227,20 @@ export function OpportunitiesPage() {
     resetScreenshotImportSession();
   };
 
-  const processScreenshotImportFile = async (
-    file: File,
+  const processScreenshotImportFiles = async (
+    files: File[],
     crop: SetCompletionImportCrop,
-    previewUrl: string,
   ) => {
     setScreenshotImportProcessing(true);
     setScreenshotImportScanning(false);
     setScreenshotImportConfirming(false);
     setScreenshotImportError(null);
-    setScreenshotImportDetectionPreview(null);
+    setScreenshotImportScreenshots((current) => {
+      for (const screenshot of current) {
+        URL.revokeObjectURL(screenshot.previewUrl);
+      }
+      return [];
+    });
     setScreenshotImportRows([]);
     setScreenshotImportProgress({
       progress: 0,
@@ -1221,57 +1249,62 @@ export function OpportunitiesPage() {
     });
 
     try {
-      const detectionPreview = await analyzeSetCompletionInventoryScreenshot(
-        file,
-        crop,
-        screenshotImportTraceSettings,
-        (progress) => {
-          setScreenshotImportProgress(progress);
-        },
-      );
-      setScreenshotImportPreviewUrl((current) => {
-        if (current && current !== previewUrl) {
-          URL.revokeObjectURL(current);
+      const preparedScreenshots: ScreenshotImportPreparedScreenshot[] = [];
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const previewUrl = URL.createObjectURL(file);
+        try {
+          const detectionPreview = await analyzeSetCompletionInventoryScreenshot(
+            file,
+            crop,
+            screenshotImportTraceSettings,
+            (progress) => {
+              setScreenshotImportProgress({
+                ...progress,
+                detail: `${progress.detail} (${index + 1}/${files.length})`,
+              });
+            },
+          );
+          preparedScreenshots.push({
+            id: `${Date.now()}-${index}`,
+            fileName: file.name,
+            previewUrl,
+            detectionPreview,
+          });
+        } catch (error) {
+          URL.revokeObjectURL(previewUrl);
+          throw error;
         }
-        return previewUrl;
-      });
-      setScreenshotImportDetectionPreview(detectionPreview);
+      }
+      setScreenshotImportScreenshots(preparedScreenshots);
     } catch (error) {
-      URL.revokeObjectURL(previewUrl);
-      setScreenshotImportPreviewUrl(null);
+      setScreenshotImportScreenshots((current) => {
+        for (const screenshot of current) {
+          URL.revokeObjectURL(screenshot.previewUrl);
+        }
+        return [];
+      });
       setScreenshotImportError(toErrorMessage(error));
     } finally {
       setScreenshotImportProcessing(false);
     }
   };
 
-  const handleScreenshotFilePicked = async (file: File | null) => {
-    if (!file) {
+  const handleScreenshotFilePicked = async (files: File[]) => {
+    if (!files.length) {
       return;
     }
-    const previewUrl = URL.createObjectURL(file);
-    setScreenshotImportDetectionPreview(null);
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
     setScreenshotImportScanning(false);
     setScreenshotImportConfirming(false);
     setScreenshotImportRows([]);
-    setScreenshotImportPreviewUrl((current) => {
-      if (current) {
-        URL.revokeObjectURL(current);
-      }
-      return previewUrl;
-    });
-    await processScreenshotImportFile(
-      file,
-      getDefaultSetCompletionImportCrop(),
-      previewUrl,
-    );
+    await processScreenshotImportFiles(files, getDefaultSetCompletionImportCrop());
   };
 
   const handleScreenshotScan = async () => {
-    if (!screenshotImportDetectionPreview) {
+    if (!screenshotImportScreenshots.length) {
       return;
     }
 
@@ -1279,14 +1312,26 @@ export function OpportunitiesPage() {
     setScreenshotImportError(null);
     setScreenshotImportRows([]);
     try {
-      const results = await scanAndMatchSetCompletionDetectionPreview(
-        screenshotImportDetectionPreview,
-        screenshotImportCandidates,
-        (progress) => {
-          setScreenshotImportProgress(progress);
-        },
-      );
-      setScreenshotImportRows(results.map((entry) => buildScreenshotImportRowState(entry)));
+      const results: ScreenshotImportRowState[] = [];
+      for (let index = 0; index < screenshotImportScreenshots.length; index += 1) {
+        const screenshot = screenshotImportScreenshots[index];
+        const screenshotResults = await scanAndMatchSetCompletionDetectionPreview(
+          screenshot.detectionPreview,
+          screenshotImportCandidates,
+          (progress) => {
+            setScreenshotImportProgress({
+              ...progress,
+              detail: `${progress.detail} (${index + 1}/${screenshotImportScreenshots.length})`,
+            });
+          },
+        );
+        results.push(
+          ...screenshotResults.map((entry) =>
+            buildScreenshotImportRowState(entry, screenshot, index),
+          ),
+        );
+      }
+      setScreenshotImportRows(results);
     } catch (error) {
       setScreenshotImportError(toErrorMessage(error));
     } finally {
@@ -2022,8 +2067,7 @@ export function OpportunitiesPage() {
       <SetCompletionScreenshotImportModal
         open={screenshotImportOpen}
         fileInputRef={screenshotFileInputRef}
-        previewUrl={screenshotImportPreviewUrl}
-        detectionPreview={screenshotImportDetectionPreview}
+        screenshots={screenshotImportScreenshots}
         processing={screenshotImportProcessing}
         scanning={screenshotImportScanning}
         confirming={screenshotImportConfirming}

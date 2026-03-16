@@ -304,6 +304,21 @@
   gap: 12px;
 }
 
+.screenshot-import-preview-list {
+  display: grid;
+  gap: 16px;
+}
+
+.screenshot-import-original-preview-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.screenshot-import-original-preview-meta strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
 .screenshot-import-original-preview-shell {
   position: relative;
   border: 1px solid var(--border);
@@ -737,6 +752,10 @@
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.screenshot-import-row-source {
+  color: var(--accent-blue);
 }
 
 .screenshot-import-qty-field {
