@@ -8,6 +8,11 @@ import {
   stopMarketTracking,
 } from '../../lib/tauriClient';
 import { formatShortLocalDate, formatShortLocalDateTime } from '../../lib/dateTime';
+import {
+  clearWatchlistAddFeedbackTimeouts,
+  markWatchlistAddFeedback,
+  WATCHLIST_ADD_SUCCESS_MESSAGE,
+} from '../../lib/watchlistAddFeedback';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
@@ -2138,7 +2143,9 @@ function AnalysisTab() {
   const [itemDetailsLoading, setItemDetailsLoading] = useState(false);
   const [itemDetailsError, setItemDetailsError] = useState<string | null>(null);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
+  const [watchlistAddFeedback, setWatchlistAddFeedback] = useState<Record<string, boolean>>({});
   const [autocompleteItems, setAutocompleteItems] = useState<WfmAutocompleteItem[]>([]);
+  const watchlistAddFeedbackTimeoutsRef = useRef(new Map<string, number>());
   const [revealedPanels, setRevealedPanels] = useState<Record<AnalysisPanelKey, boolean>>(
     () => ({
       ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
@@ -2163,6 +2170,13 @@ function AnalysisTab() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(
+    () => () => {
+      clearWatchlistAddFeedbackTimeouts(watchlistAddFeedbackTimeoutsRef);
+    },
+    [],
+  );
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -2687,24 +2701,34 @@ function AnalysisTab() {
                             }))
                           }
                         />
-                        <button
-                          className="btn-sm"
-                          type="button"
-                          disabled={!watchlistItem}
-                          onClick={() => {
-                            if (!watchlistItem) {
-                              return;
-                            }
-                            addExplicitItemToWatchlist(
-                              watchlistItem,
-                              component.variantKey,
-                              component.variantLabel,
-                              Number.parseInt(targetValue || '0', 10),
-                            );
-                          }}
-                        >
-                          Add to Watchlist
-                        </button>
+                        <div className="watchlist-add-feedback-stack">
+                          {watchlistAddFeedback[component.slug] ? (
+                            <span className="watchlist-add-success">{WATCHLIST_ADD_SUCCESS_MESSAGE}</span>
+                          ) : null}
+                          <button
+                            className="btn-sm"
+                            type="button"
+                            disabled={!watchlistItem}
+                            onClick={() => {
+                              if (!watchlistItem) {
+                                return;
+                              }
+                              addExplicitItemToWatchlist(
+                                watchlistItem,
+                                component.variantKey,
+                                component.variantLabel,
+                                Number.parseInt(targetValue || '0', 10),
+                              );
+                              markWatchlistAddFeedback(
+                                component.slug,
+                                setWatchlistAddFeedback,
+                                watchlistAddFeedbackTimeoutsRef,
+                              );
+                            }}
+                          >
+                            Add to Watchlist
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );

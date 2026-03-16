@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getArbitrageScannerState,
   listenToArbitrageScannerProgress,
@@ -6,6 +6,11 @@ import {
   stopArbitrageScanner,
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
+import {
+  clearWatchlistAddFeedbackTimeouts,
+  markWatchlistAddFeedback,
+  WATCHLIST_ADD_SUCCESS_MESSAGE,
+} from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import type {
@@ -184,11 +189,13 @@ function buildScannerProgressDetails(progress: ArbitrageScannerProgress | null):
 function ArbitrageComponentRow({
   component,
   targetValue,
+  recentlyAdded,
   onTargetChange,
   onAdd,
 }: {
   component: ArbitrageScannerComponentEntry;
   targetValue: string;
+  recentlyAdded: boolean;
   onTargetChange: (value: string) => void;
   onAdd: () => void;
 }) {
@@ -229,14 +236,19 @@ function ArbitrageComponentRow({
           value={targetValue}
           onChange={(event) => onTargetChange(event.target.value)}
         />
-        <button
-          className="btn-sm scanner-component-watch-button"
-          type="button"
-          disabled={isDisabled}
-          onClick={onAdd}
-        >
-          Add to Watchlist
-        </button>
+        <div className="watchlist-add-feedback-stack">
+          {recentlyAdded ? (
+            <span className="watchlist-add-success">{WATCHLIST_ADD_SUCCESS_MESSAGE}</span>
+          ) : null}
+          <button
+            className="btn-sm scanner-component-watch-button"
+            type="button"
+            disabled={isDisabled}
+            onClick={onAdd}
+          >
+            Add to Watchlist
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -248,6 +260,7 @@ function ArbitrageRow({
   expanded,
   onToggle,
   targetInputs,
+  recentlyAddedKeys,
   onTargetChange,
   onAddToWatchlist,
 }: {
@@ -256,6 +269,7 @@ function ArbitrageRow({
   expanded: boolean;
   onToggle: () => void;
   targetInputs: Record<string, string>;
+  recentlyAddedKeys: Record<string, boolean>;
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
 }) {
@@ -336,6 +350,7 @@ function ArbitrageRow({
                   key={`${entry.slug}-${component.slug}`}
                   component={component}
                   targetValue={targetInputs[component.slug] ?? getDefaultComponentTarget(component)}
+                  recentlyAdded={Boolean(recentlyAddedKeys[component.slug])}
                   onTargetChange={(value) => onTargetChange(component, value)}
                   onAdd={() => onAddToWatchlist(component)}
                 />
@@ -515,10 +530,12 @@ export function ScannersPage() {
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
   const [expandedRelicSlug, setExpandedRelicSlug] = useState<string | null>(null);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
+  const [watchlistAddFeedback, setWatchlistAddFeedback] = useState<Record<string, boolean>>({});
   const [relicRefinement, setRelicRefinement] = useState<RelicRefinementKey>('intact');
   const [showOnlyUnvaulted, setShowOnlyUnvaulted] = useState(false);
   const [arbitrageSearch, setArbitrageSearch] = useState('');
   const [relicSearch, setRelicSearch] = useState('');
+  const watchlistAddFeedbackTimeoutsRef = useRef(new Map<string, number>());
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const syncScannerStaleAlert = useAppStore((state) => state.syncScannerStaleAlert);
 
@@ -711,6 +728,13 @@ export function ScannersPage() {
     );
   }, [relicResults]);
 
+  useEffect(
+    () => () => {
+      clearWatchlistAddFeedbackTimeouts(watchlistAddFeedbackTimeoutsRef);
+    },
+    [],
+  );
+
   const updateComponentTarget = (
     component: ArbitrageScannerComponentEntry,
     value: string,
@@ -743,6 +767,7 @@ export function ScannersPage() {
     };
 
     addExplicitItemToWatchlist(item, 'base', 'Base Market', targetPrice);
+    markWatchlistAddFeedback(component.slug, setWatchlistAddFeedback, watchlistAddFeedbackTimeoutsRef);
   };
 
   const scanSummaryCounts = arbitrage
@@ -889,6 +914,7 @@ export function ScannersPage() {
                         setExpandedSlug((current) => (current === entry.slug ? null : entry.slug))
                       }
                       targetInputs={componentTargets}
+                      recentlyAddedKeys={watchlistAddFeedback}
                       onTargetChange={updateComponentTarget}
                       onAddToWatchlist={addComponentToWatchlist}
                     />
