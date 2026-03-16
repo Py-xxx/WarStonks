@@ -61,6 +61,7 @@ import {
   getWatchlistRetryDelayMs,
   selectPreferredWatchlistOrder,
 } from '../lib/watchlist';
+import { orderQuickViewVariants } from '../lib/marketVariantFallback';
 import type {
   HomeSubTab,
   PageId,
@@ -852,6 +853,45 @@ async function loadQuickViewOrdersForSelection(
   return {
     sellOrders: response.sellOrders,
     apiVersion: response.apiVersion,
+  };
+}
+
+async function loadQuickViewOrdersForBestVariant(
+  item: WfmAutocompleteItem,
+  variants: MarketVariant[],
+  sellerMode: SellerMode,
+): Promise<{
+  variantKey: string | null;
+  variantLabel: string | null;
+  sellOrders: WfmTopSellOrder[];
+  apiVersion: string | null;
+}> {
+  const orderedVariants = orderQuickViewVariants(variants);
+  let fallbackVariant = orderedVariants[0] ?? null;
+  let fallbackResponse: { sellOrders: WfmTopSellOrder[]; apiVersion: string | null } | null = null;
+
+  for (const variant of orderedVariants) {
+    const response = await loadQuickViewOrdersForSelection(item, variant.key, sellerMode);
+    if (!fallbackResponse) {
+      fallbackResponse = response;
+      fallbackVariant = variant;
+    }
+
+    if (response.sellOrders.length > 0) {
+      return {
+        variantKey: variant.key,
+        variantLabel: variant.label,
+        sellOrders: response.sellOrders,
+        apiVersion: response.apiVersion,
+      };
+    }
+  }
+
+  return {
+    variantKey: fallbackVariant?.key ?? null,
+    variantLabel: fallbackVariant?.label ?? null,
+    sellOrders: fallbackResponse?.sellOrders ?? [],
+    apiVersion: fallbackResponse?.apiVersion ?? null,
   };
 }
 
@@ -2627,7 +2667,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         variants.find((variant) => variant.isDefault)?.key
         ?? variants[0]?.key
         ?? 'base';
-      const response = await loadQuickViewOrdersForSelection(item, defaultVariantKey, sellerMode);
+      const resolvedQuickView = await loadQuickViewOrdersForBestVariant(item, variants, sellerMode);
       if (requestId !== quickViewRequestSequence) {
         return;
       }
@@ -2637,11 +2677,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         item,
         sellerMode,
       );
-      let nextSelectedVariantKey: string | null = defaultVariantKey;
+      let nextSelectedVariantKey: string | null = resolvedQuickView.variantKey ?? defaultVariantKey;
       let nextSelectedVariantLabel: string | null =
-        variants.find((variant) => variant.key === defaultVariantKey)?.label
-        ?? (defaultVariantKey.startsWith('rank:')
-          ? `Rank ${defaultVariantKey.slice(5)}`
+        resolvedQuickView.variantLabel
+        ?? variants.find((variant) => variant.key === nextSelectedVariantKey)?.label
+        ?? (nextSelectedVariantKey?.startsWith('rank:')
+          ? `Rank ${nextSelectedVariantKey.slice(5)}`
           : 'Base Market');
 
       if (nextTrackedSelection?.variantKey !== nextSelectedVariantKey) {
@@ -2662,10 +2703,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         quickView: {
           selectedItem: item,
-          sellOrders: response.sellOrders,
+          sellOrders: resolvedQuickView.sellOrders,
           sparklinePoints: [],
           sparklineLoading: true,
-          apiVersion: response.apiVersion,
+          apiVersion: resolvedQuickView.apiVersion,
           loading: false,
           errorMessage: null,
         },
