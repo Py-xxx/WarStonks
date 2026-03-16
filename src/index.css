@@ -7094,6 +7094,89 @@ body {
   background: rgba(9, 12, 18, 0.58);
 }
 
+.scanner-farm-header-row,
+.scanner-farm-row-main {
+  align-items: center;
+  gap: 12px;
+}
+
+.scanner-farm-header-row-arbitrage,
+.scanner-farm-row-main-arbitrage {
+  grid-template-columns: minmax(320px, 1.7fr) minmax(120px, 0.6fr) minmax(170px, 0.8fr) minmax(120px, 0.5fr) minmax(110px, 0.45fr) 24px;
+}
+
+.scanner-farm-header-row-relic,
+.scanner-farm-row-main-relic {
+  grid-template-columns: minmax(320px, 1.7fr) minmax(140px, 0.6fr) minmax(120px, 0.5fr) minmax(120px, 0.5fr) minmax(110px, 0.45fr) 24px;
+}
+
+.scanner-farm-row {
+  border-color: rgba(108, 174, 255, 0.12);
+  background: rgba(10, 16, 28, 0.9);
+}
+
+.scanner-farm-row.is-expanded {
+  border-color: rgba(92, 160, 255, 0.24);
+}
+
+.scanner-farm-thumb img {
+  object-fit: contain;
+}
+
+.scanner-farm-cell-name {
+  gap: 12px;
+  min-width: 0;
+}
+
+.scanner-farm-copy {
+  min-width: 0;
+}
+
+.scanner-farm-copy strong {
+  font-size: 15px;
+}
+
+.scanner-farm-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.scanner-farm-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.scanner-farm-cell-metric {
+  color: var(--text-secondary);
+}
+
+.scanner-farm-cell-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scanner-farm-cell-value {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.scanner-farm-cell-action {
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.scanner-farm-row-body {
+  background: rgba(12, 16, 24, 0.74);
+}
+
 .scanner-list-row {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
