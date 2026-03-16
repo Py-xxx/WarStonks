@@ -10,16 +10,19 @@ const cargoTomlPath = path.join(projectRoot, 'src-tauri', 'Cargo.toml');
 const tauriConfigPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
 
 function updateCargoVersion(cargoToml, version) {
-  const next = cargoToml.replace(
-    /(\[package\][\s\S]*?^version = )\"[^\"]+\"/m,
-    `$1"${version}"`,
+  const packageSectionMatch = cargoToml.match(
+    /^(\[package\]\n[\s\S]*?)(^version = )\"([^\"]+)\"/m,
   );
 
-  if (next === cargoToml) {
-    throw new Error('Failed to update version in src-tauri/Cargo.toml');
+  if (!packageSectionMatch) {
+    throw new Error('Failed to locate the [package] version in src-tauri/Cargo.toml');
   }
 
-  return next;
+  const [, packageSection, versionPrefix] = packageSectionMatch;
+  return cargoToml.replace(
+    `${packageSection}${versionPrefix}"${packageSectionMatch[3]}"`,
+    `${packageSection}${versionPrefix}"${version}"`,
+  );
 }
 
 function updateTauriConfigVersion(configText, version) {
