@@ -25,6 +25,13 @@ export interface SetCompletionDetectionBox {
   height: number;
 }
 
+export interface SetCompletionDetectionCellOcrCrops {
+  originalTextDataUrl: string | null;
+  processedTextDataUrl: string | null;
+  originalQuantityDataUrl: string | null;
+  processedQuantityDataUrl: string | null;
+}
+
 export interface SetCompletionTraceSettings {
   smoothness: number;
   thickness: number;
@@ -37,6 +44,7 @@ export interface SetCompletionDetectionCell {
   itemBox: SetCompletionDetectionBox;
   nameBox: SetCompletionDetectionBox | null;
   quantityBox: SetCompletionDetectionBox | null;
+  ocrCrops: SetCompletionDetectionCellOcrCrops;
 }
 
 export interface SetCompletionScreenshotDetectionPreview {
@@ -47,6 +55,16 @@ export interface SetCompletionScreenshotDetectionPreview {
   cells: SetCompletionDetectionCell[];
   exportDirectory: string | null;
   exportedFileCount: number;
+}
+
+export interface SetCompletionScreenshotScanEntry {
+  rowId: string;
+  tileIndex: number;
+  hasQuantityBox: boolean;
+  originalText: string;
+  processedText: string;
+  originalQuantity: string | null;
+  processedQuantity: string | null;
 }
 
 interface TileDescriptor {
@@ -186,20 +204,30 @@ export async function analyzeSetCompletionInventoryScreenshot(
       descriptor.maskRect.height,
     );
 
+    const translatedNameBox = detection.nameBox
+      ? translateBox(detection.nameBox, descriptor.maskRect.x, descriptor.maskRect.y)
+      : null;
+    const translatedQuantityBox = detection.quantityBox
+      ? translateBox(detection.quantityBox, descriptor.maskRect.x, descriptor.maskRect.y)
+      : null;
+    const ocrCrops = buildCellOcrCrops(
+      croppedCanvas,
+      previewCanvas,
+      translatedNameBox,
+      translatedQuantityBox,
+    );
+
     cells.push({
       rowId: descriptor.rowId,
       tileIndex: descriptor.tileIndex,
       itemBox: { ...descriptor.maskRect },
-      nameBox: detection.nameBox
-        ? translateBox(detection.nameBox, descriptor.maskRect.x, descriptor.maskRect.y)
-        : null,
-      quantityBox: detection.quantityBox
-        ? translateBox(detection.quantityBox, descriptor.maskRect.x, descriptor.maskRect.y)
-        : null,
+      nameBox: translatedNameBox,
+      quantityBox: translatedQuantityBox,
+      ocrCrops,
     });
   }
 
-  const exportResult = await exportSetCompletionDetectionCrops(croppedCanvas, previewCanvas, cells);
+  const exportResult = await exportSetCompletionDetectionCrops(cells);
   drawOverlayBoxes(previewContext, cells);
 
   onProgress?.({
@@ -604,35 +632,35 @@ function drawOverlayBoxes(
 }
 
 async function exportSetCompletionDetectionCrops(
-  originalCanvas: HTMLCanvasElement,
-  processedCanvas: HTMLCanvasElement,
   cells: SetCompletionDetectionCell[],
 ): Promise<ScreenshotCropExportResult> {
   const files: ScreenshotCropExportFile[] = [];
 
   for (const cell of cells) {
     const cellFolder = `cell-${String(cell.tileIndex + 1).padStart(2, '0')}`;
-    if (cell.nameBox) {
-      const originalNameBox = scaleBox(cell.nameBox, 1 / MASK_SCALE);
+    if (cell.ocrCrops.originalTextDataUrl) {
       files.push({
         relativePath: `${cellFolder}/original-text.png`,
-        dataUrl: cropCanvasToDataUrl(originalCanvas, originalNameBox),
+        dataUrl: cell.ocrCrops.originalTextDataUrl,
       });
+    }
+    if (cell.ocrCrops.processedTextDataUrl) {
       files.push({
         relativePath: `${cellFolder}/processed-text.png`,
-        dataUrl: cropCanvasToDataUrl(processedCanvas, cell.nameBox),
+        dataUrl: cell.ocrCrops.processedTextDataUrl,
       });
     }
 
-    if (cell.quantityBox) {
-      const originalQuantityBox = scaleBox(cell.quantityBox, 1 / MASK_SCALE);
+    if (cell.ocrCrops.originalQuantityDataUrl) {
       files.push({
         relativePath: `${cellFolder}/original-quantity.png`,
-        dataUrl: cropCanvasToDataUrl(originalCanvas, originalQuantityBox),
+        dataUrl: cell.ocrCrops.originalQuantityDataUrl,
       });
+    }
+    if (cell.ocrCrops.processedQuantityDataUrl) {
       files.push({
         relativePath: `${cellFolder}/processed-quantity.png`,
-        dataUrl: cropCanvasToDataUrl(processedCanvas, cell.quantityBox),
+        dataUrl: cell.ocrCrops.processedQuantityDataUrl,
       });
     }
   }
@@ -646,6 +674,26 @@ async function exportSetCompletionDetectionCrops(
   }
 
   return saveSetCompletionScreenshotCrops(files);
+}
+
+function buildCellOcrCrops(
+  originalCanvas: HTMLCanvasElement,
+  processedCanvas: HTMLCanvasElement,
+  nameBox: SetCompletionDetectionBox | null,
+  quantityBox: SetCompletionDetectionBox | null,
+): SetCompletionDetectionCellOcrCrops {
+  return {
+    originalTextDataUrl: nameBox
+      ? cropCanvasToDataUrl(originalCanvas, scaleBox(nameBox, 1 / MASK_SCALE))
+      : null,
+    processedTextDataUrl: nameBox ? cropCanvasToDataUrl(processedCanvas, nameBox) : null,
+    originalQuantityDataUrl: quantityBox
+      ? cropCanvasToDataUrl(originalCanvas, scaleBox(quantityBox, 1 / MASK_SCALE))
+      : null,
+    processedQuantityDataUrl: quantityBox
+      ? cropCanvasToDataUrl(processedCanvas, quantityBox)
+      : null,
+  };
 }
 
 function cropCanvasToDataUrl(
@@ -690,6 +738,112 @@ function scaleBox(
     width: Math.max(1, Math.round(box.width * factor)),
     height: Math.max(1, Math.round(box.height * factor)),
   };
+}
+
+type TesseractWorkerLike = {
+  recognize: (image: string) => Promise<{ data: { text: string } }>;
+  setParameters: (params: Record<string, string>) => Promise<unknown>;
+};
+
+let tesseractWorkerPromise: Promise<TesseractWorkerLike> | null = null;
+
+export async function scanSetCompletionDetectionPreview(
+  detectionPreview: SetCompletionScreenshotDetectionPreview,
+  onProgress?: (progress: SetCompletionScreenshotProgress) => void,
+): Promise<SetCompletionScreenshotScanEntry[]> {
+  const worker = await getTesseractWorker();
+  const entries: SetCompletionScreenshotScanEntry[] = [];
+  const cellsWithText = detectionPreview.cells.filter(
+    (cell) => cell.ocrCrops.originalTextDataUrl || cell.ocrCrops.processedTextDataUrl,
+  );
+
+  for (let index = 0; index < cellsWithText.length; index += 1) {
+    const cell = cellsWithText[index];
+    onProgress?.({
+      progress: cellsWithText.length ? index / cellsWithText.length : 0,
+      stage: 'scan',
+      detail: `Scanning OCR crops ${index + 1}/${cellsWithText.length}…`,
+    });
+
+    const originalText = cell.ocrCrops.originalTextDataUrl
+      ? await runTesseractTextRecognition(worker, cell.ocrCrops.originalTextDataUrl, false)
+      : '';
+    const processedText = cell.ocrCrops.processedTextDataUrl
+      ? await runTesseractTextRecognition(worker, cell.ocrCrops.processedTextDataUrl, false)
+      : '';
+    const originalQuantity = cell.quantityBox
+      ? await runTesseractTextRecognition(worker, cell.ocrCrops.originalQuantityDataUrl, true)
+      : null;
+    const processedQuantity = cell.quantityBox
+      ? await runTesseractTextRecognition(worker, cell.ocrCrops.processedQuantityDataUrl, true)
+      : null;
+
+    entries.push({
+      rowId: cell.rowId,
+      tileIndex: cell.tileIndex,
+      hasQuantityBox: cell.quantityBox !== null,
+      originalText: normalizeOcrOutput(originalText ?? ''),
+      processedText: normalizeOcrOutput(processedText ?? ''),
+      originalQuantity,
+      processedQuantity,
+    });
+  }
+
+  onProgress?.({
+    progress: 1,
+    stage: 'scan',
+    detail: `Scanned ${entries.length} detected item crops with Tesseract.`,
+  });
+
+  return entries;
+}
+
+async function getTesseractWorker(): Promise<TesseractWorkerLike> {
+  if (!tesseractWorkerPromise) {
+    tesseractWorkerPromise = import('tesseract.js').then(async (tesseract) => {
+      const worker = await tesseract.createWorker('eng');
+      return worker as unknown as TesseractWorkerLike;
+    });
+  }
+
+  return tesseractWorkerPromise;
+}
+
+async function runTesseractTextRecognition(
+  worker: TesseractWorkerLike,
+  image: string | null,
+  digitsOnly: boolean,
+): Promise<string | null> {
+  if (!image) {
+    return digitsOnly ? null : '';
+  }
+
+  if (digitsOnly) {
+    await worker.setParameters({
+      tessedit_pageseg_mode: '8',
+      tessedit_char_whitelist: '0123456789',
+      preserve_interword_spaces: '0',
+    });
+  } else {
+    await worker.setParameters({
+      tessedit_pageseg_mode: '6',
+      tessedit_char_whitelist:
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -',
+      preserve_interword_spaces: '1',
+    });
+  }
+
+  const result = await worker.recognize(image);
+  const text = (result.data.text ?? '').trim();
+  if (!digitsOnly) {
+    return text;
+  }
+  const digits = text.replace(/\D+/g, '');
+  return digits || null;
+}
+
+function normalizeOcrOutput(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function strokeBox(
