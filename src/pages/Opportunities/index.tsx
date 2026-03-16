@@ -491,29 +491,29 @@ function SetPlannerRow({
                           </span>
                         </span>
                       </div>
-                      {componentState.missingQuantity > 0 && relicHints.length > 0 ? (
-                        <div className="planner-component-relics">
-                          <span className="planner-component-relics-label">Owned relics</span>
-                          <div className="planner-component-relic-pill-list">
-                            {relicHints.slice(0, 4).map((relic) => (
-                              <span
-                                key={`${component.slug}-${relic.key}`}
-                                className="planner-component-relic-pill"
-                                title={relic.fullName}
-                              >
-                                {relic.label} ×{relic.totalCount}
-                              </span>
-                            ))}
-                            {relicHints.length > 4 ? (
-                              <span className="planner-component-relic-pill planner-component-relic-pill-more">
-                                +{relicHints.length - 4} more
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : null}
                     </div>
                   </div>
+                  {componentState.missingQuantity > 0 && relicHints.length > 0 ? (
+                    <div className="planner-component-relics planner-component-relics-middle">
+                      <span className="planner-component-relics-label">Owned relics</span>
+                      <div className="planner-component-relic-pill-list">
+                        {relicHints.slice(0, 4).map((relic) => (
+                          <span
+                            key={`${component.slug}-${relic.key}`}
+                            className="planner-component-relic-pill"
+                            title={relic.fullName}
+                          >
+                            {relic.label} ×{relic.totalCount}
+                          </span>
+                        ))}
+                        {relicHints.length > 4 ? (
+                          <span className="planner-component-relic-pill planner-component-relic-pill-more">
+                            +{relicHints.length - 4} more
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
 
                   {componentState.missingQuantity > 0 ? (
                     <div className="planner-component-actions">
