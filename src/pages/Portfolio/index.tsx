@@ -99,6 +99,26 @@ function formatHoursValue(value: number | null): string {
   return `${rounded.toFixed(rounded % 1 === 0 ? 0 : 1)}h`;
 }
 
+function portfolioCoverageTone(value: number): 'green' | 'blue' | 'amber' {
+  if (value >= 95) {
+    return 'green';
+  }
+  if (value >= 75) {
+    return 'blue';
+  }
+  return 'amber';
+}
+
+function portfolioCoverageLabel(value: number): string {
+  if (value >= 95) {
+    return 'Strong';
+  }
+  if (value >= 75) {
+    return 'Partial';
+  }
+  return 'Limited';
+}
+
 function formatAxisPlatinumValue(value: number): string {
   if (!Number.isFinite(value)) {
     return '—';
@@ -1530,6 +1550,59 @@ function PnlSummaryTab({
         </div>
       ) : summary ? (
         <div className="portfolio-summary-body">
+          <div className="portfolio-quality-strip">
+            <div className="chart-card portfolio-quality-card">
+              <div className="portfolio-quality-card-top">
+                <span className="info-card-label">
+                  Profit Coverage
+                  <InfoHint text="How much of sell revenue has a matched local buy cost basis behind it." />
+                </span>
+                <span className={`market-panel-badge tone-${portfolioCoverageTone(summary.costBasisCoveragePct)}`}>
+                  {portfolioCoverageLabel(summary.costBasisCoveragePct)}
+                </span>
+              </div>
+              <strong className="portfolio-quality-card-value">
+                {formatPercentValue(summary.costBasisCoveragePct)}
+              </strong>
+            </div>
+            <div className="chart-card portfolio-quality-card">
+              <div className="portfolio-quality-card-top">
+                <span className="info-card-label">
+                  Value Coverage
+                  <InfoHint text="How much of open inventory has cached market statistics behind its current valuation." />
+                </span>
+                <span className={`market-panel-badge tone-${portfolioCoverageTone(summary.currentValueCoveragePct)}`}>
+                  {portfolioCoverageLabel(summary.currentValueCoveragePct)}
+                </span>
+              </div>
+              <strong className="portfolio-quality-card-value">
+                {formatPercentValue(summary.currentValueCoveragePct)}
+              </strong>
+            </div>
+            <div className="chart-card portfolio-quality-card">
+              <div className="portfolio-quality-card-top">
+                <span className="info-card-label">
+                  Unmatched Sell Revenue
+                  <InfoHint text="Sell revenue that still has no matched local buy cost basis. This is the least reliable part of realized profit." />
+                </span>
+              </div>
+              <strong className="portfolio-quality-card-value">
+                {formatPlatinumValue(summary.unmatchedSellRevenue)}
+              </strong>
+            </div>
+            <div className="chart-card portfolio-quality-card">
+              <div className="portfolio-quality-card-top">
+                <span className="info-card-label">
+                  Partial Basis Revenue
+                  <InfoHint text="Sell revenue where only part of the cost basis could be matched locally." />
+                </span>
+              </div>
+              <strong className="portfolio-quality-card-value">
+                {formatPlatinumValue(summary.partialCostBasisRevenue)}
+              </strong>
+            </div>
+          </div>
+
           <div className="plat-grid portfolio-summary-grid">
             <div className="info-card">
               <div className="info-card-label">
@@ -1542,20 +1615,22 @@ function PnlSummaryTab({
               <div className={`info-card-val${summary.realizedProfit >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.realizedProfit)}
               </div>
+              <div className="info-card-note">Closed sells with local cost basis matching.</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
-                Unrealized Value
+                Estimated Inventory Value
                 <InfoHint
                   text="Estimated current value of open and kept inventory, using the latest local market estimate when available."
                   placement="bottom"
                 />
               </div>
               <div className="info-card-val neutral">{formatPlatinumValue(summary.unrealizedValue)}</div>
+              <div className="info-card-note">Open buys and kept inventory at current local estimates.</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
-                Total P&amp;L
+                Estimated Total P&amp;L
                 <InfoHint
                   text="Realized profit plus unrealized P&L. This is the broadest portfolio view across closed and open positions."
                   placement="bottom"
@@ -1564,6 +1639,7 @@ function PnlSummaryTab({
               <div className={`info-card-val${summary.totalPnl >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.totalPnl)}
               </div>
+              <div className="info-card-note">Realized result plus estimated open-position mark-to-market.</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
@@ -1571,6 +1647,7 @@ function PnlSummaryTab({
                 <InfoHint text="Total platinum still tied up in open buys and kept inventory." />
               </div>
               <div className="info-card-val neutral">{formatPlatinumValue(summary.openExposure)}</div>
+              <div className="info-card-note">Capital still deployed in open and kept positions.</div>
             </div>
           </div>
 
