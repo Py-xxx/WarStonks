@@ -27,6 +27,17 @@ import type {
 type ListingModalMode = 'create' | 'edit';
 type TradeListingKind = 'sell' | 'buy';
 
+function InfoHint({ text }: { text: string }) {
+  return (
+    <span className="info-hint trade-info-hint" tabIndex={0} aria-label={text}>
+      <span className="info-hint-glyph" aria-hidden="true">i</span>
+      <span className="info-hint-tooltip left">
+        {text}
+      </span>
+    </span>
+  );
+}
+
 interface ListingModalState {
   mode: ListingModalMode;
   orderType: TradeListingKind;
@@ -729,17 +740,21 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           <button className="btn-primary" type="button" onClick={openCreateListing}>
             Create {listingType === 'sell' ? 'Sell' : 'Buy'} Order
           </button>
-          <button
-            className={`trade-visibility-toggle${autoWatchlistBuyOrdersEnabled ? ' on' : ''}`}
-            type="button"
-            onClick={() => setAutoWatchlistBuyOrdersEnabled(!autoWatchlistBuyOrdersEnabled)}
-            title="Automatically create and manage a linked buy order for watchlist items"
-          >
-            <span className="trade-visibility-toggle-track" />
-            <span className="trade-visibility-toggle-copy">
-              Auto Watchlist Buy {autoWatchlistBuyOrdersEnabled ? 'On' : 'Off'}
-            </span>
-          </button>
+          <div className="trade-visibility-toggle-wrap">
+            <button
+              className={`trade-visibility-toggle${autoWatchlistBuyOrdersEnabled ? ' on' : ''}`}
+              type="button"
+              onClick={() => setAutoWatchlistBuyOrdersEnabled(!autoWatchlistBuyOrdersEnabled)}
+            >
+              <span className="trade-visibility-toggle-track" />
+              <span className="trade-visibility-toggle-copy">
+                Auto Buy Order
+              </span>
+            </button>
+            <div className="trade-visibility-toggle-info">
+              <InfoHint text="Automatically adds and removes buy orders for items added/removed from the watchlist. Recommended: On" />
+            </div>
+          </div>
           <button className="btn-secondary" type="button" onClick={() => void handleDisconnect()}>
             Disconnect
           </button>

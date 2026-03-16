@@ -5703,6 +5703,10 @@ body {
   color: var(--text-primary);
   cursor: pointer;
 }
+.trade-visibility-toggle-wrap {
+  position: relative;
+  display: inline-flex;
+}
 .trade-visibility-toggle-track {
   width: 24px;
   height: 14px;
@@ -5734,6 +5738,26 @@ body {
 .trade-hero-actions .trade-visibility-toggle {
   min-width: 188px;
   justify-content: space-between;
+  padding-right: 34px;
+}
+.trade-visibility-toggle-info {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 1;
+}
+.trade-info-hint {
+  width: 16px;
+  height: 16px;
+  padding-top: 2px;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+.trade-info-hint:hover,
+.trade-info-hint:focus-visible {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 .trade-listing-autocomplete {
   min-height: 0;
