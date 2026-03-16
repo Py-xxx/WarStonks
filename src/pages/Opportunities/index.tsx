@@ -1093,6 +1093,36 @@ export function OpportunitiesPage() {
     });
   }, [ownedMap, scannerResponse]);
 
+  const plannerPositiveSummary = useMemo(() => {
+    let expectedInvestment = 0;
+    let expectedProfit = 0;
+    let profitableSetCount = 0;
+
+    for (const planner of plannerEntries) {
+      if (
+        planner.remainingInvestment === null ||
+        planner.completionProfit === null ||
+        planner.completionProfit <= 0
+      ) {
+        continue;
+      }
+
+      expectedInvestment += planner.remainingInvestment;
+      expectedProfit += planner.completionProfit;
+      profitableSetCount += 1;
+    }
+
+    const expectedMarginPct =
+      expectedInvestment > 0 ? (expectedProfit / expectedInvestment) * 100 : null;
+
+    return {
+      expectedInvestment,
+      expectedProfit,
+      expectedMarginPct,
+      profitableSetCount,
+    };
+  }, [plannerEntries]);
+
   const farmNowRelics = useMemo<FarmNowRelicRow[]>(() => {
     const relics = farmNowScan?.relicRoiResults ?? [];
     const ownedMap = new Map<string, OwnedRelicEntry>();
@@ -1501,6 +1531,29 @@ export function OpportunitiesPage() {
                   </p>
                 </div>
               </div>
+
+              {plannerPositiveSummary.profitableSetCount > 0 ? (
+                <div className="set-planner-summary-grid">
+                  <article className="set-planner-summary-card">
+                    <span className="card-label">Expected Investment</span>
+                    <strong>{formatPlat(plannerPositiveSummary.expectedInvestment)}</strong>
+                    <span>
+                      Total capital across {plannerPositiveSummary.profitableSetCount}{' '}
+                      {plannerPositiveSummary.profitableSetCount === 1 ? 'profitable set' : 'profitable sets'}
+                    </span>
+                  </article>
+                  <article className="set-planner-summary-card">
+                    <span className="card-label">Expected Profit</span>
+                    <strong>{formatPlat(plannerPositiveSummary.expectedProfit)}</strong>
+                    <span>Total projected profit from positive-profit completions</span>
+                  </article>
+                  <article className="set-planner-summary-card">
+                    <span className="card-label">Expected Margin</span>
+                    <strong>{formatPercent(plannerPositiveSummary.expectedMarginPct)}</strong>
+                    <span>Profit as a percentage of total expected investment</span>
+                  </article>
+                </div>
+              ) : null}
 
               {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
 
