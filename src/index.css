@@ -8092,6 +8092,18 @@ body {
 }
 
 .market-panel,
+.market-panel.card {
+  position: relative;
+}
+
+.market-panel:hover,
+.market-panel:focus-within,
+.market-panel.card:hover,
+.market-panel.card:focus-within {
+  z-index: 12;
+}
+
+.market-panel,
 .market-summary-grid-shell,
 .market-hero-shell,
 .market-analytics-grid,
