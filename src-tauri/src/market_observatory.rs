@@ -65,6 +65,20 @@ fn scoped_wfm_coalesce_key(prefix: &str, priority: RequestPriority, slug: &str) 
     format!("{prefix}:{priority_scope}:{slug}")
 }
 
+fn scoped_wfm_orders_coalesce_key(
+    priority: RequestPriority,
+    slug: &str,
+    variant_key: &str,
+    seller_mode: &str,
+) -> String {
+    format!(
+        "{}:{}:{}",
+        scoped_wfm_coalesce_key("orders", priority, slug),
+        variant_key,
+        seller_mode
+    )
+}
+
 #[derive(Debug, Clone)]
 struct RelicCatalogEntry {
     item_id: i64,
@@ -2994,7 +3008,12 @@ where
             .header("Crossplay", WFM_CROSSPLAY_HEADER),
         priority,
         request_label,
-        Some(scoped_wfm_coalesce_key("orders", priority, slug)),
+        Some(scoped_wfm_orders_coalesce_key(
+            priority,
+            slug,
+            variant_key,
+            seller_mode,
+        )),
         None,
         || is_cancelled(),
     )?;
@@ -9906,7 +9925,7 @@ mod tests {
         extract_rank_stat_highlights, initialize_market_observatory_schema,
         insert_statistics_rows_for_domain, liquidity_score_percent, normalize_variant_key,
         persist_snapshot, pressure_label, resample_rows,
-        scoped_wfm_coalesce_key,
+        scoped_wfm_coalesce_key, scoped_wfm_orders_coalesce_key,
         stale_arbitrage_scanner_progress, weighted_sell_percentile_price,
         AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey,
         ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary, MarketSnapshot,
@@ -10059,6 +10078,15 @@ mod tests {
         assert_eq!(
             scoped_wfm_coalesce_key("statistics", RequestPriority::Low, "wisp_prime_set"),
             "statistics:low:wisp_prime_set"
+        );
+        assert_eq!(
+            scoped_wfm_orders_coalesce_key(
+                RequestPriority::Instant,
+                "barrel_diffusion",
+                "rank:5",
+                "ingame-online",
+            ),
+            "orders:instant:barrel_diffusion:rank:5:ingame-online"
         );
     }
 
