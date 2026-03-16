@@ -5765,15 +5765,35 @@ body {
   max-height: calc(100vh - 48px);
   transform: translate(-50%, -50%);
 }
+.watchlist-purchase-modal-body {
+  grid-template-columns: minmax(0, 1fr);
+  padding-top: 16px;
+}
+.watchlist-purchase-content {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
 .trade-listing-modal-body {
   display: grid;
   gap: 14px;
   grid-template-columns: 1fr;
 }
 .watchlist-purchase-copy {
-  margin: 0 0 12px;
+  margin: 0;
   color: var(--text-secondary);
   line-height: 1.5;
+}
+.watchlist-purchase-actions {
+  width: 100%;
+  padding: 0 18px 18px;
+  justify-content: stretch;
+}
+.watchlist-purchase-action {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 38px;
+  justify-content: center;
 }
 .trade-listing-type-tabs {
   display: inline-grid;
