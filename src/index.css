@@ -3906,6 +3906,12 @@ body {
   display: grid;
   gap: 4px;
 }
+.alert-system-notes {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
 .alert-topline {
   display: flex;
   align-items: center;

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { type AppUpdateSummary, clearPendingAppUpdate, installPendingAppUpdate } from '../lib/appUpdater';
 import {
   closeWfmBuyOrder,
   createWfmBuyOrder,
@@ -86,6 +87,7 @@ import type {
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
   AppSettings,
+  AppUpdateInstallState,
   DiscordWebhookSettingsInput,
   ItemAnalysisResponse,
   MarketVariant,
@@ -257,6 +259,7 @@ function extractQuickViewSparklinePoints(chartPoints: Awaited<ReturnType<typeof 
 
 const WORLDSTATE_SYSTEM_ALERT_ID = 'system:worldstate-offline';
 const SCANNER_STALE_SYSTEM_ALERT_ID = 'system:scanner-stale';
+const APP_UPDATE_SYSTEM_ALERT_ID = 'system:app-update';
 const SCANNER_STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000;
 
 function toErrorMessage(error: unknown): string {
@@ -421,6 +424,39 @@ function buildScannerStaleSystemAlert(scanFinishedAt: string): SystemAlert {
   };
 }
 
+function buildAppUpdateSystemAlert(input: {
+  version: string;
+  currentVersion: string;
+  notes: string | null;
+  installState: AppUpdateInstallState;
+  progressPercent?: number | null;
+  errorMessage?: string | null;
+}): SystemAlert {
+  let message = `WarStonks ${input.version} is available. You are currently on ${input.currentVersion}.`;
+  if (input.installState === 'downloading') {
+    message = input.progressPercent !== null && input.progressPercent !== undefined
+      ? `Downloading WarStonks ${input.version}… ${input.progressPercent}%`
+      : `Downloading WarStonks ${input.version}…`;
+  } else if (input.installState === 'installing') {
+    message = `Installing WarStonks ${input.version}. The app will relaunch automatically when the installer finishes.`;
+  } else if (input.installState === 'error') {
+    message = input.errorMessage ?? `WarStonks ${input.version} could not be installed automatically.`;
+  }
+
+  return {
+    id: APP_UPDATE_SYSTEM_ALERT_ID,
+    kind: 'app-update',
+    title: input.installState === 'error' ? 'Update failed' : 'Update available',
+    message,
+    createdAt: new Date().toISOString(),
+    updateVersion: input.version,
+    currentVersion: input.currentVersion,
+    releaseNotes: input.notes,
+    installState: input.installState,
+    progressPercent: input.progressPercent ?? null,
+  };
+}
+
 function upsertWorldStateSystemAlert(
   alerts: SystemAlert[],
   sourceKey: WorldStateEndpointKey,
@@ -476,6 +512,21 @@ function upsertScannerStaleSystemAlert(
   }
 
   return [buildScannerStaleSystemAlert(scanFinishedAt), ...filteredAlerts];
+}
+
+function upsertAppUpdateSystemAlert(
+  alerts: SystemAlert[],
+  input: {
+    version: string;
+    currentVersion: string;
+    notes: string | null;
+    installState: AppUpdateInstallState;
+    progressPercent?: number | null;
+    errorMessage?: string | null;
+  },
+): SystemAlert[] {
+  const nextAlert = buildAppUpdateSystemAlert(input);
+  return [nextAlert, ...alerts.filter((alert) => alert.id !== APP_UPDATE_SYSTEM_ALERT_ID)];
 }
 
 async function persistWorldStateSnapshot<T>(
@@ -946,6 +997,8 @@ interface AppStore {
   markAlertNoResponse: (id: string) => void;
   dismissSystemAlert: (id: string) => void;
   clearAllSystemAlerts: () => void;
+  showAppUpdateAvailable: (update: AppUpdateSummary) => void;
+  installAppUpdate: () => Promise<void>;
   retryWorldStateSystemAlert: (sourceKeys: WorldStateEndpointKey[]) => Promise<void>;
   syncScannerStaleAlert: (scanFinishedAt: string | null) => void;
   refreshWatchlistItem: (id: string) => Promise<WatchlistRefreshResult>;
@@ -2140,19 +2193,122 @@ export const useAppStore = create<AppStore>((set, get) => ({
       };
     }),
   dismissSystemAlert: (id) =>
-    set((state) => ({
-      systemAlerts: state.systemAlerts.filter((alert) => alert.id !== id),
-      worldStateSystemAlertDismissed:
-        id === WORLDSTATE_SYSTEM_ALERT_ID ? true : state.worldStateSystemAlertDismissed,
-    })),
+    set((state) => {
+      if (id === APP_UPDATE_SYSTEM_ALERT_ID) {
+        void clearPendingAppUpdate();
+      }
+
+      return {
+        systemAlerts: state.systemAlerts.filter((alert) => alert.id !== id),
+        worldStateSystemAlertDismissed:
+          id === WORLDSTATE_SYSTEM_ALERT_ID ? true : state.worldStateSystemAlertDismissed,
+      };
+    }),
   clearAllSystemAlerts: () =>
+    set((state) => {
+      if (state.systemAlerts.some((alert) => alert.id === APP_UPDATE_SYSTEM_ALERT_ID)) {
+        void clearPendingAppUpdate();
+      }
+
+      return {
+        systemAlerts: [],
+        worldStateSystemAlertDismissed:
+          state.systemAlerts.some((alert) => alert.id === WORLDSTATE_SYSTEM_ALERT_ID)
+            ? true
+            : state.worldStateSystemAlertDismissed,
+      };
+    }),
+  showAppUpdateAvailable: (update) =>
     set((state) => ({
-      systemAlerts: [],
-      worldStateSystemAlertDismissed:
-        state.systemAlerts.some((alert) => alert.id === WORLDSTATE_SYSTEM_ALERT_ID)
-          ? true
-          : state.worldStateSystemAlertDismissed,
+      systemAlerts: upsertAppUpdateSystemAlert(state.systemAlerts, {
+        version: update.version,
+        currentVersion: update.currentVersion,
+        notes: update.notes,
+        installState: 'available',
+      }),
     })),
+  installAppUpdate: async () => {
+    const existingAlert = get().systemAlerts.find((alert) => alert.id === APP_UPDATE_SYSTEM_ALERT_ID);
+    if (!existingAlert?.updateVersion || !existingAlert.currentVersion) {
+      throw new Error('No pending app update was found.');
+    }
+
+    let totalBytes: number | null = null;
+    let downloadedBytes = 0;
+
+    set((state) => ({
+      systemAlerts: upsertAppUpdateSystemAlert(state.systemAlerts, {
+        version: existingAlert.updateVersion ?? 'Unknown',
+        currentVersion: existingAlert.currentVersion ?? 'Unknown',
+        notes: existingAlert.releaseNotes ?? null,
+        installState: 'downloading',
+        progressPercent: 0,
+      }),
+    }));
+
+    try {
+      await installPendingAppUpdate((event) => {
+        if (event.event === 'Started') {
+          totalBytes = event.data.contentLength ?? null;
+          downloadedBytes = 0;
+          set((state) => ({
+            systemAlerts: upsertAppUpdateSystemAlert(state.systemAlerts, {
+              version: existingAlert.updateVersion ?? 'Unknown',
+              currentVersion: existingAlert.currentVersion ?? 'Unknown',
+              notes: existingAlert.releaseNotes ?? null,
+              installState: 'downloading',
+              progressPercent: 0,
+            }),
+          }));
+          return;
+        }
+
+        if (event.event === 'Progress') {
+          downloadedBytes += event.data.chunkLength;
+          const progressPercent = totalBytes && totalBytes > 0
+            ? Math.max(0, Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)))
+            : null;
+          set((state) => ({
+            systemAlerts: upsertAppUpdateSystemAlert(state.systemAlerts, {
+              version: existingAlert.updateVersion ?? 'Unknown',
+              currentVersion: existingAlert.currentVersion ?? 'Unknown',
+              notes: existingAlert.releaseNotes ?? null,
+              installState: 'downloading',
+              progressPercent,
+            }),
+          }));
+          return;
+        }
+
+        set((state) => ({
+          systemAlerts: upsertAppUpdateSystemAlert(state.systemAlerts, {
+            version: existingAlert.updateVersion ?? 'Unknown',
+            currentVersion: existingAlert.currentVersion ?? 'Unknown',
+            notes: existingAlert.releaseNotes ?? null,
+            installState: 'installing',
+            progressPercent: 100,
+          }),
+        }));
+      });
+
+      void clearPendingAppUpdate();
+      set((state) => ({
+        systemAlerts: state.systemAlerts.filter((alert) => alert.id !== APP_UPDATE_SYSTEM_ALERT_ID),
+      }));
+    } catch (error) {
+      const errorMessage = toErrorMessage(error);
+      set((state) => ({
+        systemAlerts: upsertAppUpdateSystemAlert(state.systemAlerts, {
+          version: existingAlert.updateVersion ?? 'Unknown',
+          currentVersion: existingAlert.currentVersion ?? 'Unknown',
+          notes: existingAlert.releaseNotes ?? null,
+          installState: 'error',
+          errorMessage,
+        }),
+      }));
+      throw error;
+    }
+  },
   retryWorldStateSystemAlert: async (sourceKeys) => {
     const uniqueSourceKeys = [...new Set(sourceKeys)];
 

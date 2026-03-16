@@ -34,6 +34,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const clearAllSystemAlerts = useAppStore((state) => state.clearAllSystemAlerts);
   const dismissAlert = useAppStore((state) => state.dismissAlert);
   const dismissSystemAlert = useAppStore((state) => state.dismissSystemAlert);
+  const installAppUpdate = useAppStore((state) => state.installAppUpdate);
   const markAlertNoResponse = useAppStore((state) => state.markAlertNoResponse);
   const markWatchlistItemBought = useAppStore((state) => state.markWatchlistItemBought);
   const retryWorldStateSystemAlert = useAppStore((state) => state.retryWorldStateSystemAlert);
@@ -87,14 +88,16 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
           <div className="alerts-list">
             {visibleSystemAlerts.map((alert) => (
               <div key={alert.id} className="alert-item alert-item-system">
-                <button
-                  className="alert-clear-btn alert-clear-btn-floating"
-                  type="button"
-                  aria-label={`Clear system alert for ${alert.title}`}
-                  onClick={() => dismissSystemAlert(alert.id)}
-                >
-                  ×
-                </button>
+                {alert.kind !== 'app-update' ? (
+                  <button
+                    className="alert-clear-btn alert-clear-btn-floating"
+                    type="button"
+                    aria-label={`Clear system alert for ${alert.title}`}
+                    onClick={() => dismissSystemAlert(alert.id)}
+                  >
+                    ×
+                  </button>
+                ) : null}
                 <div className="alert-main">
                   <span className="alert-item-thumb alert-item-thumb-system">!</span>
                   <div className="alert-copy">
@@ -102,6 +105,16 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       <span className="alert-item-name">{alert.title}</span>
                       {alert.kind === 'worldstate-offline' ? (
                         <span className="badge badge-amber">{alert.sourceKeys?.length ?? 0} feeds</span>
+                      ) : alert.kind === 'app-update' ? (
+                        <span className={`badge ${
+                          alert.installState === 'error'
+                            ? 'badge-amber'
+                            : alert.installState === 'available'
+                              ? 'badge-blue'
+                              : 'badge-green'
+                        }`}>
+                          {alert.updateVersion ?? 'Update'}
+                        </span>
                       ) : (
                         <span className="badge badge-amber">Stale</span>
                       )}
@@ -117,6 +130,11 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       ) : null}
                       <span>{formatAlertTimestamp(alert.createdAt)}</span>
                     </div>
+                    {alert.kind === 'app-update' && alert.releaseNotes ? (
+                      <div className="alert-system-notes">
+                        {alert.releaseNotes.split('\n').find((line) => line.trim().length > 0) ?? alert.releaseNotes}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -130,6 +148,35 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       }}
                     >
                       Retry
+                    </button>
+                  </div>
+                ) : null}
+
+                {alert.kind === 'app-update' ? (
+                  <div className="alert-actions">
+                    <button
+                      className="act-btn"
+                      type="button"
+                      disabled={alert.installState === 'downloading' || alert.installState === 'installing'}
+                      onClick={() => {
+                        void installAppUpdate().catch((error) => {
+                          console.error('[updater] failed to install app update', error);
+                        });
+                      }}
+                    >
+                      {alert.installState === 'downloading'
+                        ? `Downloading${alert.progressPercent !== null && alert.progressPercent !== undefined ? ` ${alert.progressPercent}%` : ''}`
+                        : alert.installState === 'installing'
+                          ? 'Installing…'
+                          : 'Update Now'}
+                    </button>
+                    <button
+                      className="act-btn"
+                      type="button"
+                      disabled={alert.installState === 'downloading' || alert.installState === 'installing'}
+                      onClick={() => dismissSystemAlert(alert.id)}
+                    >
+                      Later
                     </button>
                   </div>
                 ) : null}
