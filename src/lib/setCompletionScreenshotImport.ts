@@ -1,3 +1,8 @@
+import {
+  saveSetCompletionScreenshotCrops,
+  type ScreenshotCropExportFile,
+  type ScreenshotCropExportResult,
+} from './tauriClient';
 import ssQtyAssetUrl from '../assets/set-completion/ss-qty.png';
 
 export interface SetCompletionImportCrop {
@@ -40,6 +45,8 @@ export interface SetCompletionScreenshotDetectionPreview {
   quantityCount: number;
   nameCount: number;
   cells: SetCompletionDetectionCell[];
+  exportDirectory: string | null;
+  exportedFileCount: number;
 }
 
 interface TileDescriptor {
@@ -192,12 +199,16 @@ export async function analyzeSetCompletionInventoryScreenshot(
     });
   }
 
+  const exportResult = await exportSetCompletionDetectionCrops(croppedCanvas, previewCanvas, cells);
   drawOverlayBoxes(previewContext, cells);
 
   onProgress?.({
     progress: 1,
     stage: 'complete',
-    detail: `Detected ${cells.length} item cells in the screenshot.`,
+    detail:
+      exportResult.fileCount > 0
+        ? `Detected ${cells.length} item cells and saved ${exportResult.fileCount} crop images.`
+        : `Detected ${cells.length} item cells in the screenshot.`,
   });
 
   return {
@@ -206,6 +217,8 @@ export async function analyzeSetCompletionInventoryScreenshot(
     quantityCount: cells.filter((cell) => cell.quantityBox !== null).length,
     nameCount: cells.filter((cell) => cell.nameBox !== null).length,
     cells,
+    exportDirectory: exportResult.exportDirectory,
+    exportedFileCount: exportResult.fileCount,
   };
 }
 
@@ -588,6 +601,95 @@ function drawOverlayBoxes(
       strokeBox(context, cell.quantityBox, '#3dd68c', 3);
     }
   }
+}
+
+async function exportSetCompletionDetectionCrops(
+  originalCanvas: HTMLCanvasElement,
+  processedCanvas: HTMLCanvasElement,
+  cells: SetCompletionDetectionCell[],
+): Promise<ScreenshotCropExportResult> {
+  const files: ScreenshotCropExportFile[] = [];
+
+  for (const cell of cells) {
+    const cellFolder = `cell-${String(cell.tileIndex + 1).padStart(2, '0')}`;
+    if (cell.nameBox) {
+      const originalNameBox = scaleBox(cell.nameBox, 1 / MASK_SCALE);
+      files.push({
+        relativePath: `${cellFolder}/original-text.png`,
+        dataUrl: cropCanvasToDataUrl(originalCanvas, originalNameBox),
+      });
+      files.push({
+        relativePath: `${cellFolder}/processed-text.png`,
+        dataUrl: cropCanvasToDataUrl(processedCanvas, cell.nameBox),
+      });
+    }
+
+    if (cell.quantityBox) {
+      const originalQuantityBox = scaleBox(cell.quantityBox, 1 / MASK_SCALE);
+      files.push({
+        relativePath: `${cellFolder}/original-quantity.png`,
+        dataUrl: cropCanvasToDataUrl(originalCanvas, originalQuantityBox),
+      });
+      files.push({
+        relativePath: `${cellFolder}/processed-quantity.png`,
+        dataUrl: cropCanvasToDataUrl(processedCanvas, cell.quantityBox),
+      });
+    }
+  }
+
+  if (!files.length) {
+    return {
+      exportDirectory: '',
+      fileCount: 0,
+      cellCount: 0,
+    };
+  }
+
+  return saveSetCompletionScreenshotCrops(files);
+}
+
+function cropCanvasToDataUrl(
+  sourceCanvas: HTMLCanvasElement,
+  box: SetCompletionDetectionBox,
+): string {
+  const clampedBox = clampBoxToCanvas(box, sourceCanvas.width, sourceCanvas.height);
+  const croppedCanvas = extractPixelCanvas(
+    sourceCanvas,
+    clampedBox.x,
+    clampedBox.y,
+    clampedBox.width,
+    clampedBox.height,
+  );
+  return croppedCanvas.toDataURL('image/png');
+}
+
+function clampBoxToCanvas(
+  box: SetCompletionDetectionBox,
+  width: number,
+  height: number,
+): SetCompletionDetectionBox {
+  const x = clamp(Math.round(box.x), 0, Math.max(0, width - 1));
+  const y = clamp(Math.round(box.y), 0, Math.max(0, height - 1));
+  const right = clamp(Math.round(box.x + box.width), x + 1, width);
+  const bottom = clamp(Math.round(box.y + box.height), y + 1, height);
+  return {
+    x,
+    y,
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y),
+  };
+}
+
+function scaleBox(
+  box: SetCompletionDetectionBox,
+  factor: number,
+): SetCompletionDetectionBox {
+  return {
+    x: Math.round(box.x * factor),
+    y: Math.round(box.y * factor),
+    width: Math.max(1, Math.round(box.width * factor)),
+    height: Math.max(1, Math.round(box.height * factor)),
+  };
 }
 
 function strokeBox(

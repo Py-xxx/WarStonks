@@ -461,6 +461,16 @@ function SetCompletionScreenshotImportModal({
 
             {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
 
+            {detectionPreview?.exportDirectory ? (
+              <div className="scanner-inline-progress screenshot-import-progress">
+                <span className="scanner-progress-label">EXPORTED</span>
+                <strong>
+                  Saved {detectionPreview.exportedFileCount} crop images to{' '}
+                  {detectionPreview.exportDirectory}
+                </strong>
+              </div>
+            ) : null}
+
             {previewUrl ? (
               <>
                 <div className="screenshot-import-original-preview">

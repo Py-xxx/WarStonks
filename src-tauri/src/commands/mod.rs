@@ -1,8 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use reqwest::blocking::Client;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
@@ -180,6 +183,21 @@ pub struct AppShellInfo {
     pub platform: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotCropExportFile {
+    pub relative_path: String,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotCropExportResult {
+    pub export_directory: String,
+    pub file_count: usize,
+    pub cell_count: usize,
+}
+
 /// Returns static metadata about the app shell.
 /// Used by the frontend tauriClient to verify connectivity.
 #[tauri::command]
@@ -221,6 +239,115 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     webbrowser::open(validated_url)
         .map(|_| ())
         .map_err(|error| format!("Failed to open external URL: {error}"))
+}
+
+#[tauri::command]
+pub async fn save_set_completion_screenshot_crops(
+    app: tauri::AppHandle,
+    files: Vec<ScreenshotCropExportFile>,
+) -> Result<ScreenshotCropExportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_save_set_completion_screenshot_crops(app, files).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn run_save_set_completion_screenshot_crops(
+    app: tauri::AppHandle,
+    files: Vec<ScreenshotCropExportFile>,
+) -> Result<ScreenshotCropExportResult> {
+    if files.is_empty() {
+        return Err(anyhow!("no screenshot crop files were provided"));
+    }
+
+    let file_count = files.len();
+
+    let download_dir = app
+        .path()
+        .download_dir()
+        .context("failed to resolve the Downloads directory")?;
+    let export_root = download_dir
+        .join("WarStonks")
+        .join("set-completion-crops")
+        .join(build_screenshot_export_directory_name());
+    fs::create_dir_all(&export_root).with_context(|| {
+        format!(
+            "failed to create screenshot export directory at {}",
+            export_root.display()
+        )
+    })?;
+
+    let mut cell_directories = std::collections::BTreeSet::new();
+
+    for file in files {
+        let relative_path = validate_relative_export_path(&file.relative_path)?;
+        if let Some(first_component) = relative_path.iter().next() {
+            if first_component.to_string_lossy().starts_with("cell-") {
+                cell_directories.insert(first_component.to_string_lossy().to_string());
+            }
+        }
+        let payload = decode_data_url(&file.data_url)?;
+        let output_path = export_root.join(&relative_path);
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create screenshot crop directory at {}", parent.display())
+            })?;
+        }
+        fs::write(&output_path, payload).with_context(|| {
+            format!("failed to write screenshot crop file at {}", output_path.display())
+        })?;
+    }
+
+    Ok(ScreenshotCropExportResult {
+        export_directory: export_root.to_string_lossy().to_string(),
+        file_count,
+        cell_count: cell_directories.len(),
+    })
+}
+
+fn build_screenshot_export_directory_name() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    format!("overlay-crops-{millis}")
+}
+
+fn validate_relative_export_path(relative_path: &str) -> Result<PathBuf> {
+    let trimmed = relative_path.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("screenshot crop path is empty"));
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return Err(anyhow!("screenshot crop path must be relative"));
+    }
+
+    for component in path.components() {
+        use std::path::Component;
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(anyhow!("screenshot crop path cannot contain parent segments"))
+            }
+            _ => return Err(anyhow!("screenshot crop path contains invalid segments")),
+        }
+    }
+
+    Ok(path)
+}
+
+fn decode_data_url(data_url: &str) -> Result<Vec<u8>> {
+    let payload = data_url
+        .split_once(',')
+        .map(|(_, payload)| payload)
+        .ok_or_else(|| anyhow!("invalid screenshot crop data URL"))?;
+    BASE64_STANDARD
+        .decode(payload)
+        .context("failed to decode screenshot crop payload")
 }
 
 fn build_wfstat_client() -> Result<Client, String> {

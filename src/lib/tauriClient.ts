@@ -127,6 +127,17 @@ export interface TrackingRefreshSummary {
   dueItems: number;
 }
 
+export interface ScreenshotCropExportFile {
+  relativePath: string;
+  dataUrl: string;
+}
+
+export interface ScreenshotCropExportResult {
+  exportDirectory: string;
+  fileCount: number;
+  cellCount: number;
+}
+
 export interface WorldStateMarketNewsResponse {
   news: WfstatNewsItem[];
   flashSales: WfstatFlashSale[];
@@ -218,6 +229,12 @@ export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
 
 export async function getWorldStateMarketNews(): Promise<WorldStateMarketNewsResponse> {
   return invoke<WorldStateMarketNewsResponse>('get_worldstate_market_news');
+}
+
+export async function saveSetCompletionScreenshotCrops(
+  files: ScreenshotCropExportFile[],
+): Promise<ScreenshotCropExportResult> {
+  return invoke<ScreenshotCropExportResult>('save_set_completion_screenshot_crops', { files });
 }
 
 export async function getWorldStateCache(): Promise<
