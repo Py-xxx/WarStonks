@@ -2282,16 +2282,12 @@ body {
 }
 
 .logo {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-}
-
-.logo-image {
-  display: block;
-  width: auto;
-  height: 34px;
-  object-fit: contain;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
+  white-space: nowrap;
 }
 
 .topbar-search-group {

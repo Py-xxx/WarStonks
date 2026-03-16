@@ -7,7 +7,6 @@ import { formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trade
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import appLogo from '../../assets/branding/app-logo.png';
 import type { WfmAutocompleteItem } from '../../types';
 
 const SearchIcon = () => (
@@ -236,9 +235,7 @@ export function TopBar() {
 
   return (
     <header className="topbar">
-      <div className="logo" aria-label="WarStonks">
-        <img className="logo-image" src={appLogo} alt="WarStonks" />
-      </div>
+      <div className="logo">WarStonks</div>
 
       <div className="topbar-search-group">
         <div
