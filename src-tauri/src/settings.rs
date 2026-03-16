@@ -16,7 +16,7 @@ const SETTINGS_FILE_NAME: &str = "integrations.json";
 const ALECAFRAME_BASE_URL: &str = "https://stats.alecaframe.com";
 const ALECAFRAME_PUBLIC_STATS_PATH: &str = "/api/stats/public";
 const ALECAFRAME_RELIC_INVENTORY_PATH: &str = "/api/stats/public/getRelicInventory";
-const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
+const ALECAFRAME_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

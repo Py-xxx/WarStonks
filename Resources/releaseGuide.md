@@ -13,7 +13,7 @@ If `latest.json` points to a newer signed Windows installer, WarStonks will show
 1. Do not release from a GitHub ZIP download.
 2. Release from a real Git checkout on your Windows machine.
 3. Do not change the updater signing key unless you intentionally want to break updates for existing installs.
-4. Keep all app version references aligned before building.
+4. Use `package.json` as the only manual version source.
 5. Upload all three updater files to the GitHub Release:
    - the NSIS setup `.exe`
    - the matching `.sig`
@@ -40,27 +40,37 @@ Recommended Windows location:
 
 Do not commit these files.
 
-## Files That Must Be Updated For Every Release
+## Version Source Of Truth
 
-Before building a release, update the version in all of these files so the app stays consistent:
+You now only manually change one file:
 
 1. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/package.json`
-2. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/Cargo.toml`
-3. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/tauri.conf.json`
-4. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src/components/Sidebar/index.tsx`
 
-There are also hard-coded user-agent version strings that should be kept aligned:
+The repo includes a sync script here:
 
-1. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/src/commands/mod.rs`
-2. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/src/market_observatory.rs`
-3. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/src/settings.rs`
-4. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/src/trades.rs`
+- `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/scripts/sync-version.mjs`
 
-Notes:
+And a package script here:
 
-- the running app version shown by Tauri comes from `src-tauri/Cargo.toml`
-- the bundled app version also appears in `src-tauri/tauri.conf.json`
-- the sidebar version label is currently manual text
+- `pnpm version:sync`
+
+What the sync script updates automatically from `package.json`:
+
+1. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/Cargo.toml`
+2. `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/src-tauri/tauri.conf.json`
+
+What is already automatic and no longer needs manual version edits:
+
+1. the sidebar version label now reads the runtime Tauri app version
+2. the Rust WFM/Alecaframe user-agent strings now derive from `CARGO_PKG_VERSION`
+
+Important:
+
+- `pnpm tauri dev`
+- `pnpm tauri build`
+- any other `pnpm tauri ...` command run through `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/scripts/tauri-wrapper.mjs`
+
+That wrapper now runs the version sync automatically before calling Tauri.
 
 ## Recommended Release Workflow
 
@@ -69,9 +79,10 @@ Notes:
 On your main dev machine:
 
 1. Make all code changes.
-2. Update the version in the files listed above.
-3. Commit the release-ready state.
-4. Push that commit to GitHub.
+2. Update the version only in `/Users/nathan/Documents/VSCodeProjects/Warstonks/WarStonks/package.json`.
+3. Run `pnpm version:sync` if you want to verify the synced files before building.
+4. Commit the release-ready state.
+5. Push that commit to GitHub.
 
 Example:
 
@@ -112,7 +123,7 @@ git push origin v3.0.1
 
 Use the same version number everywhere:
 
-- app version: `3.0.1`
+- `package.json`: `3.0.1`
 - tag: `v3.0.1`
 
 ## Windows Build Prerequisites
@@ -147,6 +158,8 @@ pnpm tauri build
 ```
 
 This is still the correct build command.
+
+`pnpm tauri build` now auto-runs the version sync first, so `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json` will be updated from `package.json` before the Tauri build starts.
 
 ## Files Produced By The Build
 

@@ -39,14 +39,14 @@ const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
 const TRADE_LOG_DERIVED_VERSION: i64 = 3;
 const PORTFOLIO_PNL_CHART_BUCKET_LIMIT: usize = 90;
 const PORTFOLIO_PROFIT_POINT_LIMIT: usize = 12;
-const ALECAFRAME_USER_AGENT: &str = "warstonks/3.0.0";
+const ALECAFRAME_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
 const WFM_TRADE_LOG_LOCK_DAYS: i64 = 80;
 const ALECAFRAME_NOTIFICATION_DELAY_SECONDS: i64 = 90;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://ws.warframe.market/socket";
-const WFM_USER_AGENT: &str = "warstonks/3.0.0";
+const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -20,7 +20,7 @@ const WFSTAT_API_BASE_URL: &str = "https://api.warframestat.us";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_CROSSPLAY_HEADER: &str = "true";
-const WFM_USER_AGENT: &str = "warstonks/3.0.0";
+const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const WFSTAT_LANGUAGE_QUERY: &str = "en";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
