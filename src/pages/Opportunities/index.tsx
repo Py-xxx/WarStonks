@@ -79,6 +79,24 @@ type FarmNowRelicRow = {
   }>;
 };
 
+type FarmNowSetCompletionDrop = {
+  drop: RelicRoiDropEntry;
+  isNeeded: boolean;
+  missingQuantity: number;
+  coveredSetCount: number;
+  setNames: string[];
+};
+
+type FarmNowSetCompletionRow = {
+  relic: RelicRoiEntry;
+  ownedCount: number;
+  neededDropCount: number;
+  totalMissingQuantity: number;
+  coveredSetCount: number;
+  coveredSetNames: string[];
+  drops: FarmNowSetCompletionDrop[];
+};
+
 type PlannerCatalogItem = {
   itemId: number | null;
   slug: string;
@@ -968,12 +986,16 @@ export function OpportunitiesPage() {
       setFarmNowError(null);
 
       try {
-        const scannerState = await getArbitrageScannerState();
+        const [scannerState, owned] = await Promise.all([
+          getArbitrageScannerState(),
+          getSetCompletionOwnedItems(),
+        ]);
         if (cancelled) {
           return;
         }
         setFarmNowScan(scannerState.latestScan);
         setFarmNowScanState(scannerState);
+        setOwnedItems(owned);
       } catch (error) {
         if (cancelled) {
           return;
@@ -1042,9 +1064,12 @@ export function OpportunitiesPage() {
     void loadOwnedRelics();
   }, [activeTab]);
 
+  const plannerScanSource =
+    activeTab === 'farm-now' ? farmNowScan ?? scannerResponse : scannerResponse ?? farmNowScan;
+
   const plannerCatalog = useMemo<PlannerCatalogItem[]>(() => {
     const bySlug = new Map<string, PlannerCatalogItem>();
-    for (const setEntry of scannerResponse?.results ?? []) {
+    for (const setEntry of plannerScanSource?.results ?? []) {
       for (const component of setEntry.components) {
         if (!bySlug.has(component.slug)) {
           bySlug.set(component.slug, {
@@ -1059,7 +1084,7 @@ export function OpportunitiesPage() {
 
     const scanCatalog = [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
     return scanCatalog.length > 0 ? scanCatalog : plannerFallbackCatalog;
-  }, [plannerFallbackCatalog, scannerResponse]);
+  }, [plannerFallbackCatalog, plannerScanSource]);
 
   const screenshotImportCandidates = useMemo<SetCompletionImportCandidate[]>(
     () =>
@@ -1112,7 +1137,7 @@ export function OpportunitiesPage() {
   }, [ownedItems]);
 
   const plannerEntries = useMemo<PlannerSetEntry[]>(() => {
-    const results = scannerResponse?.results ?? [];
+    const results = plannerScanSource?.results ?? [];
     const computed: PlannerSetEntry[] = [];
 
     for (const entry of results) {
@@ -1183,7 +1208,7 @@ export function OpportunitiesPage() {
 
       return right.entry.liquidityScore - left.entry.liquidityScore;
     });
-  }, [ownedMap, scannerResponse]);
+  }, [ownedMap, plannerScanSource]);
 
   const plannerPositiveSummary = useMemo(() => {
     let expectedInvestment = 0;
@@ -1334,6 +1359,130 @@ export function OpportunitiesPage() {
   }, [ownedRelics, farmNowScan]);
 
   const farmNowTopRelics = useMemo(() => farmNowRelics.slice(0, 3), [farmNowRelics]);
+  const farmNowMissingComponents = useMemo(() => {
+    const byKey = new Map<
+      string,
+      {
+        missingQuantity: number;
+        setNames: Set<string>;
+      }
+    >();
+
+    for (const planner of plannerEntries) {
+      for (const component of planner.components) {
+        if (component.missingQuantity <= 0) {
+          continue;
+        }
+
+        const keys = [
+          component.component.itemId !== null ? `item:${component.component.itemId}` : null,
+          component.component.slug ? `slug:${component.component.slug}` : null,
+        ].filter((value): value is string => Boolean(value));
+
+        for (const key of keys) {
+          const current = byKey.get(key) ?? {
+            missingQuantity: 0,
+            setNames: new Set<string>(),
+          };
+          current.missingQuantity += component.missingQuantity;
+          current.setNames.add(planner.entry.name);
+          byKey.set(key, current);
+        }
+      }
+    }
+
+    return byKey;
+  }, [plannerEntries]);
+
+  const farmNowSetCompletionRelics = useMemo<FarmNowSetCompletionRow[]>(() => {
+    const relics = farmNowScan?.relicRoiResults ?? [];
+    const ownedByRelic = new Map<string, number>();
+
+    for (const relic of ownedRelics) {
+      ownedByRelic.set(`${relic.tier}:${relic.code}`, relic.counts.total ?? 0);
+    }
+
+    const rows: FarmNowSetCompletionRow[] = [];
+
+    for (const relic of relics) {
+      const parsedRelic = parseRelicTierCode(relic.name);
+      const ownedCount = parsedRelic
+        ? ownedByRelic.get(`${parsedRelic.tier}:${parsedRelic.code}`) ?? 0
+        : 0;
+      const coveredSetNames = new Set<string>();
+
+      const drops = relic.drops.map<FarmNowSetCompletionDrop>((drop) => {
+        const neededMatch =
+          (drop.itemId !== null ? farmNowMissingComponents.get(`item:${drop.itemId}`) : undefined) ??
+          farmNowMissingComponents.get(`slug:${drop.slug}`);
+        const setNames = neededMatch ? [...neededMatch.setNames].sort() : [];
+
+        for (const setName of setNames) {
+          coveredSetNames.add(setName);
+        }
+
+        return {
+          drop,
+          isNeeded: Boolean(neededMatch),
+          missingQuantity: neededMatch?.missingQuantity ?? 0,
+          coveredSetCount: setNames.length,
+          setNames,
+        };
+      });
+
+      const neededDrops = drops.filter((drop) => drop.isNeeded);
+      if (!neededDrops.length) {
+        continue;
+      }
+
+      rows.push({
+        relic,
+        ownedCount,
+        neededDropCount: neededDrops.length,
+        totalMissingQuantity: neededDrops.reduce((sum, drop) => sum + drop.missingQuantity, 0),
+        coveredSetCount: coveredSetNames.size,
+        coveredSetNames: [...coveredSetNames].sort(),
+        drops,
+      });
+    }
+
+    return rows.sort((left, right) => {
+      if (right.neededDropCount !== left.neededDropCount) {
+        return right.neededDropCount - left.neededDropCount;
+      }
+      if (right.coveredSetCount !== left.coveredSetCount) {
+        return right.coveredSetCount - left.coveredSetCount;
+      }
+      if (right.totalMissingQuantity !== left.totalMissingQuantity) {
+        return right.totalMissingQuantity - left.totalMissingQuantity;
+      }
+      if (right.ownedCount !== left.ownedCount) {
+        return right.ownedCount - left.ownedCount;
+      }
+      return left.relic.name.localeCompare(right.relic.name);
+    });
+  }, [farmNowScan, ownedRelics, farmNowMissingComponents]);
+
+  const farmNowSetCompletionTopRelics = useMemo(
+    () => farmNowSetCompletionRelics.slice(0, 3),
+    [farmNowSetCompletionRelics],
+  );
+  const farmNowSetCompletionSetCount = useMemo(
+    () => plannerEntries.filter((planner) => planner.components.some((component) => component.missingQuantity > 0))
+      .length,
+    [plannerEntries],
+  );
+  const farmNowSetCompletionMissingCount = useMemo(() => {
+    const slugs = new Set<string>();
+    for (const planner of plannerEntries) {
+      for (const component of planner.components) {
+        if (component.missingQuantity > 0) {
+          slugs.add(component.component.slug);
+        }
+      }
+    }
+    return slugs.size;
+  }, [plannerEntries]);
   const ownedRelicTotal = useMemo(
     () =>
       ownedRelics.reduce((sum, relic) => sum + (relic.counts?.total ?? 0), 0),
@@ -2044,10 +2193,15 @@ export function OpportunitiesPage() {
               <div className="farm-now-header">
                 <div>
                   <span className="panel-title-eyebrow">What To Farm Now</span>
-                  <h3>Relic Profit Planner</h3>
+                  <h3>
+                    {farmNowTab === 'set-completion'
+                      ? 'Relics For Set Completion'
+                      : 'Relic Profit Planner'}
+                  </h3>
                   <p>
-                    Uses the cached Relic ROI scan to rank relics by expected part profit for each
-                    refinement. No buy cost is assumed, so profit equals expected value per relic.
+                    {farmNowTab === 'set-completion'
+                      ? 'Ranks relics by how many missing set-completion components they can cover, using your owned component inventory as the baseline.'
+                      : 'Uses the cached Relic ROI scan to rank relics by expected part profit for each refinement. No buy cost is assumed, so profit equals expected value per relic.'}
                   </p>
                 </div>
                 <div className="farm-now-tabs">
@@ -2071,15 +2225,31 @@ export function OpportunitiesPage() {
               <div className="farm-now-summary">
                 <div className="farm-now-summary-main">
                   <div className="farm-now-metrics">
-                    <span className="market-panel-badge tone-blue">
-                      Relics scanned {farmNowScan?.scannedRelicCount ?? 0}
-                    </span>
-                    <span className="market-panel-badge tone-blue">
-                      Profit rows {farmNowRelics.length}
-                    </span>
-                    <span className="market-panel-badge tone-green">
-                      Owned relics {ownedRelics.length} ({ownedRelicTotal})
-                    </span>
+                    {farmNowTab === 'set-completion' ? (
+                      <>
+                        <span className="market-panel-badge tone-blue">
+                          Relics ranked {farmNowSetCompletionRelics.length}
+                        </span>
+                        <span className="market-panel-badge tone-blue">
+                          Missing components {farmNowSetCompletionMissingCount}
+                        </span>
+                        <span className="market-panel-badge tone-green">
+                          Sets in progress {farmNowSetCompletionSetCount}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="market-panel-badge tone-blue">
+                          Relics scanned {farmNowScan?.scannedRelicCount ?? 0}
+                        </span>
+                        <span className="market-panel-badge tone-blue">
+                          Profit rows {farmNowRelics.length}
+                        </span>
+                        <span className="market-panel-badge tone-green">
+                          Owned relics {ownedRelics.length} ({ownedRelicTotal})
+                        </span>
+                      </>
+                    )}
                   </div>
                   <div className="farm-now-meta">
                     {farmNowLastScan ? (
@@ -2100,24 +2270,189 @@ export function OpportunitiesPage() {
                 </div>
               </div>
 
-              {farmNowTopRelics.length > 0 ? (
+              {(farmNowTab === 'set-completion'
+                ? farmNowSetCompletionTopRelics.length > 0
+                : farmNowTopRelics.length > 0) ? (
                 <div className="farm-now-toplist">
-                  {farmNowTopRelics.map((row) => (
-                    <div key={`${row.relic.slug}-${row.refinementKey}`} className="farm-now-top-card">
-                      <span className="panel-title-eyebrow">Top pick</span>
-                      <strong>{row.relic.name}</strong>
-                      <span className="farm-now-top-meta">
-                        {row.refinementLabel} · {formatPlatDecimal(row.expectedProfit)} · {formatPlatDecimal(row.platPerHour)}/hr · x{row.ownedCount}
-                      </span>
-                    </div>
-                  ))}
+                  {farmNowTab === 'set-completion'
+                    ? farmNowSetCompletionTopRelics.map((row) => (
+                        <div key={row.relic.slug} className="farm-now-top-card">
+                          <span className="panel-title-eyebrow">Best coverage</span>
+                          <strong>{row.relic.name}</strong>
+                          <span className="farm-now-top-meta">
+                            {row.neededDropCount} needed drops · {row.coveredSetCount} sets helped · x
+                            {row.ownedCount} owned
+                          </span>
+                        </div>
+                      ))
+                    : farmNowTopRelics.map((row) => (
+                        <div
+                          key={`${row.relic.slug}-${row.refinementKey}`}
+                          className="farm-now-top-card"
+                        >
+                          <span className="panel-title-eyebrow">Top pick</span>
+                          <strong>{row.relic.name}</strong>
+                          <span className="farm-now-top-meta">
+                            {row.refinementLabel} · {formatPlatDecimal(row.expectedProfit)} ·{' '}
+                            {formatPlatDecimal(row.platPerHour)}/hr · x{row.ownedCount}
+                          </span>
+                        </div>
+                      ))}
                 </div>
               ) : null}
 
               {farmNowError ? <div className="scanner-inline-error">{farmNowError}</div> : null}
 
               {farmNowTab === 'set-completion' ? (
-                <div className="opportunities-placeholder">Set completion farming is coming next.</div>
+                farmNowLoading ? (
+                  <div className="opportunities-placeholder">Loading set completion relic coverage…</div>
+                ) : noFarmScan ? (
+                  <div className="set-planner-empty">
+                    <div>
+                      <span className="panel-title-eyebrow">Scanner Cache Required</span>
+                      <h3>Run a Relic ROI scan first</h3>
+                      <p>
+                        This view uses the cached Relic ROI data from the Arbitrage scanner. Run a
+                        scan in Scanners, then return here to rank relics for set completion.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setActivePage('scanners')}
+                    >
+                      Open Scanners
+                    </button>
+                  </div>
+                ) : ownedItems.length === 0 ? (
+                  <div className="set-planner-empty">
+                    <div>
+                      <span className="panel-title-eyebrow">Owned Inventory Required</span>
+                      <h3>Add your components first</h3>
+                      <p>
+                        This view needs your Set Completion Planner inventory so it can see which
+                        components are still missing from partial sets.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setActiveTab('set-planner')}
+                    >
+                      Open Set Completion Planner
+                    </button>
+                  </div>
+                ) : farmNowSetCompletionRelics.length === 0 ? (
+                  <div className="opportunities-placeholder">
+                    No relics in the cached scan currently cover your missing set-completion parts.
+                  </div>
+                ) : (
+                  <div className="farm-now-list farm-now-list-set-completion">
+                    <div className="farm-now-header-row">
+                      <span className="farm-now-header-label">Relic</span>
+                      <span className="farm-now-header-label">Needed Drops</span>
+                      <span className="farm-now-header-label">Sets Helped</span>
+                      <span className="farm-now-header-label">Owned</span>
+                      <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
+                    </div>
+
+                    {farmNowSetCompletionRelics.map((row) => {
+                      const relicKey = `${row.relic.slug}:set-completion`;
+                      const expanded = expandedFarmRelicKey === relicKey;
+                      const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
+                      return (
+                        <article key={relicKey} className={`farm-now-row${expanded ? ' is-expanded' : ''}`}>
+                          <button
+                            type="button"
+                            className="farm-now-row-button"
+                            onClick={() =>
+                              setExpandedFarmRelicKey((current) =>
+                                current === relicKey ? null : relicKey,
+                              )
+                            }
+                          >
+                            <div className="farm-now-row-main">
+                              <div className="farm-now-cell farm-now-cell-name">
+                                <span className="farm-now-thumb">
+                                  {imageUrl ? (
+                                    <img src={imageUrl} alt="" loading="lazy" />
+                                  ) : (
+                                    <span>{row.relic.name.slice(0, 1)}</span>
+                                  )}
+                                </span>
+                                <div className="farm-now-copy">
+                                  <strong>{row.relic.name}</strong>
+                                  <span className="farm-now-subtitle">
+                                    {row.totalMissingQuantity} missing parts covered
+                                  </span>
+                                </div>
+                              </div>
+                              <span className="farm-now-cell farm-now-cell-owned">
+                                {row.neededDropCount}
+                              </span>
+                              <span className="farm-now-cell farm-now-cell-owned">
+                                {row.coveredSetCount}
+                              </span>
+                              <span className="farm-now-cell farm-now-cell-owned">
+                                ×{row.ownedCount}
+                              </span>
+                              <span className="farm-now-cell farm-now-cell-action">{expanded ? '−' : '+'}</span>
+                            </div>
+                          </button>
+
+                          {expanded ? (
+                            <div className="farm-now-row-body">
+                              <div className="farm-now-drop-grid">
+                                {row.drops.map((entry) => {
+                                  const dropImage = resolveWfmAssetUrl(entry.drop.imagePath);
+                                  const tone = relicRarityTone(entry.drop.rarity);
+                                  return (
+                                    <div
+                                      key={`${relicKey}-${entry.drop.slug}`}
+                                      className={`farm-now-drop-card${entry.isNeeded ? ' is-needed' : ''}`}
+                                    >
+                                      <span className="farm-now-drop-thumb">
+                                        {dropImage ? (
+                                          <img src={dropImage} alt="" loading="lazy" />
+                                        ) : (
+                                          <span>{entry.drop.name.slice(0, 1)}</span>
+                                        )}
+                                      </span>
+                                      <div className="farm-now-drop-copy">
+                                        <span className="farm-now-drop-name">{entry.drop.name}</span>
+                                        <div className="farm-now-drop-meta">
+                                          <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
+                                            {entry.drop.rarity ?? 'Unknown'}
+                                          </span>
+                                          {entry.isNeeded ? (
+                                            <>
+                                              <span className="market-panel-badge tone-green">Needed</span>
+                                              <span className="farm-now-drop-stat">
+                                                Missing {entry.missingQuantity}
+                                              </span>
+                                              <span className="farm-now-drop-stat">
+                                                {entry.coveredSetCount} set{entry.coveredSetCount === 1 ? '' : 's'}
+                                              </span>
+                                            </>
+                                          ) : null}
+                                        </div>
+                                        {entry.isNeeded && entry.setNames.length ? (
+                                          <span className="farm-now-drop-needed-sets">
+                                            {entry.setNames.join(' · ')}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )
               ) : farmNowLoading ? (
                 <div className="opportunities-placeholder">Loading relic profitability…</div>
               ) : noFarmScan ? (
