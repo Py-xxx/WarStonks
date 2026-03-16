@@ -3,8 +3,27 @@ interface WhisperTarget {
   platinum: number;
 }
 
+export function formatWhisperItemName(itemName: string): string {
+  const trimmedName = itemName.trim();
+  if (!trimmedName) {
+    return '[]';
+  }
+
+  if (/\sset$/i.test(trimmedName)) {
+    const baseName = trimmedName.replace(/\sset$/i, '').trim();
+    return `[${baseName}] set`;
+  }
+
+  if (/\sblueprint$/i.test(trimmedName)) {
+    const baseName = trimmedName.replace(/\sblueprint$/i, '').trim();
+    return `[${baseName}] Blueprint`;
+  }
+
+  return `[${trimmedName}]`;
+}
+
 export function formatWhisperMessage(target: WhisperTarget, itemName: string): string {
-  return `/w ${target.username} Hey there! I would like to buy ${itemName} for ${target.platinum} :platinum: (WarStonks - by py)`;
+  return `/w ${target.username} Hey there! I would like to buy ${formatWhisperItemName(itemName)} for ${target.platinum} :platinum: please (WarStonks - by py)`;
 }
 
 export async function copyWhisperMessage(
