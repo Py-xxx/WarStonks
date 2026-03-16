@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getAppVersion } from '../../lib/tauriClient';
+import { getAppVersion, openExternalUrl } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
 import type { PageId } from '../../types';
 
@@ -60,6 +60,21 @@ const GearIcon = () => (
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
   </svg>
 );
+const BookOpenIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M2 19.5A2.5 2.5 0 0 1 4.5 17H20" />
+    <path d="M4.5 17H20V4.6a.6.6 0 0 0-.6-.6H6a4 4 0 0 0-4 4v11.5Z" />
+    <path d="M8 8h8" />
+    <path d="M8 12h6" />
+  </svg>
+);
+const MessageCircleIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M7.9 20A9 9 0 1 1 20 12.1" />
+    <path d="m13 17 5-5-5-5" />
+    <path d="M18 12H8" />
+  </svg>
+);
 const ChevronLeftIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
     <polyline points="15 18 9 12 15 6"/>
@@ -88,6 +103,12 @@ export function Sidebar() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const [appVersion, setAppVersion] = useState<string>('…');
+
+  const handleOpenDiscord = () => {
+    void openExternalUrl('https://discord.gg/QuSm3fPZT6').catch((error) => {
+      console.warn('[sidebar] failed to open Discord invite', error);
+    });
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -131,14 +152,41 @@ export function Sidebar() {
       ))}
 
       <div className="sidebar-footer">
-        <span className="version">{appVersion}</span>
-        <button
-          className="icon-btn-sm"
-          onClick={toggleSidebar}
-          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {sidebarCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
-        </button>
+        <div className="sidebar-footer-links">
+          <div
+            className={`nav-item sidebar-footer-link${activePage === 'guide' ? ' active' : ''}`}
+            onClick={() => setActivePage('guide')}
+            role="button"
+            tabIndex={0}
+            aria-label="Guide"
+            aria-current={activePage === 'guide' ? 'page' : undefined}
+            onKeyDown={(e) => e.key === 'Enter' && setActivePage('guide')}
+          >
+            <span className="nav-icon"><BookOpenIcon /></span>
+            <span className="nav-label">Guide</span>
+          </div>
+          <div
+            className="nav-item sidebar-footer-link"
+            onClick={handleOpenDiscord}
+            role="button"
+            tabIndex={0}
+            aria-label="Join Discord"
+            onKeyDown={(e) => e.key === 'Enter' && handleOpenDiscord()}
+          >
+            <span className="nav-icon"><MessageCircleIcon /></span>
+            <span className="nav-label">Join Discord</span>
+          </div>
+        </div>
+        <div className="sidebar-footer-meta">
+          <span className="version">{appVersion}</span>
+          <button
+            className="icon-btn-sm"
+            onClick={toggleSidebar}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+          </button>
+        </div>
       </div>
     </nav>
   );

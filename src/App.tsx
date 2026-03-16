@@ -9,6 +9,7 @@ import { OpportunitiesPage } from './pages/Opportunities';
 import { TradesPage } from './pages/Trades';
 import { PortfolioPage } from './pages/Portfolio';
 import { StrategyPage } from './pages/Strategy';
+import { GuidePage } from './pages/Guide';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsSidebar } from './components/SettingsSidebar';
 import { AlecaframeModal } from './components/AlecaframeModal';
@@ -37,6 +38,7 @@ function PageRouter() {
     case 'trades':        return <TradesPage />;
     case 'portfolio':     return <PortfolioPage />;
     case 'strategy':      return <StrategyPage />;
+    case 'guide':         return <GuidePage />;
     default:              return <HomePage />;
   }
 }
