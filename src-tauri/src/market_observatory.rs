@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
@@ -965,6 +966,18 @@ struct ScannerPriceModel {
     confidence_summary: MarketConfidenceSummary,
 }
 
+/// Statistics rows parsed from a WFM HTTP response, ready to be persisted by
+/// the background writer thread.  Carrying rows as a value here means the
+/// HTTP fetch thread can hand off the write work and continue immediately
+/// without waiting for any disk I/O.
+struct WriteTask {
+    item_id: i64,
+    slug: String,
+    variant_key: String,
+    fetched_at: String,
+    rows_by_domain: HashMap<String, Vec<InternalStatsRow>>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WfmOrderRecord {
@@ -1781,18 +1794,32 @@ where
         }
     }
 
-    for (domain_key, rows) in rows_by_domain {
-        insert_statistics_rows_for_domain(
-            connection,
-            item_id,
-            slug,
-            variant_key,
-            &domain_key,
-            &rows,
-            &fetched_at,
-        )?;
+    // Wrap all domain-key writes in a single transaction so the entire cache
+    // population for one item costs one WAL fsync instead of one per row.
+    // Without this, 200+ autocommit INSERTs per fetch (three concurrent
+    // threads × multiple domain keys) serialise on the WAL write lock and
+    // each pay a full fsync, producing 1–3 s freezes where the scheduler
+    // queue goes idle even though scanner work is available.
+    connection.execute_batch("BEGIN")?;
+    let write_result = (|| -> Result<()> {
+        for (domain_key, rows) in rows_by_domain {
+            insert_statistics_rows_for_domain(
+                connection,
+                item_id,
+                slug,
+                variant_key,
+                &domain_key,
+                &rows,
+                &fetched_at,
+            )?;
+        }
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = connection.execute_batch("ROLLBACK");
+        return write_result;
     }
-
+    connection.execute_batch("COMMIT")?;
     Ok(())
 }
 
@@ -2054,6 +2081,7 @@ fn latest_statistics_fetch_timestamp(
     Ok(fetched_at.and_then(|value| parse_timestamp(&value)))
 }
 
+#[allow(dead_code)]
 fn ensure_statistics_cached_for_scan<C>(
     connection: &Connection,
     item_id: i64,
@@ -2098,6 +2126,249 @@ where
         return Err(error);
     }
     Ok(true)
+}
+
+// ---------------------------------------------------------------------------
+// Scanner HTTP–SQLite pipeline helpers
+// ---------------------------------------------------------------------------
+
+/// Fetches WFM statistics for one item over the scheduler and returns the
+/// parsed rows as a [`WriteTask`], without touching SQLite at all.
+/// The caller is responsible for persisting the rows (via the writer thread).
+fn fetch_statistics_for_pipeline<C>(
+    item_id: i64,
+    slug: &str,
+    variant_key: &str,
+    mut is_cancelled: C,
+) -> Result<WriteTask>
+where
+    C: FnMut() -> bool,
+{
+    let client = shared_wfm_client()?;
+    let builder = client
+        .get(format!("{WFM_API_BASE_URL_V1}/items/{slug}/statistics"))
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Language", WFM_LANGUAGE_HEADER)
+        .header("Platform", WFM_PLATFORM_HEADER)
+        .header("Crossplay", WFM_CROSSPLAY_HEADER)
+        .timeout(Duration::from_secs(SCANNER_WFM_STATS_TIMEOUT_SECONDS));
+
+    let response = execute_wfm_bytes_request(
+        builder,
+        RequestPriority::Low,
+        "request WFM statistics",
+        Some(scoped_wfm_coalesce_key("statistics", RequestPriority::Low, slug)),
+        Some(Duration::from_secs(SCANNER_WFM_STATS_TIMEOUT_SECONDS)),
+        || is_cancelled(),
+    )?;
+
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_error_body("WFM statistics request", &response));
+    }
+
+    let payload = serde_json::from_slice::<WfmStatisticsApiResponse>(&response.body)
+        .context("failed to parse WFM statistics response")?;
+
+    let fetched_at = format_timestamp(now_utc())?;
+    let mut rows_by_domain = HashMap::<String, Vec<InternalStatsRow>>::new();
+
+    for (domain_key, rows) in payload.payload.statistics_closed {
+        let filtered = filter_variant_statistics_rows(rows, variant_key);
+        rows_by_domain
+            .entry(domain_key)
+            .or_default()
+            .extend(normalize_statistics_rows(filtered, "closed"));
+    }
+
+    for (domain_key, rows) in payload.payload.statistics_live {
+        let filtered = filter_variant_statistics_rows(rows, variant_key);
+        let grouped = filtered.into_iter().fold(
+            HashMap::<String, Vec<WfmStatisticsRowApi>>::new(),
+            |mut acc, row| {
+                let kind = match row.order_type.as_deref() {
+                    Some("buy") => "live_buy",
+                    _ => "live_sell",
+                };
+                acc.entry(kind.to_string()).or_default().push(row);
+                acc
+            },
+        );
+        for (source_kind, source_rows) in grouped {
+            rows_by_domain
+                .entry(domain_key.clone())
+                .or_default()
+                .extend(normalize_statistics_rows(source_rows, &source_kind));
+        }
+    }
+
+    Ok(WriteTask {
+        item_id,
+        slug: slug.to_string(),
+        variant_key: variant_key.to_string(),
+        fetched_at,
+        rows_by_domain,
+    })
+}
+
+/// Derives the live-sell reference price directly from in-memory parsed rows,
+/// mirroring the SQLite query in `latest_live_sell_reference_price`.
+fn live_sell_price_from_rows(rows_by_domain: &HashMap<String, Vec<InternalStatsRow>>) -> Option<f64> {
+    rows_by_domain
+        .get("48hours")?
+        .iter()
+        .filter(|r| r.source_kind == "live_sell")
+        .max_by_key(|r| r.bucket_at)
+        .and_then(|r| {
+            r.min_price
+                .or(r.median)
+                .or(r.avg_price)
+                .or(r.wa_price)
+                .or(r.closed_price)
+                .or(r.open_price)
+        })
+}
+
+/// Computes a [`ScannerPriceModel`] entirely from in-memory parsed rows,
+/// replicating the logic of `build_statistics_price_model` without any SQLite
+/// reads.  Used by the pipeline path so that the main scan loop never has to
+/// wait for a SQLite read-back after an HTTP fetch.
+fn build_price_model_from_rows(
+    rows_by_domain: &HashMap<String, Vec<InternalStatsRow>>,
+) -> Option<ScannerPriceModel> {
+    // Mirror the time-range filtering that `load_chart_statistics_rows` applies
+    // for ThirtyDays: include rows from both source domains within the last
+    // 30 days, but exclude the most recent 48 h from the 90-day domain to
+    // avoid double-counting with the 48-hour domain.
+    let domain_cutoff = now_utc() - AnalyticsDomainKey::ThirtyDays.lookback();
+    let recent_cutoff = now_utc() - TimeDuration::hours(48);
+
+    let mut closed_rows: Vec<InternalStatsRow> = Vec::new();
+    for source_domain in ["90days", "48hours"] {
+        if let Some(rows) = rows_by_domain.get(source_domain) {
+            for row in rows {
+                if row.bucket_at < domain_cutoff {
+                    continue;
+                }
+                if source_domain == "90days" && row.bucket_at >= recent_cutoff {
+                    continue;
+                }
+                if row.source_kind == "closed" {
+                    closed_rows.push(row.clone());
+                }
+            }
+        }
+    }
+    closed_rows.sort_by_key(|r| r.bucket_at);
+
+    if closed_rows.is_empty() {
+        return None;
+    }
+
+    let anchors = build_historical_zone_anchors(&closed_rows);
+    let zone_bands = anchors.as_ref().and_then(|a| {
+        compute_zone_bands(
+            a.support_floor.or(a.fair_low),
+            a.fair_high,
+            a.support_recurrence,
+            a.fair_center,
+        )
+    });
+    let chart_points = resample_rows(
+        &closed_rows,
+        &[],
+        AnalyticsDomainKey::ThirtyDays,
+        AnalyticsBucketSizeKey::TwentyFourHours,
+    );
+    let confidence_summary = if let Some(a) = anchors.as_ref() {
+        build_zone_confidence(&chart_points, a.fair_low, a.fair_high)
+    } else {
+        build_confidence_summary("low", vec!["Thin history".to_string()])
+    };
+    let current_stats_price = live_sell_price_from_rows(rows_by_domain).map(round_platinum);
+    let (liquidity_score, sale_state) = score_stats_liquidity(&closed_rows);
+    let recommended_entry_price = recommended_entry_price_from_zone(zone_bands.as_ref());
+    let shared_exit_pricing = build_shared_exit_pricing(
+        recommended_entry_price,
+        &closed_rows,
+        zone_bands.as_ref(),
+        None,
+        None,
+        &[],
+    );
+
+    Some(ScannerPriceModel {
+        entry_low: shared_exit_pricing
+            .zone_bands
+            .as_ref()
+            .map(|e| round_platinum(e.entry_low)),
+        entry_high: shared_exit_pricing
+            .zone_bands
+            .as_ref()
+            .map(|e| round_platinum(e.entry_high)),
+        recommended_entry_price,
+        exit_low: shared_exit_pricing
+            .zone_bands
+            .as_ref()
+            .map(|e| round_platinum(e.exit_low)),
+        exit_high: shared_exit_pricing
+            .zone_bands
+            .as_ref()
+            .map(|e| round_platinum(e.exit_high)),
+        recommended_exit_price: shared_exit_pricing.recommended_exit_price,
+        current_stats_price,
+        liquidity_score,
+        sale_state,
+        confidence_summary,
+    })
+}
+
+/// Persists one [`WriteTask`] to SQLite inside a single transaction.
+/// Called exclusively from the background writer thread.
+fn write_statistics_task(connection: &Connection, task: &WriteTask) -> Result<()> {
+    connection.execute_batch("BEGIN")?;
+    let result = (|| -> Result<()> {
+        for (domain_key, rows) in &task.rows_by_domain {
+            insert_statistics_rows_for_domain(
+                connection,
+                task.item_id,
+                &task.slug,
+                &task.variant_key,
+                domain_key,
+                rows,
+                &task.fetched_at,
+            )?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = connection.execute_batch("ROLLBACK");
+        return result;
+    }
+    connection.execute_batch("COMMIT")?;
+    Ok(())
+}
+
+/// Entry point for the background statistics writer thread.
+/// Receives [`WriteTask`] items from the scan pipeline via `rx`, writing each
+/// to SQLite in a single transaction.  Exits when the channel closes (all
+/// senders have been dropped).
+fn run_statistics_writer(db_path: PathBuf, rx: mpsc::Receiver<WriteTask>) {
+    let connection = match Connection::open(&db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("[scanner-writer] failed to open observatory db: {error}");
+            return;
+        }
+    };
+    let _ = connection.busy_timeout(Duration::from_secs(30));
+    for task in rx {
+        if let Err(error) = write_statistics_task(&connection, &task) {
+            eprintln!(
+                "[scanner-writer] failed to write statistics for '{}': {error}",
+                task.slug
+            );
+        }
+    }
 }
 
 fn latest_live_sell_reference_price(
@@ -7398,7 +7669,8 @@ fn build_arbitrage_set_entry(
 
 fn get_or_build_scanner_price_model<C>(
     observatory_connection: &Connection,
-    price_model_cache: &mut HashMap<i64, Option<ScannerPriceModel>>,
+    shared_model_cache: &Arc<Mutex<HashMap<i64, Option<ScannerPriceModel>>>>,
+    write_tx: &mpsc::Sender<WriteTask>,
     item_id: i64,
     slug: &str,
     refreshed_statistics_count: &mut usize,
@@ -7407,23 +7679,42 @@ fn get_or_build_scanner_price_model<C>(
 where
     C: FnMut() -> bool,
 {
-    if let Some(existing) = price_model_cache.get(&item_id) {
-        return Ok(existing.clone());
+    // Fast path: already computed in a prior iteration.
+    {
+        let cache = shared_model_cache.lock().expect("shared_model_cache lock poisoned");
+        if let Some(existing) = cache.get(&item_id) {
+            return Ok(existing.clone());
+        }
     }
 
-    let model = (|| -> Result<Option<ScannerPriceModel>> {
-        if ensure_statistics_cached_for_scan(
-            observatory_connection,
-            item_id,
-            slug,
-            "base",
-            || is_cancelled(),
-        )? {
-            *refreshed_statistics_count += 1;
-        }
-        build_statistics_price_model(observatory_connection, item_id, "base")
-    })()?;
-    price_model_cache.insert(item_id, model.clone());
+    let model = if statistics_cache_is_usable(
+        observatory_connection,
+        item_id,
+        "base",
+        AnalyticsDomainKey::ThirtyDays,
+    )? && latest_statistics_fetch_timestamp(observatory_connection, item_id, "base")?
+        .map(|ts| (now_utc() - ts) < TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS))
+        .unwrap_or(false)
+    {
+        // Warm cache: build model from existing SQLite rows — no network call.
+        build_statistics_price_model(observatory_connection, item_id, "base")?
+    } else {
+        // Cold cache: fetch from WFM, compute model from the in-memory rows
+        // immediately, then hand the write task to the background writer so the
+        // HTTP fetch thread is never blocked waiting for SQLite I/O.
+        let task = fetch_statistics_for_pipeline(item_id, slug, "base", || is_cancelled())?;
+        let model = build_price_model_from_rows(&task.rows_by_domain);
+        // Best-effort: if the writer thread has already exited (e.g. during
+        // cancellation) we still return the model rather than failing the scan.
+        let _ = write_tx.send(task);
+        *refreshed_statistics_count += 1;
+        model
+    };
+
+    shared_model_cache
+        .lock()
+        .expect("shared_model_cache lock poisoned")
+        .insert(item_id, model.clone());
     Ok(model)
 }
 
@@ -7840,9 +8131,15 @@ fn build_arbitrage_scanner_inner(
     // spin up duplicate fetches for the same item.
     let prefetch_in_flight: Arc<Mutex<HashSet<i64>>> = Arc::new(Mutex::new(HashSet::new()));
 
-    // Spawn a one-shot background thread that prefetches statistics for `item_id` into the
-    // SQLite cache at Background priority.  When the main loop later reaches that item it
-    // finds the cache warm and skips the network call entirely.
+    // Channel for handing SQLite write tasks from HTTP-fetch threads to the single
+    // background writer.  Declared here (before kick_prefetch) so the closure can clone
+    // the sender.
+    let (write_tx, write_rx) = mpsc::channel::<WriteTask>();
+
+    // Shared price model cache populated by both prefetch threads and the main loop.
+    // Using Arc<Mutex<_>> so prefetch threads can store models while the main loop reads.
+    let shared_price_model_cache = Arc::new(Mutex::new(HashMap::<i64, Option<ScannerPriceModel>>::new()));
+
     let kick_prefetch = |item_id: i64, slug: String| {
         {
             let mut in_flight = prefetch_in_flight.lock().expect("prefetch_in_flight lock poisoned");
@@ -7854,17 +8151,49 @@ fn build_arbitrage_scanner_inner(
         let db_path = observatory_db_path.clone();
         let in_flight_arc = Arc::clone(&prefetch_in_flight);
         let stopped = Arc::clone(&prefetch_stop);
+        let cache_arc = Arc::clone(&shared_price_model_cache);
+        let tx = write_tx.clone();
         std::thread::spawn(move || {
-            if let Ok(conn) = Connection::open(&db_path) {
-                let _ = conn.busy_timeout(Duration::from_secs(30));
-                let _ = ensure_statistics_cached_for_scan(
-                    &conn,
-                    item_id,
-                    &slug,
-                    "base",
+            // Check whether SQLite already has a fresh entry before going to the network.
+            let is_warm = Connection::open(&db_path)
+                .ok()
+                .and_then(|conn| {
+                    let usable = statistics_cache_is_usable(
+                        &conn, item_id, "base", AnalyticsDomainKey::ThirtyDays,
+                    ).unwrap_or(false);
+                    let fresh = latest_statistics_fetch_timestamp(&conn, item_id, "base")
+                        .ok()
+                        .flatten()
+                        .map(|ts| (now_utc() - ts) < TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS))
+                        .unwrap_or(false);
+                    if usable && fresh {
+                        // Build model from SQLite and store in the shared cache so the
+                        // main thread can find it without any network wait.
+                        let model = build_statistics_price_model(&conn, item_id, "base").ok().flatten();
+                        cache_arc.lock().expect("shared_model_cache lock poisoned").insert(item_id, model);
+                        Some(true)
+                    } else {
+                        Some(false)
+                    }
+                })
+                .unwrap_or(false);
+
+            if !is_warm && !stopped.load(AtomicOrdering::Relaxed) {
+                // Cold: fetch from WFM via the pipeline, compute model in-memory, send
+                // write task to the background writer, store model in shared cache.
+                match fetch_statistics_for_pipeline(
+                    item_id, &slug, "base",
                     || stopped.load(AtomicOrdering::Relaxed),
-                );
+                ) {
+                    Ok(task) => {
+                        let model = build_price_model_from_rows(&task.rows_by_domain);
+                        let _ = tx.send(task);
+                        cache_arc.lock().expect("shared_model_cache lock poisoned").insert(item_id, model);
+                    }
+                    Err(_) => {}
+                }
             }
+
             in_flight_arc.lock().expect("prefetch_in_flight lock poisoned").remove(&item_id);
         });
     };
@@ -7888,10 +8217,15 @@ fn build_arbitrage_scanner_inner(
         .sum::<usize>();
     let total_task_count = total_set_count + total_component_count + relic_roots.len();
 
+    // Spawn the background writer thread that persists WriteTask items to SQLite.
+    // Using a dedicated thread with its own connection means all SQLite writes are
+    // serialised on a single connection, eliminating WAL write-lock contention between
+    // the main thread and any prefetch threads.
+    let writer_db_path = observatory_db_path.clone();
+    let writer_thread = std::thread::spawn(move || run_statistics_writer(writer_db_path, write_rx));
+
     let mut refreshed_set_count = 0;
     let mut refreshed_statistics_count = 0;
-    // Shared across Arbitrage and Relic ROI so each prime item price model is derived once per scan run.
-    let mut shared_price_model_cache = HashMap::<i64, Option<ScannerPriceModel>>::new();
     let mut was_stopped = false;
     let mut skipped_entry_count = 0usize;
     let mut skipped_entries = Vec::<ScannerSkippedEntry>::new();
@@ -8009,7 +8343,8 @@ fn build_arbitrage_scanner_inner(
         let resolution = match work_unit.item_id {
             Some(item_id) => get_or_build_scanner_price_model(
                 &observatory_connection,
-                &mut shared_price_model_cache,
+                &shared_price_model_cache,
+                &write_tx,
                 item_id,
                 &work_unit.slug,
                 &mut refreshed_statistics_count,
@@ -8116,9 +8451,20 @@ fn build_arbitrage_scanner_inner(
     // Signal them to exit before the pure-computation relic ROI phase begins.
     prefetch_stop.store(true, AtomicOrdering::Relaxed);
 
+    // Drop main's sender so the writer thread sees EOF and exits cleanly once
+    // it has drained all queued tasks.
+    drop(write_tx);
+    let _ = writer_thread.join();
+
+    // Take a snapshot of the completed price model cache for the results-building phase.
+    let price_model_snapshot = shared_price_model_cache
+        .lock()
+        .expect("shared_model_cache lock poisoned")
+        .clone();
+
     let mut results = Vec::new();
     for (set_root, components) in &scanned_sets {
-        let set_model = shared_price_model_cache
+        let set_model = price_model_snapshot
             .get(&set_root.item_id)
             .cloned()
             .flatten();
@@ -8127,7 +8473,7 @@ fn build_arbitrage_scanner_inner(
             .map(|component| {
                 component
                     .component_item_id
-                    .and_then(|item_id| shared_price_model_cache.get(&item_id).cloned().flatten())
+                    .and_then(|item_id| price_model_snapshot.get(&item_id).cloned().flatten())
             })
             .collect::<Vec<_>>();
         results.push(build_arbitrage_set_entry(
@@ -8169,7 +8515,7 @@ fn build_arbitrage_scanner_inner(
             match build_relic_roi_entry(&catalog_connection, relic_root, |item_id, slug, name| {
                 let _ = slug;
                 let _ = name;
-                Ok(shared_price_model_cache.get(&item_id).cloned().flatten())
+                Ok(price_model_snapshot.get(&item_id).cloned().flatten())
             }) {
                 Ok(Some(entry)) => relic_entries.push(entry),
                 Ok(None) => {}
