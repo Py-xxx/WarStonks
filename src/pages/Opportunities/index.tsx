@@ -469,7 +469,8 @@ function SetCompletionScreenshotImportModal({
               <div className="scanner-inline-progress screenshot-import-progress">
                 <span className="scanner-progress-label">EXPORTED</span>
                 <strong>
-                  Saved {exportResult.savedCount} cropped cell images to {exportResult.directory}
+                  Saved {exportResult.savedCount} processed images across {exportResult.savedCellCount}{' '}
+                  cell folders in {exportResult.directory}
                 </strong>
               </div>
             ) : null}
@@ -973,7 +974,7 @@ export function OpportunitiesPage() {
       setScreenshotImportProgress({
         progress: 0.94,
         stage: 'export',
-        detail: `Saving ${detectionPreview.cells.length} cropped overlay cells to Downloads…`,
+        detail: `Saving per-line and quantity overlay images into cell folders in Downloads…`,
       });
       const overlayCrops = await buildSetCompletionOverlayCropImages(detectionPreview);
       const exportResult = await saveSetCompletionOverlayCropImages(overlayCrops);
@@ -981,7 +982,7 @@ export function OpportunitiesPage() {
       setScreenshotImportProgress({
         progress: 1,
         stage: 'complete',
-        detail: `Saved ${exportResult.savedCount} cropped cell images to Downloads.`,
+        detail: `Saved ${exportResult.savedCount} processed images across ${exportResult.savedCellCount} cell folders to Downloads.`,
       });
     } catch (error) {
       if (!detectionPreview) {

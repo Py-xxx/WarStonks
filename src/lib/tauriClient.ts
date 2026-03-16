@@ -130,6 +130,9 @@ export interface TrackingRefreshSummary {
 export interface SetCompletionOverlayCropImage {
   rowId: string;
   tileIndex: number;
+  cellFolderName: string;
+  kind: 'line' | 'quantity';
+  lineIndex: number | null;
   filename: string;
   imageDataUrl: string;
 }
@@ -137,6 +140,7 @@ export interface SetCompletionOverlayCropImage {
 export interface SetCompletionOverlayCropSaveResult {
   directory: string;
   savedCount: number;
+  savedCellCount: number;
 }
 
 export interface WorldStateMarketNewsResponse {
