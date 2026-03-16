@@ -788,36 +788,29 @@ export function ScannersPage() {
             <div className="market-panel scanners-intro-panel">
               <div className="market-panel-header">
                 <div className="market-panel-header-copy">
-                  <span className="panel-title-eyebrow">Scanner Logic</span>
                   {activeTab === 'arbitrage' ? (
-                    <>
-                      <h3>Statistics-only set arbitrage</h3>
-                      <p>
-                        Uses the bootstrapped set map as the source of truth, refreshes WFM statistics for each
-                        set and component, and saves one frozen scan snapshot until the next successful run.
-                      </p>
-                    </>
+                    <p>
+                      Finds set arbitrage opportunities using the cached set map and refreshed WFM statistics,
+                      then keeps one frozen scan snapshot until the next successful run.
+                    </p>
                   ) : (
-                    <>
-                      <h3>Shared relic ROI scan</h3>
-                      <p>
-                        Uses the same completed scan as Arbitrage. Relic ROI is fully local, refinement-aware,
-                        and ranks relics by expected run value with liquidity and confidence weighting.
-                      </p>
-                    </>
+                    <p>
+                      Uses the shared Arbitrage scan to rank relic ROI locally with refinement-aware expected
+                      value, liquidity, and confidence weighting.
+                    </p>
                   )}
+                  {progress ? (
+                    <div className="scanner-header-status-line">
+                      <span className="market-panel-badge tone-neutral">
+                        {progress.status === 'running'
+                          ? `${progress.stageLabel} · ${Math.round(progress.progressValue)}%`
+                          : progress.lastCompletedAt
+                            ? `Updated ${formatShortLocalDateTime(progress.lastCompletedAt)}`
+                            : 'No saved scan'}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
-                {progress ? (
-                  <div className="market-panel-header-aside">
-                    <span className="market-panel-badge tone-neutral">
-                      {progress.status === 'running'
-                        ? `${progress.stageLabel} · ${Math.round(progress.progressValue)}%`
-                        : progress.lastCompletedAt
-                          ? `Updated ${formatShortLocalDateTime(progress.lastCompletedAt)}`
-                          : 'No saved scan'}
-                    </span>
-                  </div>
-                ) : null}
               </div>
               <div className="scanner-progress-layout">
                 <div className="scanner-progress-block">
@@ -831,9 +824,6 @@ export function ScannersPage() {
                       style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
                     />
                   </div>
-                  <p className="scanner-progress-copy">
-                    {progress?.statusText ?? 'No saved scanner results yet. Start a scan to cache the results.'}
-                  </p>
                   {buildScannerProgressDetails(progress).length > 0 ? (
                     <div className="scanner-progress-meta">
                       <span>{buildScannerProgressDetails(progress).join(' · ')}</span>
@@ -851,7 +841,7 @@ export function ScannersPage() {
                     </div>
                   ) : null}
                 </div>
-                <div className="scanner-summary-card scanner-summary-card--compact">
+                <div className="scanner-summary-card--compact">
                   <span className="scanner-summary-stat">
                     {scanSummaryCounts ?? 'No saved scan'}
                   </span>

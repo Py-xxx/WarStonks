@@ -6981,23 +6981,23 @@ body {
   min-width: 260px;
   max-width: 460px;
   flex: 1;
-  min-height: 38px;
+  height: 34px;
   padding: 0 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(152, 170, 210, 0.14);
-  background: linear-gradient(180deg, rgba(12, 18, 30, 0.98), rgba(9, 13, 22, 0.96));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: text;
 }
 
 .scanner-search-shell:focus-within {
-  border-color: rgba(74, 158, 255, 0.38);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 0 0 3px rgba(74, 158, 255, 0.1);
+  border-color: rgba(74, 158, 255, 0.35);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
 }
 
 .scanner-search-icon {
-  color: rgba(121, 184, 255, 0.9);
+  color: var(--text-muted);
   font-size: 13px;
   line-height: 1;
 }
@@ -7066,6 +7066,12 @@ body {
   min-height: 120px;
 }
 
+.scanner-header-status-line {
+  display: flex;
+  align-items: center;
+  padding-top: 6px;
+}
+
 .scanner-progress-block {
   display: flex;
   flex-direction: column;
@@ -7079,28 +7085,12 @@ body {
   align-items: start;
 }
 
-.scanner-summary-card {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(13, 18, 28, 0.9);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  justify-items: start;
-  align-content: start;
-}
-
 .scanner-summary-card--compact {
   justify-self: end;
-  justify-items: end;
-  align-content: center;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
   min-height: 100%;
-}
-
-.scanner-summary-card strong {
-  font-size: 14px;
-  line-height: 1.15;
 }
 
 .scanner-summary-stat-grid {
@@ -7154,13 +7144,6 @@ body {
   background: linear-gradient(90deg, rgba(74, 158, 255, 0.72), rgba(89, 225, 193, 0.82));
   box-shadow: 0 0 22px rgba(74, 158, 255, 0.24);
   transition: width 180ms ease;
-}
-
-.scanner-progress-copy {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 .scanner-start-button {
