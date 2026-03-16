@@ -31,6 +31,7 @@ export interface SetCompletionDetectionCell {
   tileIndex: number;
   itemBox: SetCompletionDetectionBox;
   nameBox: SetCompletionDetectionBox | null;
+  nameLineBoxes: SetCompletionDetectionBox[];
   quantityBox: SetCompletionDetectionBox | null;
 }
 
@@ -186,6 +187,9 @@ export async function analyzeSetCompletionInventoryScreenshot(
       nameBox: detection.nameBox
         ? translateBox(detection.nameBox, descriptor.maskRect.x, descriptor.maskRect.y)
         : null,
+      nameLineBoxes: detection.nameLineBoxes.map((lineBox) =>
+        translateBox(lineBox, descriptor.maskRect.x, descriptor.maskRect.y),
+      ),
       quantityBox: detection.quantityBox
         ? translateBox(detection.quantityBox, descriptor.maskRect.x, descriptor.maskRect.y)
         : null,
@@ -338,6 +342,7 @@ function analyzeTileMask(
   detected: boolean;
   previewCanvas: HTMLCanvasElement;
   nameBox: SetCompletionDetectionBox | null;
+  nameLineBoxes: SetCompletionDetectionBox[];
   quantityBox: SetCompletionDetectionBox | null;
 } {
   const previewCanvas = createCanvas(tileMask.width, tileMask.height);
@@ -386,6 +391,12 @@ function analyzeTileMask(
         nameRegionRect.y,
       )
     : null;
+  const nameLineBoxes =
+    localNameBounds && nameBox
+      ? detectNameLineBoxes(nameMask, localNameBounds).map((lineBox) =>
+          translateBox(lineBox, nameRegionRect.x, nameRegionRect.y),
+        )
+      : [];
 
   applyTraceOverlay(previewCanvas, tileMask, nameBox, traceSettings);
   applyTraceOverlay(previewCanvas, tileMask, quantityBox, traceSettings);
@@ -394,6 +405,7 @@ function analyzeTileMask(
     detected,
     previewCanvas,
     nameBox,
+    nameLineBoxes,
     quantityBox,
   };
 }
@@ -584,6 +596,11 @@ function drawOverlayBoxes(
     }
   }
   for (const cell of cells) {
+    for (const lineBox of cell.nameLineBoxes) {
+      strokeBox(context, lineBox, '#79d8ff', 2);
+    }
+  }
+  for (const cell of cells) {
     if (cell.quantityBox) {
       strokeBox(context, cell.quantityBox, '#3dd68c', 3);
     }
@@ -692,6 +709,126 @@ function cleanupNameDetectionMask(source: HTMLCanvasElement): HTMLCanvasElement 
     padding: 4,
   });
   return trimmed;
+}
+
+function detectNameLineBoxes(
+  nameMask: HTMLCanvasElement,
+  textBounds: SetCompletionDetectionBox,
+): SetCompletionDetectionBox[] {
+  const context = nameMask.getContext('2d');
+  if (!context) {
+    return [];
+  }
+  const { data } = context.getImageData(0, 0, nameMask.width, nameMask.height);
+  const startX = clamp(textBounds.x, 0, Math.max(0, nameMask.width - 1));
+  const endX = clamp(
+    textBounds.x + textBounds.width - 1,
+    startX,
+    Math.max(0, nameMask.width - 1),
+  );
+  const startY = clamp(textBounds.y, 0, Math.max(0, nameMask.height - 1));
+  const endY = clamp(
+    textBounds.y + textBounds.height - 1,
+    startY,
+    Math.max(0, nameMask.height - 1),
+  );
+
+  const rowScores: number[] = [];
+  let maxScore = 0;
+  for (let y = startY; y <= endY; y += 1) {
+    let score = 0;
+    for (let x = startX; x <= endX; x += 1) {
+      const index = (y * nameMask.width + x) * 4;
+      if (data[index] > 180) {
+        score += 1;
+      }
+    }
+    rowScores.push(score);
+    maxScore = Math.max(maxScore, score);
+  }
+
+  if (maxScore === 0) {
+    return [];
+  }
+
+  const activeThreshold = Math.max(1, Math.round(maxScore * 0.12));
+  const lineRanges: Array<{ start: number; end: number }> = [];
+  const allowedGap = Math.max(2, Math.round((endY - startY + 1) * 0.025));
+  let activeStart = -1;
+  let lastActive = -1;
+
+  for (let localY = 0; localY < rowScores.length; localY += 1) {
+    const score = rowScores[localY];
+    if (score >= activeThreshold) {
+      if (activeStart < 0) {
+        activeStart = localY;
+      }
+      lastActive = localY;
+      continue;
+    }
+    if (activeStart >= 0 && lastActive >= 0 && localY - lastActive > allowedGap) {
+      lineRanges.push({ start: activeStart, end: lastActive });
+      activeStart = -1;
+      lastActive = -1;
+    }
+  }
+
+  if (activeStart >= 0 && lastActive >= 0) {
+    lineRanges.push({ start: activeStart, end: lastActive });
+  }
+
+  const minLineHeight = Math.max(6, Math.round((endY - startY + 1) * 0.05));
+  const lineBoxes = lineRanges
+    .filter((range) => range.end - range.start + 1 >= minLineHeight)
+    .map((range) =>
+      buildLineBoxFromRows(nameMask, data, startX, endX, startY + range.start, startY + range.end),
+    )
+    .filter((box): box is SetCompletionDetectionBox => box !== null);
+
+  return lineBoxes;
+}
+
+function buildLineBoxFromRows(
+  source: HTMLCanvasElement,
+  data: Uint8ClampedArray,
+  startX: number,
+  endX: number,
+  startY: number,
+  endY: number,
+): SetCompletionDetectionBox | null {
+  let minX = endX;
+  let maxX = startX - 1;
+  let found = false;
+
+  for (let y = startY; y <= endY; y += 1) {
+    for (let x = startX; x <= endX; x += 1) {
+      const index = (y * source.width + x) * 4;
+      if (data[index] <= 180) {
+        continue;
+      }
+      found = true;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+    }
+  }
+
+  if (!found || maxX < minX) {
+    return null;
+  }
+
+  const horizontalPadding = Math.max(4, Math.round((endX - startX + 1) * 0.015));
+  const verticalPadding = 2;
+  const left = clamp(minX - horizontalPadding, 0, Math.max(0, source.width - 1));
+  const right = clamp(maxX + horizontalPadding, left, Math.max(0, source.width - 1));
+  const top = clamp(startY - verticalPadding, 0, Math.max(0, source.height - 1));
+  const bottom = clamp(endY + verticalPadding, top, Math.max(0, source.height - 1));
+
+  return {
+    x: left,
+    y: top,
+    width: right - left + 1,
+    height: bottom - top + 1,
+  };
 }
 
 function filterTracePixels(
