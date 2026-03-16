@@ -788,6 +788,16 @@ pub struct SetCompletionOwnedItem {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionScreenshotImportRow {
+    pub item_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub image_path: Option<String>,
+    pub quantity: i64,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedSetComponentDelta {
     pub sync_key: String,
@@ -6641,6 +6651,66 @@ fn upsert_set_completion_owned_item(
     load_set_completion_owned_items(connection)
 }
 
+fn replace_set_completion_owned_items(
+    connection: &mut Connection,
+    rows: &[SetCompletionScreenshotImportRow],
+) -> Result<Vec<SetCompletionOwnedItem>> {
+    if rows.is_empty() {
+        return load_set_completion_owned_items(connection);
+    }
+
+    let transaction = connection
+        .transaction()
+        .context("failed to start screenshot import transaction")?;
+
+    let updated_at = format_timestamp(now_utc())?;
+    let mut seen_slugs = HashSet::new();
+    for row in rows {
+        if row.slug.trim().is_empty() {
+            return Err(anyhow!("component slug is required"));
+        }
+        if row.name.trim().is_empty() {
+            return Err(anyhow!("component name is required"));
+        }
+        if row.quantity <= 0 {
+            return Err(anyhow!("screenshot import quantity must be greater than zero"));
+        }
+        if !seen_slugs.insert(row.slug.clone()) {
+            return Err(anyhow!("duplicate screenshot import row for {}", row.slug));
+        }
+
+        transaction.execute(
+            "INSERT INTO owned_set_components (
+               component_slug,
+               component_item_id,
+               component_name,
+               component_image_path,
+               quantity,
+               updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(component_slug) DO UPDATE SET
+               component_item_id = excluded.component_item_id,
+               component_name = excluded.component_name,
+               component_image_path = excluded.component_image_path,
+               quantity = excluded.quantity,
+               updated_at = excluded.updated_at",
+            params![
+                row.slug,
+                row.item_id,
+                row.name,
+                row.image_path,
+                row.quantity,
+                updated_at,
+            ],
+        )?;
+    }
+
+    transaction
+        .commit()
+        .context("failed to commit screenshot import transaction")?;
+    load_set_completion_owned_items(connection)
+}
+
 fn apply_owned_set_component_deltas_inner(
     connection: &mut Connection,
     deltas: &[OwnedSetComponentDelta],
@@ -8984,6 +9054,20 @@ pub async fn set_set_completion_owned_item_quantity(
             image_path.as_deref(),
             quantity,
         )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_set_completion_screenshot_import_rows(
+    app: tauri::AppHandle,
+    rows: Vec<SetCompletionScreenshotImportRow>,
+) -> Result<Vec<SetCompletionOwnedItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut connection = open_market_observatory_database(&app)?;
+        replace_set_completion_owned_items(&mut connection, &rows)
     })
     .await
     .map_err(|error| error.to_string())?
