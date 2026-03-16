@@ -3,159 +3,182 @@
 [![Latest Release](https://img.shields.io/github/v/release/Py-xxx/WarStonks?display_name=tag&style=for-the-badge)](https://github.com/Py-xxx/WarStonks/releases)
 [![Windows](https://img.shields.io/badge/platform-Windows-0f172a?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/releases)
 [![Auto Updates](https://img.shields.io/badge/updates-automatic-15803d?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/releases)
-[![Tauri](https://img.shields.io/badge/Tauri-2-24c8db?style=for-the-badge&logo=tauri&logoColor=white)](https://tauri.app/)
+[![Warframe Market](https://img.shields.io/badge/data-warframe.market-f97316?style=for-the-badge)](https://warframe.market/)
+
+WarStonks is a desktop trading companion for Warframe players who want to stop guessing and start making cleaner, faster market decisions.
+
+It brings live market data, analysis, scanners, watchlists, relic planning, and portfolio tracking into one app so you can see:
+
+- what is worth flipping
+- what is worth farming
+- what is worth completing
+- what your trades are actually doing over time
+
+If you actively use Warframe Market and want better timing, better visibility, and less manual checking, this app is built for that.
 
 ## Download
 
-The latest version can be downloaded directly from [Releases](https://github.com/Py-xxx/WarStonks/releases).
+Download the latest version from [Releases](https://github.com/Py-xxx/WarStonks/releases).
 
-For normal use, only download the Windows `.exe` file from the latest release.
+For normal use:
 
-- Do not download the source code zip
-- Install the app once from the release `.exe`
-- After that, WarStonks can check for released updates and update itself automatically in-app
+- download the latest Windows `.exe`
+- do not download the source code zip
+- install once, then let the app handle updates from there
 
-## What WarStonks Does
+WarStonks supports in-app automatic updates, so once installed, future updates can be delivered directly through the app.
 
-WarStonks is a desktop assistant for Warframe trading, scanning, and planning.
+## Why People Use It
+
+Warframe trading usually means bouncing between listings, statistics, relic data, personal notes, and your own inventory. WarStonks pulls those together into one workflow.
+
+That means you can:
+
+- spot flips faster
+- track your buy targets properly
+- understand entry and exit zones before committing
+- see whether a relic helps complete sets you are already building
+- manage active orders without losing context
+- keep a real local record of your trading performance
+
+## What The App Does
+
+WarStonks is designed around practical decisions, not just raw data dumps.
 
 It helps you:
 
-- find profitable flips and set opportunities
-- track items you want to buy
-- monitor your orders and trade account
-- understand market posture and price zones
-- manage owned prime components and relics
-- keep a local trade ledger and P&L summary
-
-The app is built to feel fast and practical:
-
-- local-first data and caching
-- live market requests where they matter
-- scanner workflows for bulk decision-making
-- one place for analysis, planning, trades, and portfolio tracking
-
-## Why It Is Useful
-
-Warframe market data is spread across listings, statistics, relic drops, and your own inventory. WarStonks brings those together into one workflow so you can:
-
-- decide what to flip
-- decide what to farm
-- decide what to complete
-- manage active buy and sell orders
-- review how your trades are actually performing
+- search and analyze items quickly
+- compare market posture and execution quality
+- run scanner-based opportunity discovery
+- manage a live watchlist with actionable alerts
+- sync watchlist behavior with buy orders
+- plan set completion using owned parts and owned relics
+- track your trade history and P&L locally
 
 ## Tabs
 
 ### Home
 
-Your day-to-day command center.
+Your day-to-day trading dashboard.
 
-- global item search
-- quick view for live pricing
+- global search
+- quick view pricing
 - watchlist management
-- alerts and match notifications
+- alert handling
+- fast action flow for items you are actively monitoring
 
 ### Market
 
-Deep analysis for a selected item.
+The deep-dive page for a specific item.
 
+- analysis
+- analytics
 - entry and exit zones
-- trade posture
-- execution quality
-- trend and analytics panels
-- drop sources and supply context
+- liquidity and execution readouts
+- trend context
+- supply and drop-source context
+
+This is where you decide whether an item is worth acting on.
 
 ### Events
 
-Live worldstate information that can affect supply, timing, and demand.
+Warframe worldstate tracking in one place.
 
 - alerts
 - fissures
 - void trader
 - invasions
-- activities and news
+- activity/news context
+
+Useful when timing and supply pressure matter.
 
 ### Scanners
 
-Bulk scanning tools for opportunity discovery.
+Bulk opportunity discovery.
 
-- Arbitrage: compares set value against component entry cost
-- Relic ROI: compares relic rewards against expected value and exit opportunity
+- Arbitrage scanner for set-versus-component opportunities
+- Relic ROI scanner for relic value and reward quality
+
+This is where you go when you want the app to surface opportunities for you instead of searching manually.
 
 ### Opportunities
 
-Planning tools built from the scanner data.
+Actionable planning tools powered by scanner and inventory data.
 
 - What To Farm Now
 - Set Completion Planner
-- owned prime component tracking
-- owned relic-aware planning
+- owned component tracking
+- owned relic-aware recommendations
+
+This is the part of the app that turns raw data into a next move.
 
 ### Trades
 
-Your active Warframe Market trading workspace.
+Your Warframe Market operations tab.
 
 - buy orders
 - sell orders
 - account status
-- linked watchlist automation
+- watchlist-linked order automation
+
+Built for keeping active trading organized.
 
 ### Portfolio
 
-Your local trade ledger and performance summary.
+Your local trade record and performance layer.
 
 - trade log
 - realized profit
 - estimated inventory value
 - estimated total P&L
-- breakdowns and coverage metrics
+- trade breakdowns and coverage metrics
+
+This is where you see whether your process is actually working.
 
 ### Guide
 
-Reserved for onboarding and user guidance. This is currently a future feature.
+A future onboarding/help area for users.
 
 ### Strategy
 
-Reserved for future higher-level trading workflows and presets.
+A future feature area for higher-level trading workflows, presets, and planning.
 
 ## Typical Workflow
 
 1. Search an item on Home or Market
-2. Review Analysis and Analytics
-3. Add it to the watchlist if the setup looks good
-4. Let alerts tell you when a buy opportunity appears
+2. Review the analysis and current market posture
+3. Add it to your watchlist if the setup is good
+4. Let alerts surface the moment it becomes actionable
 5. Use Trades to manage orders
-6. Use Portfolio to review results
-7. Use Scanners and Opportunities to find the next move
+6. Use Portfolio to measure results
+7. Use Scanners and Opportunities to find the next edge
 
-## Main Features
+## Core Highlights
 
-- rank-aware item markets
-- market analysis and analytics
-- watchlist alerts
-- buy-order sync with watchlist
-- arbitrage scanner
-- relic ROI scanner
+- live item search and quick view
+- watchlist alerts and fast buy handling
+- item analysis and analytics
+- arbitrage scanning
+- relic ROI scanning
 - set completion planning
-- owned relic cache support
-- local trade history and P&L
-- worldstate panels
+- owned relic support
+- local trade ledger and P&L
+- worldstate visibility
 
 ## Developer Notes
 
-WarStonks is a Tauri desktop app with:
+WarStonks is a Tauri desktop app built with:
 
 - React
 - TypeScript
 - Rust
 - SQLite
 
-Basic local development:
+Local development:
 
 ```bash
 pnpm install
 pnpm tauri dev
 ```
 
-Windows releases are built from the repo and published through GitHub Releases. The user-facing install artifact is the release `.exe`.
+Releases are published through GitHub Releases. For users, the install artifact is the Windows `.exe`.
