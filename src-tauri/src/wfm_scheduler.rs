@@ -1,12 +1,9 @@
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
-use std::fs::{create_dir_all, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const MAX_GRANTS_PER_WINDOW: usize = 3;
 const MAX_NON_INSTANT_GRANTS_PER_WINDOW: usize = 2;
@@ -115,12 +112,6 @@ struct QueueHealthPriorityMetrics {
 }
 
 #[derive(Debug, Clone)]
-struct RateLimitedBucket {
-    bucket_start_ms: u64,
-    count: u64,
-}
-
-#[derive(Debug, Clone)]
 enum CoalescedEntry {
     InFlight {
         started_at: Instant,
@@ -157,26 +148,6 @@ pub struct WfmSchedulerSnapshot {
     pub queued_requests: Vec<WfmQueuedRequestSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct QueueDebugEvent {
-    timestamp_ms: u64,
-    event: String,
-    request_label: String,
-    request_lane: String,
-    request_priority: String,
-    ticket_id: Option<u64>,
-    coalesce_key: Option<String>,
-    blocked_reason: Option<String>,
-    reserved_instant_capacity: bool,
-    waited_ms: Option<u64>,
-    total_ms: Option<u64>,
-    network_ms: Option<u64>,
-    status: Option<u16>,
-    cooldown_remaining_ms: u64,
-    snapshot: WfmSchedulerSnapshot,
-}
-
 #[derive(Debug)]
 struct SchedulerState {
     instant_queue: VecDeque<RequestTicket>,
@@ -193,12 +164,9 @@ struct SchedulerState {
     total_coalesced_leaders: u64,
     total_coalesced_stale_evictions: u64,
     total_rate_limited_responses: u64,
-    debug_log_path: Option<PathBuf>,
-    health_log_path: Option<PathBuf>,
     priority_metrics: [QueueHealthPriorityMetrics; 5],
     blocked_by_instant_queue: u64,
     blocked_by_reserved_instant_slot: u64,
-    rate_limited_buckets: VecDeque<RateLimitedBucket>,
     next_coalesced_generation: u64,
 }
 
@@ -224,12 +192,9 @@ impl Default for SchedulerState {
             total_coalesced_leaders: 0,
             total_coalesced_stale_evictions: 0,
             total_rate_limited_responses: 0,
-            debug_log_path: None,
-            health_log_path: None,
             priority_metrics: std::array::from_fn(|_| QueueHealthPriorityMetrics::default()),
             blocked_by_instant_queue: 0,
             blocked_by_reserved_instant_slot: 0,
-            rate_limited_buckets: VecDeque::new(),
             next_coalesced_generation: 1,
         }
     }
@@ -238,21 +203,6 @@ impl Default for SchedulerState {
 fn scheduler_state() -> &'static (Mutex<SchedulerState>, Condvar) {
     static STATE: OnceLock<(Mutex<SchedulerState>, Condvar)> = OnceLock::new();
     STATE.get_or_init(|| (Mutex::new(SchedulerState::default()), Condvar::new()))
-}
-
-pub fn configure_wfm_scheduler_debug_log(path: Option<PathBuf>) {
-    let (lock, _) = scheduler_state();
-    if let Ok(mut state) = lock.lock() {
-        state.debug_log_path = path;
-    }
-}
-
-pub fn configure_wfm_scheduler_health_log(path: Option<PathBuf>) {
-    let (lock, _) = scheduler_state();
-    if let Ok(mut state) = lock.lock() {
-        state.health_log_path = path;
-        write_scheduler_health_report(&state, Instant::now());
-    }
 }
 
 pub fn acquire_wfm_slot_interruptible<C>(
@@ -718,169 +668,6 @@ fn update_priority_wait_metrics(
     metrics.max_wait_ms = metrics.max_wait_ms.max(waited_ms);
 }
 
-fn record_rate_limited_bucket(state: &mut SchedulerState, timestamp_ms: u64) {
-    let bucket_start_ms = timestamp_ms - (timestamp_ms % 60_000);
-    if let Some(existing) = state
-        .rate_limited_buckets
-        .iter_mut()
-        .find(|bucket| bucket.bucket_start_ms == bucket_start_ms)
-    {
-        existing.count = existing.count.saturating_add(1);
-    } else {
-        state.rate_limited_buckets.push_back(RateLimitedBucket {
-            bucket_start_ms,
-            count: 1,
-        });
-    }
-
-    let cutoff = bucket_start_ms.saturating_sub(59 * 60_000);
-    while state
-        .rate_limited_buckets
-        .front()
-        .map(|bucket| bucket.bucket_start_ms < cutoff)
-        .unwrap_or(false)
-    {
-        state.rate_limited_buckets.pop_front();
-    }
-}
-
-fn priority_wait_summary_line(priority: RequestPriority, metrics: &QueueHealthPriorityMetrics) -> String {
-    let average_wait_ms = if metrics.wait_samples == 0 {
-        0
-    } else {
-        metrics.total_wait_ms / metrics.wait_samples
-    };
-    format!(
-        "- `{}`: avg {} ms, max {} ms, samples {}",
-        priority.as_str(),
-        average_wait_ms,
-        metrics.max_wait_ms,
-        metrics.wait_samples
-    )
-}
-
-fn write_scheduler_health_report(state: &SchedulerState, now: Instant) {
-    let Some(path) = state.health_log_path.clone() else {
-        return;
-    };
-
-    let generated_at_ms = unix_timestamp_ms();
-    let average_429_per_minute = if state.rate_limited_buckets.is_empty() {
-        0.0
-    } else {
-        let total_429 = state
-            .rate_limited_buckets
-            .iter()
-            .map(|bucket| bucket.count)
-            .sum::<u64>();
-        total_429 as f64 / state.rate_limited_buckets.len() as f64
-    };
-
-    let mut report = String::new();
-    report.push_str("# WFM Queue Health\n\n");
-    report.push_str(&format!("- Generated at (unix ms): `{generated_at_ms}`\n"));
-    report.push_str(&format!(
-        "- Current queue depths: instant `{}`, high `{}`, medium `{}`, low `{}`, background `{}`\n",
-        state.instant_queue.len(),
-        state.normal_queues[RequestPriority::High.normal_index().unwrap()].len(),
-        state.normal_queues[RequestPriority::Medium.normal_index().unwrap()].len(),
-        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].len(),
-        state.normal_queues[RequestPriority::Background.normal_index().unwrap()].len(),
-    ));
-    report.push_str(&format!(
-        "- Recent grants in rolling window: `{}`\n",
-        state.recent_grants.len()
-    ));
-    report.push_str(&format!(
-        "- Cooldown remaining: `{}` ms\n\n",
-        state.cooldown_until
-            .and_then(|instant| instant.checked_duration_since(now))
-            .map(|duration| duration.as_millis() as u64)
-            .unwrap_or(0)
-    ));
-
-    report.push_str("## Wait Times By Priority\n");
-    report.push_str(&priority_wait_summary_line(
-        RequestPriority::Instant,
-        &state.priority_metrics[RequestPriority::Instant.metrics_index()],
-    ));
-    report.push('\n');
-    report.push_str(&priority_wait_summary_line(
-        RequestPriority::High,
-        &state.priority_metrics[RequestPriority::High.metrics_index()],
-    ));
-    report.push('\n');
-    report.push_str(&priority_wait_summary_line(
-        RequestPriority::Medium,
-        &state.priority_metrics[RequestPriority::Medium.metrics_index()],
-    ));
-    report.push('\n');
-    report.push_str(&priority_wait_summary_line(
-        RequestPriority::Low,
-        &state.priority_metrics[RequestPriority::Low.metrics_index()],
-    ));
-    report.push('\n');
-    report.push_str(&priority_wait_summary_line(
-        RequestPriority::Background,
-        &state.priority_metrics[RequestPriority::Background.metrics_index()],
-    ));
-    report.push_str("\n\n");
-
-    report.push_str("## Queue Pressure\n");
-    report.push_str(&format!(
-        "- Requests blocked by `instant-queue`: `{}`\n",
-        state.blocked_by_instant_queue
-    ));
-    report.push_str(&format!(
-        "- Requests blocked by `reserved-instant-slot`: `{}`\n\n",
-        state.blocked_by_reserved_instant_slot
-    ));
-
-    report.push_str("## Coalescing\n");
-    report.push_str(&format!(
-        "- Coalesced leaders: `{}`\n",
-        state.total_coalesced_leaders
-    ));
-    report.push_str(&format!(
-        "- Coalesced hits: `{}`\n",
-        state.total_coalesced_hits
-    ));
-    report.push_str(&format!(
-        "- Stale coalesced evictions: `{}`\n",
-        state.total_coalesced_stale_evictions
-    ));
-    report.push_str(&format!(
-        "- Hit/leader ratio: `{:.2}`\n\n",
-        if state.total_coalesced_leaders == 0 {
-            0.0
-        } else {
-            state.total_coalesced_hits as f64 / state.total_coalesced_leaders as f64
-        }
-    ));
-
-    report.push_str("## Rate Limits\n");
-    report.push_str(&format!(
-        "- Total 429 responses: `{}`\n",
-        state.total_rate_limited_responses
-    ));
-    report.push_str(&format!(
-        "- Average 429s per recorded minute: `{average_429_per_minute:.2}`\n"
-    ));
-    report.push_str("- 429 count over time (minute buckets):\n");
-    if state.rate_limited_buckets.is_empty() {
-        report.push_str("  - none\n");
-    } else {
-        for bucket in &state.rate_limited_buckets {
-            report.push_str(&format!(
-                "  - `{}` -> `{}`\n",
-                bucket.bucket_start_ms, bucket.count
-            ));
-        }
-    }
-
-    let _ = write_text_file(&path, &report);
-}
-
 fn cleanup_expired_coalesced(state: &mut SchedulerState, now: Instant) {
     state.coalesced.retain(|_, entry| match entry {
         CoalescedEntry::InFlight { .. } => true,
@@ -1180,18 +967,18 @@ fn log_request_resolution(
 #[allow(clippy::too_many_arguments)]
 fn log_scheduler_event(
     state: &mut SchedulerState,
-    now: Instant,
+    _now: Instant,
     event: &str,
-    request_label: &str,
+    _request_label: &str,
     request_priority: RequestPriority,
-    ticket_id: Option<u64>,
-    coalesce_key: Option<String>,
+    _ticket_id: Option<u64>,
+    _coalesce_key: Option<String>,
     blocked_reason: Option<String>,
-    reserved_instant_capacity: bool,
+    _reserved_instant_capacity: bool,
     waited_ms: Option<u64>,
-    total_ms: Option<u64>,
-    network_ms: Option<u64>,
-    status: Option<u16>,
+    _total_ms: Option<u64>,
+    _network_ms: Option<u64>,
+    _status: Option<u16>,
 ) {
     if let Some(waited_ms) = waited_ms {
         if event == "granted" {
@@ -1216,71 +1003,6 @@ fn log_scheduler_event(
             _ => {}
         }
     }
-
-    if event == "rate-limited" {
-        record_rate_limited_bucket(state, unix_timestamp_ms());
-    }
-
-    let Some(path) = state.debug_log_path.clone() else {
-        write_scheduler_health_report(state, now);
-        return;
-    };
-
-    let payload = QueueDebugEvent {
-        timestamp_ms: unix_timestamp_ms(),
-        event: event.to_string(),
-        request_label: request_label.to_string(),
-        request_lane: request_priority.lane().to_string(),
-        request_priority: request_priority.as_str().to_string(),
-        ticket_id,
-        coalesce_key,
-        blocked_reason,
-        reserved_instant_capacity,
-        waited_ms,
-        total_ms,
-        network_ms,
-        status,
-        cooldown_remaining_ms: state
-            .cooldown_until
-            .and_then(|instant| instant.checked_duration_since(now))
-            .map(|duration| duration.as_millis() as u64)
-            .unwrap_or(0),
-        snapshot: build_snapshot(state, now),
-    };
-
-    let Ok(serialized) = serde_json::to_string(&payload) else {
-        write_scheduler_health_report(state, now);
-        return;
-    };
-    let _ = append_json_line(&path, &serialized);
-    write_scheduler_health_report(state, now);
-}
-
-fn append_json_line(path: &PathBuf, line: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        create_dir_all(parent)?;
-    }
-
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(line.as_bytes())?;
-    file.write_all(b"\n")?;
-    Ok(())
-}
-
-fn write_text_file(path: &PathBuf, contents: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        create_dir_all(parent)?;
-    }
-
-    std::fs::write(path, contents)?;
-    Ok(())
-}
-
-fn unix_timestamp_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

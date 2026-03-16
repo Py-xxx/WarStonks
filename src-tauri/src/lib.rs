@@ -1,5 +1,3 @@
-use tauri::Manager;
-
 mod commands;
 mod item_catalog;
 mod market_observatory;
@@ -15,15 +13,6 @@ pub fn run() {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
-
-            if let Ok(app_data_dir) = app.path().app_data_dir() {
-                crate::wfm_scheduler::configure_wfm_scheduler_debug_log(Some(
-                    app_data_dir.join("log").join("queueDebug.jsonl"),
-                ));
-                crate::wfm_scheduler::configure_wfm_scheduler_health_log(Some(
-                    app_data_dir.join("log").join("queueHealth.md"),
-                ));
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
