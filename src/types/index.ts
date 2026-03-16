@@ -6,7 +6,8 @@ export type PageId =
   | 'opportunities'
   | 'trades'
   | 'portfolio'
-  | 'strategy';
+  | 'strategy'
+  | 'guide';
 
 export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
