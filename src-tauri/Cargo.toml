@@ -1,6 +1,6 @@
 [package]
 name = "warstonks"
-version = "3.0.1"
+version = "3.0.2"
 description = "WarStonks — Warframe market assistant"
 authors = []
 edition = "2021"
