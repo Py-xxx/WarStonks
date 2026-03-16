@@ -258,51 +258,50 @@ function ArbitrageRow({
   const imageUrl = resolveWfmAssetUrl(entry.imagePath);
 
   return (
-    <article className={`scanner-list-row${expanded ? ' is-expanded' : ''}`}>
-      <button className="scanner-list-button" type="button" onClick={onToggle}>
-        <div className="scanner-list-primary scanner-list-primary-relic">
-          <div className="scanner-result-rank">#{index + 1}</div>
-          <span className="scanner-result-thumb">
-            {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
-          </span>
-          <div className="scanner-list-name">
-            <strong>{entry.name}</strong>
-            <span className="scanner-list-note">{entry.note}</span>
-          </div>
-        </div>
-        <div className="scanner-list-metrics">
-          <div className="scanner-list-metric">
-            <span>Entry</span>
-            <strong>{formatPlat(entry.basketEntryCost)}</strong>
-          </div>
-          <div className="scanner-list-metric">
-            <span>Exit Zone</span>
-            <strong>{formatPlat(entry.setExitLow)} - {formatPlat(entry.setExitHigh)}</strong>
-          </div>
-          <div className="scanner-list-metric">
-            <span>Margin</span>
-            <strong>{formatPlat(entry.grossMargin)}</strong>
-          </div>
-          <div className="scanner-list-metric">
-            <span>ROI</span>
-            <strong>{formatPercent(entry.roiPct)}</strong>
-          </div>
-          <div className="scanner-list-metric">
-            <span>Liquidity</span>
-            <strong>{Math.round(entry.liquidityScore)}%</strong>
-          </div>
-          <div className="scanner-list-badges">
-            <span className="market-panel-badge tone-blue">Score {Math.round(entry.arbitrageScore)}</span>
-            <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
-              {entry.confidenceSummary.label}
+    <article className={`farm-now-row scanner-farm-row${expanded ? ' is-expanded' : ''}`}>
+      <button className="farm-now-row-button scanner-farm-row-button" type="button" onClick={onToggle}>
+        <div className="farm-now-row-main scanner-farm-row-main scanner-farm-row-main-arbitrage">
+          <div className="farm-now-cell farm-now-cell-name scanner-farm-cell-name">
+            <div className="scanner-result-rank">#{index + 1}</div>
+            <span className="farm-now-thumb scanner-farm-thumb">
+              {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
             </span>
-            <span className="scanner-list-chevron">{expanded ? '−' : '+'}</span>
+            <div className="farm-now-copy scanner-farm-copy">
+              <strong>{entry.name}</strong>
+              <span className="farm-now-subtitle">{entry.note}</span>
+              <div className="scanner-farm-badge-row">
+                <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
+                  {entry.confidenceSummary.label}
+                </span>
+                <span className="market-panel-badge tone-blue">Score {Math.round(entry.arbitrageScore)}</span>
+                <span className="market-panel-badge tone-neutral">Liquidity {Math.round(entry.liquidityScore)}%</span>
+              </div>
+            </div>
           </div>
+          <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
+            <span className="scanner-farm-cell-label">Entry</span>
+            <strong className="scanner-farm-cell-value">{formatPlat(entry.basketEntryCost)}</strong>
+          </span>
+          <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
+            <span className="scanner-farm-cell-label">Exit Zone</span>
+            <strong className="scanner-farm-cell-value">
+              {formatPlat(entry.setExitLow)} - {formatPlat(entry.setExitHigh)}
+            </strong>
+          </span>
+          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
+            <span className="scanner-farm-cell-label">Margin</span>
+            <strong className="scanner-farm-cell-value">{formatPlat(entry.grossMargin)}</strong>
+          </span>
+          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
+            <span className="scanner-farm-cell-label">ROI</span>
+            <strong className="scanner-farm-cell-value">{formatPercent(entry.roiPct)}</strong>
+          </span>
+          <span className="farm-now-cell farm-now-cell-action scanner-farm-cell-action">{expanded ? '−' : '+'}</span>
         </div>
       </button>
 
       {expanded ? (
-        <div className="scanner-row-body">
+        <div className="farm-now-row-body scanner-farm-row-body">
           <div className="scanner-row-summary-grid">
             <div className="market-metric-card">
               <span className="info-card-label">Set Exit</span>
@@ -415,50 +414,50 @@ function RelicRoiRow({
   const summary = getRelicRefinementSummary(entry, refinementKey);
 
   return (
-    <article className={`scanner-list-row${expanded ? ' is-expanded' : ''}`}>
-      <button className="scanner-list-button scanner-list-button-relic" type="button" onClick={onToggle}>
-        <div className="scanner-list-primary scanner-list-primary-relic">
-          <div className="scanner-result-rank">#{index + 1}</div>
-          <span className="scanner-result-thumb">
-            {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
+    <article className={`farm-now-row scanner-farm-row${expanded ? ' is-expanded' : ''}`}>
+      <button className="farm-now-row-button scanner-farm-row-button" type="button" onClick={onToggle}>
+        <div className="farm-now-row-main scanner-farm-row-main scanner-farm-row-main-relic">
+          <div className="farm-now-cell farm-now-cell-name scanner-farm-cell-name">
+            <div className="scanner-result-rank">#{index + 1}</div>
+            <span className="farm-now-thumb scanner-farm-thumb">
+              {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
+            </span>
+            <div className="farm-now-copy scanner-farm-copy">
+              <strong>{entry.name}</strong>
+              <span className="farm-now-subtitle">{summary?.note ?? entry.note}</span>
+              <div className="scanner-farm-badge-row">
+                {entry.isUnvaulted ? (
+                  <span className="market-panel-badge tone-green">Unvaulted</span>
+                ) : (
+                  <span className="market-panel-badge tone-amber">Vaulted</span>
+                )}
+                <span className={`market-panel-badge tone-${confidenceTone(summary?.confidenceSummary.level ?? 'low')}`}>
+                  {summary?.confidenceSummary.label ?? entry.confidenceSummary.label}
+                </span>
+              </div>
+            </div>
+          </div>
+          <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
+            <span className="market-panel-badge tone-blue">{summary?.refinementLabel ?? '—'}</span>
           </span>
-          <div className="scanner-list-name">
-            <strong>{entry.name}</strong>
-            <span className="scanner-list-note">{summary?.note ?? entry.note}</span>
-          </div>
-        </div>
-        <div className="scanner-list-metrics-relic">
-          <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{formatPlatPrecise(summary?.runValue ?? null)}</strong>
-          </div>
-          <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{Math.round(summary?.liquidityScore ?? 0)}%</strong>
-          </div>
-          <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{entry.isUnvaulted ? 'Unvaulted' : 'Vaulted'}</strong>
-          </div>
-          <div className="scanner-list-metric scanner-list-metric-inline">
-            <strong>{Math.round(summary?.relicRoiScore ?? 0)}</strong>
-          </div>
-        </div>
-        <div className="scanner-list-badges scanner-list-badges-relic">
-          {entry.isUnvaulted ? (
-            <span className="market-panel-badge tone-green">Unvaulted</span>
-          ) : (
-            <span className="market-panel-badge tone-amber">Vaulted</span>
-          )}
-          <span className="market-panel-badge tone-blue">
-            Score {Math.round(summary?.relicRoiScore ?? 0)}
+          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
+            <span className="scanner-farm-cell-label">Run Value</span>
+            <strong className="scanner-farm-cell-value">{formatPlatPrecise(summary?.runValue ?? null)}</strong>
           </span>
-          <span className={`market-panel-badge tone-${confidenceTone(summary?.confidenceSummary.level ?? 'low')}`}>
-            {summary?.confidenceSummary.label ?? entry.confidenceSummary.label}
+          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
+            <span className="scanner-farm-cell-label">Liquidity</span>
+            <strong className="scanner-farm-cell-value">{Math.round(summary?.liquidityScore ?? 0)}%</strong>
           </span>
-          <span className="scanner-list-chevron">{expanded ? '−' : '+'}</span>
+          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
+            <span className="scanner-farm-cell-label">Score</span>
+            <strong className="scanner-farm-cell-value">{Math.round(summary?.relicRoiScore ?? 0)}</strong>
+          </span>
+          <span className="farm-now-cell farm-now-cell-action scanner-farm-cell-action">{expanded ? '−' : '+'}</span>
         </div>
       </button>
 
       {expanded ? (
-        <div className="scanner-row-body">
+        <div className="farm-now-row-body scanner-farm-row-body">
           <div className="scanner-inline-summary">
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">Refinement</span>
@@ -881,6 +880,14 @@ export function ScannersPage() {
                     />
                   </div>
                 </div>
+                <div className="farm-now-header-row scanner-farm-header-row scanner-farm-header-row-arbitrage">
+                  <span className="farm-now-header-label">Set</span>
+                  <span className="farm-now-header-label">Entry</span>
+                  <span className="farm-now-header-label">Exit Zone</span>
+                  <span className="farm-now-header-label farm-now-header-value">Margin</span>
+                  <span className="farm-now-header-label farm-now-header-value">ROI</span>
+                  <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
+                </div>
                 {arbitrageResults.length > 0 ? (
                   arbitrageResults.map((entry, index) => (
                     <ArbitrageRow
@@ -940,13 +947,13 @@ export function ScannersPage() {
                       </select>
                     </div>
                   </div>
-                  <div className="scanner-list-header scanner-list-header-relic">
-                    <div className="scanner-list-header-primary" />
-                    <span>Run Value</span>
-                    <span>Liquidity</span>
-                    <span>Vault</span>
-                    <span>Score</span>
-                    <div className="scanner-list-header-actions" />
+                  <div className="farm-now-header-row scanner-farm-header-row scanner-farm-header-row-relic">
+                    <span className="farm-now-header-label">Relic</span>
+                    <span className="farm-now-header-label">Refinement</span>
+                    <span className="farm-now-header-label farm-now-header-value">Run Value</span>
+                    <span className="farm-now-header-label farm-now-header-value">Liquidity</span>
+                    <span className="farm-now-header-label farm-now-header-value">Score</span>
+                    <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                   </div>
                   {relicResults.map((entry, index) => (
                     <RelicRoiRow
