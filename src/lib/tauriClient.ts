@@ -127,18 +127,6 @@ export interface TrackingRefreshSummary {
   dueItems: number;
 }
 
-export interface SetCompletionOverlayCropImage {
-  rowId: string;
-  tileIndex: number;
-  filename: string;
-  imageDataUrl: string;
-}
-
-export interface SetCompletionOverlayCropSaveResult {
-  directory: string;
-  savedCount: number;
-}
-
 export interface WorldStateMarketNewsResponse {
   news: WfstatNewsItem[];
   flashSales: WfstatFlashSale[];
@@ -586,14 +574,6 @@ export async function setSetCompletionOwnedItemQuantity(input: {
     name: input.name,
     imagePath: input.imagePath,
     quantity: input.quantity,
-  });
-}
-
-export async function saveSetCompletionOverlayCropImages(
-  crops: SetCompletionOverlayCropImage[],
-): Promise<SetCompletionOverlayCropSaveResult> {
-  return invoke<SetCompletionOverlayCropSaveResult>('save_set_completion_overlay_crop_images', {
-    crops,
   });
 }
 
