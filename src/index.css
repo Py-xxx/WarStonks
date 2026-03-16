@@ -5950,6 +5950,12 @@ body {
 .info-card-val.neutral { color: var(--text-primary); }
 .info-card-val.off     { color: var(--text-secondary); }
 .info-card-val.negative { color: #f37f87; }
+.info-card-note {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
 
 .perf-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-bottom: 14px; }
 .perf-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
@@ -5974,6 +5980,33 @@ body {
 .portfolio-summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 14px;
+}
+.portfolio-quality-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.portfolio-quality-card {
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+.portfolio-quality-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.portfolio-quality-card-top .info-card-label {
+  margin-bottom: 0;
+}
+.portfolio-quality-card-value {
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.1;
 }
 .portfolio-perf-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -6795,6 +6828,7 @@ body {
   .plat-grid,
   .alloc-grid,
   .portfolio-summary-grid,
+  .portfolio-quality-strip,
   .portfolio-perf-grid,
   .portfolio-breakdown-grid,
   .portfolio-insight-grid,
