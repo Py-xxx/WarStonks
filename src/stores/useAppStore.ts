@@ -61,6 +61,11 @@ import {
   getWatchlistRetryDelayMs,
   selectPreferredWatchlistOrder,
 } from '../lib/watchlist';
+import {
+  buildTradeBuyOrderVariantKey,
+  findMissingWatchlistBuyOrderIds,
+  indexTradeBuyOrdersByVariant,
+} from '../lib/watchlistTradeSync';
 import { orderQuickViewVariants } from '../lib/marketVariantFallback';
 import type {
   HomeSubTab,
@@ -93,6 +98,7 @@ import type {
   DiscordWebhookSettingsInput,
   ItemAnalysisResponse,
   MarketVariant,
+  TradeOverview,
   TradeDetectedBuy,
   WalletSnapshot,
   WfmAutocompleteItem,
@@ -292,6 +298,19 @@ function deriveVariantRankFromKey(variantKey: string): number | null {
 
   const parsed = Number.parseInt(variantKey.slice(5), 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function restoreSelectedWatchlistId(
+  watchlist: WatchlistItem[],
+  selectedWatchlistId: string | null,
+): string | null {
+  return selectedWatchlistId && watchlist.some((item) => item.id === selectedWatchlistId)
+    ? selectedWatchlistId
+    : watchlist[0]?.id ?? null;
+}
+
+function isSameWatchlistSequence(left: WatchlistItem[], right: WatchlistItem[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 function findMatchingBuyOrderId(
@@ -706,7 +725,7 @@ function createWatchlistItemFromTradeBuyOrder(
     return null;
   }
 
-  const variantKey = order.rank === null ? 'base' : `rank:${order.rank}`;
+  const variantKey = buildTradeBuyOrderVariantKey(order.rank);
   const variantLabel = order.rank === null ? 'Base Market' : `Rank ${order.rank}`;
   return createWatchlistItem(
     {
@@ -732,10 +751,31 @@ function mergeWatchlistWithTradeBuyOrders(
   existingWatchlist: WatchlistItem[],
   buyOrders: Awaited<ReturnType<typeof getWfmTradeOverview>>['buyOrders'],
 ): WatchlistItem[] {
-  let nextWatchlist = [...existingWatchlist];
+  const orderMap = indexTradeBuyOrdersByVariant(buyOrders);
+  let nextWatchlist = existingWatchlist.map((item) => {
+    const matchingOrder = orderMap.get(`${item.slug}:${item.variantKey}`);
+    if (!matchingOrder) {
+      return item.linkedBuyOrderId ? { ...item, linkedBuyOrderId: null } : item;
+    }
+
+    if (
+      item.targetPrice === matchingOrder.yourPrice
+      && item.linkedBuyOrderId === matchingOrder.orderId
+      && item.imagePath === (matchingOrder.imagePath ?? item.imagePath)
+    ) {
+      return item;
+    }
+
+    return {
+      ...item,
+      targetPrice: matchingOrder.yourPrice,
+      linkedBuyOrderId: matchingOrder.orderId,
+      imagePath: matchingOrder.imagePath ?? item.imagePath,
+    };
+  });
 
   for (const order of buyOrders) {
-    const variantKey = order.rank === null ? 'base' : `rank:${order.rank}`;
+    const variantKey = buildTradeBuyOrderVariantKey(order.rank);
     const existingIndex = nextWatchlist.findIndex(
       (item) => item.slug === order.slug && item.variantKey === variantKey,
     );
@@ -757,6 +797,61 @@ function mergeWatchlistWithTradeBuyOrders(
   }
 
   return nextWatchlist;
+}
+
+function buildAutocompleteItemFromWatchlistEntry(item: WatchlistItem): WfmAutocompleteItem {
+  return {
+    itemId: item.itemId,
+    wfmId: null,
+    name: item.name,
+    slug: item.slug,
+    maxRank: deriveVariantRankFromKey(item.variantKey),
+    itemFamily: item.itemFamily,
+    imagePath: item.imagePath,
+  };
+}
+
+async function reconcileWatchlistWithTradeBuyOrders(input: {
+  watchlist: WatchlistItem[];
+  selectedWatchlistId: string | null;
+  buyOrders: TradeOverview['buyOrders'];
+  sellerMode: SellerMode;
+  syncMissingWatchlistOrders: boolean;
+}): Promise<{
+  watchlist: WatchlistItem[];
+  selectedWatchlistId: string | null;
+  createdMissingBuyOrders: boolean;
+}> {
+  let nextWatchlist = mergeWatchlistWithTradeBuyOrders(input.watchlist, input.buyOrders);
+  let createdMissingBuyOrders = false;
+
+  if (input.syncMissingWatchlistOrders) {
+    for (const watchlistId of findMissingWatchlistBuyOrderIds(nextWatchlist, input.buyOrders)) {
+      const missingItem = nextWatchlist.find((entry) => entry.id === watchlistId);
+      if (!missingItem) {
+        continue;
+      }
+
+      const linkedBuyOrderId = await syncWatchlistBuyOrder(
+        buildAutocompleteItemFromWatchlistEntry(missingItem),
+        missingItem.variantKey,
+        missingItem.targetPrice,
+        input.sellerMode,
+        null,
+      );
+
+      nextWatchlist = nextWatchlist.map((entry) =>
+        entry.id === watchlistId ? { ...entry, linkedBuyOrderId } : entry,
+      );
+      createdMissingBuyOrders = true;
+    }
+  }
+
+  return {
+    watchlist: nextWatchlist,
+    selectedWatchlistId: restoreSelectedWatchlistId(nextWatchlist, input.selectedWatchlistId),
+    createdMissingBuyOrders,
+  };
 }
 
 const persistedWatchlistState = readPersistedWatchlistState();
@@ -1108,6 +1203,7 @@ interface AppStore {
   tradeAccountLoading: boolean;
   tradeAccountError: string | null;
   loadTradeAccount: () => Promise<void>;
+  syncWatchlistTradeOverview: (overview: TradeOverview) => Promise<TradeOverview>;
   signInTradeAccount: (input: TradeSignInInput) => Promise<void>;
   signOutTradeAccount: () => Promise<void>;
   setTradeAccountStatus: (status: 'ingame' | 'online' | 'invisible') => Promise<void>;
@@ -3004,6 +3100,50 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tradeAccount: null,
   tradeAccountLoading: false,
   tradeAccountError: null,
+  syncWatchlistTradeOverview: async (overview) => {
+    const currentState = get();
+    const shouldSyncMissingWatchlistOrders = Boolean(
+      currentState.tradeAccount && currentState.autoWatchlistBuyOrdersEnabled,
+    );
+    const reconciled = await reconcileWatchlistWithTradeBuyOrders({
+      watchlist: currentState.watchlist,
+      selectedWatchlistId: currentState.selectedWatchlistId,
+      buyOrders: overview.buyOrders,
+      sellerMode: currentState.sellerMode,
+      syncMissingWatchlistOrders: shouldSyncMissingWatchlistOrders,
+    });
+
+    let finalWatchlist = reconciled.watchlist;
+    let finalSelectedWatchlistId = reconciled.selectedWatchlistId;
+    let finalOverview = overview;
+
+    if (reconciled.createdMissingBuyOrders) {
+      finalOverview = await getWfmTradeOverview(currentState.sellerMode);
+      const refreshed = await reconcileWatchlistWithTradeBuyOrders({
+        watchlist: reconciled.watchlist,
+        selectedWatchlistId: reconciled.selectedWatchlistId,
+        buyOrders: finalOverview.buyOrders,
+        sellerMode: currentState.sellerMode,
+        syncMissingWatchlistOrders: false,
+      });
+      finalWatchlist = refreshed.watchlist;
+      finalSelectedWatchlistId = refreshed.selectedWatchlistId;
+    }
+
+    const watchlistChanged =
+      !isSameWatchlistSequence(finalWatchlist, currentState.watchlist)
+      || finalSelectedWatchlistId !== currentState.selectedWatchlistId;
+
+    if (watchlistChanged) {
+      writePersistedWatchlistState(finalWatchlist, finalSelectedWatchlistId);
+      set({
+        watchlist: finalWatchlist,
+        selectedWatchlistId: finalSelectedWatchlistId,
+      });
+    }
+
+    return finalOverview;
+  },
   loadTradeAccount: async () => {
     if (tradeAccountLoadPromise) {
       return tradeAccountLoadPromise;
@@ -3020,12 +3160,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (sessionState.account) {
           try {
             const overview = await getWfmTradeOverview(get().sellerMode);
-            nextWatchlist = mergeWatchlistWithTradeBuyOrders(nextWatchlist, overview.buyOrders);
-            if (
-              !nextSelectedWatchlistId
-              || !nextWatchlist.some((item) => item.id === nextSelectedWatchlistId)
-            ) {
-              nextSelectedWatchlistId = nextWatchlist[0]?.id ?? null;
+            const reconciled = await reconcileWatchlistWithTradeBuyOrders({
+              watchlist: nextWatchlist,
+              selectedWatchlistId: nextSelectedWatchlistId,
+              buyOrders: overview.buyOrders,
+              sellerMode: get().sellerMode,
+              syncMissingWatchlistOrders: get().autoWatchlistBuyOrdersEnabled,
+            });
+            nextWatchlist = reconciled.watchlist;
+            nextSelectedWatchlistId = reconciled.selectedWatchlistId;
+            if (reconciled.createdMissingBuyOrders) {
+              const refreshedOverview = await getWfmTradeOverview(get().sellerMode);
+              const refreshed = await reconcileWatchlistWithTradeBuyOrders({
+                watchlist: nextWatchlist,
+                selectedWatchlistId: nextSelectedWatchlistId,
+                buyOrders: refreshedOverview.buyOrders,
+                sellerMode: get().sellerMode,
+                syncMissingWatchlistOrders: false,
+              });
+              nextWatchlist = refreshed.watchlist;
+              nextSelectedWatchlistId = refreshed.selectedWatchlistId;
             }
             writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
           } catch (error) {
@@ -3065,9 +3219,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (sessionState.account) {
         try {
           const overview = await getWfmTradeOverview(get().sellerMode);
-          nextWatchlist = mergeWatchlistWithTradeBuyOrders(nextWatchlist, overview.buyOrders);
-          if (!nextSelectedWatchlistId || !nextWatchlist.some((item) => item.id === nextSelectedWatchlistId)) {
-            nextSelectedWatchlistId = nextWatchlist[0]?.id ?? null;
+          const reconciled = await reconcileWatchlistWithTradeBuyOrders({
+            watchlist: nextWatchlist,
+            selectedWatchlistId: nextSelectedWatchlistId,
+            buyOrders: overview.buyOrders,
+            sellerMode: get().sellerMode,
+            syncMissingWatchlistOrders: get().autoWatchlistBuyOrdersEnabled,
+          });
+          nextWatchlist = reconciled.watchlist;
+          nextSelectedWatchlistId = reconciled.selectedWatchlistId;
+          if (reconciled.createdMissingBuyOrders) {
+            const refreshedOverview = await getWfmTradeOverview(get().sellerMode);
+            const refreshed = await reconcileWatchlistWithTradeBuyOrders({
+              watchlist: nextWatchlist,
+              selectedWatchlistId: nextSelectedWatchlistId,
+              buyOrders: refreshedOverview.buyOrders,
+              sellerMode: get().sellerMode,
+              syncMissingWatchlistOrders: false,
+            });
+            nextWatchlist = refreshed.watchlist;
+            nextSelectedWatchlistId = refreshed.selectedWatchlistId;
           }
           writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
         } catch (error) {
@@ -3129,8 +3300,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   autoWatchlistBuyOrdersEnabled: true,
-  setAutoWatchlistBuyOrdersEnabled: (enabled) =>
-    set({ autoWatchlistBuyOrdersEnabled: enabled }),
+  setAutoWatchlistBuyOrdersEnabled: (enabled) => {
+    set({ autoWatchlistBuyOrdersEnabled: enabled });
+    if (!enabled) {
+      return;
+    }
+
+    const state = get();
+    if (!state.tradeAccount) {
+      return;
+    }
+
+    void getWfmTradeOverview(state.sellerMode)
+      .then((overview) => get().syncWatchlistTradeOverview(overview))
+      .catch((error) => {
+        console.error('[watchlist] failed to reconcile after enabling auto buy order', error);
+        set({ tradeAccountError: toErrorMessage(error) });
+      });
+  },
   tradesSubTab: 'sell-orders',
   setTradesSubTab: (tab) => set({ tradesSubTab: tab }),
 
