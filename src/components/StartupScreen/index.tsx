@@ -1,4 +1,5 @@
 import type { StartupProgress, StartupSummary } from '../../lib/tauriClient';
+import appLogo from '../../assets/branding/app-logo.png';
 
 interface StartupScreenProps {
   progress: StartupProgress;
@@ -26,7 +27,7 @@ export function StartupScreen({
         <div className="startup-header">
           <div>
             <p className="startup-eyebrow">Catalog Bootstrap</p>
-            <h1>WarStonks</h1>
+            <img className="startup-logo-image" src={appLogo} alt="WarStonks" />
           </div>
           <div className="startup-progress-chip">{formatPercent(progress.progressValue)}</div>
         </div>

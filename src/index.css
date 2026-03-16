@@ -2104,11 +2104,11 @@ body {
   gap: 16px;
 }
 
-.startup-header h1 {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 34px;
-  line-height: 1;
-  letter-spacing: 0.08em;
+.startup-logo-image {
+  display: block;
+  width: auto;
+  height: 46px;
+  object-fit: contain;
 }
 
 .startup-eyebrow {
@@ -2289,18 +2289,16 @@ body {
 }
 
 .logo {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: 0.05em;
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
-.logo span {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-muted);
-  margin-left: 6px;
+
+.logo-image {
+  display: block;
+  width: auto;
+  height: 34px;
+  object-fit: contain;
 }
 
 .topbar-search-group {
