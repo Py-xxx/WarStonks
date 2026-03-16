@@ -451,28 +451,37 @@ function SetPlannerRow({
               {planner.ownedComponentCount}/{planner.totalComponentCount} components owned
             </span>
           </div>
-          <div className="planner-set-pills">
+          <div className="planner-set-status-pills">
             <span className="market-panel-badge tone-green">
               {planner.ownedComponentCount}/{planner.totalComponentCount} owned
-            </span>
-            <span className="market-panel-badge tone-blue">
-              Invest {formatPlat(planner.remainingInvestment)}
-            </span>
-            <span className="market-panel-badge tone-blue">
-              Exit {formatPlat(planner.entry.recommendedSetExitPrice)}
             </span>
             <span className="market-panel-badge tone-green">
               Profit {formatPlat(planner.completionProfit)}
             </span>
-            <span className="market-panel-badge tone-blue">
-              ROI {formatPercent(planner.completionRoiPct)}
-            </span>
-            <span className="market-panel-badge tone-blue">
-              Liquidity {Math.round(planner.entry.liquidityScore)}%
-            </span>
-            <span className={`market-panel-badge tone-${confidenceTone(planner.entry.confidenceSummary.level)}`}>
-              {planner.entry.confidenceSummary.label}
-            </span>
+          </div>
+          <div className="planner-set-metrics">
+            <div className="planner-set-metric">
+              <span className="planner-set-metric-label">Investment</span>
+              <strong>{formatPlat(planner.remainingInvestment)}</strong>
+            </div>
+            <div className="planner-set-metric">
+              <span className="planner-set-metric-label">Exit</span>
+              <strong>{formatPlat(planner.entry.recommendedSetExitPrice)}</strong>
+            </div>
+            <div className="planner-set-metric">
+              <span className="planner-set-metric-label">ROI</span>
+              <strong>{formatPercent(planner.completionRoiPct)}</strong>
+            </div>
+            <div className="planner-set-metric">
+              <span className="planner-set-metric-label">Liquidity</span>
+              <strong>{Math.round(planner.entry.liquidityScore)}%</strong>
+            </div>
+            <div className="planner-set-metric">
+              <span className="planner-set-metric-label">Confidence</span>
+              <strong>{planner.entry.confidenceSummary.label}</strong>
+            </div>
+          </div>
+          <div className="planner-set-pills">
             <span className="planner-set-chevron">{expanded ? '−' : '+'}</span>
           </div>
         </div>
