@@ -268,31 +268,31 @@ export function useStartupInitialization(): StartupState {
         }));
 
         let completedWorldStateTasks = 0;
-        await Promise.allSettled(
-          startupWorldStateTasks.map(async (task) => {
-            try {
-              await task.run();
-            } finally {
-              if (!isMounted || activeAttemptRef.current !== currentAttempt) {
-                return;
-              }
-
-              completedWorldStateTasks += 1;
-              const nextProgress = buildWorldStateProgress(
-                completedWorldStateTasks,
-                startupWorldStateTasks.length,
-                task.stageKey,
-                task.stageLabel,
-              );
-
-              setProgress((current) => ({
-                ...current,
-                ...nextProgress,
-                progressValue: Math.max(current.progressValue, nextProgress.progressValue),
-              }));
+        for (const task of startupWorldStateTasks) {
+          try {
+            await task.run();
+          } catch (error) {
+            console.warn(`[startup] worldstate task '${task.stageKey}' failed`, error);
+          } finally {
+            if (!isMounted || activeAttemptRef.current !== currentAttempt) {
+              return;
             }
-          }),
-        );
+
+            completedWorldStateTasks += 1;
+            const nextProgress = buildWorldStateProgress(
+              completedWorldStateTasks,
+              startupWorldStateTasks.length,
+              task.stageKey,
+              task.stageLabel,
+            );
+
+            setProgress((current) => ({
+              ...current,
+              ...nextProgress,
+              progressValue: Math.max(current.progressValue, nextProgress.progressValue),
+            }));
+          }
+        }
 
         if (!isMounted || activeAttemptRef.current !== currentAttempt) {
           return;
