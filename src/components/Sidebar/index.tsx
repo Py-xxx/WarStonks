@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import { getAppVersion } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
 import type { PageId } from '../../types';
 
@@ -85,6 +87,30 @@ export function Sidebar() {
   const setActivePage = useAppStore((s) => s.setActivePage);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const [appVersion, setAppVersion] = useState<string>('…');
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void getAppVersion()
+      .then((version) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setAppVersion(version);
+      })
+      .catch((error) => {
+        console.warn('[sidebar] failed to load app version', error);
+        if (isMounted) {
+          setAppVersion('-');
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <nav className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`} aria-label="Main navigation">
@@ -105,7 +131,7 @@ export function Sidebar() {
       ))}
 
       <div className="sidebar-footer">
-        <span className="version">3.0.0</span>
+        <span className="version">{appVersion}</span>
         <button
           className="icon-btn-sm"
           onClick={toggleSidebar}
