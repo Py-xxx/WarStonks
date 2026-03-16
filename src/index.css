@@ -3252,6 +3252,33 @@ body {
   flex-direction: column;
 }
 
+.home-page-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  --text-secondary: #a8b0c0;
+  --text-muted: #70798c;
+}
+
+.market-page-subnav,
+.market-page-content {
+  --text-secondary: #a5adbd;
+  --text-muted: #6c7588;
+}
+
+.trades-page-subnav,
+.trades-page-content {
+  --text-secondary: #adb5c6;
+  --text-muted: #788194;
+}
+
+.portfolio-page-subnav,
+.portfolio-page-content {
+  --text-secondary: #b3bbcc;
+  --text-muted: #818a9d;
+}
+
 /* ── SUB-NAV ── */
 .subnav {
   height: 40px;
@@ -3275,6 +3302,14 @@ body {
   padding-right: 12px;
   border-right: 1px solid var(--border);
   white-space: nowrap;
+}
+
+.home-page-subnav .page-title,
+.trades-page-subnav .page-title,
+.portfolio-page-subnav .page-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .subtab {
@@ -3592,6 +3627,15 @@ body {
   letter-spacing: 0;
   text-transform: none;
   color: var(--text-primary);
+}
+
+.home-page-shell .panel-title-eyebrow {
+  font-size: 16px;
+}
+
+.home-page-shell .card-label {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .watchlist-controls-card { margin-bottom: 14px; }
@@ -5353,6 +5397,38 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+
+.trades-page-content .card-label,
+.trades-page-content .trade-listing-label,
+.trades-page-content .trade-cell-label,
+.trades-page-content .stat-mini-label,
+.trades-page-content .create-order-label,
+.trades-page-content .listing-table th,
+.trades-page-subnav .trade-subnav-hint {
+  color: var(--text-secondary);
+}
+
+.trades-page-content .card-label,
+.trades-page-content .trade-listing-label,
+.trades-page-content .trade-cell-label,
+.trades-page-content .stat-mini-label,
+.trades-page-content .create-order-label {
+  font-size: 10px;
+}
+
+.trades-page-content .listing-table th {
+  font-size: 10px;
+}
+
+.trades-page-content .trade-hero-title {
+  font-size: 24px;
+}
+
+.trades-page-content .trade-hero-meta,
+.trades-page-content .conn-meta,
+.trades-page-content .health-note {
+  color: var(--text-secondary);
+}
 .connection-bar {
   display: flex;
   align-items: center;
@@ -6140,6 +6216,50 @@ body {
 .portfolio-log-date {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.portfolio-page-content .card-label,
+.portfolio-page-content .info-card-label,
+.portfolio-page-content .perf-label,
+.portfolio-page-content .portfolio-chart-callout-label,
+.portfolio-page-content .portfolio-log-updated,
+.portfolio-page-content .portfolio-filter-field > span,
+.portfolio-page-content .portfolio-log-header,
+.portfolio-page-content .portfolio-log-item-slug {
+  color: var(--text-secondary);
+}
+
+.portfolio-page-content .info-card-label {
+  font-size: 11px;
+  margin-bottom: 7px;
+}
+
+.portfolio-page-content .perf-label {
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+
+.portfolio-page-content .portfolio-chart-callout-label {
+  font-size: 10px;
+}
+
+.portfolio-page-content .portfolio-log-header {
+  font-size: 12px;
+}
+
+.portfolio-page-content .portfolio-log-updated,
+.portfolio-page-content .portfolio-filter-field > span,
+.portfolio-page-content .portfolio-breakdown-meta,
+.portfolio-page-content .portfolio-note-pill,
+.portfolio-page-content .portfolio-chart-callout-meta,
+.portfolio-page-content .portfolio-breakdown-empty {
+  color: var(--text-secondary);
+}
+
+.portfolio-page-content .portfolio-log-item-name,
+.portfolio-page-content .portfolio-breakdown-name,
+.portfolio-page-content .portfolio-breakdown-value {
+  color: var(--text-primary);
 }
 .portfolio-log-date {
   text-align: right;

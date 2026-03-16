@@ -931,7 +931,7 @@ export function TradesPage() {
 
   return (
     <>
-      <div className="subnav">
+      <div className="subnav trades-page-subnav">
         <div className="subnav-left">
           <span className="page-title">Trades</span>
           <span className={`subtab${tradesSubTab === 'sell-orders' ? ' active' : ''}`} onClick={() => setTradesSubTab('sell-orders')} role="tab" tabIndex={0}>
@@ -952,7 +952,7 @@ export function TradesPage() {
           </div>
         ) : null}
       </div>
-      <div className="page-content">
+      <div className="page-content trades-page-content">
         {!tradeAccount ? (
           <SignInPanel />
         ) : (
