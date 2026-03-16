@@ -474,6 +474,7 @@ function HealthTab() {
 function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
+  const syncWatchlistTradeOverview = useAppStore((s) => s.syncWatchlistTradeOverview);
   const sellerMode = useAppStore((s) => s.sellerMode);
   const autoWatchlistBuyOrdersEnabled = useAppStore((s) => s.autoWatchlistBuyOrdersEnabled);
   const setAutoWatchlistBuyOrdersEnabled = useAppStore((s) => s.setAutoWatchlistBuyOrdersEnabled);
@@ -517,8 +518,10 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       setOverviewError(null);
       try {
         const nextOverview = await loadTradeOverviewSnapshot(sellerMode);
+        const syncedOverview = await syncWatchlistTradeOverview(nextOverview);
         if (!cancelled) {
-          setOverview(nextOverview);
+          tradeOverviewCache.set(sellerMode, syncedOverview);
+          setOverview(syncedOverview);
           setOverviewError(null);
         }
       } catch (error) {
@@ -538,7 +541,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     return () => {
       cancelled = true;
     };
-  }, [tradeAccount, sellerMode]);
+  }, [loadTradeAccount, sellerMode, syncWatchlistTradeOverview, tradeAccount]);
 
   useEffect(() => {
     if (!tradeAccount) {
@@ -573,10 +576,14 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     };
   }, [tradeAccount]);
 
-  const applyOverview = (nextOverview: TradeOverview) => {
+  const applyOverview = async (nextOverview: TradeOverview) => {
     tradeOverviewCache.set(sellerMode, nextOverview);
     setOverview(nextOverview);
     setOverviewError(null);
+
+    const syncedOverview = await syncWatchlistTradeOverview(nextOverview);
+    tradeOverviewCache.set(sellerMode, syncedOverview);
+    setOverview(syncedOverview);
   };
 
   const openCreateListing = () => {
@@ -660,7 +667,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
               sellerMode,
             );
 
-      applyOverview(nextOverview);
+      await applyOverview(nextOverview);
       setListingModal(null);
     } catch (error) {
       setListingActionError(error instanceof Error ? error.message : String(error));
@@ -684,7 +691,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         Math.min(quantity, order.quantity),
         sellerMode,
       );
-      applyOverview(nextOverview);
+      await applyOverview(nextOverview);
     } catch (error) {
       setOverviewError(error instanceof Error ? error.message : String(error));
       void loadTradeAccount();
@@ -697,7 +704,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         listingType === 'sell'
           ? await deleteWfmSellOrder(orderId, sellerMode)
           : await deleteWfmBuyOrder(orderId, sellerMode);
-      applyOverview(nextOverview);
+      await applyOverview(nextOverview);
     } catch (error) {
       setOverviewError(error instanceof Error ? error.message : String(error));
       void loadTradeAccount();
