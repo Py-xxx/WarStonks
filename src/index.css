@@ -7046,6 +7046,13 @@ body {
   align-content: start;
 }
 
+.scanner-summary-card--compact {
+  justify-self: end;
+  justify-items: end;
+  align-content: center;
+  min-height: 100%;
+}
+
 .scanner-summary-card strong {
   font-size: 14px;
   line-height: 1.15;
