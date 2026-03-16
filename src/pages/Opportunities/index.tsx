@@ -34,6 +34,7 @@ import type {
   ArbitrageScannerState,
   ArbitrageScannerSetEntry,
   OwnedRelicEntry,
+  OwnedRelicInventoryCache,
   RelicRefinementChanceProfile,
   RelicRoiDropEntry,
   RelicRoiEntry,
@@ -900,6 +901,7 @@ export function OpportunitiesPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [ownedRelics, setOwnedRelics] = useState<OwnedRelicEntry[]>([]);
   const [ownedRelicsLoading, setOwnedRelicsLoading] = useState(false);
+  const [farmNowRelicsRefreshing, setFarmNowRelicsRefreshing] = useState(false);
   const [ownedRelicsError, setOwnedRelicsError] = useState<string | null>(null);
   const [expandedRelicKey, setExpandedRelicKey] = useState<string | null>(null);
   const [ownedRelicsLoaded, setOwnedRelicsLoaded] = useState(false);
@@ -1044,13 +1046,11 @@ export function OpportunitiesPage() {
     void loadOwnedRelics();
   }, [activeTab]);
 
-  useEffect(() => {
-    if (activeTab !== 'farm-now') {
-      return;
-    }
-
-    void loadOwnedRelics();
-  }, [activeTab]);
+  const applyOwnedRelicCache = (cache: OwnedRelicInventoryCache) => {
+    setOwnedRelics(cache.entries);
+    setOwnedRelicsLoaded(true);
+    setOwnedRelicsUpdatedAt(cache.updatedAt);
+  };
 
   const loadOwnedRelics = async (force = false) => {
     if (ownedRelicsLoading) {
@@ -1067,15 +1067,62 @@ export function OpportunitiesPage() {
       const cache = force
         ? await refreshOwnedRelicInventory()
         : await getOwnedRelicInventoryCache();
-      setOwnedRelics(cache.entries);
-      setOwnedRelicsLoaded(true);
-      setOwnedRelicsUpdatedAt(cache.updatedAt);
+      applyOwnedRelicCache(cache);
     } catch (error) {
       setOwnedRelicsError(toErrorMessage(error));
     } finally {
       setOwnedRelicsLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (activeTab !== 'farm-now') {
+      return;
+    }
+
+    let cancelled = false;
+
+    const primeFarmNowRelics = async () => {
+      setOwnedRelicsError(null);
+
+      try {
+        const cache = await getOwnedRelicInventoryCache();
+        if (cancelled) {
+          return;
+        }
+        applyOwnedRelicCache(cache);
+      } catch (error) {
+        if (!cancelled) {
+          setOwnedRelicsError(toErrorMessage(error));
+        }
+      }
+
+      setFarmNowRelicsRefreshing(true);
+      try {
+        const refreshedCache = await refreshOwnedRelicInventory();
+        if (cancelled) {
+          return;
+        }
+        applyOwnedRelicCache(refreshedCache);
+        setOwnedRelicsError(null);
+      } catch (error) {
+        if (!cancelled) {
+          setOwnedRelicsError(toErrorMessage(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setFarmNowRelicsRefreshing(false);
+        }
+      }
+    };
+
+    void primeFarmNowRelics();
+
+    return () => {
+      cancelled = true;
+      setFarmNowRelicsRefreshing(false);
+    };
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab !== 'owned-relics') {
@@ -2287,6 +2334,12 @@ export function OpportunitiesPage() {
                     ) : (
                       <span>No scan data yet</span>
                     )}
+                    {farmNowRelicsRefreshing ? (
+                      <span className="farm-now-refresh-indicator" title="Refreshing owned relic cache">
+                        <span className="farm-now-refresh-spinner" aria-hidden="true" />
+                        Refreshing relics
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 <div className="farm-now-summary-actions">

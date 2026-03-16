@@ -1295,8 +1295,28 @@
 }
 
 .farm-now-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.farm-now-refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.farm-now-refresh-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(121, 184, 255, 0.2);
+  border-top-color: #79b8ff;
+  animation: market-panel-spin 0.85s linear infinite;
 }
 
 .farm-now-summary-actions {
