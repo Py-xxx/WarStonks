@@ -107,7 +107,13 @@ function clearRevealTimeouts(timeoutsRef: MutableRefObject<number[]>) {
   timeoutsRef.current = [];
 }
 
-function AdaptiveInfoHint({ text }: { text: string }) {
+function AdaptiveInfoHint({
+  text,
+  preferredPlacement = 'auto',
+}: {
+  text: string;
+  preferredPlacement?: 'auto' | 'below';
+}) {
   const hintRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
   const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({
@@ -124,7 +130,9 @@ function AdaptiveInfoHint({ text }: { text: string }) {
 
     const viewportPadding = 12;
     const tooltipGap = 8;
-    const placeBelow = hintRect.top < tooltipRect.height + 24;
+    const placeBelow = preferredPlacement === 'below'
+      ? true
+      : hintRect.top < tooltipRect.height + 24;
     let nextStyle: CSSProperties = placeBelow
       ? { top: `calc(100% + ${tooltipGap}px)`, bottom: 'auto' }
       : { bottom: `calc(100% + ${tooltipGap}px)`, top: 'auto' };
@@ -1717,6 +1725,7 @@ function AnalyticsPanel({
   title,
   eyebrow,
   info,
+  infoPlacement = 'auto',
   children,
   loading = false,
   errorMessage = null,
@@ -1727,6 +1736,7 @@ function AnalyticsPanel({
   title: string;
   eyebrow: string;
   info?: string;
+  infoPlacement?: 'auto' | 'below';
   children: ReactNode;
   loading?: boolean;
   errorMessage?: string | null;
@@ -1739,12 +1749,12 @@ function AnalyticsPanel({
       <div className="card-header">
         <div className="market-panel-header">
           <div className="market-panel-header-copy">
-            <span className="panel-title-eyebrow">{eyebrow}</span>
-            <span className="card-label market-panel-title-row">
-              <span>{title}</span>
-              {info ? <AdaptiveInfoHint text={info} /> : null}
-            </span>
-          </div>
+              <span className="panel-title-eyebrow">{eyebrow}</span>
+              <span className="card-label market-panel-title-row">
+                <span>{title}</span>
+              {info ? <AdaptiveInfoHint text={info} preferredPlacement={infoPlacement} /> : null}
+              </span>
+            </div>
           {headerAside ? <div className="market-panel-header-aside">{headerAside}</div> : null}
         </div>
       </div>
@@ -1915,6 +1925,7 @@ function AnalyticsTab() {
               title="Entry / Exit Zone Overview"
               eyebrow="Market State"
               info="Current fair value, entry zone, exit zone, and zone quality derived from the latest analytics snapshot."
+              infoPlacement="below"
               loading={!revealedPanels.overview && !errorMessage}
               errorMessage={!revealedPanels.overview ? errorMessage : null}
               loadingLabel="Calculating entry and exit zones"
@@ -1961,6 +1972,7 @@ function AnalyticsTab() {
               title="Orderbook Pressure"
               eyebrow="Execution"
               info="Live cheapest sell, highest buy, spread, and visible depth showing whether execution currently favors entry or exit."
+              infoPlacement="below"
               loading={!revealedPanels.pressure && !errorMessage}
               errorMessage={!revealedPanels.pressure ? errorMessage : null}
               loadingLabel="Reading current orderbook pressure"
