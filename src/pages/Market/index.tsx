@@ -510,6 +510,7 @@ function StaticAnalyticsChart({
         ? plotWidth / 2
         : (activePointIndex / (points.length - 1)) * plotWidth
       : null;
+  const hoverCardOnRight = activePointX === null ? true : activePointX < plotWidth / 2;
 
   useEffect(() => {
     if (hoveredPointIndex !== null && hoveredPointIndex >= points.length) {
@@ -643,7 +644,9 @@ function StaticAnalyticsChart({
             ) : (
               <div className="market-chart-plot-wrap">
                 {activePoint ? (
-                  <div className="market-chart-hover-card">
+                  <div
+                    className={`market-chart-hover-card${hoverCardOnRight ? ' is-right' : ' is-left'}`}
+                  >
                     <div className="market-chart-hover-header">
                       <span className="market-chart-hover-label">Hovered Bucket</span>
                       <span className="market-chart-hover-time">{formatChartTimestamp(activePoint.timestamp, domain)}</span>
