@@ -22,4 +22,4 @@ These instructions must be read and followed first on every prompt.
 18. If there is any uncertainty, ask clarifying questions before making assumptions.
 19. All calculations must be logically sound and produce accurate, reliable results.
 20. After every major addition or edit, commit the changes to Git with a clear commit message and push to GitHub.
-21. Any Warframe Market API request must go through the shared priority queue / scheduler rather than calling the API directly.
+21. Any Warframe Market API request must go through the shared priority queue / scheduler rather than calling the API directly. Refer to Resources/WFM_Priority_Queue.md
