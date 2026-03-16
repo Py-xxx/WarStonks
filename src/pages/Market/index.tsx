@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import {
   getWfmAutocompleteItems,
@@ -2319,9 +2319,9 @@ function AnalysisTab() {
         ? 0.18
         : 0.35;
   const timeOfDayDisplay = buildTimeOfDayDisplayModel(analysis?.timeOfDayLiquidity);
-  const displayDropSources = useMemo(
-    () => buildDisplayDropSources(analysis?.supplyContext.dropSources ?? [], autocompleteItems),
-    [analysis?.supplyContext.dropSources, autocompleteItems],
+  const displayDropSources = buildDisplayDropSources(
+    analysis?.supplyContext.dropSources ?? [],
+    autocompleteItems,
   );
 
   return (
