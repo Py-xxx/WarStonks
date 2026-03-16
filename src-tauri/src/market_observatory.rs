@@ -9278,6 +9278,16 @@ fn save_owned_relic_inventory_cache(
     Ok(())
 }
 
+pub(crate) fn refresh_owned_relic_inventory_cache_inner(
+    app: &tauri::AppHandle,
+) -> Result<OwnedRelicInventoryCache> {
+    let mut connection = open_market_observatory_database(app)?;
+    let rows = fetch_owned_relic_inventory_rows(app)?;
+    let updated_at = format_timestamp(now_utc())?;
+    save_owned_relic_inventory_cache(&mut connection, &rows, &updated_at)?;
+    load_owned_relic_inventory_cache(app, &connection)
+}
+
 #[tauri::command]
 pub async fn get_owned_relic_inventory_cache(
     app: tauri::AppHandle,
@@ -9296,11 +9306,7 @@ pub async fn refresh_owned_relic_inventory(
     app: tauri::AppHandle,
 ) -> Result<OwnedRelicInventoryCache, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut connection = open_market_observatory_database(&app)?;
-        let rows = fetch_owned_relic_inventory_rows(&app)?;
-        let updated_at = format_timestamp(now_utc())?;
-        save_owned_relic_inventory_cache(&mut connection, &rows, &updated_at)?;
-        load_owned_relic_inventory_cache(&app, &connection)
+        refresh_owned_relic_inventory_cache_inner(&app)
     })
     .await
     .map_err(|error| error.to_string())?

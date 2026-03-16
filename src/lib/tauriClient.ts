@@ -180,6 +180,10 @@ export async function getCurrencyBalances(): Promise<WalletSnapshot> {
   return invoke<WalletSnapshot>('get_currency_balances');
 }
 
+export async function refreshAlecaframeWalletSnapshot(): Promise<WalletSnapshot> {
+  return invoke<WalletSnapshot>('refresh_alecaframe_wallet_snapshot');
+}
+
 export async function getWorldStateEvents(): Promise<Record<string, unknown>[]> {
   return invoke<Record<string, unknown>[]>('get_worldstate_events');
 }
