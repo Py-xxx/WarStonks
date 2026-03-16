@@ -163,6 +163,22 @@
   width: 32px;
   height: 32px;
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid rgba(108, 174, 255, 0.18);
+  background: rgba(14, 20, 32, 0.88);
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.set-planner-drawer-icon:hover {
+  border-color: rgba(108, 174, 255, 0.34);
+  background: rgba(18, 28, 44, 0.96);
+  color: #d8ebff;
 }
 
 /* Drawer body: 2-column layout (search | owned) */

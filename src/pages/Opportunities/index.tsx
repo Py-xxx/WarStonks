@@ -3,6 +3,7 @@ import {
   applySetCompletionScreenshotImportRows,
   getArbitrageScannerState,
   getOwnedRelicInventoryCache,
+  getWfmAutocompleteItems,
   refreshOwnedRelicInventory,
   getSetCompletionOwnedItems,
   setSetCompletionOwnedItemQuantity,
@@ -91,6 +92,49 @@ type PlannerOwnedRelicHint = {
   fullName: string;
   totalCount: number;
 };
+
+function isLikelyPrimeComponentItem(item: WfmAutocompleteItem): boolean {
+  const normalizedName = item.name.trim().toLowerCase();
+  const normalizedFamily = item.itemFamily?.trim().toLowerCase() ?? '';
+
+  if (!normalizedName.includes(' prime ')) {
+    return false;
+  }
+
+  if (
+    normalizedName.endsWith(' set') ||
+    normalizedName.includes(' relic') ||
+    normalizedFamily.includes('relic') ||
+    normalizedFamily.includes('set')
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function mapAutocompleteItemsToPlannerCatalog(
+  items: WfmAutocompleteItem[],
+): PlannerCatalogItem[] {
+  const bySlug = new Map<string, PlannerCatalogItem>();
+
+  for (const item of items) {
+    if (!isLikelyPrimeComponentItem(item)) {
+      continue;
+    }
+
+    if (!bySlug.has(item.slug)) {
+      bySlug.set(item.slug, {
+        itemId: item.itemId,
+        slug: item.slug,
+        name: item.name,
+        imagePath: item.imagePath,
+      });
+    }
+  }
+
+  return [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
 
 type ScreenshotImportPreparedScreenshot = {
   id: string;
@@ -819,6 +863,7 @@ export function OpportunitiesPage() {
   const [farmNowError, setFarmNowError] = useState<string | null>(null);
   const [expandedFarmRelicKey, setExpandedFarmRelicKey] = useState<string | null>(null);
   const [scannerResponse, setScannerResponse] = useState<ArbitrageScannerResponse | null>(null);
+  const [plannerFallbackCatalog, setPlannerFallbackCatalog] = useState<PlannerCatalogItem[]>([]);
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -879,9 +924,10 @@ export function OpportunitiesPage() {
       setErrorMessage(null);
 
       try {
-        const [scannerState, owned] = await Promise.all([
+        const [scannerState, owned, autocompleteItems] = await Promise.all([
           getArbitrageScannerState(),
           getSetCompletionOwnedItems(),
+          getWfmAutocompleteItems(),
         ]);
         if (cancelled) {
           return;
@@ -889,6 +935,7 @@ export function OpportunitiesPage() {
 
         setScannerResponse(scannerState.latestScan);
         setOwnedItems(owned);
+        setPlannerFallbackCatalog(mapAutocompleteItemsToPlannerCatalog(autocompleteItems));
       } catch (error) {
         if (cancelled) {
           return;
@@ -1009,8 +1056,9 @@ export function OpportunitiesPage() {
       }
     }
 
-    return [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }, [scannerResponse]);
+    const scanCatalog = [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
+    return scanCatalog.length > 0 ? scanCatalog : plannerFallbackCatalog;
+  }, [plannerFallbackCatalog, scannerResponse]);
 
   const screenshotImportCandidates = useMemo<SetCompletionImportCandidate[]>(
     () =>
@@ -1764,7 +1812,7 @@ export function OpportunitiesPage() {
                         id="planner-component-search"
                         className="set-planner-search-input"
                         type="text"
-                        placeholder={plannerCatalog.length ? 'Search set components…' : 'Run scan to unlock components'}
+                        placeholder={plannerCatalog.length ? 'Search set components…' : 'Loading component catalog…'}
                         value={componentQuery}
                         onChange={(event) => setComponentQuery(event.target.value)}
                         disabled={!plannerCatalog.length}
@@ -1795,7 +1843,7 @@ export function OpportunitiesPage() {
                         ))}
                       </div>
                     ) : (
-                      <div className="watchlist-form-note">Arbitrage cache not available yet.</div>
+                      <div className="watchlist-form-note">Component catalog is still loading.</div>
                     )}
                   </div>
 
