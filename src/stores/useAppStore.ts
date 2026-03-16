@@ -6,6 +6,7 @@ import {
   deleteWfmBuyOrder,
   ensureMarketTracking,
   getWfmTradeSessionState,
+  getWfmAutocompleteItems,
   getAppSettings,
   getItemAnalytics,
   getItemAnalysis,
@@ -113,6 +114,7 @@ let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
 let tradeAccountLoadPromise: Promise<void> | null = null;
 let backgroundWalletRefreshPromise: Promise<void> | null = null;
 const watchlistRefreshGenerations = new Map<string, number>();
+let autocompleteCatalogPromise: Promise<WfmAutocompleteItem[]> | null = null;
 
 const defaultAppSettings: AppSettings = {
   alecaframe: {
@@ -314,6 +316,38 @@ function findMatchingBuyOrderId(
   return matchingOrders[0]?.orderId ?? null;
 }
 
+async function getAutocompleteCatalog(): Promise<WfmAutocompleteItem[]> {
+  if (!autocompleteCatalogPromise) {
+    autocompleteCatalogPromise = getWfmAutocompleteItems().catch((error) => {
+      autocompleteCatalogPromise = null;
+      throw error;
+    });
+  }
+
+  return autocompleteCatalogPromise;
+}
+
+async function resolveWatchlistWfmIdentity(item: WfmAutocompleteItem): Promise<WfmAutocompleteItem> {
+  if (item.wfmId) {
+    return item;
+  }
+
+  const catalog = await getAutocompleteCatalog();
+  const matched =
+    catalog.find((entry) => entry.itemId === item.itemId) ??
+    catalog.find((entry) => entry.slug === item.slug);
+
+  return matched
+    ? {
+        ...item,
+        wfmId: matched.wfmId,
+        maxRank: item.maxRank ?? matched.maxRank,
+        itemFamily: item.itemFamily ?? matched.itemFamily,
+        imagePath: item.imagePath ?? matched.imagePath,
+      }
+    : item;
+}
+
 async function syncWatchlistBuyOrder(
   item: WfmAutocompleteItem,
   variantKey: string,
@@ -321,7 +355,8 @@ async function syncWatchlistBuyOrder(
   sellerMode: SellerMode,
   linkedBuyOrderId: string | null,
 ): Promise<string | null> {
-  if (!item.wfmId) {
+  const resolvedItem = await resolveWatchlistWfmIdentity(item);
+  if (!resolvedItem.wfmId) {
     return linkedBuyOrderId;
   }
 
@@ -339,12 +374,12 @@ async function syncWatchlistBuyOrder(
       },
       sellerMode,
     );
-    return findMatchingBuyOrderId(item, variantKey, normalizedPrice, overview) ?? linkedBuyOrderId;
+    return findMatchingBuyOrderId(resolvedItem, variantKey, normalizedPrice, overview) ?? linkedBuyOrderId;
   }
 
   const overview = await createWfmBuyOrder(
     {
-      wfmId: item.wfmId,
+      wfmId: resolvedItem.wfmId,
       price: normalizedPrice,
       quantity: 1,
       rank,
@@ -353,7 +388,7 @@ async function syncWatchlistBuyOrder(
     sellerMode,
   );
 
-  return findMatchingBuyOrderId(item, variantKey, normalizedPrice, overview);
+  return findMatchingBuyOrderId(resolvedItem, variantKey, normalizedPrice, overview);
 }
 
 async function removeWatchlistBuyOrder(
