@@ -4,7 +4,9 @@ import {
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
   getSetCompletionOwnedItems,
+  runSetCompletionOverlayOcr,
   setSetCompletionOwnedItemQuantity,
+  type SetCompletionOverlayOcrReading,
 } from '../../lib/tauriClient';
 import {
   analyzeSetCompletionInventoryScreenshot,
@@ -360,6 +362,7 @@ function SetCompletionScreenshotImportModal({
   fileInputRef,
   previewUrl,
   detectionPreview,
+  readings,
   processing,
   progress,
   errorMessage,
@@ -370,6 +373,7 @@ function SetCompletionScreenshotImportModal({
   fileInputRef: { current: HTMLInputElement | null };
   previewUrl: string | null;
   detectionPreview: SetCompletionScreenshotDetectionPreview | null;
+  readings: SetCompletionOverlayOcrReading[];
   processing: boolean;
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
@@ -406,8 +410,8 @@ function SetCompletionScreenshotImportModal({
           </div>
         </div>
 
-        <div className="settings-modal-body screenshot-import-body screenshot-import-body-single">
-          <div className="settings-form-card screenshot-import-left screenshot-import-left-single">
+        <div className="settings-modal-body screenshot-import-body">
+          <div className="settings-form-card screenshot-import-left">
             <div className="screenshot-import-example">
               <div className="screenshot-import-example-copy">
                 <span className="panel-title-eyebrow">Example Only</span>
@@ -445,11 +449,12 @@ function SetCompletionScreenshotImportModal({
 
             <p className="watchlist-form-note">
               Use a single screenshot from the in-game <strong>Prime Components</strong> tab. This
-              is detection-only for now and does not import, OCR, or match any items yet.
+              now reads the traced overlay only and shows a raw OCR readout. It still does not
+              match or import any items yet.
             </p>
             <p className="watchlist-form-note">
               Workflow: choose the screenshot and the detector will immediately extract the fixed
-              palette, build the overlays, and display them over the original image.
+              palette, build the overlays, and then OCR only the overlay text and quantity regions.
             </p>
 
             {progress ? (
@@ -486,6 +491,52 @@ function SetCompletionScreenshotImportModal({
               </div>
             )}
           </div>
+
+          <aside className="settings-form-card screenshot-import-right">
+            <div className="screenshot-import-summary-panel">
+              <span className="panel-title-eyebrow">Overlay OCR</span>
+              <h3>Detected Text</h3>
+              <div className="screenshot-import-legend">
+                <span className="screenshot-import-legend-pill screenshot-import-legend-pill-blue">
+                  {detectionPreview?.nameCount ?? 0} text regions
+                </span>
+                <span className="screenshot-import-legend-pill screenshot-import-legend-pill-green">
+                  {detectionPreview?.quantityCount ?? 0} qty regions
+                </span>
+                <span className="screenshot-import-legend-pill screenshot-import-legend-pill-red-trace">
+                  Overlay only
+                </span>
+              </div>
+              <div className="screenshot-import-readings">
+                {readings.length ? (
+                  <ul className="screenshot-import-reading-list">
+                    {readings.map((reading) => {
+                      const cell = detectionPreview?.cells.find(
+                        (candidate) => candidate.rowId === reading.rowId,
+                      );
+                      const quantityLabel =
+                        cell?.quantityBox === null
+                          ? '1'
+                          : reading.detectedQuantity?.trim() || 'Unreadable';
+                      return (
+                        <li key={reading.rowId}>
+                          <strong>{reading.detectedText.trim() || 'No text detected'}</strong>
+                          {' · '}
+                          Qty {quantityLabel}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <div className="opportunities-placeholder">
+                    {processing
+                      ? 'Reading the overlay text…'
+                      : 'Choose a screenshot to generate a raw OCR readout.'}
+                  </div>
+                )}
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
     </>
@@ -519,6 +570,8 @@ export function OpportunitiesPage() {
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
   const [screenshotImportDetectionPreview, setScreenshotImportDetectionPreview] =
     useState<SetCompletionScreenshotDetectionPreview | null>(null);
+  const [screenshotImportReadings, setScreenshotImportReadings] =
+    useState<SetCompletionOverlayOcrReading[]>([]);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportProgress, setScreenshotImportProgress] =
     useState<SetCompletionScreenshotProgress | null>(null);
@@ -903,6 +956,7 @@ export function OpportunitiesPage() {
 
   const resetScreenshotImportSession = () => {
     setScreenshotImportDetectionPreview(null);
+    setScreenshotImportReadings([]);
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
@@ -930,14 +984,16 @@ export function OpportunitiesPage() {
     setScreenshotImportProcessing(true);
     setScreenshotImportError(null);
     setScreenshotImportDetectionPreview(null);
+    setScreenshotImportReadings([]);
     setScreenshotImportProgress({
       progress: 0,
       stage: 'prepare',
       detail: 'Preparing screenshot detector…',
     });
+    let detectionPreview: SetCompletionScreenshotDetectionPreview | null = null;
 
     try {
-      const detectionPreview = await analyzeSetCompletionInventoryScreenshot(
+      detectionPreview = await analyzeSetCompletionInventoryScreenshot(
         file,
         crop,
         screenshotImportTraceSettings,
@@ -952,9 +1008,39 @@ export function OpportunitiesPage() {
         return previewUrl;
       });
       setScreenshotImportDetectionPreview(detectionPreview);
+      const ocrCells = detectionPreview.cells
+        .filter((cell) => cell.nameLineBoxes.length > 0)
+        .map((cell) => ({
+          rowId: cell.rowId,
+          tileIndex: cell.tileIndex,
+          nameLineBoxes: cell.nameLineBoxes,
+          quantityBox: cell.quantityBox,
+        }));
+
+      if (ocrCells.length) {
+        setScreenshotImportProgress({
+          progress: 0.92,
+          stage: 'ocr',
+          detail: `Reading ${ocrCells.length} detected text regions…`,
+        });
+        const readings = await runSetCompletionOverlayOcr({
+          imageDataUrl: detectionPreview.annotatedPreviewDataUrl,
+          cells: ocrCells,
+        });
+        setScreenshotImportReadings(readings);
+      } else {
+        setScreenshotImportReadings([]);
+      }
+      setScreenshotImportProgress({
+        progress: 1,
+        stage: 'complete',
+        detail: `Read ${ocrCells.length} overlay entries from the screenshot.`,
+      });
     } catch (error) {
-      URL.revokeObjectURL(previewUrl);
-      setScreenshotImportPreviewUrl(null);
+      if (!detectionPreview) {
+        URL.revokeObjectURL(previewUrl);
+        setScreenshotImportPreviewUrl(null);
+      }
       setScreenshotImportError(toErrorMessage(error));
     } finally {
       setScreenshotImportProcessing(false);
@@ -1656,6 +1742,7 @@ export function OpportunitiesPage() {
         fileInputRef={screenshotFileInputRef}
         previewUrl={screenshotImportPreviewUrl}
         detectionPreview={screenshotImportDetectionPreview}
+        readings={screenshotImportReadings}
         processing={screenshotImportProcessing}
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
