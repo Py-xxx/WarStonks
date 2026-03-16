@@ -5,6 +5,7 @@ import {
   createWfmBuyOrder,
   deleteWfmBuyOrder,
   ensureMarketTracking,
+  getCachedWfmProfileTradeLog,
   getWfmTradeSessionState,
   getWfmAutocompleteItems,
   getAppSettings,
@@ -66,6 +67,10 @@ import {
   findMissingWatchlistBuyOrderIds,
   indexTradeBuyOrdersByVariant,
 } from '../lib/watchlistTradeSync';
+import {
+  findActiveWatchlistBuyOrder,
+  hasRecentClosedBuyTradeAtPrice,
+} from '../lib/watchlistPurchase';
 import { orderQuickViewVariants } from '../lib/marketVariantFallback';
 import type {
   HomeSubTab,
@@ -334,6 +339,74 @@ function findMatchingBuyOrderId(
 
   matchingOrders.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   return matchingOrders[0]?.orderId ?? null;
+}
+
+function findBuyOrderById(
+  buyOrders: TradeOverview['buyOrders'],
+  orderId: string,
+): TradeOverview['buyOrders'][number] | null {
+  return buyOrders.find((order) => order.orderId === orderId) ?? null;
+}
+
+function isBuyOrderConfirmedForPurchase(input: {
+  order: TradeOverview['buyOrders'][number] | null;
+  expectedPrice: number;
+  expectedRank: number | null;
+}): boolean {
+  const { order, expectedPrice, expectedRank } = input;
+  return Boolean(
+    order
+    && order.yourPrice === expectedPrice
+    && order.quantity === 1
+    && order.visible
+    && order.rank === expectedRank,
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function confirmWatchlistBuyOrderReadyForClose(input: {
+  overview: TradeOverview;
+  orderId: string;
+  expectedPrice: number;
+  expectedRank: number | null;
+  sellerMode: SellerMode;
+}): Promise<TradeOverview> {
+  const { orderId, expectedPrice, expectedRank, sellerMode } = input;
+  let latestOverview = input.overview;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const matchingOrder = findBuyOrderById(latestOverview.buyOrders, orderId);
+    if (
+      isBuyOrderConfirmedForPurchase({
+        order: matchingOrder,
+        expectedPrice,
+        expectedRank,
+      })
+    ) {
+      return latestOverview;
+    }
+
+    await delay(175);
+    latestOverview = await getWfmTradeOverview(sellerMode);
+  }
+
+  throw new Error('Failed to confirm the updated buy order price before closing the order.');
+}
+
+function clearLinkedBuyOrderFromWatchlistState(
+  watchlist: WatchlistItem[],
+  id: string,
+): WatchlistItem[] {
+  return watchlist.map((entry) =>
+    entry.id === id && entry.linkedBuyOrderId !== null
+      ? { ...entry, linkedBuyOrderId: null }
+      : entry,
+  );
 }
 
 async function getAutocompleteCatalog(): Promise<WfmAutocompleteItem[]> {
@@ -1167,7 +1240,10 @@ interface AppStore {
     targetPrice: number,
   ) => void;
   removeWatchlistItem: (id: string) => void;
-  markWatchlistItemBought: (id: string, price: number) => Promise<void>;
+  markWatchlistItemBought: (
+    id: string,
+    price: number,
+  ) => Promise<{ confirmationMessage: string }>;
   handleDetectedTradeBuys: (buys: TradeDetectedBuy[]) => Promise<void>;
   dismissAlert: (id: string) => void;
   clearAllAlerts: () => void;
@@ -2322,12 +2398,81 @@ export const useAppStore = create<AppStore>((set, get) => ({
       throw new Error('Bought price must be greater than zero.');
     }
 
-    if (item.linkedBuyOrderId) {
-      const expectedRank = deriveVariantRankFromKey(item.variantKey);
-      if (item.targetPrice !== normalizedPrice) {
-        await updateWfmBuyOrder(
+    const expectedRank = deriveVariantRankFromKey(item.variantKey);
+    const clearLinkedBuyOrder = () => {
+      set((currentState) => {
+        const nextWatchlist = clearLinkedBuyOrderFromWatchlistState(currentState.watchlist, id);
+        if (isSameWatchlistSequence(nextWatchlist, currentState.watchlist)) {
+          return currentState;
+        }
+
+        writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
+        return { watchlist: nextWatchlist };
+      });
+    };
+
+    if (state.tradeAccount) {
+      const activeOverview = await getWfmTradeOverview(state.sellerMode);
+      const activeBuyOrder = findActiveWatchlistBuyOrder(item, activeOverview.buyOrders);
+
+      if (activeBuyOrder) {
+        let latestOverview = activeOverview;
+        if (
+          !isBuyOrderConfirmedForPurchase({
+            order: activeBuyOrder,
+            expectedPrice: normalizedPrice,
+            expectedRank,
+          })
+        ) {
+          latestOverview = await updateWfmBuyOrder(
+            {
+              orderId: activeBuyOrder.orderId,
+              price: normalizedPrice,
+              quantity: 1,
+              rank: expectedRank,
+              visible: true,
+            },
+            state.sellerMode,
+          );
+          latestOverview = await confirmWatchlistBuyOrderReadyForClose({
+            overview: latestOverview,
+            orderId: activeBuyOrder.orderId,
+            expectedPrice: normalizedPrice,
+            expectedRank,
+            sellerMode: state.sellerMode,
+          });
+        }
+
+        await closeWfmBuyOrder(activeBuyOrder.orderId, 1, state.sellerMode);
+        clearLinkedBuyOrder();
+        get().removeWatchlistItem(id);
+        return { confirmationMessage: 'Item has been marked as bought.' };
+      }
+
+      const cachedTradeLog = await getCachedWfmProfileTradeLog(state.tradeAccount.name).catch(
+        () => null,
+      );
+      if (
+        cachedTradeLog
+        && hasRecentClosedBuyTradeAtPrice(
+          item,
+          normalizedPrice,
+          cachedTradeLog.entries,
+          Date.now(),
+        )
+      ) {
+        clearLinkedBuyOrder();
+        get().removeWatchlistItem(id);
+        return { confirmationMessage: 'Item has been marked as bought.' };
+      }
+
+      const resolvedItem = await resolveWatchlistWfmIdentity(
+        buildAutocompleteItemFromWatchlistEntry(item),
+      );
+      if (resolvedItem.wfmId) {
+        let createdOverview = await createWfmBuyOrder(
           {
-            orderId: item.linkedBuyOrderId,
+            wfmId: resolvedItem.wfmId,
             price: normalizedPrice,
             quantity: 1,
             rank: expectedRank,
@@ -2335,19 +2480,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
           },
           state.sellerMode,
         );
-      }
+        const createdOrderId =
+          findMatchingBuyOrderId(resolvedItem, item.variantKey, normalizedPrice, createdOverview);
+        if (!createdOrderId) {
+          throw new Error('Created the buy order but could not confirm it before closing.');
+        }
+        await confirmWatchlistBuyOrderReadyForClose({
+          overview: createdOverview,
+          orderId: createdOrderId,
+          expectedPrice: normalizedPrice,
+          expectedRank,
+          sellerMode: state.sellerMode,
+        });
 
-      await closeWfmBuyOrder(item.linkedBuyOrderId, 1, state.sellerMode);
-      set((currentState) => {
-        const nextWatchlist = currentState.watchlist.map((entry) =>
-          entry.id === id ? { ...entry, linkedBuyOrderId: null } : entry,
-        );
-        writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
-        return { watchlist: nextWatchlist };
-      });
+        await closeWfmBuyOrder(createdOrderId, 1, state.sellerMode);
+      }
     }
 
+    clearLinkedBuyOrder();
     get().removeWatchlistItem(id);
+    return { confirmationMessage: 'Item has been marked as bought.' };
   },
   handleDetectedTradeBuys: async (buys) => {
     if (!buys.length) {

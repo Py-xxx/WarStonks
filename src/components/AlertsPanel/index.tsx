@@ -45,16 +45,20 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   } | null>(null);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
 
   const totalAlerts = alerts.length + systemAlerts.length;
 
   if (totalAlerts === 0) {
     return (
-      <div className="empty-state">
-        <span className="empty-primary">No active alerts</span>
-        <span className="empty-sub">
-          Alerts appear when a watchlist item reaches your target price or a worldstate feed fails.
-        </span>
+      <div>
+        {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
+        <div className="empty-state">
+          <span className="empty-primary">No active alerts</span>
+          <span className="empty-sub">
+            Alerts appear when a watchlist item reaches your target price or a worldstate feed fails.
+          </span>
+        </div>
       </div>
     );
   }
@@ -64,6 +68,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
 
   return (
     <div className={`alerts-panel${compact ? ' compact' : ''}`}>
+      {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
       {visibleSystemAlerts.length > 0 ? (
         <div className="alerts-section alerts-section-card">
           <div className="alerts-section-header">
@@ -243,6 +248,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                           (item) => item.id === alert.watchlistId,
                         );
                         setPurchaseError(null);
+                        setPurchaseSuccess(null);
                         setPurchaseModal({
                           watchlistId: alert.watchlistId,
                           itemName: alert.itemName,
@@ -292,7 +298,8 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
             setPurchaseLoading(true);
             setPurchaseError(null);
             void markWatchlistItemBought(purchaseModal.watchlistId, price)
-              .then(() => {
+              .then((result) => {
+                setPurchaseSuccess(result.confirmationMessage);
                 setPurchaseModal(null);
               })
               .catch((error) => {

@@ -136,6 +136,7 @@ function WatchlistCard() {
   const [purchaseItemId, setPurchaseItemId] = useState<string | null>(null);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
   const [copiedWatchlistId, setCopiedWatchlistId] = useState<string | null>(null);
   const watchlistRows = watchlist.map((item) => ({
     item,
@@ -153,6 +154,8 @@ function WatchlistCard() {
       <div className="card-body card-body-compact">
         <WatchlistAddControls compact />
       </div>
+
+      {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
 
       {watchlist.length === 0 ? (
         <div className="empty-state">
@@ -200,6 +203,7 @@ function WatchlistCard() {
                           onClick={(event) => {
                             event.stopPropagation();
                             setPurchaseError(null);
+                            setPurchaseSuccess(null);
                             setPurchaseItemId(item.id);
                           }}
                         >
@@ -278,7 +282,8 @@ function WatchlistCard() {
             setPurchaseLoading(true);
             setPurchaseError(null);
             void markWatchlistItemBought(purchaseItem.id, price)
-              .then(() => {
+              .then((result) => {
+                setPurchaseSuccess(result.confirmationMessage);
                 setPurchaseItemId(null);
               })
               .catch((error) => {

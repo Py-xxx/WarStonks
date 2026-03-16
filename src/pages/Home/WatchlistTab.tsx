@@ -19,6 +19,7 @@ export function WatchlistTab() {
   const [purchaseItemId, setPurchaseItemId] = useState<string | null>(null);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
   const [copiedWatchlistId, setCopiedWatchlistId] = useState<string | null>(null);
   const purchaseItem = watchlist.find((item) => item.id === purchaseItemId) ?? null;
 
@@ -32,6 +33,8 @@ export function WatchlistTab() {
       <div className="watchlist-controls-card">
         <WatchlistAddControls />
       </div>
+
+      {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
 
       <div className="card">
         {watchlist.length === 0 ? (
@@ -111,6 +114,7 @@ export function WatchlistTab() {
                             onClick={(event) => {
                               event.stopPropagation();
                               setPurchaseError(null);
+                              setPurchaseSuccess(null);
                               setPurchaseItemId(item.id);
                             }}
                           >
@@ -183,7 +187,8 @@ export function WatchlistTab() {
             setPurchaseLoading(true);
             setPurchaseError(null);
             void markWatchlistItemBought(purchaseItem.id, price)
-              .then(() => {
+              .then((result) => {
+                setPurchaseSuccess(result.confirmationMessage);
                 setPurchaseItemId(null);
               })
               .catch((error) => {
