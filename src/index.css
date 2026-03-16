@@ -8017,6 +8017,23 @@ body {
   isolation: isolate;
 }
 
+.market-panel,
+.market-panel.card,
+.market-panel .card-body,
+.market-summary-grid-shell,
+.market-hero-shell {
+  overflow: visible;
+}
+
+.market-panel,
+.market-summary-grid-shell,
+.market-hero-shell,
+.market-analytics-grid,
+.market-analysis-layout,
+.market-analysis-column {
+  isolation: isolate;
+}
+
 .market-chart-card,
 .market-volume-card {
   border: 1px solid var(--border);
