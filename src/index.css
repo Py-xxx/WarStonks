@@ -2104,13 +2104,6 @@ body {
   gap: 16px;
 }
 
-.startup-logo-image {
-  display: block;
-  width: auto;
-  height: 46px;
-  object-fit: contain;
-}
-
 .startup-eyebrow {
   margin-bottom: 10px;
   font-family: 'JetBrains Mono', monospace;
