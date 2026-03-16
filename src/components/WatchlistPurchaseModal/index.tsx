@@ -29,12 +29,18 @@ export function WatchlistPurchaseModal({
   }
 
   return createPortal(
-    <div className="modal-backdrop" role="presentation" onClick={loading ? undefined : onClose}>
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
       <div
         className="settings-modal watchlist-purchase-modal watchlist-purchase-modal-fullscreen"
         role="dialog"
         aria-modal="true"
         aria-labelledby="watchlist-purchase-modal-title"
+        onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="settings-modal-header">
@@ -42,15 +48,6 @@ export function WatchlistPurchaseModal({
             <span className="card-label">Watchlist</span>
             <h3 id="watchlist-purchase-modal-title">Mark as bought</h3>
           </div>
-          <button
-            className="settings-close-btn"
-            type="button"
-            onClick={onClose}
-            aria-label="Close mark as bought modal"
-            disabled={loading}
-          >
-            ×
-          </button>
         </div>
 
         <div className="settings-modal-body">
