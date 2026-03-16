@@ -22,6 +22,11 @@ import {
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
+import {
+  clearWatchlistAddFeedbackTimeouts,
+  markWatchlistAddFeedback,
+  WATCHLIST_ADD_SUCCESS_MESSAGE,
+} from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   ArbitrageScannerComponentEntry,
@@ -443,6 +448,7 @@ function SetPlannerRow({
   onToggle,
   targetInputs,
   ownedRelicHints,
+  recentlyAddedKeys,
   onTargetChange,
   onAddToWatchlist,
 }: {
@@ -451,6 +457,7 @@ function SetPlannerRow({
   onToggle: () => void;
   targetInputs: Record<string, string>;
   ownedRelicHints: Map<string, PlannerOwnedRelicHint[]>;
+  recentlyAddedKeys: Record<string, boolean>;
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
 }) {
@@ -588,14 +595,19 @@ function SetPlannerRow({
                         value={effectiveTarget}
                         onChange={(event) => onTargetChange(component, event.target.value)}
                       />
-                      <button
-                        className="btn-sm scanner-component-watch-button"
-                        type="button"
-                        disabled={!effectiveTarget.trim() || !component.itemId}
-                        onClick={() => onAddToWatchlist(component)}
-                      >
-                        Add to Watchlist
-                      </button>
+                      <div className="watchlist-add-feedback-stack">
+                        {recentlyAddedKeys[targetKey] ? (
+                          <span className="watchlist-add-success">{WATCHLIST_ADD_SUCCESS_MESSAGE}</span>
+                        ) : null}
+                        <button
+                          className="btn-sm scanner-component-watch-button"
+                          type="button"
+                          disabled={!effectiveTarget.trim() || !component.itemId}
+                          onClick={() => onAddToWatchlist(component)}
+                        >
+                          Add to Watchlist
+                        </button>
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -910,7 +922,9 @@ export function OpportunitiesPage() {
   const [screenshotImportRows, setScreenshotImportRows] = useState<
     ScreenshotImportRowState[]
   >([]);
+  const [watchlistAddFeedback, setWatchlistAddFeedback] = useState<Record<string, boolean>>({});
   const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
+  const watchlistAddFeedbackTimeoutsRef = useRef(new Map<string, number>());
 
   const screenshotImportTraceSettings = useMemo<SetCompletionTraceSettings>(
     () => ({
@@ -973,6 +987,13 @@ export function OpportunitiesPage() {
       cancelled = true;
     };
   }, [activeTab]);
+
+  useEffect(
+    () => () => {
+      clearWatchlistAddFeedbackTimeouts(watchlistAddFeedbackTimeoutsRef);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (activeTab !== 'farm-now') {
@@ -1782,6 +1803,11 @@ export function OpportunitiesPage() {
     };
 
     addExplicitItemToWatchlist(watchlistItem, 'base', 'Base Market', targetPrice);
+    markWatchlistAddFeedback(
+      `${setSlug}:${component.slug}`,
+      setWatchlistAddFeedback,
+      watchlistAddFeedbackTimeoutsRef,
+    );
   };
 
   const noScanAvailable = !loading && !(scannerResponse?.results?.length);
@@ -1893,6 +1919,7 @@ export function OpportunitiesPage() {
                       }
                       targetInputs={plannerTargetInputs}
                       ownedRelicHints={plannerOwnedRelicHints}
+                      recentlyAddedKeys={watchlistAddFeedback}
                       onTargetChange={(component, value) =>
                         handlePlannerTargetChange(component, value, planner.entry.slug)
                       }
