@@ -1615,7 +1615,6 @@ function PnlSummaryTab({
               <div className={`info-card-val${summary.realizedProfit >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.realizedProfit)}
               </div>
-              <div className="info-card-note">Closed sells with local cost basis matching.</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
@@ -1626,7 +1625,6 @@ function PnlSummaryTab({
                 />
               </div>
               <div className="info-card-val neutral">{formatPlatinumValue(summary.unrealizedValue)}</div>
-              <div className="info-card-note">Open buys and kept inventory at current local estimates.</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
@@ -1639,7 +1637,6 @@ function PnlSummaryTab({
               <div className={`info-card-val${summary.totalPnl >= 0 ? '' : ' negative'}`}>
                 {formatSignedPlatinumValue(summary.totalPnl)}
               </div>
-              <div className="info-card-note">Realized result plus estimated open-position mark-to-market.</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
@@ -1647,7 +1644,6 @@ function PnlSummaryTab({
                 <InfoHint text="Total platinum still tied up in open buys and kept inventory." />
               </div>
               <div className="info-card-val neutral">{formatPlatinumValue(summary.openExposure)}</div>
-              <div className="info-card-note">Capital still deployed in open and kept positions.</div>
             </div>
           </div>
 
