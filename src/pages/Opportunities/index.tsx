@@ -85,6 +85,13 @@ type PlannerCatalogItem = {
   imagePath: string | null;
 };
 
+type PlannerOwnedRelicHint = {
+  key: string;
+  label: string;
+  fullName: string;
+  totalCount: number;
+};
+
 type ScreenshotImportPreparedScreenshot = {
   id: string;
   fileName: string;
@@ -373,6 +380,7 @@ function SetPlannerRow({
   expanded,
   onToggle,
   targetInputs,
+  ownedRelicHints,
   onTargetChange,
   onAddToWatchlist,
 }: {
@@ -380,6 +388,7 @@ function SetPlannerRow({
   expanded: boolean;
   onToggle: () => void;
   targetInputs: Record<string, string>;
+  ownedRelicHints: Map<string, PlannerOwnedRelicHint[]>;
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
 }) {
@@ -434,6 +443,12 @@ function SetPlannerRow({
               const targetKey = `${planner.entry.slug}:${component.slug}`;
               const effectiveTarget =
                 targetInputs[targetKey] ?? buildPlannerDefaultTarget(component);
+              const relicHints =
+                (component.itemId !== null
+                  ? ownedRelicHints.get(`item:${component.itemId}`)
+                  : undefined) ??
+                ownedRelicHints.get(`slug:${component.slug}`) ??
+                [];
 
               return (
                 <div
@@ -476,6 +491,27 @@ function SetPlannerRow({
                           </span>
                         </span>
                       </div>
+                      {componentState.missingQuantity > 0 && relicHints.length > 0 ? (
+                        <div className="planner-component-relics">
+                          <span className="planner-component-relics-label">Owned relics</span>
+                          <div className="planner-component-relic-pill-list">
+                            {relicHints.slice(0, 4).map((relic) => (
+                              <span
+                                key={`${component.slug}-${relic.key}`}
+                                className="planner-component-relic-pill"
+                                title={relic.fullName}
+                              >
+                                {relic.label} ×{relic.totalCount}
+                              </span>
+                            ))}
+                            {relicHints.length > 4 ? (
+                              <span className="planner-component-relic-pill planner-component-relic-pill-more">
+                                +{relicHints.length - 4} more
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 
@@ -910,6 +946,14 @@ export function OpportunitiesPage() {
   }, [activeTab]);
 
   useEffect(() => {
+    if (activeTab !== 'set-planner') {
+      return;
+    }
+
+    void loadOwnedRelics();
+  }, [activeTab]);
+
+  useEffect(() => {
     if (activeTab !== 'farm-now') {
       return;
     }
@@ -1126,6 +1170,49 @@ export function OpportunitiesPage() {
       profitableSetCount,
     };
   }, [plannerEntries]);
+
+  const plannerOwnedRelicHints = useMemo(() => {
+    const byDropKey = new Map<string, PlannerOwnedRelicHint[]>();
+
+    for (const relic of ownedRelics) {
+      if ((relic.counts?.total ?? 0) <= 0) {
+        continue;
+      }
+
+      const hint: PlannerOwnedRelicHint = {
+        key: `${relic.tier}:${relic.code}`,
+        label: `${relic.tier} ${relic.code}`,
+        fullName: relic.name,
+        totalCount: relic.counts.total,
+      };
+
+      for (const drop of relic.drops) {
+        const keys = [
+          drop.itemId !== null ? `item:${drop.itemId}` : null,
+          drop.slug ? `slug:${drop.slug}` : null,
+        ].filter((value): value is string => Boolean(value));
+
+        for (const key of keys) {
+          const existing = byDropKey.get(key) ?? [];
+          if (!existing.some((entry) => entry.key === hint.key)) {
+            existing.push(hint);
+            byDropKey.set(key, existing);
+          }
+        }
+      }
+    }
+
+    for (const hints of byDropKey.values()) {
+      hints.sort((left, right) => {
+        if (right.totalCount !== left.totalCount) {
+          return right.totalCount - left.totalCount;
+        }
+        return left.label.localeCompare(right.label);
+      });
+    }
+
+    return byDropKey;
+  }, [ownedRelics]);
 
   const farmNowRelics = useMemo<FarmNowRelicRow[]>(() => {
     const relics = farmNowScan?.relicRoiResults ?? [];
@@ -1607,6 +1694,7 @@ export function OpportunitiesPage() {
                         )
                       }
                       targetInputs={plannerTargetInputs}
+                      ownedRelicHints={plannerOwnedRelicHints}
                       onTargetChange={(component, value) =>
                         handlePlannerTargetChange(component, value, planner.entry.slug)
                       }
