@@ -393,7 +393,6 @@ function SetPlannerRow({
             {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{planner.entry.name.slice(0, 1)}</span>}
           </span>
           <div className="planner-set-copy">
-            <span className="panel-title-eyebrow">Set Completion Planner</span>
             <strong>{planner.entry.name}</strong>
             <span className="planner-set-note">
               {planner.ownedComponentCount}/{planner.totalComponentCount} components owned
