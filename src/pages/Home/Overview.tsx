@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { WatchlistPurchaseModal } from '../../components/WatchlistPurchaseModal';
 import { formatElapsedTime, formatShortLocalDateTime } from '../../lib/dateTime';
+import { buildWatchlistMarketSignals } from '../../lib/watchlistMarketSignals';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
@@ -11,8 +12,6 @@ import type { ItemAnalysisResponse, WfmTopSellOrder } from '../../types';
 
 const COPY_RESET_DELAY_MS = 1800;
 const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
-const PENDING_METRIC_VALUE = '--';
-
 const colorMap = {
   green: 'var(--accent-green)',
   amber: 'var(--accent-amber)',
@@ -401,32 +400,33 @@ function EventsCard() {
 }
 
 function MetricsRow() {
+  const watchlist = useAppStore((state) => state.watchlist);
+  const signals = useMemo(() => buildWatchlistMarketSignals(watchlist), [watchlist]);
+
   return (
     <div className="metrics-row">
-      <div className="card metric-card">
-        <div className="card-label">Best Score</div>
-        <div className="metric-value">{PENDING_METRIC_VALUE}</div>
-        <div className="metric-sub">Analysis pending</div>
-        <div className="metric-bar">
-          <div className="metric-bar-fill" style={{ width: '0%', background: colorMap.green }} />
+      {signals.map((signal) => (
+        <div key={signal.key} className="card metric-card" title={signal.tooltip}>
+          <div className="card-label">{signal.label}</div>
+          <div className="metric-value">{signal.valueText}</div>
+          <div className="metric-sub">{signal.subtitle}</div>
+          <div className="metric-bar">
+            <div
+              className="metric-bar-fill"
+              style={{
+                width: `${signal.fillPct}%`,
+                background:
+                  signal.tone === 'green'
+                    ? colorMap.green
+                    : signal.tone === 'red'
+                      ? colorMap.red
+                      : colorMap.amber,
+                opacity: signal.key === 'volatility' ? 0.8 : 1,
+              }}
+            />
+          </div>
         </div>
-      </div>
-      <div className="card metric-card">
-        <div className="card-label">Avg Efficiency</div>
-        <div className="metric-value">{PENDING_METRIC_VALUE}</div>
-        <div className="metric-sub">Analysis pending</div>
-        <div className="metric-bar">
-          <div className="metric-bar-fill" style={{ width: '0%', background: colorMap.amber }} />
-        </div>
-      </div>
-      <div className="card metric-card">
-        <div className="card-label">Market Volatility</div>
-        <div className="metric-value">{PENDING_METRIC_VALUE}</div>
-        <div className="metric-sub">24h abs move</div>
-        <div className="metric-bar">
-          <div className="metric-bar-fill" style={{ width: '0%', background: colorMap.red, opacity: 0.7 }} />
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
