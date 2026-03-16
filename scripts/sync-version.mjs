@@ -10,19 +10,33 @@ const cargoTomlPath = path.join(projectRoot, 'src-tauri', 'Cargo.toml');
 const tauriConfigPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
 
 function updateCargoVersion(cargoToml, version) {
-  const packageSectionMatch = cargoToml.match(
-    /^(\[package\]\n[\s\S]*?)(^version = )\"([^\"]+)\"/m,
-  );
+  const lineEnding = cargoToml.includes('\r\n') ? '\r\n' : '\n';
+  const lines = cargoToml.split(/\r?\n/);
+  let insidePackageSection = false;
+  let updated = false;
 
-  if (!packageSectionMatch) {
+  const nextLines = lines.map((line) => {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      insidePackageSection = trimmed === '[package]';
+      return line;
+    }
+
+    if (insidePackageSection && trimmed.startsWith('version = ')) {
+      updated = true;
+      const indentation = line.match(/^\s*/)?.[0] ?? '';
+      return `${indentation}version = "${version}"`;
+    }
+
+    return line;
+  });
+
+  if (!updated) {
     throw new Error('Failed to locate the [package] version in src-tauri/Cargo.toml');
   }
 
-  const [, packageSection, versionPrefix] = packageSectionMatch;
-  return cargoToml.replace(
-    `${packageSection}${versionPrefix}"${packageSectionMatch[3]}"`,
-    `${packageSection}${versionPrefix}"${version}"`,
-  );
+  return nextLines.join(lineEnding);
 }
 
 function updateTauriConfigVersion(configText, version) {
