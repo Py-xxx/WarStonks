@@ -69,9 +69,6 @@ pub struct RelicTierIcon {
 pub struct SetCompletionOverlayCropImage {
     pub row_id: String,
     pub tile_index: usize,
-    pub cell_folder_name: String,
-    pub kind: String,
-    pub line_index: Option<usize>,
     pub filename: String,
     pub image_data_url: String,
 }
@@ -81,7 +78,6 @@ pub struct SetCompletionOverlayCropImage {
 pub struct SetCompletionOverlayCropSaveResult {
     pub directory: String,
     pub saved_count: usize,
-    pub saved_cell_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,27 +274,6 @@ fn sanitize_overlay_crop_filename(filename: &str, fallback_index: usize) -> Stri
     }
 }
 
-fn sanitize_overlay_crop_folder_name(name: &str, fallback_index: usize) -> String {
-    let folder = name
-        .trim()
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string();
-    if folder.is_empty() {
-        format!("set-completion-cell-{:02}", fallback_index + 1)
-    } else {
-        folder
-    }
-}
-
 #[tauri::command]
 pub fn save_set_completion_overlay_crop_images(
     app: tauri::AppHandle,
@@ -320,16 +295,10 @@ pub fn save_set_completion_overlay_crop_images(
         .map_err(|error| format!("Failed to create overlay crop export directory: {error}"))?;
 
     let mut saved_count = 0usize;
-    let mut saved_folders = std::collections::HashSet::new();
     for (index, crop) in crops.iter().enumerate() {
         let bytes = extract_data_url_png_bytes(&crop.image_data_url)?;
-        let folder_name = sanitize_overlay_crop_folder_name(&crop.cell_folder_name, crop.tile_index);
-        let target_dir = export_dir.join(folder_name);
-        std::fs::create_dir_all(&target_dir)
-            .map_err(|error| format!("Failed to create overlay crop cell directory '{}': {error}", target_dir.display()))?;
-        saved_folders.insert(target_dir.clone());
         let filename = sanitize_overlay_crop_filename(&crop.filename, index);
-        let target = target_dir.join(filename);
+        let target = export_dir.join(filename);
         std::fs::write(&target, bytes)
             .map_err(|error| format!("Failed to write overlay crop image '{}': {error}", target.display()))?;
         saved_count += 1;
@@ -338,7 +307,6 @@ pub fn save_set_completion_overlay_crop_images(
     Ok(SetCompletionOverlayCropSaveResult {
         directory: export_dir.display().to_string(),
         saved_count,
-        saved_cell_count: saved_folders.len(),
     })
 }
 

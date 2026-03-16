@@ -47,9 +47,6 @@ export interface SetCompletionScreenshotDetectionPreview {
 export interface SetCompletionOverlayCropImage {
   rowId: string;
   tileIndex: number;
-  cellFolderName: string;
-  kind: 'line' | 'quantity';
-  lineIndex: number | null;
   filename: string;
   imageDataUrl: string;
 }
@@ -237,48 +234,27 @@ export async function buildSetCompletionOverlayCropImages(
   }
   overlayContext.drawImage(overlayImage, 0, 0, overlayImage.naturalWidth, overlayImage.naturalHeight);
 
-  return detectionPreview.cells.flatMap((cell) => {
-    const cellFolderName = `set-completion-cell-${String(cell.tileIndex + 1).padStart(2, '0')}`;
-    const crops: SetCompletionOverlayCropImage[] = cell.nameLineBoxes.map((lineBox, index) => {
+  return detectionPreview.cells
+    .map((cell) => {
+      const cropBounds = buildOverlayCropBounds(cell);
+      if (!cropBounds) {
+        return null;
+      }
       const cropCanvas = extractPixelCanvas(
         overlayCanvas,
-        lineBox.x,
-        lineBox.y,
-        lineBox.width,
-        lineBox.height,
+        cropBounds.x,
+        cropBounds.y,
+        cropBounds.width,
+        cropBounds.height,
       );
       return {
         rowId: cell.rowId,
         tileIndex: cell.tileIndex,
-        cellFolderName,
-        kind: 'line',
-        lineIndex: index + 1,
-        filename: `line-${index + 1}.png`,
+        filename: `set-completion-cell-${String(cell.tileIndex + 1).padStart(2, '0')}.png`,
         imageDataUrl: cropCanvas.toDataURL('image/png'),
-      };
-    });
-
-    if (cell.quantityBox) {
-      const quantityCanvas = extractPixelCanvas(
-        overlayCanvas,
-        cell.quantityBox.x,
-        cell.quantityBox.y,
-        cell.quantityBox.width,
-        cell.quantityBox.height,
-      );
-      crops.push({
-        rowId: cell.rowId,
-        tileIndex: cell.tileIndex,
-        cellFolderName,
-        kind: 'quantity',
-        lineIndex: null,
-        filename: 'quantity.png',
-        imageDataUrl: quantityCanvas.toDataURL('image/png'),
-      });
-    }
-
-    return crops;
-  });
+      } satisfies SetCompletionOverlayCropImage;
+    })
+    .filter((crop): crop is SetCompletionOverlayCropImage => crop !== null);
 }
 
 async function loadFileImage(file: File): Promise<HTMLImageElement> {
@@ -687,6 +663,54 @@ function drawOverlayBoxes(
       strokeBox(context, cell.quantityBox, '#3dd68c', 3);
     }
   }
+}
+
+function buildOverlayCropBounds(
+  cell: SetCompletionDetectionCell,
+): SetCompletionDetectionBox | null {
+  const boxes = [...cell.nameLineBoxes];
+  if (cell.quantityBox) {
+    boxes.push(cell.quantityBox);
+  }
+  if (!boxes.length) {
+    return null;
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = -1;
+  let maxY = -1;
+  for (const box of boxes) {
+    minX = Math.min(minX, box.x);
+    minY = Math.min(minY, box.y);
+    maxX = Math.max(maxX, box.x + box.width - 1);
+    maxY = Math.max(maxY, box.y + box.height - 1);
+  }
+  if (maxX < minX || maxY < minY) {
+    return null;
+  }
+
+  const horizontalPadding = Math.max(10, Math.round((maxX - minX + 1) * 0.08));
+  const verticalPadding = Math.max(8, Math.round((maxY - minY + 1) * 0.1));
+  const left = clamp(minX - horizontalPadding, cell.itemBox.x, cell.itemBox.x + cell.itemBox.width - 1);
+  const top = clamp(minY - verticalPadding, cell.itemBox.y, cell.itemBox.y + cell.itemBox.height - 1);
+  const right = clamp(
+    maxX + horizontalPadding,
+    left,
+    cell.itemBox.x + cell.itemBox.width - 1,
+  );
+  const bottom = clamp(
+    maxY + verticalPadding,
+    top,
+    cell.itemBox.y + cell.itemBox.height - 1,
+  );
+
+  return {
+    x: left,
+    y: top,
+    width: right - left + 1,
+    height: bottom - top + 1,
+  };
 }
 
 function strokeBox(
