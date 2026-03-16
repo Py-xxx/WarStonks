@@ -929,9 +929,12 @@ export function OpportunitiesPage() {
     setOwnedRelicsError(null);
 
     try {
-      const cache = force
+      let cache = force
         ? await refreshOwnedRelicInventory()
         : await getOwnedRelicInventoryCache();
+      if (!force && (!cache.updatedAt || cache.entries.length === 0)) {
+        cache = await refreshOwnedRelicInventory();
+      }
       setOwnedRelics(cache.entries);
       setOwnedRelicsLoaded(true);
       setOwnedRelicsUpdatedAt(cache.updatedAt);
