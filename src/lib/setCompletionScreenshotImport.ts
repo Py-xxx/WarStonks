@@ -37,18 +37,10 @@ export interface SetCompletionDetectionCell {
 
 export interface SetCompletionScreenshotDetectionPreview {
   annotatedPreviewDataUrl: string;
-  overlayPreviewDataUrl: string;
   detectedItemCount: number;
   quantityCount: number;
   nameCount: number;
   cells: SetCompletionDetectionCell[];
-}
-
-export interface SetCompletionOverlayCropImage {
-  rowId: string;
-  tileIndex: number;
-  filename: string;
-  imageDataUrl: string;
 }
 
 interface TileDescriptor {
@@ -204,7 +196,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
     });
   }
 
-  const overlayPreviewDataUrl = previewCanvas.toDataURL('image/png');
   drawOverlayBoxes(previewContext, cells);
 
   onProgress?.({
@@ -215,46 +206,11 @@ export async function analyzeSetCompletionInventoryScreenshot(
 
   return {
     annotatedPreviewDataUrl: previewCanvas.toDataURL('image/png'),
-    overlayPreviewDataUrl,
     detectedItemCount: cells.length,
     quantityCount: cells.filter((cell) => cell.quantityBox !== null).length,
     nameCount: cells.filter((cell) => cell.nameBox !== null).length,
     cells,
   };
-}
-
-export async function buildSetCompletionOverlayCropImages(
-  detectionPreview: SetCompletionScreenshotDetectionPreview,
-): Promise<SetCompletionOverlayCropImage[]> {
-  const overlayImage = await loadImageFromUrl(detectionPreview.overlayPreviewDataUrl);
-  const overlayCanvas = createCanvas(overlayImage.naturalWidth, overlayImage.naturalHeight);
-  const overlayContext = overlayCanvas.getContext('2d');
-  if (!overlayContext) {
-    throw new Error('Could not prepare overlay crop canvas.');
-  }
-  overlayContext.drawImage(overlayImage, 0, 0, overlayImage.naturalWidth, overlayImage.naturalHeight);
-
-  return detectionPreview.cells
-    .map((cell) => {
-      const cropBounds = buildOverlayCropBounds(cell);
-      if (!cropBounds) {
-        return null;
-      }
-      const cropCanvas = extractPixelCanvas(
-        overlayCanvas,
-        cropBounds.x,
-        cropBounds.y,
-        cropBounds.width,
-        cropBounds.height,
-      );
-      return {
-        rowId: cell.rowId,
-        tileIndex: cell.tileIndex,
-        filename: `set-completion-cell-${String(cell.tileIndex + 1).padStart(2, '0')}.png`,
-        imageDataUrl: cropCanvas.toDataURL('image/png'),
-      } satisfies SetCompletionOverlayCropImage;
-    })
-    .filter((crop): crop is SetCompletionOverlayCropImage => crop !== null);
 }
 
 async function loadFileImage(file: File): Promise<HTMLImageElement> {
@@ -268,14 +224,6 @@ async function loadFileImage(file: File): Promise<HTMLImageElement> {
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
-}
-
-async function loadImageFromUrl(url: string): Promise<HTMLImageElement> {
-  const image = new Image();
-  image.decoding = 'async';
-  image.src = url;
-  await image.decode();
-  return image;
 }
 
 async function loadTemplates(): Promise<{ qty: TemplateMask }> {
@@ -398,12 +346,6 @@ function analyzeTileMask(
   quantityBox: SetCompletionDetectionBox | null;
 } {
   const previewCanvas = createCanvas(tileMask.width, tileMask.height);
-  const previewContext = previewCanvas.getContext('2d');
-  if (!previewContext) {
-    throw new Error('Could not create processed overlay canvas.');
-  }
-  previewContext.fillStyle = '#000000';
-  previewContext.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
   const badgeRegionRect = toPixelRegion(tileMask, BADGE_REGION);
   const badgeMask = extractPixelCanvas(
     tileMask,
@@ -663,54 +605,6 @@ function drawOverlayBoxes(
       strokeBox(context, cell.quantityBox, '#3dd68c', 3);
     }
   }
-}
-
-function buildOverlayCropBounds(
-  cell: SetCompletionDetectionCell,
-): SetCompletionDetectionBox | null {
-  const boxes = [...cell.nameLineBoxes];
-  if (cell.quantityBox) {
-    boxes.push(cell.quantityBox);
-  }
-  if (!boxes.length) {
-    return null;
-  }
-
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = -1;
-  let maxY = -1;
-  for (const box of boxes) {
-    minX = Math.min(minX, box.x);
-    minY = Math.min(minY, box.y);
-    maxX = Math.max(maxX, box.x + box.width - 1);
-    maxY = Math.max(maxY, box.y + box.height - 1);
-  }
-  if (maxX < minX || maxY < minY) {
-    return null;
-  }
-
-  const horizontalPadding = Math.max(10, Math.round((maxX - minX + 1) * 0.08));
-  const verticalPadding = Math.max(8, Math.round((maxY - minY + 1) * 0.1));
-  const left = clamp(minX - horizontalPadding, cell.itemBox.x, cell.itemBox.x + cell.itemBox.width - 1);
-  const top = clamp(minY - verticalPadding, cell.itemBox.y, cell.itemBox.y + cell.itemBox.height - 1);
-  const right = clamp(
-    maxX + horizontalPadding,
-    left,
-    cell.itemBox.x + cell.itemBox.width - 1,
-  );
-  const bottom = clamp(
-    maxY + verticalPadding,
-    top,
-    cell.itemBox.y + cell.itemBox.height - 1,
-  );
-
-  return {
-    x: left,
-    y: top,
-    width: right - left + 1,
-    height: bottom - top + 1,
-  };
 }
 
 function strokeBox(
