@@ -12,6 +12,10 @@ mod worldstate_cache;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             if let Ok(app_data_dir) = app.path().app_data_dir() {
                 crate::wfm_scheduler::configure_wfm_scheduler_debug_log(Some(
                     app_data_dir.join("log").join("queueDebug.jsonl"),

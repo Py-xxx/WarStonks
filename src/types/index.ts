@@ -25,7 +25,8 @@ export type WorldStateEndpointKey =
   | 'void-trader'
   | 'market-news';
 
-export type SystemAlertKind = 'worldstate-offline' | 'scanner-stale';
+export type SystemAlertKind = 'worldstate-offline' | 'scanner-stale' | 'app-update';
+export type AppUpdateInstallState = 'available' | 'downloading' | 'installing' | 'error';
 
 export interface WatchlistItem {
   id: string;
@@ -79,6 +80,11 @@ export interface SystemAlert {
   message: string;
   createdAt: string;
   sourceKeys?: WorldStateEndpointKey[];
+  updateVersion?: string | null;
+  currentVersion?: string | null;
+  releaseNotes?: string | null;
+  installState?: AppUpdateInstallState | null;
+  progressPercent?: number | null;
 }
 
 export interface TradeAccountSummary {
