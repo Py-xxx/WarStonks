@@ -50,42 +50,44 @@ export function WatchlistPurchaseModal({
           </div>
         </div>
 
-        <div className="settings-modal-body">
-          <p className="watchlist-purchase-copy">
-            Confirm how much <strong>{itemName}</strong> was bought for. The default value uses
-            your desired watch price.
-          </p>
-          <label className="trade-listing-label" htmlFor="watchlist-purchase-price">
-            Bought price
-          </label>
-          <input
-            id="watchlist-purchase-price"
-            className="field-input"
-            type="number"
-            min={1}
-            step={1}
-            value={priceInput}
-            onChange={(event) => setPriceInput(event.target.value)}
-            disabled={loading}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                const parsed = Number.parseInt(priceInput, 10);
-                if (Number.isInteger(parsed) && parsed > 0) {
-                  onSubmit(parsed);
+        <div className="settings-modal-body watchlist-purchase-modal-body">
+          <div className="watchlist-purchase-content">
+            <p className="watchlist-purchase-copy">
+              Confirm how much <strong>{itemName}</strong> was bought for. The default value uses
+              your desired watch price.
+            </p>
+            <label className="trade-listing-label" htmlFor="watchlist-purchase-price">
+              Bought price
+            </label>
+            <input
+              id="watchlist-purchase-price"
+              className="field-input"
+              type="number"
+              min={1}
+              step={1}
+              value={priceInput}
+              onChange={(event) => setPriceInput(event.target.value)}
+              disabled={loading}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  const parsed = Number.parseInt(priceInput, 10);
+                  if (Number.isInteger(parsed) && parsed > 0) {
+                    onSubmit(parsed);
+                  }
                 }
-              }
-            }}
-          />
+              }}
+            />
 
-          {errorMessage ? <div className="trade-inline-error">{errorMessage}</div> : null}
+            {errorMessage ? <div className="trade-inline-error">{errorMessage}</div> : null}
+          </div>
         </div>
 
-        <div className="settings-modal-actions">
-          <button className="act-btn" type="button" onClick={onClose} disabled={loading}>
+        <div className="settings-modal-actions watchlist-purchase-actions">
+          <button className="act-btn watchlist-purchase-action" type="button" onClick={onClose} disabled={loading}>
             Cancel
           </button>
           <button
-            className="btn-primary"
+            className="btn-primary watchlist-purchase-action"
             type="button"
             onClick={() => {
               const parsed = Number.parseInt(priceInput, 10);
