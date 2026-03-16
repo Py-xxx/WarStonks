@@ -475,6 +475,13 @@ function upsertWorldStateSystemAlert(
   return [nextAlert, ...alerts.filter((alert) => alert.id !== WORLDSTATE_SYSTEM_ALERT_ID)];
 }
 
+function shouldCreateWorldStateOfflineAlert(input: {
+  dismissed: boolean;
+  hasUsableData: boolean;
+}): boolean {
+  return !input.dismissed && !input.hasUsableData;
+}
+
 function clearWorldStateSystemAlertSource(
   alerts: SystemAlert[],
   sourceKey: WorldStateEndpointKey,
@@ -1295,7 +1302,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.events,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateEvents.length > 0 || (cachedSnapshot?.payload.length ?? 0) > 0,
+            }),
           ),
         }));
       } finally {
@@ -1357,7 +1368,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.alerts,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateAlerts.length > 0 || (cachedSnapshot?.payload.length ?? 0) > 0,
+            }),
           ),
         }));
       } finally {
@@ -1417,7 +1432,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.sortie,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData: state.worldStateSortie !== null || cachedSnapshot?.payload !== null,
+            }),
           ),
         }));
       } finally {
@@ -1477,7 +1495,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.arbitration,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateArbitration !== null || cachedSnapshot?.payload !== null,
+            }),
           ),
         }));
       } finally {
@@ -1537,7 +1559,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.archonHunt,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateArchonHunt !== null || cachedSnapshot?.payload !== null,
+            }),
           ),
         }));
       } finally {
@@ -1599,7 +1625,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.fissures,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateFissures.length > 0 || (cachedSnapshot?.payload.length ?? 0) > 0,
+            }),
           ),
         }));
       } finally {
@@ -1668,7 +1698,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.marketNews,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateNews.length > 0 ||
+                state.worldStateFlashSales.length > 0 ||
+                (cachedSnapshot?.payload.news.length ?? 0) > 0 ||
+                (cachedSnapshot?.payload.flashSales.length ?? 0) > 0,
+            }),
           ),
         }));
       } finally {
@@ -1730,7 +1767,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.invasions,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateInvasions.length > 0 || (cachedSnapshot?.payload.length ?? 0) > 0,
+            }),
           ),
         }));
       } finally {
@@ -1792,7 +1833,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.syndicateMissions,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData:
+                state.worldStateSyndicateMissions.length > 0 ||
+                (cachedSnapshot?.payload.length ?? 0) > 0,
+            }),
           ),
         }));
       } finally {
@@ -1852,7 +1898,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
           systemAlerts: upsertWorldStateSystemAlert(
             state.systemAlerts,
             WORLDSTATE_ENDPOINT_KEYS.voidTrader,
-            !state.worldStateSystemAlertDismissed,
+            shouldCreateWorldStateOfflineAlert({
+              dismissed: state.worldStateSystemAlertDismissed,
+              hasUsableData: state.worldStateVoidTrader !== null || cachedSnapshot?.payload !== null,
+            }),
           ),
         }));
       } finally {
