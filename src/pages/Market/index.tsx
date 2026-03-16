@@ -610,7 +610,10 @@ function StaticAnalyticsChart({
         <div className="market-chart-header">
           <div className="market-chart-header-copy">
             <span className="panel-title-eyebrow">Price Chart</span>
-            <span className="card-label">{itemName}</span>
+            <span className="card-label market-panel-title-row">
+              <span>{itemName}</span>
+              <AdaptiveInfoHint text="Historical price view for the selected item, including live hover details, entry and exit zones, and optional series overlays." />
+            </span>
           </div>
           <div className="market-chart-select-row">
             <label className="market-toolbar-group">
@@ -1805,6 +1808,7 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title="Entry / Exit Zone Overview"
               eyebrow="Market State"
+              info="Current fair value, entry zone, exit zone, and zone quality derived from the latest analytics snapshot."
               loading={!revealedPanels.overview && !errorMessage}
               errorMessage={!revealedPanels.overview ? errorMessage : null}
               loadingLabel="Calculating entry and exit zones"
@@ -1850,6 +1854,7 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title="Orderbook Pressure"
               eyebrow="Execution"
+              info="Live cheapest sell, highest buy, spread, and visible depth showing whether execution currently favors entry or exit."
               loading={!revealedPanels.pressure && !errorMessage}
               errorMessage={!revealedPanels.pressure ? errorMessage : null}
               loadingLabel="Reading current orderbook pressure"
@@ -1895,6 +1900,7 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title="Trend Quality Breakdown"
               eyebrow="Structure"
+              info="Short-term trend structure across multiple price views, including slope, confidence, stability, volatility, and reversal context."
               loading={!revealedPanels.trend && !errorMessage}
               errorMessage={!revealedPanels.trend ? errorMessage : null}
               loadingLabel="Scoring short-term trend quality"
@@ -1963,6 +1969,7 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title="Action Card"
               eyebrow="Readout"
+              info="Condensed analytics recommendation that combines zone quality, adjusted edge, spread, and book bias into one suggested action."
               loading={!revealedPanels.action && !errorMessage}
               errorMessage={!revealedPanels.action ? errorMessage : null}
               loadingLabel="Building the market readout"
