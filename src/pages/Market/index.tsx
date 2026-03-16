@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import {
+  getWfmAutocompleteItems,
   getItemAnalytics,
   getItemDetailSummary,
   openExternalUrl,
@@ -1417,6 +1418,106 @@ function containsItemMatch(haystack: string | null | undefined, needles: string[
   return needles.some((needle) => normalizedHaystack.includes(needle));
 }
 
+interface DisplayDropSource {
+  key: string;
+  location: string;
+  rarity: string | null;
+  chance: number | null;
+  sourceType: string | null;
+  imagePath: string | null;
+  isRelic: boolean;
+}
+
+function normalizeRelicLocation(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const relicMatch = value.match(/\b(lith|meso|neo|axi)\s+([a-z0-9]+)\b/i);
+  if (!relicMatch) {
+    return null;
+  }
+
+  const tier = relicMatch[1].charAt(0).toUpperCase() + relicMatch[1].slice(1).toLowerCase();
+  const code = relicMatch[2].toUpperCase();
+  return `${tier} ${code} Relic`;
+}
+
+function isRelicDropSource(location: string | null | undefined, sourceType: string | null | undefined): boolean {
+  const normalizedType = normalizeMatchValue(sourceType);
+  if (normalizedType?.includes('relic')) {
+    return true;
+  }
+  return normalizeRelicLocation(location) !== null;
+}
+
+function buildDisplayDropSources(
+  dropSources: Array<{
+    location: string;
+    chance: number | null;
+    rarity: string | null;
+    sourceType: string | null;
+  }>,
+  autocompleteItems: WfmAutocompleteItem[],
+): DisplayDropSource[] {
+  const relicImageByName = new Map<string, string | null>();
+  autocompleteItems.forEach((item) => {
+    if (!item.name.toLowerCase().includes(' relic')) {
+      return;
+    }
+
+    const normalizedName = normalizeMatchValue(item.name);
+    if (!normalizedName || relicImageByName.has(normalizedName)) {
+      return;
+    }
+
+    relicImageByName.set(normalizedName, item.imagePath);
+  });
+
+  const uniqueRelics = new Map<string, DisplayDropSource>();
+  const otherSources: DisplayDropSource[] = [];
+
+  dropSources.forEach((source) => {
+    if (!isRelicDropSource(source.location, source.sourceType)) {
+      otherSources.push({
+        key: `${source.location}-${source.sourceType ?? 'none'}`,
+        location: source.location,
+        rarity: source.rarity,
+        chance: source.chance,
+        sourceType: source.sourceType,
+        imagePath: null,
+        isRelic: false,
+      });
+      return;
+    }
+
+    const normalizedRelicName = normalizeRelicLocation(source.location);
+    if (!normalizedRelicName) {
+      return;
+    }
+
+    const existing = uniqueRelics.get(normalizedRelicName);
+    if (existing) {
+      if (!existing.rarity && source.rarity) {
+        existing.rarity = source.rarity;
+      }
+      return;
+    }
+
+    uniqueRelics.set(normalizedRelicName, {
+      key: normalizedRelicName,
+      location: normalizedRelicName,
+      rarity: source.rarity,
+      chance: source.chance,
+      sourceType: 'relic',
+      imagePath: relicImageByName.get(normalizeMatchValue(normalizedRelicName) ?? '') ?? null,
+      isRelic: true,
+    });
+  });
+
+  return [...uniqueRelics.values(), ...otherSources];
+}
+
 interface EventContextEntry {
   label: string;
   impact: string;
@@ -2037,12 +2138,31 @@ function AnalysisTab() {
   const [itemDetailsLoading, setItemDetailsLoading] = useState(false);
   const [itemDetailsError, setItemDetailsError] = useState<string | null>(null);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
+  const [autocompleteItems, setAutocompleteItems] = useState<WfmAutocompleteItem[]>([]);
   const [revealedPanels, setRevealedPanels] = useState<Record<AnalysisPanelKey, boolean>>(
     () => ({
       ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
       itemDetails: false,
     }),
   );
+
+  useEffect(() => {
+    let isMounted = true;
+    void getWfmAutocompleteItems()
+      .then((items) => {
+        if (!isMounted) {
+          return;
+        }
+        setAutocompleteItems(items);
+      })
+      .catch((error) => {
+        console.error('Failed to load WFM autocomplete items for relic images', error);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -2185,6 +2305,10 @@ function AnalysisTab() {
         ? 0.18
         : 0.35;
   const timeOfDayDisplay = buildTimeOfDayDisplayModel(analysis?.timeOfDayLiquidity);
+  const displayDropSources = useMemo(
+    () => buildDisplayDropSources(analysis?.supplyContext.dropSources ?? [], autocompleteItems),
+    [analysis?.supplyContext.dropSources, autocompleteItems],
+  );
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
@@ -2588,14 +2712,29 @@ function AnalysisTab() {
               </div>
             ) : analysis?.supplyContext.mode === 'drop-sources' ? (
               <div className="market-drop-list">
-                {(analysis?.supplyContext.dropSources ?? []).map((source) => (
-                  <div key={`${source.location}-${source.sourceType ?? 'none'}`} className="market-drop-card">
-                    <span className="market-copy-title">{source.location}</span>
-                    <span>Chance: {formatDropChancePercent(source.chance)}</span>
-                    <span>Rarity: {source.rarity ?? '—'}</span>
-                    <span>Type: {source.sourceType ?? '—'}</span>
-                  </div>
-                ))}
+                {displayDropSources.map((source) => {
+                  const imageUrl = resolveWfmAssetUrl(source.imagePath);
+                  return (
+                    <div key={source.key} className="market-drop-card">
+                      <div className="market-drop-card-top">
+                        {source.isRelic ? (
+                          imageUrl ? (
+                            <img className="market-drop-image" src={imageUrl} alt={source.location} loading="lazy" />
+                          ) : (
+                            <span className="market-drop-image placeholder" aria-hidden="true">
+                              {source.location.slice(0, 2)}
+                            </span>
+                          )
+                        ) : null}
+                        <span className="market-drop-title">{source.location}</span>
+                      </div>
+                      {source.isRelic ? <span>Rarity: {source.rarity ?? '—'}</span> : null}
+                      {!source.isRelic ? <span>Chance: {formatDropChancePercent(source.chance)}</span> : null}
+                      {!source.isRelic ? <span>Rarity: {source.rarity ?? '—'}</span> : null}
+                      {!source.isRelic ? <span>Type: {source.sourceType ?? '—'}</span> : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div className="market-copy-block">

@@ -8589,6 +8589,40 @@ body {
   gap: 4px;
 }
 
+.market-drop-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.market-drop-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.market-drop-image {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid rgba(121, 184, 255, 0.16);
+  background: rgba(8, 13, 24, 0.9);
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.market-drop-image.placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(214, 229, 255, 0.7);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .market-time-card-heat {
   position: relative;
   overflow: hidden;
