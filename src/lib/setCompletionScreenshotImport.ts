@@ -1,8 +1,3 @@
-import {
-  saveSetCompletionScreenshotCrops,
-  type ScreenshotCropExportFile,
-  type ScreenshotCropExportResult,
-} from './tauriClient';
 import ssQtyAssetUrl from '../assets/set-completion/ss-qty.png';
 
 export interface SetCompletionImportCrop {
@@ -26,6 +21,7 @@ export interface SetCompletionDetectionBox {
 }
 
 export interface SetCompletionDetectionCellOcrCrops {
+  originalCellDataUrl: string;
   originalTextDataUrl: string | null;
   processedTextDataUrl: string | null;
   originalQuantityDataUrl: string | null;
@@ -53,18 +49,40 @@ export interface SetCompletionScreenshotDetectionPreview {
   quantityCount: number;
   nameCount: number;
   cells: SetCompletionDetectionCell[];
-  exportDirectory: string | null;
-  exportedFileCount: number;
 }
 
-export interface SetCompletionScreenshotScanEntry {
+export interface SetCompletionImportCandidate {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+}
+
+export interface SetCompletionScreenshotReviewMatch {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  confidence: number;
+  confidenceLabel: 'high' | 'medium' | 'low';
+}
+
+export interface SetCompletionScreenshotReviewEntry {
   rowId: string;
   tileIndex: number;
+  originalCellDataUrl: string;
   hasQuantityBox: boolean;
   originalText: string;
   processedText: string;
   originalQuantity: string | null;
   processedQuantity: string | null;
+  suggestedQuantity: number | null;
+  matchedCandidate: SetCompletionScreenshotReviewMatch | null;
+  reviewReason: string | null;
+  matchReviewReason: string | null;
+  quantityReviewReason: string | null;
+  hasConflictingNameSignals: boolean;
+  hasConflictingQuantitySignals: boolean;
 }
 
 interface TileDescriptor {
@@ -123,6 +141,34 @@ const NAME_REGION = {
   height: 0.64,
 };
 const QTY_TEMPLATE_RATIOS = [0.18, 0.2, 0.22, 0.24, 0.26, 0.28, 0.3];
+const OCR_COMPONENT_VOCABULARY = [
+  'prime',
+  'blueprint',
+  'systems',
+  'neuroptics',
+  'chassis',
+  'barrel',
+  'blade',
+  'receiver',
+  'handle',
+  'stock',
+  'grip',
+  'harness',
+  'string',
+  'disc',
+  'carapace',
+  'cerebrum',
+  'gauntlet',
+  'ornament',
+  'wings',
+  'head',
+  'upper',
+  'lower',
+] as const;
+const OCR_COMPONENT_VOCABULARY_SET = new Set<string>(OCR_COMPONENT_VOCABULARY);
+const HIGH_CONFIDENCE_THRESHOLD = 0.92;
+const LOW_CONFIDENCE_THRESHOLD = 0.78;
+const AMBIGUOUS_MATCH_GAP = 0.045;
 const DEFAULT_CROP: SetCompletionImportCrop = {
   left: 0,
   top: 0,
@@ -213,6 +259,7 @@ export async function analyzeSetCompletionInventoryScreenshot(
     const ocrCrops = buildCellOcrCrops(
       croppedCanvas,
       previewCanvas,
+      descriptor.maskRect,
       translatedNameBox,
       translatedQuantityBox,
     );
@@ -227,16 +274,12 @@ export async function analyzeSetCompletionInventoryScreenshot(
     });
   }
 
-  const exportResult = await exportSetCompletionDetectionCrops(cells);
   drawOverlayBoxes(previewContext, cells);
 
   onProgress?.({
     progress: 1,
     stage: 'complete',
-    detail:
-      exportResult.fileCount > 0
-        ? `Detected ${cells.length} item cells and saved ${exportResult.fileCount} crop images.`
-        : `Detected ${cells.length} item cells in the screenshot.`,
+    detail: `Detected ${cells.length} item cells in the screenshot.`,
   });
 
   return {
@@ -245,8 +288,6 @@ export async function analyzeSetCompletionInventoryScreenshot(
     quantityCount: cells.filter((cell) => cell.quantityBox !== null).length,
     nameCount: cells.filter((cell) => cell.nameBox !== null).length,
     cells,
-    exportDirectory: exportResult.exportDirectory,
-    exportedFileCount: exportResult.fileCount,
   };
 }
 
@@ -631,58 +672,18 @@ function drawOverlayBoxes(
   }
 }
 
-async function exportSetCompletionDetectionCrops(
-  cells: SetCompletionDetectionCell[],
-): Promise<ScreenshotCropExportResult> {
-  const files: ScreenshotCropExportFile[] = [];
-
-  for (const cell of cells) {
-    const cellFolder = `cell-${String(cell.tileIndex + 1).padStart(2, '0')}`;
-    if (cell.ocrCrops.originalTextDataUrl) {
-      files.push({
-        relativePath: `${cellFolder}/original-text.png`,
-        dataUrl: cell.ocrCrops.originalTextDataUrl,
-      });
-    }
-    if (cell.ocrCrops.processedTextDataUrl) {
-      files.push({
-        relativePath: `${cellFolder}/processed-text.png`,
-        dataUrl: cell.ocrCrops.processedTextDataUrl,
-      });
-    }
-
-    if (cell.ocrCrops.originalQuantityDataUrl) {
-      files.push({
-        relativePath: `${cellFolder}/original-quantity.png`,
-        dataUrl: cell.ocrCrops.originalQuantityDataUrl,
-      });
-    }
-    if (cell.ocrCrops.processedQuantityDataUrl) {
-      files.push({
-        relativePath: `${cellFolder}/processed-quantity.png`,
-        dataUrl: cell.ocrCrops.processedQuantityDataUrl,
-      });
-    }
-  }
-
-  if (!files.length) {
-    return {
-      exportDirectory: '',
-      fileCount: 0,
-      cellCount: 0,
-    };
-  }
-
-  return saveSetCompletionScreenshotCrops(files);
-}
-
 function buildCellOcrCrops(
   originalCanvas: HTMLCanvasElement,
   processedCanvas: HTMLCanvasElement,
+  itemBox: SetCompletionDetectionBox,
   nameBox: SetCompletionDetectionBox | null,
   quantityBox: SetCompletionDetectionBox | null,
 ): SetCompletionDetectionCellOcrCrops {
   return {
+    originalCellDataUrl: cropCanvasToDataUrl(
+      originalCanvas,
+      scaleBox(itemBox, 1 / MASK_SCALE),
+    ),
     originalTextDataUrl: nameBox
       ? cropCanvasToDataUrl(originalCanvas, scaleBox(nameBox, 1 / MASK_SCALE))
       : null,
@@ -745,24 +746,34 @@ type TesseractWorkerLike = {
   setParameters: (params: Record<string, string>) => Promise<unknown>;
 };
 
+interface PreparedImportCandidate extends SetCompletionImportCandidate {
+  normalizedName: string;
+  normalizedTokens: string[];
+}
+
+interface MatchCandidateScore {
+  candidate: PreparedImportCandidate;
+  score: number;
+}
+
 let tesseractWorkerPromise: Promise<TesseractWorkerLike> | null = null;
 
-export async function scanSetCompletionDetectionPreview(
+export async function scanAndMatchSetCompletionDetectionPreview(
   detectionPreview: SetCompletionScreenshotDetectionPreview,
+  candidates: SetCompletionImportCandidate[],
   onProgress?: (progress: SetCompletionScreenshotProgress) => void,
-): Promise<SetCompletionScreenshotScanEntry[]> {
+): Promise<SetCompletionScreenshotReviewEntry[]> {
   const worker = await getTesseractWorker();
-  const entries: SetCompletionScreenshotScanEntry[] = [];
-  const cellsWithText = detectionPreview.cells.filter(
-    (cell) => cell.ocrCrops.originalTextDataUrl || cell.ocrCrops.processedTextDataUrl,
-  );
+  const preparedCandidates = prepareImportCandidates(candidates);
+  const entries: SetCompletionScreenshotReviewEntry[] = [];
+  const scannableCells = detectionPreview.cells.filter((cell) => cell.nameBox !== null);
 
-  for (let index = 0; index < cellsWithText.length; index += 1) {
-    const cell = cellsWithText[index];
+  for (let index = 0; index < scannableCells.length; index += 1) {
+    const cell = scannableCells[index];
     onProgress?.({
-      progress: cellsWithText.length ? index / cellsWithText.length : 0,
+      progress: scannableCells.length ? index / scannableCells.length : 0,
       stage: 'scan',
-      detail: `Scanning OCR crops ${index + 1}/${cellsWithText.length}…`,
+      detail: `Scanning OCR crops ${index + 1}/${scannableCells.length}…`,
     });
 
     const originalText = cell.ocrCrops.originalTextDataUrl
@@ -777,22 +788,21 @@ export async function scanSetCompletionDetectionPreview(
     const processedQuantity = cell.quantityBox
       ? await runTesseractTextRecognition(worker, cell.ocrCrops.processedQuantityDataUrl, true)
       : null;
-
-    entries.push({
-      rowId: cell.rowId,
-      tileIndex: cell.tileIndex,
-      hasQuantityBox: cell.quantityBox !== null,
-      originalText: normalizeOcrOutput(originalText ?? ''),
-      processedText: normalizeOcrOutput(processedText ?? ''),
+    const review = buildReviewEntry(
+      cell,
+      normalizeOcrOutput(originalText ?? ''),
+      normalizeOcrOutput(processedText ?? ''),
       originalQuantity,
       processedQuantity,
-    });
+      preparedCandidates,
+    );
+    entries.push(review);
   }
 
   onProgress?.({
     progress: 1,
     stage: 'scan',
-    detail: `Scanned ${entries.length} detected item crops with Tesseract.`,
+    detail: `Scanned ${entries.length} detected item crops and prepared review rows.`,
   });
 
   return entries;
@@ -844,6 +854,371 @@ async function runTesseractTextRecognition(
 
 function normalizeOcrOutput(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function buildReviewEntry(
+  cell: SetCompletionDetectionCell,
+  originalText: string,
+  processedText: string,
+  originalQuantity: string | null,
+  processedQuantity: string | null,
+  candidates: PreparedImportCandidate[],
+): SetCompletionScreenshotReviewEntry {
+  const originalPrepared = prepareMatchValue(originalText);
+  const processedPrepared = prepareMatchValue(processedText);
+  const originalTop = rankCandidatesForOcrText(originalPrepared, candidates)[0] ?? null;
+  const processedTop = rankCandidatesForOcrText(processedPrepared, candidates)[0] ?? null;
+  const mergedMatch = mergeTopMatches(originalTop, processedTop, originalPrepared, processedPrepared, candidates);
+  const quantityDecision = resolveSuggestedQuantity(
+    cell.quantityBox !== null,
+    originalQuantity,
+    processedQuantity,
+  );
+  const reviewReasons: string[] = [];
+  const reviewMatch =
+    mergedMatch.candidate && mergedMatch.score >= LOW_CONFIDENCE_THRESHOLD
+      ? {
+          itemId: mergedMatch.candidate.itemId,
+          slug: mergedMatch.candidate.slug,
+          name: mergedMatch.candidate.name,
+          imagePath: mergedMatch.candidate.imagePath,
+          confidence: mergedMatch.score,
+          confidenceLabel: (
+            mergedMatch.score >= HIGH_CONFIDENCE_THRESHOLD
+              ? 'high'
+              : mergedMatch.score >= LOW_CONFIDENCE_THRESHOLD
+                ? 'medium'
+                : 'low'
+          ) as SetCompletionScreenshotReviewMatch['confidenceLabel'],
+        }
+      : null;
+
+  if (!reviewMatch) {
+    reviewReasons.push('No match');
+  } else if (mergedMatch.conflictingSignals) {
+    reviewReasons.push('Conflicting OCR');
+  } else if (mergedMatch.ambiguous || reviewMatch.confidenceLabel !== 'high') {
+    reviewReasons.push('Low confidence');
+  }
+
+  if (!quantityDecision.valid) {
+    reviewReasons.push(quantityDecision.reason);
+  }
+
+  return {
+    rowId: cell.rowId,
+    tileIndex: cell.tileIndex,
+    originalCellDataUrl: cell.ocrCrops.originalCellDataUrl,
+    hasQuantityBox: cell.quantityBox !== null,
+    originalText,
+    processedText,
+    originalQuantity,
+    processedQuantity,
+    suggestedQuantity: quantityDecision.quantity,
+    matchedCandidate: reviewMatch,
+    reviewReason: reviewReasons.length ? reviewReasons.join(' · ') : null,
+    matchReviewReason: reviewMatch
+      ? mergedMatch.conflictingSignals
+        ? 'Conflicting OCR'
+        : mergedMatch.ambiguous || reviewMatch.confidenceLabel !== 'high'
+          ? 'Low confidence'
+          : null
+      : 'No match',
+    quantityReviewReason: quantityDecision.valid ? null : quantityDecision.reason,
+    hasConflictingNameSignals: mergedMatch.conflictingSignals,
+    hasConflictingQuantitySignals: quantityDecision.conflicting,
+  };
+}
+
+function prepareImportCandidates(
+  candidates: SetCompletionImportCandidate[],
+): PreparedImportCandidate[] {
+  return candidates.map((candidate) => ({
+    ...candidate,
+    normalizedName: normalizeMatchValue(candidate.name),
+    normalizedTokens: tokenizeMatchValue(candidate.name),
+  }));
+}
+
+function prepareMatchValue(value: string): { normalized: string; tokens: string[] } {
+  return {
+    normalized: normalizeMatchValue(value),
+    tokens: tokenizeMatchValue(value),
+  };
+}
+
+function normalizeMatchValue(value: string): string {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized
+    .split(' ')
+    .map((token) => correctOcrToken(token))
+    .join(' ')
+    .trim();
+}
+
+function tokenizeMatchValue(value: string): string[] {
+  const normalized = normalizeMatchValue(value);
+  return normalized ? normalized.split(' ') : [];
+}
+
+function correctOcrToken(token: string): string {
+  if (!token || OCR_COMPONENT_VOCABULARY_SET.has(token)) {
+    return token;
+  }
+
+  let bestToken = token;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of OCR_COMPONENT_VOCABULARY) {
+    const distance = levenshteinDistance(token, candidate);
+    const allowedDistance = Math.max(1, Math.floor(candidate.length * 0.34));
+    if (distance > allowedDistance || distance >= bestDistance) {
+      continue;
+    }
+    bestToken = candidate;
+    bestDistance = distance;
+  }
+  return bestToken;
+}
+
+function rankCandidatesForOcrText(
+  ocr: { normalized: string; tokens: string[] },
+  candidates: PreparedImportCandidate[],
+): MatchCandidateScore[] {
+  if (!ocr.normalized) {
+    return [];
+  }
+
+  const ranked = candidates
+    .map((candidate) => ({
+      candidate,
+      score: scoreCandidateAgainstOcr(ocr, candidate),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  return ranked;
+}
+
+function scoreCandidateAgainstOcr(
+  ocr: { normalized: string; tokens: string[] },
+  candidate: PreparedImportCandidate,
+): number {
+  if (ocr.normalized === candidate.normalizedName) {
+    return 1.1;
+  }
+
+  const maxLength = Math.max(ocr.normalized.length, candidate.normalizedName.length);
+  const distance = levenshteinDistance(ocr.normalized, candidate.normalizedName);
+  const charSimilarity = maxLength > 0 ? 1 - distance / maxLength : 0;
+  const candidateTokenSet = new Set(candidate.normalizedTokens);
+  const ocrTokenSet = new Set(ocr.tokens);
+  let weightedMatches = 0;
+  let weightedTotal = 0;
+  for (const token of candidate.normalizedTokens) {
+    const tokenWeight = OCR_COMPONENT_VOCABULARY_SET.has(token) ? 3 : token === 'prime' ? 2 : 1;
+    weightedTotal += tokenWeight;
+    if (ocrTokenSet.has(token)) {
+      weightedMatches += tokenWeight;
+    }
+  }
+
+  let ocrTokenCoverage = 0;
+  if (ocr.tokens.length > 0) {
+    let matchedOcrTokens = 0;
+    for (const token of ocr.tokens) {
+      if (candidateTokenSet.has(token)) {
+        matchedOcrTokens += 1;
+      }
+    }
+    ocrTokenCoverage = matchedOcrTokens / ocr.tokens.length;
+  }
+
+  const weightedCoverage = weightedTotal > 0 ? weightedMatches / weightedTotal : 0;
+  const startsWithFamily = candidate.normalizedName.startsWith(ocr.tokens.slice(0, 2).join(' '));
+
+  return (
+    charSimilarity * 0.46 +
+    weightedCoverage * 0.34 +
+    ocrTokenCoverage * 0.14 +
+    (startsWithFamily ? 0.06 : 0)
+  );
+}
+
+function mergeTopMatches(
+  originalTop: MatchCandidateScore | null,
+  processedTop: MatchCandidateScore | null,
+  originalPrepared: { normalized: string; tokens: string[] },
+  processedPrepared: { normalized: string; tokens: string[] },
+  candidates: PreparedImportCandidate[],
+): {
+  candidate: PreparedImportCandidate | null;
+  score: number;
+  ambiguous: boolean;
+  conflictingSignals: boolean;
+} {
+  const mergedScores = new Map<string, MatchCandidateScore>();
+  const rankedOriginal = rankCandidatesForOcrText(originalPrepared, candidates).slice(0, 3);
+  const rankedProcessed = rankCandidatesForOcrText(processedPrepared, candidates).slice(0, 3);
+
+  for (const entry of [...rankedOriginal, ...rankedProcessed]) {
+    const current = mergedScores.get(entry.candidate.slug);
+    if (!current) {
+      mergedScores.set(entry.candidate.slug, { ...entry });
+      continue;
+    }
+    current.score = Math.max(current.score, entry.score) + Math.min(current.score, entry.score) * 0.18;
+  }
+
+  if (
+    originalTop &&
+    processedTop &&
+    originalTop.candidate.slug === processedTop.candidate.slug &&
+    originalTop.score >= LOW_CONFIDENCE_THRESHOLD &&
+    processedTop.score >= LOW_CONFIDENCE_THRESHOLD
+  ) {
+    const boosted = mergedScores.get(originalTop.candidate.slug);
+    if (boosted) {
+      boosted.score += 0.08;
+    }
+  }
+
+  const rankedMerged = [...mergedScores.values()].sort((left, right) => right.score - left.score);
+  const best = rankedMerged[0] ?? null;
+  const second = rankedMerged[1] ?? null;
+  const conflictingSignals =
+    originalTop !== null &&
+    processedTop !== null &&
+    originalTop.candidate.slug !== processedTop.candidate.slug &&
+    originalTop.score >= LOW_CONFIDENCE_THRESHOLD &&
+    processedTop.score >= LOW_CONFIDENCE_THRESHOLD;
+
+  return {
+    candidate: best?.candidate ?? null,
+    score: best?.score ?? 0,
+    ambiguous:
+      best !== null &&
+      second !== null &&
+      best.score >= LOW_CONFIDENCE_THRESHOLD &&
+      best.score - second.score < AMBIGUOUS_MATCH_GAP,
+    conflictingSignals,
+  };
+}
+
+function resolveSuggestedQuantity(
+  hasQuantityBox: boolean,
+  originalQuantity: string | null,
+  processedQuantity: string | null,
+): {
+  quantity: number | null;
+  valid: boolean;
+  conflicting: boolean;
+  reason: string;
+} {
+  if (!hasQuantityBox) {
+    return {
+      quantity: 1,
+      valid: true,
+      conflicting: false,
+      reason: '',
+    };
+  }
+
+  const originalValue = parseQuantityValue(originalQuantity);
+  const processedValue = parseQuantityValue(processedQuantity);
+  if (originalValue !== null && processedValue !== null && originalValue === processedValue) {
+    return {
+      quantity: originalValue,
+      valid: true,
+      conflicting: false,
+      reason: '',
+    };
+  }
+
+  if (processedValue !== null && originalValue === null) {
+    return {
+      quantity: processedValue,
+      valid: false,
+      conflicting: false,
+      reason: 'Invalid quantity',
+    };
+  }
+
+  if (originalValue !== null && processedValue === null) {
+    return {
+      quantity: originalValue,
+      valid: false,
+      conflicting: false,
+      reason: 'Invalid quantity',
+    };
+  }
+
+  if (originalValue !== null && processedValue !== null) {
+    return {
+      quantity: processedValue,
+      valid: false,
+      conflicting: true,
+      reason: 'Invalid quantity',
+    };
+  }
+
+  return {
+    quantity: null,
+    valid: false,
+    conflicting: false,
+    reason: 'Invalid quantity',
+  };
+}
+
+function parseQuantityValue(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const digits = value.replace(/\D+/g, '');
+  if (!digits) {
+    return null;
+  }
+  const parsed = Number.parseInt(digits, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  if (!left.length) {
+    return right.length;
+  }
+  if (!right.length) {
+    return left.length;
+  }
+
+  const previous = new Array(right.length + 1).fill(0).map((_, index) => index);
+  const current = new Array(right.length + 1).fill(0);
+
+  for (let i = 0; i < left.length; i += 1) {
+    current[0] = i + 1;
+    for (let j = 0; j < right.length; j += 1) {
+      const cost = left[i] === right[j] ? 0 : 1;
+      current[j + 1] = Math.min(
+        current[j] + 1,
+        previous[j + 1] + 1,
+        previous[j] + cost,
+      );
+    }
+    for (let j = 0; j <= right.length; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[right.length];
 }
 
 function strokeBox(

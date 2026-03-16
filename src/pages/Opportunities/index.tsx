@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  applySetCompletionScreenshotImportRows,
   getArbitrageScannerState,
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
@@ -9,11 +10,12 @@ import {
 import {
   analyzeSetCompletionInventoryScreenshot,
   getDefaultSetCompletionImportCrop,
-  scanSetCompletionDetectionPreview,
+  scanAndMatchSetCompletionDetectionPreview,
+  type SetCompletionImportCandidate,
   type SetCompletionImportCrop,
   type SetCompletionScreenshotDetectionPreview,
   type SetCompletionScreenshotProgress,
-  type SetCompletionScreenshotScanEntry,
+  type SetCompletionScreenshotReviewEntry,
   type SetCompletionTraceSettings,
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
@@ -83,12 +85,115 @@ type PlannerCatalogItem = {
   imagePath: string | null;
 };
 
+type ScreenshotImportRowState = {
+  rowId: string;
+  tileIndex: number;
+  originalCellDataUrl: string;
+  originalText: string;
+  processedText: string;
+  originalQuantity: string | null;
+  processedQuantity: string | null;
+  hasQuantityBox: boolean;
+  suggestedMatch: SetCompletionScreenshotReviewEntry['matchedCandidate'];
+  matchReviewReason: string | null;
+  quantityReviewReason: string | null;
+  nameInput: string;
+  quantityInput: string;
+  matchReviewed: boolean;
+  quantityReviewed: boolean;
+};
+
+type ScreenshotImportResolvedRow = {
+  state: ScreenshotImportRowState;
+  candidate: PlannerCatalogItem | null;
+  quantity: number | null;
+  blockedReasons: string[];
+  sortWeight: number;
+};
+
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
 
   return String(error);
+}
+
+function normalizeScreenshotImportMatchValue(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildScreenshotImportRowState(
+  entry: SetCompletionScreenshotReviewEntry,
+): ScreenshotImportRowState {
+  return {
+    rowId: entry.rowId,
+    tileIndex: entry.tileIndex,
+    originalCellDataUrl: entry.originalCellDataUrl,
+    originalText: entry.originalText,
+    processedText: entry.processedText,
+    originalQuantity: entry.originalQuantity,
+    processedQuantity: entry.processedQuantity,
+    hasQuantityBox: entry.hasQuantityBox,
+    suggestedMatch: entry.matchedCandidate,
+    matchReviewReason: entry.matchReviewReason,
+    quantityReviewReason: entry.quantityReviewReason,
+    nameInput: entry.matchedCandidate?.name ?? '',
+    quantityInput: entry.suggestedQuantity !== null ? String(entry.suggestedQuantity) : '',
+    matchReviewed: entry.matchReviewReason === null,
+    quantityReviewed: entry.quantityReviewReason === null,
+  };
+}
+
+function resolveScreenshotImportCandidate(
+  catalogMap: Map<string, PlannerCatalogItem>,
+  value: string,
+): PlannerCatalogItem | null {
+  const normalized = normalizeScreenshotImportMatchValue(value);
+  return normalized ? catalogMap.get(normalized) ?? null : null;
+}
+
+function parseScreenshotImportQuantity(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resolveScreenshotImportRow(
+  row: ScreenshotImportRowState,
+  catalogMap: Map<string, PlannerCatalogItem>,
+): ScreenshotImportResolvedRow {
+  const candidate = resolveScreenshotImportCandidate(catalogMap, row.nameInput);
+  const quantity = parseScreenshotImportQuantity(row.quantityInput);
+  const blockedReasons: string[] = [];
+
+  if (!candidate) {
+    blockedReasons.push(row.matchReviewReason ?? 'No match');
+  } else if (row.matchReviewReason && !row.matchReviewed) {
+    blockedReasons.push(row.matchReviewReason);
+  }
+
+  if (quantity === null) {
+    blockedReasons.push(row.quantityReviewReason ?? 'Invalid quantity');
+  } else if (row.quantityReviewReason && !row.quantityReviewed) {
+    blockedReasons.push(row.quantityReviewReason);
+  }
+
+  return {
+    state: row,
+    candidate,
+    quantity,
+    blockedReasons,
+    sortWeight: blockedReasons.length ? 0 : 1,
+  };
 }
 
 function formatPlat(value: number | null | undefined): string {
@@ -364,12 +469,18 @@ function SetCompletionScreenshotImportModal({
   detectionPreview,
   processing,
   scanning,
+  confirming,
   progress,
   errorMessage,
-  scanResults,
+  reviewRows,
+  hasBlockedRows,
+  candidateOptions,
   onClose,
   onPickFile,
   onScan,
+  onNameChange,
+  onQuantityChange,
+  onConfirm,
 }: {
   open: boolean;
   fileInputRef: { current: HTMLInputElement | null };
@@ -377,12 +488,18 @@ function SetCompletionScreenshotImportModal({
   detectionPreview: SetCompletionScreenshotDetectionPreview | null;
   processing: boolean;
   scanning: boolean;
+  confirming: boolean;
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
-  scanResults: SetCompletionScreenshotScanEntry[];
+  reviewRows: ScreenshotImportResolvedRow[];
+  hasBlockedRows: boolean;
+  candidateOptions: PlannerCatalogItem[];
   onClose: () => void;
   onPickFile: (file: File | null) => Promise<void>;
   onScan: () => Promise<void>;
+  onNameChange: (rowId: string, value: string) => void;
+  onQuantityChange: (rowId: string, value: string) => void;
+  onConfirm: () => Promise<void>;
 }) {
   if (!open) {
     return null;
@@ -414,8 +531,8 @@ function SetCompletionScreenshotImportModal({
           </div>
         </div>
 
-        <div className="settings-modal-body screenshot-import-body screenshot-import-body-single">
-          <div className="settings-form-card screenshot-import-left screenshot-import-left-single">
+        <div className="settings-modal-body screenshot-import-body">
+          <div className="settings-form-card screenshot-import-left">
             <div className="screenshot-import-example">
               <div className="screenshot-import-example-copy">
                 <span className="panel-title-eyebrow">Example Only</span>
@@ -436,7 +553,7 @@ function SetCompletionScreenshotImportModal({
                 type="button"
                 className="settings-primary-btn"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={processing}
+                disabled={processing || confirming}
               >
                 {processing ? 'Processing…' : 'Choose Screenshot'}
               </button>
@@ -452,7 +569,7 @@ function SetCompletionScreenshotImportModal({
               <button
                 type="button"
                 className="settings-secondary-btn"
-                disabled={processing || scanning || !detectionPreview}
+                disabled={processing || scanning || confirming || !detectionPreview}
                 onClick={() => {
                   void onScan();
                 }}
@@ -463,11 +580,12 @@ function SetCompletionScreenshotImportModal({
 
             <p className="watchlist-form-note">
               Use a single screenshot from the in-game <strong>Prime Components</strong> tab. This
-              prepares the image, exports the detected crops, and can OCR those crops on demand.
+              prepares the image and builds OCR-ready crops for review.
             </p>
             <p className="watchlist-form-note">
               Workflow: choose the screenshot and the detector will immediately extract the fixed
-              palette, build the overlays, export the crops, and display them over the original image.
+              palette and build the overlays. Then press <strong>Scan</strong> to OCR the cell crops,
+              match them against the set map, review any flagged rows, and confirm them into the planner.
             </p>
 
             {progress ? (
@@ -478,72 +596,121 @@ function SetCompletionScreenshotImportModal({
             ) : null}
 
             {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
-
-            {detectionPreview?.exportDirectory ? (
-              <div className="scanner-inline-progress screenshot-import-progress">
-                <span className="scanner-progress-label">EXPORTED</span>
-                <strong>
-                  Saved {detectionPreview.exportedFileCount} crop images to{' '}
-                  {detectionPreview.exportDirectory}
-                </strong>
-              </div>
-            ) : null}
-
             {previewUrl ? (
-              <>
-                <div className="screenshot-import-original-preview">
-                  <div className="screenshot-import-original-preview-shell">
+              <div className="screenshot-import-original-preview">
+                <div className="screenshot-import-original-preview-shell">
+                  <img
+                    className="screenshot-import-original-image"
+                    src={previewUrl}
+                    alt="Prime components screenshot preview"
+                  />
+                  {detectionPreview ? (
                     <img
-                      className="screenshot-import-original-image"
-                      src={previewUrl}
-                      alt="Prime components screenshot preview"
+                      className="screenshot-import-overlay-image"
+                      src={detectionPreview.annotatedPreviewDataUrl}
+                      alt="Detection overlay preview"
                     />
-                    {detectionPreview ? (
-                      <img
-                        className="screenshot-import-overlay-image"
-                        src={detectionPreview.annotatedPreviewDataUrl}
-                        alt="Detection overlay preview"
-                      />
-                    ) : null}
-                  </div>
+                  ) : null}
                 </div>
-
-                {scanResults.length ? (
-                  <div className="screenshot-import-summary-panel screenshot-import-readings">
-                    <div className="screenshot-import-summary">
-                      <div>
-                        <span className="card-label">OCR Readout</span>
-                        <h3>Tesseract Results</h3>
-                      </div>
-                    </div>
-                    <ul className="screenshot-import-reading-list">
-                      {scanResults.flatMap((entry) => {
-                        const originalQuantity = entry.hasQuantityBox
-                          ? entry.originalQuantity ?? '?'
-                          : '1';
-                        const processedQuantity = entry.hasQuantityBox
-                          ? entry.processedQuantity ?? '?'
-                          : '1';
-                        return [
-                          <li key={`${entry.rowId}-original`}>
-                            <strong>O</strong> {entry.originalText || 'No text detected'} · Qty{' '}
-                            {originalQuantity}
-                          </li>,
-                          <li key={`${entry.rowId}-processed`}>
-                            <strong>P</strong> {entry.processedText || 'No text detected'} · Qty{' '}
-                            {processedQuantity}
-                          </li>,
-                        ];
-                      })}
-                    </ul>
-                  </div>
-                ) : null}
-              </>
+              </div>
             ) : (
               <div className="opportunities-placeholder">
                 Choose a screenshot first to generate the overlay preview on the original image.
               </div>
             )}
+          </div>
+
+          <div className="settings-form-card screenshot-import-right">
+            <div className="screenshot-import-summary">
+              <div>
+                <span className="card-label">Review Matches</span>
+                <h3>Detected Components</h3>
+              </div>
+              <div className="scanner-run-summary">
+                <span className="scanner-run-pill scanner-run-pill-blue">
+                  {reviewRows.length} rows
+                </span>
+                {hasBlockedRows ? (
+                  <span className="scanner-run-pill scanner-run-pill-warning">Needs review</span>
+                ) : null}
+              </div>
+            </div>
+
+            <datalist id="set-completion-screenshot-candidates">
+              {candidateOptions.map((candidate) => (
+                <option key={candidate.slug} value={candidate.name} />
+              ))}
+            </datalist>
+
+            {reviewRows.length ? (
+              <div className="screenshot-import-rows">
+                {reviewRows.map((row) => {
+                  const blockedReason = row.blockedReasons.join(' · ');
+                  return (
+                    <article
+                      key={row.state.rowId}
+                      className={`screenshot-import-row${row.blockedReasons.length ? ' needs-review' : ''}`}
+                    >
+                      {row.blockedReasons.length ? (
+                        <span className="screenshot-import-row-review-badge">{blockedReason}</span>
+                      ) : null}
+                      <div className="screenshot-import-row-main">
+                        <span className="screenshot-import-row-thumb">
+                          <img src={row.state.originalCellDataUrl} alt="" />
+                        </span>
+                        <div className="screenshot-import-row-editor">
+                          <div className="screenshot-import-row-copy">
+                            <strong>Matched name</strong>
+                            <input
+                              className="set-planner-search-input"
+                              list="set-completion-screenshot-candidates"
+                              type="text"
+                              value={row.state.nameInput}
+                              onChange={(event) => onNameChange(row.state.rowId, event.target.value)}
+                              placeholder={row.state.suggestedMatch?.name ?? 'Select a valid set component'}
+                            />
+                            <span>
+                              O: {row.state.originalText || '—'} | P: {row.state.processedText || '—'}
+                            </span>
+                          </div>
+                          <div className="screenshot-import-qty-field">
+                            <span>Quantity</span>
+                            <input
+                              className="screenshot-import-qty-input"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={row.state.quantityInput}
+                              onChange={(event) => onQuantityChange(row.state.rowId, event.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="opportunities-placeholder">
+                Upload a screenshot, then press Scan to build the editable review list.
+              </div>
+            )}
+
+            <div className="screenshot-import-footer">
+              <button type="button" className="settings-secondary-btn" onClick={onClose}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="settings-primary-btn"
+                disabled={processing || scanning || confirming || !reviewRows.length || hasBlockedRows}
+                onClick={() => {
+                  void onConfirm();
+                }}
+              >
+                {confirming ? 'Confirming…' : 'Confirm'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -580,11 +747,12 @@ export function OpportunitiesPage() {
     useState<SetCompletionScreenshotDetectionPreview | null>(null);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportScanning, setScreenshotImportScanning] = useState(false);
+  const [screenshotImportConfirming, setScreenshotImportConfirming] = useState(false);
   const [screenshotImportProgress, setScreenshotImportProgress] =
     useState<SetCompletionScreenshotProgress | null>(null);
   const [screenshotImportError, setScreenshotImportError] = useState<string | null>(null);
-  const [screenshotImportScanResults, setScreenshotImportScanResults] = useState<
-    SetCompletionScreenshotScanEntry[]
+  const [screenshotImportRows, setScreenshotImportRows] = useState<
+    ScreenshotImportRowState[]
   >([]);
   const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -743,6 +911,41 @@ export function OpportunitiesPage() {
 
     return [...bySlug.values()].sort((left, right) => left.name.localeCompare(right.name));
   }, [scannerResponse]);
+
+  const screenshotImportCandidates = useMemo<SetCompletionImportCandidate[]>(
+    () =>
+      plannerCatalog.map((candidate) => ({
+        itemId: candidate.itemId,
+        slug: candidate.slug,
+        name: candidate.name,
+        imagePath: candidate.imagePath,
+      })),
+    [plannerCatalog],
+  );
+
+  const screenshotImportCatalogMap = useMemo(() => {
+    const map = new Map<string, PlannerCatalogItem>();
+    for (const candidate of plannerCatalog) {
+      map.set(normalizeScreenshotImportMatchValue(candidate.name), candidate);
+    }
+    return map;
+  }, [plannerCatalog]);
+
+  const resolvedScreenshotImportRows = useMemo(() => {
+    return screenshotImportRows
+      .map((row) => resolveScreenshotImportRow(row, screenshotImportCatalogMap))
+      .sort((left, right) => {
+        if (left.sortWeight !== right.sortWeight) {
+          return left.sortWeight - right.sortWeight;
+        }
+        return left.state.tileIndex - right.state.tileIndex;
+      });
+  }, [screenshotImportCatalogMap, screenshotImportRows]);
+
+  const screenshotImportHasBlockedRows = useMemo(
+    () => resolvedScreenshotImportRows.some((row) => row.blockedReasons.length > 0),
+    [resolvedScreenshotImportRows],
+  );
 
   const ownedMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -970,7 +1173,8 @@ export function OpportunitiesPage() {
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
     setScreenshotImportScanning(false);
-    setScreenshotImportScanResults([]);
+    setScreenshotImportConfirming(false);
+    setScreenshotImportRows([]);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -994,9 +1198,10 @@ export function OpportunitiesPage() {
   ) => {
     setScreenshotImportProcessing(true);
     setScreenshotImportScanning(false);
+    setScreenshotImportConfirming(false);
     setScreenshotImportError(null);
     setScreenshotImportDetectionPreview(null);
-    setScreenshotImportScanResults([]);
+    setScreenshotImportRows([]);
     setScreenshotImportProgress({
       progress: 0,
       stage: 'prepare',
@@ -1038,7 +1243,8 @@ export function OpportunitiesPage() {
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
     setScreenshotImportScanning(false);
-    setScreenshotImportScanResults([]);
+    setScreenshotImportConfirming(false);
+    setScreenshotImportRows([]);
     setScreenshotImportPreviewUrl((current) => {
       if (current) {
         URL.revokeObjectURL(current);
@@ -1059,19 +1265,77 @@ export function OpportunitiesPage() {
 
     setScreenshotImportScanning(true);
     setScreenshotImportError(null);
-    setScreenshotImportScanResults([]);
+    setScreenshotImportRows([]);
     try {
-      const results = await scanSetCompletionDetectionPreview(
+      const results = await scanAndMatchSetCompletionDetectionPreview(
         screenshotImportDetectionPreview,
+        screenshotImportCandidates,
         (progress) => {
           setScreenshotImportProgress(progress);
         },
       );
-      setScreenshotImportScanResults(results);
+      setScreenshotImportRows(results.map((entry) => buildScreenshotImportRowState(entry)));
     } catch (error) {
       setScreenshotImportError(toErrorMessage(error));
     } finally {
       setScreenshotImportScanning(false);
+    }
+  };
+
+  const handleScreenshotImportNameChange = (rowId: string, value: string) => {
+    setScreenshotImportRows((current) =>
+      current.map((row) =>
+        row.rowId !== rowId
+          ? row
+          : {
+              ...row,
+              nameInput: value,
+              matchReviewed:
+                row.matchReviewReason === null ||
+                resolveScreenshotImportCandidate(screenshotImportCatalogMap, value) !== null,
+            },
+      ),
+    );
+  };
+
+  const handleScreenshotImportQuantityChange = (rowId: string, value: string) => {
+    setScreenshotImportRows((current) =>
+      current.map((row) =>
+        row.rowId !== rowId
+          ? row
+          : {
+              ...row,
+              quantityInput: value,
+              quantityReviewed:
+                row.quantityReviewReason === null || parseScreenshotImportQuantity(value) !== null,
+            },
+      ),
+    );
+  };
+
+  const handleConfirmScreenshotImport = async () => {
+    if (!resolvedScreenshotImportRows.length || screenshotImportHasBlockedRows) {
+      return;
+    }
+
+    const rows = resolvedScreenshotImportRows.map((row) => ({
+      itemId: row.candidate?.itemId ?? null,
+      slug: row.candidate?.slug ?? '',
+      name: row.candidate?.name ?? '',
+      imagePath: row.candidate?.imagePath ?? null,
+      quantity: row.quantity ?? 0,
+    }));
+
+    setScreenshotImportConfirming(true);
+    setScreenshotImportError(null);
+    try {
+      const nextOwnedItems = await applySetCompletionScreenshotImportRows(rows);
+      setOwnedItems(nextOwnedItems);
+      closeScreenshotImport();
+    } catch (error) {
+      setScreenshotImportError(toErrorMessage(error));
+    } finally {
+      setScreenshotImportConfirming(false);
     }
   };
 
@@ -1750,12 +2014,18 @@ export function OpportunitiesPage() {
         detectionPreview={screenshotImportDetectionPreview}
         processing={screenshotImportProcessing}
         scanning={screenshotImportScanning}
+        confirming={screenshotImportConfirming}
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
-        scanResults={screenshotImportScanResults}
+        reviewRows={resolvedScreenshotImportRows}
+        hasBlockedRows={screenshotImportHasBlockedRows}
+        candidateOptions={plannerCatalog}
         onClose={closeScreenshotImport}
         onPickFile={handleScreenshotFilePicked}
         onScan={handleScreenshotScan}
+        onNameChange={handleScreenshotImportNameChange}
+        onQuantityChange={handleScreenshotImportQuantityChange}
+        onConfirm={handleConfirmScreenshotImport}
       />
     </>
   );
