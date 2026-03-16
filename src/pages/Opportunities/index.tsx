@@ -107,6 +107,7 @@ type ScreenshotImportResolvedRow = {
   state: ScreenshotImportRowState;
   candidate: PlannerCatalogItem | null;
   quantity: number | null;
+  reviewReasons: string[];
   blockedReasons: string[];
   sortWeight: number;
 };
@@ -173,26 +174,31 @@ function resolveScreenshotImportRow(
 ): ScreenshotImportResolvedRow {
   const candidate = resolveScreenshotImportCandidate(catalogMap, row.nameInput);
   const quantity = parseScreenshotImportQuantity(row.quantityInput);
+  const reviewReasons: string[] = [];
   const blockedReasons: string[] = [];
+
+  if (row.matchReviewReason) {
+    reviewReasons.push(row.matchReviewReason);
+  }
+  if (row.quantityReviewReason) {
+    reviewReasons.push(row.quantityReviewReason);
+  }
 
   if (!candidate) {
     blockedReasons.push(row.matchReviewReason ?? 'No match');
-  } else if (row.matchReviewReason && !row.matchReviewed) {
-    blockedReasons.push(row.matchReviewReason);
   }
 
   if (quantity === null) {
     blockedReasons.push(row.quantityReviewReason ?? 'Invalid quantity');
-  } else if (row.quantityReviewReason && !row.quantityReviewed) {
-    blockedReasons.push(row.quantityReviewReason);
   }
 
   return {
     state: row,
     candidate,
     quantity,
+    reviewReasons,
     blockedReasons,
-    sortWeight: blockedReasons.length ? 0 : 1,
+    sortWeight: reviewReasons.length ? 0 : 1,
   };
 }
 
@@ -473,6 +479,7 @@ function SetCompletionScreenshotImportModal({
   progress,
   errorMessage,
   reviewRows,
+  hasReviewRows,
   hasBlockedRows,
   candidateOptions,
   onClose,
@@ -492,6 +499,7 @@ function SetCompletionScreenshotImportModal({
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
   reviewRows: ScreenshotImportResolvedRow[];
+  hasReviewRows: boolean;
   hasBlockedRows: boolean;
   candidateOptions: PlannerCatalogItem[];
   onClose: () => void;
@@ -630,7 +638,7 @@ function SetCompletionScreenshotImportModal({
                 <span className="scanner-run-pill scanner-run-pill-blue">
                   {reviewRows.length} rows
                 </span>
-                {hasBlockedRows ? (
+                {hasReviewRows ? (
                   <span className="scanner-run-pill scanner-run-pill-warning">Needs review</span>
                 ) : null}
               </div>
@@ -645,14 +653,14 @@ function SetCompletionScreenshotImportModal({
             {reviewRows.length ? (
               <div className="screenshot-import-rows">
                 {reviewRows.map((row) => {
-                  const blockedReason = row.blockedReasons.join(' · ');
+                  const reviewReason = row.reviewReasons.join(' · ');
                   return (
                     <article
                       key={row.state.rowId}
-                      className={`screenshot-import-row${row.blockedReasons.length ? ' needs-review' : ''}`}
+                      className={`screenshot-import-row${row.reviewReasons.length ? ' needs-review' : ''}`}
                     >
-                      {row.blockedReasons.length ? (
-                        <span className="screenshot-import-row-review-badge">{blockedReason}</span>
+                      {row.reviewReasons.length ? (
+                        <span className="screenshot-import-row-review-badge">{reviewReason}</span>
                       ) : null}
                       <div className="screenshot-import-row-main">
                         <span className="screenshot-import-row-thumb">
@@ -944,6 +952,10 @@ export function OpportunitiesPage() {
 
   const screenshotImportHasBlockedRows = useMemo(
     () => resolvedScreenshotImportRows.some((row) => row.blockedReasons.length > 0),
+    [resolvedScreenshotImportRows],
+  );
+  const screenshotImportHasReviewRows = useMemo(
+    () => resolvedScreenshotImportRows.some((row) => row.reviewReasons.length > 0),
     [resolvedScreenshotImportRows],
   );
 
@@ -2018,6 +2030,7 @@ export function OpportunitiesPage() {
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
         reviewRows={resolvedScreenshotImportRows}
+        hasReviewRows={screenshotImportHasReviewRows}
         hasBlockedRows={screenshotImportHasBlockedRows}
         candidateOptions={plannerCatalog}
         onClose={closeScreenshotImport}
