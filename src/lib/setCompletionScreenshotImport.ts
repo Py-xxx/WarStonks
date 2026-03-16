@@ -45,6 +45,10 @@ export interface SetCompletionDetectionCell {
 
 export interface SetCompletionScreenshotDetectionPreview {
   annotatedPreviewDataUrl: string;
+  sourceWidth: number;
+  sourceHeight: number;
+  overlayWidth: number;
+  overlayHeight: number;
   detectedItemCount: number;
   quantityCount: number;
   nameCount: number;
@@ -284,6 +288,10 @@ export async function analyzeSetCompletionInventoryScreenshot(
 
   return {
     annotatedPreviewDataUrl: previewCanvas.toDataURL('image/png'),
+    sourceWidth: croppedCanvas.width,
+    sourceHeight: croppedCanvas.height,
+    overlayWidth: previewCanvas.width,
+    overlayHeight: previewCanvas.height,
     detectedItemCount: cells.length,
     quantityCount: cells.filter((cell) => cell.quantityBox !== null).length,
     nameCount: cells.filter((cell) => cell.nameBox !== null).length,

@@ -92,6 +92,33 @@ type ScreenshotImportPreparedScreenshot = {
   detectionPreview: SetCompletionScreenshotDetectionPreview;
 };
 
+function renderScreenshotCellOverlays(screenshot: ScreenshotImportPreparedScreenshot) {
+  const width = screenshot.detectionPreview.overlayWidth;
+  const height = screenshot.detectionPreview.overlayHeight;
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return screenshot.detectionPreview.cells.map((cell) => {
+    const left = (cell.itemBox.x / width) * 100;
+    const top = (cell.itemBox.y / height) * 100;
+    const boxWidth = (cell.itemBox.width / width) * 100;
+    const boxHeight = (cell.itemBox.height / height) * 100;
+    return (
+      <span
+        key={cell.rowId}
+        className="screenshot-import-cell-overlay"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${boxWidth}%`,
+          height: `${boxHeight}%`,
+        }}
+      />
+    );
+  });
+}
+
 type ScreenshotImportRowState = {
   rowId: string;
   screenshotId: string;
@@ -633,6 +660,9 @@ function SetCompletionScreenshotImportModal({
                         src={screenshot.previewUrl}
                         alt={`Prime components screenshot preview ${index + 1}`}
                       />
+                      <div className="screenshot-import-cell-overlays">
+                        {renderScreenshotCellOverlays(screenshot)}
+                      </div>
                     </div>
                   </div>
                 ))}
