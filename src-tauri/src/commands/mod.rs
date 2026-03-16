@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use base64::Engine;
 use reqwest::blocking::Client;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -61,6 +62,22 @@ pub struct WfmTopSellOrdersResponse {
 pub struct RelicTierIcon {
     pub tier: String,
     pub image_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionOverlayCropImage {
+    pub row_id: String,
+    pub tile_index: usize,
+    pub filename: String,
+    pub image_data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionOverlayCropSaveResult {
+    pub directory: String,
+    pub saved_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +238,76 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     webbrowser::open(validated_url)
         .map(|_| ())
         .map_err(|error| format!("Failed to open external URL: {error}"))
+}
+
+fn extract_data_url_png_bytes(image_data_url: &str) -> Result<Vec<u8>, String> {
+    let payload = image_data_url
+        .split_once(',')
+        .map(|(_, payload)| payload.trim())
+        .filter(|payload| !payload.is_empty())
+        .ok_or_else(|| "Invalid overlay crop image payload.".to_string())?;
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|error| format!("Failed to decode overlay crop image: {error}"))
+}
+
+fn sanitize_overlay_crop_filename(filename: &str, fallback_index: usize) -> String {
+    let stem = filename
+        .trim()
+        .strip_suffix(".png")
+        .unwrap_or(filename.trim())
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    if stem.is_empty() {
+        format!("set-completion-cell-{:02}.png", fallback_index + 1)
+    } else {
+        format!("{stem}.png")
+    }
+}
+
+#[tauri::command]
+pub fn save_set_completion_overlay_crop_images(
+    app: tauri::AppHandle,
+    crops: Vec<SetCompletionOverlayCropImage>,
+) -> Result<SetCompletionOverlayCropSaveResult, String> {
+    let downloads_dir = app
+        .path()
+        .download_dir()
+        .map_err(|error| format!("Failed to resolve downloads directory: {error}"))?;
+    let export_dir = downloads_dir
+        .join("WarStonks")
+        .join("set-completion-overlay-crops")
+        .join(format!("{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| format!("Failed to read system time: {error}"))?
+            .as_secs()));
+
+    std::fs::create_dir_all(&export_dir)
+        .map_err(|error| format!("Failed to create overlay crop export directory: {error}"))?;
+
+    let mut saved_count = 0usize;
+    for (index, crop) in crops.iter().enumerate() {
+        let bytes = extract_data_url_png_bytes(&crop.image_data_url)?;
+        let filename = sanitize_overlay_crop_filename(&crop.filename, index);
+        let target = export_dir.join(filename);
+        std::fs::write(&target, bytes)
+            .map_err(|error| format!("Failed to write overlay crop image '{}': {error}", target.display()))?;
+        saved_count += 1;
+    }
+
+    Ok(SetCompletionOverlayCropSaveResult {
+        directory: export_dir.display().to_string(),
+        saved_count,
+    })
 }
 
 fn build_wfstat_client() -> Result<Client, String> {

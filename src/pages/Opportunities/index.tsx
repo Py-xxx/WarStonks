@@ -3,11 +3,14 @@ import {
   getArbitrageScannerState,
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
+  saveSetCompletionOverlayCropImages,
   getSetCompletionOwnedItems,
   setSetCompletionOwnedItemQuantity,
+  type SetCompletionOverlayCropSaveResult,
 } from '../../lib/tauriClient';
 import {
   analyzeSetCompletionInventoryScreenshot,
+  buildSetCompletionOverlayCropImages,
   getDefaultSetCompletionImportCrop,
   type SetCompletionImportCrop,
   type SetCompletionScreenshotDetectionPreview,
@@ -360,6 +363,7 @@ function SetCompletionScreenshotImportModal({
   fileInputRef,
   previewUrl,
   detectionPreview,
+  exportResult,
   processing,
   progress,
   errorMessage,
@@ -370,6 +374,7 @@ function SetCompletionScreenshotImportModal({
   fileInputRef: { current: HTMLInputElement | null };
   previewUrl: string | null;
   detectionPreview: SetCompletionScreenshotDetectionPreview | null;
+  exportResult: SetCompletionOverlayCropSaveResult | null;
   processing: boolean;
   progress: SetCompletionScreenshotProgress | null;
   errorMessage: string | null;
@@ -460,6 +465,14 @@ function SetCompletionScreenshotImportModal({
             ) : null}
 
             {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
+            {exportResult ? (
+              <div className="scanner-inline-progress screenshot-import-progress">
+                <span className="scanner-progress-label">EXPORTED</span>
+                <strong>
+                  Saved {exportResult.savedCount} cropped cell images to {exportResult.directory}
+                </strong>
+              </div>
+            ) : null}
 
             {previewUrl ? (
               <>
@@ -519,6 +532,8 @@ export function OpportunitiesPage() {
   const [screenshotImportPreviewUrl, setScreenshotImportPreviewUrl] = useState<string | null>(null);
   const [screenshotImportDetectionPreview, setScreenshotImportDetectionPreview] =
     useState<SetCompletionScreenshotDetectionPreview | null>(null);
+  const [screenshotImportExportResult, setScreenshotImportExportResult] =
+    useState<SetCompletionOverlayCropSaveResult | null>(null);
   const [screenshotImportProcessing, setScreenshotImportProcessing] = useState(false);
   const [screenshotImportProgress, setScreenshotImportProgress] =
     useState<SetCompletionScreenshotProgress | null>(null);
@@ -903,6 +918,7 @@ export function OpportunitiesPage() {
 
   const resetScreenshotImportSession = () => {
     setScreenshotImportDetectionPreview(null);
+    setScreenshotImportExportResult(null);
     setScreenshotImportError(null);
     setScreenshotImportProgress(null);
     setScreenshotImportProcessing(false);
@@ -930,14 +946,16 @@ export function OpportunitiesPage() {
     setScreenshotImportProcessing(true);
     setScreenshotImportError(null);
     setScreenshotImportDetectionPreview(null);
+    setScreenshotImportExportResult(null);
     setScreenshotImportProgress({
       progress: 0,
       stage: 'prepare',
       detail: 'Preparing screenshot detector…',
     });
+    let detectionPreview: SetCompletionScreenshotDetectionPreview | null = null;
 
     try {
-      const detectionPreview = await analyzeSetCompletionInventoryScreenshot(
+      detectionPreview = await analyzeSetCompletionInventoryScreenshot(
         file,
         crop,
         screenshotImportTraceSettings,
@@ -952,9 +970,24 @@ export function OpportunitiesPage() {
         return previewUrl;
       });
       setScreenshotImportDetectionPreview(detectionPreview);
+      setScreenshotImportProgress({
+        progress: 0.94,
+        stage: 'export',
+        detail: `Saving ${detectionPreview.cells.length} cropped overlay cells to Downloads…`,
+      });
+      const overlayCrops = await buildSetCompletionOverlayCropImages(detectionPreview);
+      const exportResult = await saveSetCompletionOverlayCropImages(overlayCrops);
+      setScreenshotImportExportResult(exportResult);
+      setScreenshotImportProgress({
+        progress: 1,
+        stage: 'complete',
+        detail: `Saved ${exportResult.savedCount} cropped cell images to Downloads.`,
+      });
     } catch (error) {
-      URL.revokeObjectURL(previewUrl);
-      setScreenshotImportPreviewUrl(null);
+      if (!detectionPreview) {
+        URL.revokeObjectURL(previewUrl);
+        setScreenshotImportPreviewUrl(null);
+      }
       setScreenshotImportError(toErrorMessage(error));
     } finally {
       setScreenshotImportProcessing(false);
@@ -1656,6 +1689,7 @@ export function OpportunitiesPage() {
         fileInputRef={screenshotFileInputRef}
         previewUrl={screenshotImportPreviewUrl}
         detectionPreview={screenshotImportDetectionPreview}
+        exportResult={screenshotImportExportResult}
         processing={screenshotImportProcessing}
         progress={screenshotImportProgress}
         errorMessage={screenshotImportError}
