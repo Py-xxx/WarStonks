@@ -529,14 +529,6 @@ function SetPlannerRow({
                         </span>
                       </div>
                       <div className="planner-component-pills">
-                        <span className="scanner-stat-pill">
-                          <span className="scanner-stat-pill-label">Stats price</span>
-                          <span className="scanner-stat-pill-value">{formatPlat(component.currentStatsPrice)}</span>
-                        </span>
-                        <span className="scanner-stat-pill scanner-stat-pill-highlight">
-                          <span className="scanner-stat-pill-label">Entry</span>
-                          <span className="scanner-stat-pill-value">{formatPlat(component.recommendedEntryPrice)}</span>
-                        </span>
                         <span className="scanner-stat-pill scanner-stat-pill-highlight">
                           <span className="scanner-stat-pill-label">Entry Zone</span>
                           <span className="scanner-stat-pill-value">
