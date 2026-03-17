@@ -9390,6 +9390,29 @@ body {
   padding: 26px;
 }
 
+.market-empty-state-action {
+  margin-top: 6px;
+  min-width: 116px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(110, 170, 255, 0.22);
+  background: rgba(19, 33, 56, 0.88);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.market-empty-state-action:hover {
+  border-color: rgba(110, 170, 255, 0.42);
+  background: rgba(24, 42, 72, 0.96);
+  transform: translateY(-1px);
+}
+
+.market-inline-notice {
+  margin-bottom: 12px;
+}
+
 .market-error-card .card-body {
   padding: 14px 16px;
 }

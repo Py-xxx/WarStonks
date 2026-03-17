@@ -14,6 +14,7 @@ use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
+use crate::error_log::log_feature_error_best_effort;
 use crate::settings;
 use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
@@ -51,6 +52,22 @@ const RELIC_REFINEMENT_RADIANT: &str = "radiant";
 /// Orders above this size (typically bot walls) get capped so one large listing
 /// cannot dominate the weighted exit price.
 const SELL_ORDER_WALL_QTY_CAP: i64 = 50;
+
+fn build_support_error_message(summary: &str) -> String {
+    format!("{summary} If it keeps happening, report it in Discord.")
+}
+
+fn log_market_error_and_build_message(
+    app: &tauri::AppHandle,
+    feature: &str,
+    stage: &str,
+    detail: &str,
+    summary: &str,
+    error: &anyhow::Error,
+) -> String {
+    log_feature_error_best_effort(app, feature, stage, detail, error);
+    build_support_error_message(summary)
+}
 
 fn scoped_wfm_coalesce_key(prefix: &str, priority: RequestPriority, slug: &str) -> String {
     let priority_scope = match priority {
@@ -9160,12 +9177,30 @@ pub async fn get_item_variants_for_market(
     item_id: i64,
     slug: String,
 ) -> Result<Vec<MarketVariant>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        resolve_variants_from_catalog(&app, item_id, &slug)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    let app_for_work = app.clone();
+    tauri::async_runtime::spawn_blocking(move || resolve_variants_from_catalog(&app_for_work, item_id, &slug))
+        .await
+        .map_err(|error| {
+            let error = anyhow!("failed to join market variant worker: {error}");
+            log_market_error_and_build_message(
+                &app,
+                "market-analysis",
+                "load-market-variants-join",
+                "Failed to join the market variant load worker.",
+                "Couldn’t load market variants right now. Please try again.",
+                &error,
+            )
+        })?
+        .map_err(|error| {
+            log_market_error_and_build_message(
+                &app,
+                "market-analysis",
+                "load-market-variants",
+                "Failed to resolve market variants for the selected item.",
+                "Couldn’t load market variants right now. Please try again.",
+                &error,
+            )
+        })
 }
 
 #[tauri::command]
@@ -9370,9 +9405,10 @@ pub async fn get_item_analytics(
     domain_key: Option<String>,
     bucket_size_key: Option<String>,
 ) -> Result<ItemAnalyticsResponse, String> {
+    let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         build_item_analytics_inner(
-            app,
+            app_for_work,
             item_id,
             slug,
             variant_key,
@@ -9382,8 +9418,27 @@ pub async fn get_item_analytics(
         )
     })
     .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| {
+        let error = anyhow!("failed to join market analytics worker: {error}");
+        log_market_error_and_build_message(
+            &app,
+            "market-analytics",
+            "load-market-analytics-join",
+            "Failed to join the market analytics worker.",
+            "Couldn’t load market analytics right now. Please try again.",
+            &error,
+        )
+    })?
+    .map_err(|error| {
+        log_market_error_and_build_message(
+            &app,
+            "market-analytics",
+            "load-market-analytics",
+            "Failed to build market analytics for the selected item.",
+            "Couldn’t load market analytics right now. Please try again.",
+            &error,
+        )
+    })
 }
 
 #[tauri::command]
@@ -9392,10 +9447,30 @@ pub async fn get_item_detail_summary(
     item_id: i64,
     slug: String,
 ) -> Result<ItemDetailSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || load_item_detail_summary(&app, item_id, &slug))
+    let app_for_work = app.clone();
+    tauri::async_runtime::spawn_blocking(move || load_item_detail_summary(&app_for_work, item_id, &slug))
         .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            let error = anyhow!("failed to join item detail worker: {error}");
+            log_market_error_and_build_message(
+                &app,
+                "market-analysis",
+                "load-item-details-join",
+                "Failed to join the item detail summary worker.",
+                "Couldn’t load item details right now.",
+                &error,
+            )
+        })?
+        .map_err(|error| {
+            log_market_error_and_build_message(
+                &app,
+                "market-analysis",
+                "load-item-details",
+                "Failed to load item detail summary for the selected item.",
+                "Couldn’t load item details right now.",
+                &error,
+            )
+        })
 }
 
 #[tauri::command]
@@ -9406,12 +9481,32 @@ pub async fn get_item_analysis(
     variant_key: Option<String>,
     seller_mode: Option<String>,
 ) -> Result<ItemAnalysisResponse, String> {
+    let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analysis_inner(app, item_id, slug, variant_key, seller_mode)
+        build_item_analysis_inner(app_for_work, item_id, slug, variant_key, seller_mode)
     })
     .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| {
+        let error = anyhow!("failed to join market analysis worker: {error}");
+        log_market_error_and_build_message(
+            &app,
+            "market-analysis",
+            "load-market-analysis-join",
+            "Failed to join the market analysis worker.",
+            "Couldn’t build the market analysis right now. Please try again.",
+            &error,
+        )
+    })?
+    .map_err(|error| {
+        log_market_error_and_build_message(
+            &app,
+            "market-analysis",
+            "load-market-analysis",
+            "Failed to build market analysis for the selected item.",
+            "Couldn’t build the market analysis right now. Please try again.",
+            &error,
+        )
+    })
 }
 
 #[tauri::command]
