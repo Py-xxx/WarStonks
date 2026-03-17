@@ -3020,7 +3020,8 @@ body {
 }
 
 .settings-inline-error,
-.settings-inline-success {
+.settings-inline-success,
+.settings-inline-warning {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 12px;
@@ -3037,6 +3038,12 @@ body {
   border: 1px solid rgba(61, 214, 140, 0.2);
   background: rgba(61, 214, 140, 0.08);
   color: #9ff0c8;
+}
+
+.settings-inline-warning {
+  border: 1px solid rgba(255, 193, 87, 0.22);
+  background: rgba(255, 193, 87, 0.08);
+  color: #ffe0a1;
 }
 
 .settings-modal {

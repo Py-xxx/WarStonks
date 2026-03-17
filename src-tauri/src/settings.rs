@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::Manager;
 
+use crate::error_log::log_feature_error_best_effort;
+
 const SETTINGS_DIR_NAME: &str = "settings";
 const SETTINGS_FILE_NAME: &str = "integrations.json";
 const ALECAFRAME_BASE_URL: &str = "https://stats.alecaframe.com";
@@ -18,6 +20,23 @@ const ALECAFRAME_PUBLIC_STATS_PATH: &str = "/api/stats/public";
 const ALECAFRAME_RELIC_INVENTORY_PATH: &str = "/api/stats/public/getRelicInventory";
 const ALECAFRAME_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
+
+fn build_support_error_message(summary: &str, reference_code: &str) -> String {
+    format!("{summary} If it keeps happening, report it in Discord. Reference: {reference_code}")
+}
+
+fn log_settings_error_and_build_message(
+    app: &tauri::AppHandle,
+    feature: &str,
+    stage: &str,
+    detail: &str,
+    summary: &str,
+    reference_code: &str,
+    error: &anyhow::Error,
+) -> String {
+    log_feature_error_best_effort(app, feature, stage, detail, error);
+    build_support_error_message(summary, reference_code)
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -665,25 +684,58 @@ fn get_currency_balances_inner(app: &tauri::AppHandle) -> Result<WalletSnapshot>
             last_update: result.last_update,
             error_message: None,
         }),
-        Err(error) => Ok(WalletSnapshot {
-            enabled: true,
-            configured: true,
-            error_message: Some(error.to_string()),
-            ..WalletSnapshot::default()
-        }),
+        Err(error) => {
+            log_feature_error_best_effort(
+                app,
+                "alecaframe",
+                "wallet-refresh",
+                "Failed to refresh the Alecaframe wallet snapshot.",
+                &error,
+            );
+            Ok(WalletSnapshot {
+                enabled: true,
+                configured: true,
+                error_message: Some(build_support_error_message(
+                    "Couldn’t refresh Alecaframe balances right now.",
+                    "ALECAFRAME-WALLET-REFRESH-01",
+                )),
+                ..WalletSnapshot::default()
+            })
+        }
     }
 }
 
 #[tauri::command]
 pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
-    load_settings_inner(&app).map_err(|error| error.to_string())
+    load_settings_inner(&app).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "load",
+            "Failed to load the saved integration settings.",
+            "Couldn’t load app settings right now. Please try again.",
+            "SETTINGS-LOAD-01",
+            &error,
+        )
+    })
 }
 
 #[tauri::command]
 pub fn test_alecaframe_public_link(
+    app: tauri::AppHandle,
     public_link: String,
 ) -> Result<AlecaframeValidationResult, String> {
-    validate_public_link_inner(public_link).map_err(|error| error.to_string())
+    validate_public_link_inner(public_link).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "alecaframe",
+            "validate-link",
+            "Failed to validate the Alecaframe public link or token.",
+            "Couldn’t validate that Alecaframe link right now. Check the link or token and try again.",
+            "ALECAFRAME-VALIDATE-01",
+            &error,
+        )
+    })
 }
 
 #[tauri::command]
@@ -691,14 +743,31 @@ pub fn save_alecaframe_settings(
     app: tauri::AppHandle,
     input: AlecaframeSettingsInput,
 ) -> Result<AppSettings, String> {
-    let mut settings = load_settings_inner(&app).map_err(|error| error.to_string())?;
+    let mut settings = load_settings_inner(&app).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "load-for-alecaframe-save",
+            "Failed to load settings before saving Alecaframe configuration.",
+            "Couldn’t save Alecaframe settings right now. Please try again.",
+            "ALECAFRAME-SAVE-LOAD-01",
+            &error,
+        )
+    })?;
     let trimmed_public_link = normalize_optional(input.public_link);
 
     let validation_result = match trimmed_public_link.clone() {
-        Some(public_link) => Some(
-            validate_public_link_inner(public_link)
-                .map_err(|error| format!("Could not save Alecaframe settings: {error}"))?,
-        ),
+        Some(public_link) => Some(validate_public_link_inner(public_link).map_err(|error| {
+            log_settings_error_and_build_message(
+                &app,
+                "alecaframe",
+                "save-validate-link",
+                "Failed to validate the Alecaframe link while saving settings.",
+                "Couldn’t save Alecaframe settings. Check the link or token and try again.",
+                "ALECAFRAME-SAVE-01",
+                &error,
+            )
+        })?),
         None => None,
     };
 
@@ -719,7 +788,17 @@ pub fn save_alecaframe_settings(
             .and_then(|result| result.last_update.clone()),
     };
 
-    save_settings_inner(&app, &settings).map_err(|error| error.to_string())?;
+    save_settings_inner(&app, &settings).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "save-alecaframe-settings",
+            "Failed to persist Alecaframe settings to app storage.",
+            "Couldn’t save Alecaframe settings right now. Please try again.",
+            "ALECAFRAME-SAVE-STORE-01",
+            &error,
+        )
+    })?;
 
     Ok(settings)
 }
@@ -729,14 +808,31 @@ pub fn save_discord_webhook_settings(
     app: tauri::AppHandle,
     input: DiscordWebhookSettingsInput,
 ) -> Result<AppSettings, String> {
-    let mut settings = load_settings_inner(&app).map_err(|error| error.to_string())?;
+    let mut settings = load_settings_inner(&app).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "load-for-discord-save",
+            "Failed to load settings before saving Discord webhook configuration.",
+            "Couldn’t save Discord webhook settings right now. Please try again.",
+            "DISCORD-WEBHOOK-LOAD-01",
+            &error,
+        )
+    })?;
     let normalized_webhook_url = normalize_optional_webhook_url(input.webhook_url);
 
     let validated_webhook_url = match normalized_webhook_url {
-        Some(url) => Some(
-            validate_discord_webhook_url(&url)
-                .map_err(|error| format!("Could not save Discord webhook settings: {error}"))?,
-        ),
+        Some(url) => Some(validate_discord_webhook_url(&url).map_err(|error| {
+            log_settings_error_and_build_message(
+                &app,
+                "discord-webhook",
+                "validate-url",
+                "Failed to validate the Discord webhook URL while saving settings.",
+                "Couldn’t save Discord webhook settings. Check the webhook URL and try again.",
+                "DISCORD-WEBHOOK-VALIDATE-01",
+                &error,
+            )
+        })?),
         None => None,
     };
 
@@ -748,7 +844,17 @@ pub fn save_discord_webhook_settings(
 
     if let Some(webhook_url) = validated_webhook_url.as_deref() {
         post_discord_webhook_payload(webhook_url, build_discord_test_payload())
-            .map_err(|error| format!("Discord webhook test failed: {error}"))?;
+            .map_err(|error| {
+                log_settings_error_and_build_message(
+                    &app,
+                    "discord-webhook",
+                    "test-notification",
+                    "Failed to deliver the Discord webhook test notification while saving settings.",
+                    "Couldn’t send the Discord test notification. Check the webhook and try again.",
+                    "DISCORD-WEBHOOK-TEST-01",
+                    &error,
+                )
+            })?;
     }
 
     settings.discord_webhook = DiscordWebhookSettings {
@@ -762,7 +868,17 @@ pub fn save_discord_webhook_settings(
         ),
     };
 
-    save_settings_inner(&app, &settings).map_err(|error| error.to_string())?;
+    save_settings_inner(&app, &settings).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "save-discord-webhook-settings",
+            "Failed to persist Discord webhook settings to app storage.",
+            "Couldn’t save Discord webhook settings right now. Please try again.",
+            "DISCORD-WEBHOOK-SAVE-STORE-01",
+            &error,
+        )
+    })?;
 
     Ok(settings)
 }
@@ -811,30 +927,80 @@ pub fn send_watchlist_found_discord_notification(
 
 #[tauri::command]
 pub async fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapshot, String> {
+    let app_for_worker = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        get_currency_balances_inner(&app).map_err(|error| error.to_string())
+        get_currency_balances_inner(&app_for_worker).map_err(|error| {
+            log_settings_error_and_build_message(
+                &app_for_worker,
+                "alecaframe",
+                "wallet-load",
+                "Failed to load the Alecaframe wallet snapshot.",
+                "Couldn’t load Alecaframe balances right now.",
+                "ALECAFRAME-WALLET-LOAD-01",
+                &error,
+            )
+        })
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| {
+        let wrapped = anyhow!(error.to_string());
+        log_settings_error_and_build_message(
+            &app,
+            "alecaframe",
+            "wallet-load-worker",
+            "The Alecaframe wallet worker thread failed before completing.",
+            "Couldn’t load Alecaframe balances right now.",
+            "ALECAFRAME-WALLET-LOAD-02",
+            &wrapped,
+        )
+    })?
 }
 
 #[tauri::command]
 pub async fn refresh_alecaframe_wallet_snapshot(
     app: tauri::AppHandle,
 ) -> Result<WalletSnapshot, String> {
+    let app_for_worker = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let snapshot = get_currency_balances_inner(&app).map_err(|error| error.to_string())?;
+        let snapshot = get_currency_balances_inner(&app_for_worker).map_err(|error| {
+            log_settings_error_and_build_message(
+                &app_for_worker,
+                "alecaframe",
+                "wallet-refresh",
+                "Failed to refresh the Alecaframe wallet snapshot.",
+                "Couldn’t refresh Alecaframe balances right now.",
+                "ALECAFRAME-WALLET-REFRESH-02",
+                &error,
+            )
+        })?;
         if snapshot.enabled && snapshot.configured && snapshot.error_message.is_none() {
             if let Err(error) =
-                crate::market_observatory::refresh_owned_relic_inventory_cache_inner(&app)
+                crate::market_observatory::refresh_owned_relic_inventory_cache_inner(&app_for_worker)
             {
-                eprintln!("[alecaframe] background owned relic cache refresh failed: {error}");
+                log_feature_error_best_effort(
+                    &app_for_worker,
+                    "alecaframe",
+                    "owned-relic-cache-refresh",
+                    "Failed to refresh the owned relic cache after refreshing Alecaframe balances.",
+                    &error,
+                );
             }
         }
         Ok(snapshot)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| {
+        let wrapped = anyhow!(error.to_string());
+        log_settings_error_and_build_message(
+            &app,
+            "alecaframe",
+            "wallet-refresh-worker",
+            "The Alecaframe wallet refresh worker thread failed before completing.",
+            "Couldn’t refresh Alecaframe balances right now.",
+            "ALECAFRAME-WALLET-REFRESH-03",
+            &wrapped,
+        )
+    })?
 }
 
 #[cfg(test)]
