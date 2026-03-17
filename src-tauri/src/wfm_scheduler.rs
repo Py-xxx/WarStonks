@@ -417,7 +417,10 @@ where
                         None,
                         Some(total_started_at.elapsed().as_millis() as u64),
                         Some(0),
-                        cached_response.as_ref().ok().map(|response| response.status),
+                        cached_response
+                            .as_ref()
+                            .ok()
+                            .map(|response| response.status),
                     );
                     condvar.notify_all();
                     return cached_response;
@@ -429,15 +432,13 @@ where
                     let generation = state.next_coalesced_generation;
                     state.next_coalesced_generation =
                         state.next_coalesced_generation.wrapping_add(1);
-                    state
-                        .coalesced
-                        .insert(
-                            coalesce_key.clone(),
-                            CoalescedEntry::InFlight {
-                                started_at: now,
-                                generation,
-                            },
-                        );
+                    state.coalesced.insert(
+                        coalesce_key.clone(),
+                        CoalescedEntry::InFlight {
+                            started_at: now,
+                            generation,
+                        },
+                    );
                     leader_generation = Some(generation);
                     log_scheduler_event(
                         &mut state,
@@ -473,7 +474,9 @@ where
                     None,
                     None,
                 );
-                let (next_state, _) = condvar.wait_timeout(state, SCHEDULER_POLL_INTERVAL).unwrap();
+                let (next_state, _) = condvar
+                    .wait_timeout(state, SCHEDULER_POLL_INTERVAL)
+                    .unwrap();
                 drop(next_state);
                 continue;
             }
@@ -561,9 +564,10 @@ where
 
     match receiver.recv_timeout(timeout) {
         Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            Err(anyhow!("{label} timed out after {} ms", timeout.as_millis()))
-        }
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
+            "{label} timed out after {} ms",
+            timeout.as_millis()
+        )),
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             Err(anyhow!("{label} failed before returning a response"))
         }
@@ -880,10 +884,7 @@ fn remove_ticket(state: &mut SchedulerState, priority: RequestPriority, ticket_i
         &mut state.instant_queue
     };
 
-    if let Some(position) = queue
-        .iter()
-        .position(|ticket| ticket.id == ticket_id)
-    {
+    if let Some(position) = queue.iter().position(|ticket| ticket.id == ticket_id) {
         queue.remove(position);
     }
 }
@@ -930,7 +931,9 @@ fn build_snapshot(state: &SchedulerState, now: Instant) -> WfmSchedulerSnapshot 
                 label: ticket.label.clone(),
                 lane: ticket.priority.lane().to_string(),
                 priority: ticket.priority.as_str().to_string(),
-                queued_ms: now.saturating_duration_since(ticket.enqueued_at).as_millis() as u64,
+                queued_ms: now
+                    .saturating_duration_since(ticket.enqueued_at)
+                    .as_millis() as u64,
             })
             .collect(),
     }
@@ -993,8 +996,7 @@ fn log_scheduler_event(
     if event == "waiting" {
         match blocked_reason.as_deref() {
             Some("instant-queue") => {
-                state.blocked_by_instant_queue =
-                    state.blocked_by_instant_queue.saturating_add(1);
+                state.blocked_by_instant_queue = state.blocked_by_instant_queue.saturating_add(1);
             }
             Some("reserved-instant-slot") => {
                 state.blocked_by_reserved_instant_slot =
@@ -1017,12 +1019,14 @@ mod tests {
     fn instant_priority_jumps_the_queue() {
         let now = Instant::now();
         let mut state = SchedulerState::default();
-        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(RequestTicket {
-            id: 1,
-            label: "scanner".to_string(),
-            enqueued_at: now,
-            priority: RequestPriority::Low,
-        });
+        state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(
+            RequestTicket {
+                id: 1,
+                label: "scanner".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::Low,
+            },
+        );
         state.instant_queue.push_back(RequestTicket {
             id: 2,
             label: "search".to_string(),
@@ -1057,15 +1061,20 @@ mod tests {
         // try_grant should service the instant item, not the low-priority item.
         let now = Instant::now();
         let mut state = SchedulerState::default();
-        state.recent_grants.push_back(now - Duration::from_millis(200));
-        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state
+            .recent_grants
+            .push_back(now - Duration::from_millis(200));
+        state
+            .recent_grants
+            .push_back(now - Duration::from_millis(100));
         state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(
             RequestTicket {
-            id: 1,
-            label: "scanner".to_string(),
-            enqueued_at: now,
-            priority: RequestPriority::Low,
-        });
+                id: 1,
+                label: "scanner".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::Low,
+            },
+        );
         // instant queue has a pending item, so the 3rd slot is reserved for it
         state.instant_queue.push_back(RequestTicket {
             id: 2,
@@ -1087,15 +1096,20 @@ mod tests {
     fn normal_priority_can_use_third_slot_when_instant_queue_is_empty() {
         let now = Instant::now();
         let mut state = SchedulerState::default();
-        state.recent_grants.push_back(now - Duration::from_millis(200));
-        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state
+            .recent_grants
+            .push_back(now - Duration::from_millis(200));
+        state
+            .recent_grants
+            .push_back(now - Duration::from_millis(100));
         state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(
             RequestTicket {
-            id: 1,
-            label: "scanner".to_string(),
-            enqueued_at: now,
-            priority: RequestPriority::Low,
-        });
+                id: 1,
+                label: "scanner".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::Low,
+            },
+        );
         // instant queue is empty, so scanner can use the 3rd slot
         let granted = try_grant(&mut state, now).expect("expected low ticket via 3rd slot");
         assert_eq!(granted.priority, RequestPriority::Low);
@@ -1106,8 +1120,12 @@ mod tests {
     fn instant_priority_can_use_reserved_slot_after_two_recent_grants() {
         let now = Instant::now();
         let mut state = SchedulerState::default();
-        state.recent_grants.push_back(now - Duration::from_millis(200));
-        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state
+            .recent_grants
+            .push_back(now - Duration::from_millis(200));
+        state
+            .recent_grants
+            .push_back(now - Duration::from_millis(100));
         state.instant_queue.push_back(RequestTicket {
             id: 1,
             label: "analysis".to_string(),
@@ -1124,16 +1142,20 @@ mod tests {
     fn low_priority_can_resume_after_window_expires() {
         let now = Instant::now();
         let mut state = SchedulerState::default();
-        state.recent_grants
+        state
+            .recent_grants
             .push_back(now - RATE_LIMIT_WINDOW - Duration::from_millis(10));
-        state.recent_grants.push_back(now - Duration::from_millis(100));
+        state
+            .recent_grants
+            .push_back(now - Duration::from_millis(100));
         state.normal_queues[RequestPriority::Low.normal_index().unwrap()].push_back(
             RequestTicket {
-            id: 1,
-            label: "scanner".to_string(),
-            enqueued_at: now,
-            priority: RequestPriority::Low,
-        });
+                id: 1,
+                label: "scanner".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::Low,
+            },
+        );
 
         let granted = try_grant(&mut state, now).expect("expected low ticket");
         assert_eq!(granted.priority, RequestPriority::Low);

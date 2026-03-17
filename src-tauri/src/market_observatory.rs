@@ -15,9 +15,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::settings;
-use crate::wfm_scheduler::{
-    execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse,
-};
+use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
@@ -1764,10 +1762,7 @@ where
         || is_cancelled(),
     )?;
     if response.status < 200 || response.status >= 300 {
-        return Err(extract_wfm_error_body(
-            "WFM statistics request",
-            &response,
-        ));
+        return Err(extract_wfm_error_body("WFM statistics request", &response));
     }
     let payload = serde_json::from_slice::<WfmStatisticsApiResponse>(&response.body)
         .context("failed to parse WFM statistics response")?;
@@ -2171,7 +2166,11 @@ where
         builder,
         RequestPriority::Low,
         "request WFM statistics",
-        Some(scoped_wfm_coalesce_key("statistics", RequestPriority::Low, slug)),
+        Some(scoped_wfm_coalesce_key(
+            "statistics",
+            RequestPriority::Low,
+            slug,
+        )),
         Some(Duration::from_secs(SCANNER_WFM_STATS_TIMEOUT_SECONDS)),
         || is_cancelled(),
     )?;
@@ -2226,7 +2225,9 @@ where
 
 /// Derives the live-sell reference price directly from in-memory parsed rows,
 /// mirroring the SQLite query in `latest_live_sell_reference_price`.
-fn live_sell_price_from_rows(rows_by_domain: &HashMap<String, Vec<InternalStatsRow>>) -> Option<f64> {
+fn live_sell_price_from_rows(
+    rows_by_domain: &HashMap<String, Vec<InternalStatsRow>>,
+) -> Option<f64> {
     rows_by_domain
         .get("48hours")?
         .iter()
@@ -3342,12 +3343,8 @@ fn capture_tracking_snapshot_with_orders_priority(
     seller_mode: &str,
     priority: RequestPriority,
 ) -> Result<(Vec<WfmDetailedOrder>, Vec<WfmDetailedOrder>, MarketSnapshot)> {
-    let (_, sell_orders, buy_orders, snapshot) = fetch_filtered_orders(
-        slug,
-        variant_key,
-        seller_mode,
-        priority,
-    )?;
+    let (_, sell_orders, buy_orders, snapshot) =
+        fetch_filtered_orders(slug, variant_key, seller_mode, priority)?;
     persist_snapshot(
         connection,
         item_id,
@@ -3886,34 +3883,47 @@ fn build_historical_exit_profile(rows: &[InternalStatsRow]) -> HistoricalExitPro
 
     let fair_series = source_rows
         .iter()
-        .filter_map(|row| row.median.or(row.wa_price).or(row.avg_price).or(row.moving_avg))
+        .filter_map(|row| {
+            row.median
+                .or(row.wa_price)
+                .or(row.avg_price)
+                .or(row.moving_avg)
+        })
         .collect::<Vec<_>>();
     let filtered_fair_series = filtered_price_series(&fair_series);
     let recent_fair_series = source_rows
         .iter()
-        .filter_map(|row| row.median.or(row.wa_price).or(row.avg_price).or(row.moving_avg))
+        .filter_map(|row| {
+            row.median
+                .or(row.wa_price)
+                .or(row.avg_price)
+                .or(row.moving_avg)
+        })
         .collect::<Vec<_>>();
 
     let fair_high_anchor = percentile_price(&filtered_fair_series, 0.68)
         .or_else(|| percentile_price(&filtered_fair_series, 0.62))
         .or_else(|| filtered_fair_series.last().copied());
-    let recent_fair_anchor =
-        average_recent_prices(&recent_fair_series, 3).or_else(|| average_recent_prices(&filtered_fair_series, 3));
-    let recent_mid_anchor =
-        average_recent_prices(&recent_fair_series, 7).or_else(|| average_recent_prices(&filtered_fair_series, 6));
+    let recent_fair_anchor = average_recent_prices(&recent_fair_series, 3)
+        .or_else(|| average_recent_prices(&filtered_fair_series, 3));
+    let recent_mid_anchor = average_recent_prices(&recent_fair_series, 7)
+        .or_else(|| average_recent_prices(&filtered_fair_series, 6));
 
     let drift_pct = if recent_fair_series.len() >= 6 {
         let midpoint = recent_fair_series.len() / 2;
         let previous_avg = recent_fair_series[..midpoint].iter().sum::<f64>() / midpoint as f64;
-        let recent_avg =
-            recent_fair_series[midpoint..].iter().sum::<f64>() / (recent_fair_series.len() - midpoint) as f64;
+        let recent_avg = recent_fair_series[midpoint..].iter().sum::<f64>()
+            / (recent_fair_series.len() - midpoint) as f64;
         if previous_avg > 0.0 {
             Some(((recent_avg - previous_avg) / previous_avg) * 100.0)
         } else {
             None
         }
     } else {
-        let previous_avg = average_recent_prices(&recent_fair_series[..recent_fair_series.len().saturating_sub(3)], 3);
+        let previous_avg = average_recent_prices(
+            &recent_fair_series[..recent_fair_series.len().saturating_sub(3)],
+            3,
+        );
         let recent_avg = average_recent_prices(&recent_fair_series, 3);
         match (previous_avg, recent_avg) {
             (Some(previous), Some(recent)) if previous > 0.0 => {
@@ -3964,13 +3974,14 @@ fn historical_recommended_exit_price(
     let zone_high = zone_bands
         .map(|entry| entry.exit_high)
         .or_else(|| zone_overview.and_then(|entry| entry.exit_zone_high));
-    let zone_target = zone_bands
-        .map(|entry| entry.exit_target)
-        .or_else(|| {
-            zone_overview.and_then(|entry| {
-                entry.exit_zone_low.zip(entry.exit_zone_high).map(|(low, high)| (low + high) * 0.5)
-            })
-        });
+    let zone_target = zone_bands.map(|entry| entry.exit_target).or_else(|| {
+        zone_overview.and_then(|entry| {
+            entry
+                .exit_zone_low
+                .zip(entry.exit_zone_high)
+                .map(|(low, high)| (low + high) * 0.5)
+        })
+    });
 
     let mut target = weighted_average_pairs(&[
         (profile.recent_fair_anchor, 0.38),
@@ -4033,13 +4044,18 @@ fn choose_live_exit_percentile(snapshot: &MarketSnapshot, liquidity_score: f64) 
         _ => {}
     }
 
-    if liquidity_score >= 78.0 && snapshot.near_floor_seller_count <= 3 && snapshot.sell_order_count >= 18 {
+    if liquidity_score >= 78.0
+        && snapshot.near_floor_seller_count <= 3
+        && snapshot.sell_order_count >= 18
+    {
         percentile += 4.0;
     } else if liquidity_score < 45.0 {
         percentile -= 3.0;
     }
 
-    if snapshot.buy_quantity >= snapshot.sell_quantity && snapshot.buy_order_count >= snapshot.sell_order_count {
+    if snapshot.buy_quantity >= snapshot.sell_quantity
+        && snapshot.buy_order_count >= snapshot.sell_order_count
+    {
         percentile += 3.0;
     } else if snapshot.buy_quantity * 2 < snapshot.sell_quantity {
         percentile -= 4.0;
@@ -4123,16 +4139,18 @@ fn build_shared_exit_pricing(
     };
 
     if let Some(entry) = entry_price {
-        recommended_exit_price =
-            recommended_exit_price.map(|price| round_platinum(price.max(round_platinum(entry + 1.0))));
+        recommended_exit_price = recommended_exit_price
+            .map(|price| round_platinum(price.max(round_platinum(entry + 1.0))));
     } else {
         recommended_exit_price = recommended_exit_price.map(round_platinum);
     }
 
     let resolved_zone_bands = match (zone_bands, recommended_exit_price) {
-        (Some(zone_bands), Some(exit_target)) => {
-            Some(align_exit_zone_bands_to_target(zone_bands, exit_target, live_cap))
-        }
+        (Some(zone_bands), Some(exit_target)) => Some(align_exit_zone_bands_to_target(
+            zone_bands,
+            exit_target,
+            live_cap,
+        )),
         (Some(zone_bands), None) => Some(zone_bands.clone()),
         (None, _) => None,
     };
@@ -4945,7 +4963,10 @@ fn liquidity_withdrawal_active(snapshots: &[MarketSnapshot]) -> bool {
         .sum::<f64>()
         / (snapshots.len() - split_index) as f64;
     let floor_start = snapshots[split_index - 1].lowest_sell.unwrap_or(0.0);
-    let floor_end = snapshots.last().and_then(|entry| entry.lowest_sell).unwrap_or(0.0);
+    let floor_end = snapshots
+        .last()
+        .and_then(|entry| entry.lowest_sell)
+        .unwrap_or(0.0);
 
     previous_avg > 0.0
         && recent_avg <= previous_avg * 0.65
@@ -5127,8 +5148,7 @@ fn liquidity_score_percent(snapshot: &MarketSnapshot) -> f64 {
     // the activity index to the maximum tier, falsely implying deep liquid market depth.
     let capped_sell_qty =
         (snapshot.sell_quantity as f64).min(snapshot.sell_order_count as f64 * 10.0);
-    let capped_buy_qty =
-        (snapshot.buy_quantity as f64).min(snapshot.buy_order_count as f64 * 10.0);
+    let capped_buy_qty = (snapshot.buy_quantity as f64).min(snapshot.buy_order_count as f64 * 10.0);
     let activity_index = (snapshot.sell_order_count + snapshot.buy_order_count) as f64 * 0.35
         + (capped_sell_qty + capped_buy_qty) * 0.45
         + (snapshot.unique_sell_users + snapshot.unique_buy_users) as f64 * 0.20;
@@ -5401,8 +5421,7 @@ fn build_manipulation_risk(
     });
     let liquidity_withdrawal_streak =
         latest_signal_streak(&snapshots, 6, liquidity_withdrawal_active);
-    let volatile_undercut_streak =
-        latest_signal_streak(&snapshots, 6, volatile_undercut_active);
+    let volatile_undercut_streak = latest_signal_streak(&snapshots, 6, volatile_undercut_active);
     let unstable_buy_pressure_streak =
         latest_signal_streak(&snapshots, 6, unstable_buy_pressure_active);
 
@@ -5701,7 +5720,8 @@ fn build_time_of_day_liquidity(
         .min_by(|left, right| left.heat_score.total_cmp(&right.heat_score))
         .map(|bucket| bucket.label.clone());
     let current_hour_label = format!("{:02}:00", now_utc().hour());
-    let confidence_summary = build_time_of_day_confidence(populated_bucket_count, total_sample_count);
+    let confidence_summary =
+        build_time_of_day_confidence(populated_bucket_count, total_sample_count);
 
     Ok(TimeOfDayLiquiditySummary {
         current_hour_label,
@@ -6963,7 +6983,9 @@ fn replace_set_completion_owned_items(
             return Err(anyhow!("component name is required"));
         }
         if row.quantity <= 0 {
-            return Err(anyhow!("screenshot import quantity must be greater than zero"));
+            return Err(anyhow!(
+                "screenshot import quantity must be greater than zero"
+            ));
         }
         if !seen_slugs.insert(row.slug.clone()) {
             return Err(anyhow!("duplicate screenshot import row for {}", row.slug));
@@ -7125,14 +7147,17 @@ fn replace_owned_set_component_deltas_inner(
             continue;
         }
 
-        let entry = aggregated.entry(delta.slug.clone()).or_insert_with(|| OwnedSetComponentDelta {
-            sync_key: String::new(),
-            item_id: delta.item_id,
-            slug: delta.slug.clone(),
-            name: delta.name.clone(),
-            image_path: delta.image_path.clone(),
-            quantity_delta: 0,
-        });
+        let entry =
+            aggregated
+                .entry(delta.slug.clone())
+                .or_insert_with(|| OwnedSetComponentDelta {
+                    sync_key: String::new(),
+                    item_id: delta.item_id,
+                    slug: delta.slug.clone(),
+                    name: delta.name.clone(),
+                    image_path: delta.image_path.clone(),
+                    quantity_delta: 0,
+                });
 
         entry.quantity_delta += delta.quantity_delta;
         if entry.item_id.is_none() {
@@ -7186,7 +7211,11 @@ fn replace_owned_set_component_deltas_inner(
              ON CONFLICT(sync_key) DO UPDATE SET
                component_slug = excluded.component_slug,
                applied_at = excluded.applied_at",
-            params![delta.sync_key.as_str(), delta.slug.as_str(), rebuilt_at.as_str()],
+            params![
+                delta.sync_key.as_str(),
+                delta.slug.as_str(),
+                rebuilt_at.as_str()
+            ],
         )?;
     }
 
@@ -7406,27 +7435,18 @@ fn build_supply_context(
             name: item_details.name.clone(),
             image_path: item_details.image_path.clone(),
         };
-        let (cached_components, _) = ensure_set_components_cached(
-            &catalog_connection,
-            &observatory_connection,
-            &set_root,
-        )?;
+        let (cached_components, _) =
+            ensure_set_components_cached(&catalog_connection, &observatory_connection, &set_root)?;
         let mut components = Vec::new();
         for component in cached_components {
             let model = component
                 .component_item_id
                 .map(|component_item_id| {
-                    build_statistics_price_model(
-                        &observatory_connection,
-                        component_item_id,
-                        "base",
-                    )
+                    build_statistics_price_model(&observatory_connection, component_item_id, "base")
                 })
                 .transpose()?
                 .flatten();
-            let current_lowest_price = model
-                .as_ref()
-                .and_then(|entry| entry.current_stats_price);
+            let current_lowest_price = model.as_ref().and_then(|entry| entry.current_stats_price);
             let recommended_entry_price = model
                 .as_ref()
                 .and_then(|entry| entry.recommended_entry_price.or(entry.current_stats_price));
@@ -7700,7 +7720,9 @@ where
 {
     // Fast path: already computed in a prior iteration.
     {
-        let cache = shared_model_cache.lock().expect("shared_model_cache lock poisoned");
+        let cache = shared_model_cache
+            .lock()
+            .expect("shared_model_cache lock poisoned");
         if let Some(existing) = cache.get(&item_id) {
             return Ok(existing.clone());
         }
@@ -8099,7 +8121,11 @@ where
             refinement_label: relic_refinement_label(refinement_key).to_string(),
             run_value,
             liquidity_score: round_platinum(weighted_liquidity),
-            relic_roi_score: build_relic_roi_score(run_value, weighted_liquidity, &confidence_summary),
+            relic_roi_score: build_relic_roi_score(
+                run_value,
+                weighted_liquidity,
+                &confidence_summary,
+            ),
             confidence_summary,
             note,
         });
@@ -8157,11 +8183,14 @@ fn build_arbitrage_scanner_inner(
 
     // Shared price model cache populated by both prefetch threads and the main loop.
     // Using Arc<Mutex<_>> so prefetch threads can store models while the main loop reads.
-    let shared_price_model_cache = Arc::new(Mutex::new(HashMap::<i64, Option<ScannerPriceModel>>::new()));
+    let shared_price_model_cache =
+        Arc::new(Mutex::new(HashMap::<i64, Option<ScannerPriceModel>>::new()));
 
     let kick_prefetch = |item_id: i64, slug: String| {
         {
-            let mut in_flight = prefetch_in_flight.lock().expect("prefetch_in_flight lock poisoned");
+            let mut in_flight = prefetch_in_flight
+                .lock()
+                .expect("prefetch_in_flight lock poisoned");
             if in_flight.contains(&item_id) {
                 return;
             }
@@ -8178,18 +8207,29 @@ fn build_arbitrage_scanner_inner(
                 .ok()
                 .and_then(|conn| {
                     let usable = statistics_cache_is_usable(
-                        &conn, item_id, "base", AnalyticsDomainKey::ThirtyDays,
-                    ).unwrap_or(false);
+                        &conn,
+                        item_id,
+                        "base",
+                        AnalyticsDomainKey::ThirtyDays,
+                    )
+                    .unwrap_or(false);
                     let fresh = latest_statistics_fetch_timestamp(&conn, item_id, "base")
                         .ok()
                         .flatten()
-                        .map(|ts| (now_utc() - ts) < TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS))
+                        .map(|ts| {
+                            (now_utc() - ts) < TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS)
+                        })
                         .unwrap_or(false);
                     if usable && fresh {
                         // Build model from SQLite and store in the shared cache so the
                         // main thread can find it without any network wait.
-                        let model = build_statistics_price_model(&conn, item_id, "base").ok().flatten();
-                        cache_arc.lock().expect("shared_model_cache lock poisoned").insert(item_id, model);
+                        let model = build_statistics_price_model(&conn, item_id, "base")
+                            .ok()
+                            .flatten();
+                        cache_arc
+                            .lock()
+                            .expect("shared_model_cache lock poisoned")
+                            .insert(item_id, model);
                         Some(true)
                     } else {
                         Some(false)
@@ -8200,20 +8240,25 @@ fn build_arbitrage_scanner_inner(
             if !is_warm && !stopped.load(AtomicOrdering::Relaxed) {
                 // Cold: fetch from WFM via the pipeline, compute model in-memory, send
                 // write task to the background writer, store model in shared cache.
-                match fetch_statistics_for_pipeline(
-                    item_id, &slug, "base",
-                    || stopped.load(AtomicOrdering::Relaxed),
-                ) {
+                match fetch_statistics_for_pipeline(item_id, &slug, "base", || {
+                    stopped.load(AtomicOrdering::Relaxed)
+                }) {
                     Ok(task) => {
                         let model = build_price_model_from_rows(&task.rows_by_domain);
                         let _ = tx.send(task);
-                        cache_arc.lock().expect("shared_model_cache lock poisoned").insert(item_id, model);
+                        cache_arc
+                            .lock()
+                            .expect("shared_model_cache lock poisoned")
+                            .insert(item_id, model);
                     }
                     Err(_) => {}
                 }
             }
 
-            in_flight_arc.lock().expect("prefetch_in_flight lock poisoned").remove(&item_id);
+            in_flight_arc
+                .lock()
+                .expect("prefetch_in_flight lock poisoned")
+                .remove(&item_id);
         });
     };
 
@@ -8291,7 +8336,10 @@ fn build_arbitrage_scanner_inner(
                 stage_label: "Scanning Sets",
                 current_set_name: Some(set_root.name.clone()),
                 current_component_name: Some(component.component_name.clone()),
-                completion_text: format!("Completed component {} for {}", component.component_name, set_root.name),
+                completion_text: format!(
+                    "Completed component {} for {}",
+                    component.component_name, set_root.name
+                ),
                 kind: ScannerWorkKind::Component,
                 attempt: 0,
             });
@@ -8459,7 +8507,9 @@ fn build_arbitrage_scanner_inner(
                     work_unit.stage_label,
                     format!(
                         "Skipped {} after {} attempts. {} item(s) skipped so far.",
-                        work_unit.display_name, SCANNER_ITEM_MAX_ATTEMPTS, runtime.skipped_entry_count
+                        work_unit.display_name,
+                        SCANNER_ITEM_MAX_ATTEMPTS,
+                        runtime.skipped_entry_count
                     ),
                 )?;
             }
@@ -8630,7 +8680,11 @@ fn build_arbitrage_scanner_inner(
         Some(format!(
             "{} scanner entr{} skipped.",
             skipped_entries.len(),
-            if skipped_entries.len() == 1 { "y was" } else { "ies were" }
+            if skipped_entries.len() == 1 {
+                "y was"
+            } else {
+                "ies were"
+            }
         ))
     };
 
@@ -9137,14 +9191,13 @@ pub async fn get_wfm_item_orders(
             Some("trades") => "request WFM trade orders",
             _ => "request WFM orders",
         };
-        let (api_version, sell_orders, buy_orders, snapshot) =
-            fetch_filtered_orders_labeled(
-                &slug,
-                &variant_key,
-                &seller_mode,
-                request_priority,
-                request_label,
-            )?;
+        let (api_version, sell_orders, buy_orders, snapshot) = fetch_filtered_orders_labeled(
+            &slug,
+            &variant_key,
+            &seller_mode,
+            request_priority,
+            request_label,
+        )?;
         Ok::<_, anyhow::Error>(WfmItemOrdersResponse {
             api_version,
             slug,
@@ -9186,15 +9239,14 @@ pub async fn ensure_market_tracking(
             true,
             None,
         )?;
-        let snapshot =
-            capture_tracking_snapshot_with_priority(
-                &connection,
-                item_id,
-                &slug,
-                &variant_key,
-                &seller_mode,
-                RequestPriority::Instant,
-            )?;
+        let snapshot = capture_tracking_snapshot_with_priority(
+            &connection,
+            item_id,
+            &slug,
+            &variant_key,
+            &seller_mode,
+            RequestPriority::Instant,
+        )?;
         Ok::<_, anyhow::Error>(snapshot)
     })
     .await
@@ -9446,9 +9498,7 @@ struct OwnedRelicCacheRow {
     counts: OwnedRelicRefinementCounts,
 }
 
-fn fetch_owned_relic_inventory_rows(
-    app: &tauri::AppHandle,
-) -> Result<Vec<OwnedRelicCacheRow>> {
+fn fetch_owned_relic_inventory_rows(app: &tauri::AppHandle) -> Result<Vec<OwnedRelicCacheRow>> {
     let settings = settings::load_settings_inner(app)?;
     if !settings.alecaframe.enabled {
         return Err(anyhow!("Enable Alecaframe API in Settings first."));
@@ -9465,13 +9515,15 @@ fn fetch_owned_relic_inventory_rows(
     let mut aggregates = BTreeMap::<(String, String), OwnedRelicRefinementCounts>::new();
     for entry in inventory {
         let key = (entry.tier.clone(), entry.code.clone());
-        let counts = aggregates.entry(key).or_insert_with(|| OwnedRelicRefinementCounts {
-            intact: 0,
-            exceptional: 0,
-            flawless: 0,
-            radiant: 0,
-            total: 0,
-        });
+        let counts = aggregates
+            .entry(key)
+            .or_insert_with(|| OwnedRelicRefinementCounts {
+                intact: 0,
+                exceptional: 0,
+                flawless: 0,
+                radiant: 0,
+                total: 0,
+            });
 
         match entry.refinement.as_str() {
             RELIC_REFINEMENT_INTACT => counts.intact += entry.count,
@@ -9498,8 +9550,7 @@ fn fetch_owned_relic_inventory_rows(
     }
 
     rows.sort_by(|left, right| {
-        let tier_cmp =
-            relic_tier_sort_order(&left.tier).cmp(&relic_tier_sort_order(&right.tier));
+        let tier_cmp = relic_tier_sort_order(&left.tier).cmp(&relic_tier_sort_order(&right.tier));
         if tier_cmp != Ordering::Equal {
             return tier_cmp;
         }
@@ -9593,7 +9644,10 @@ fn load_owned_relic_inventory_cache(
         });
     }
 
-    Ok(OwnedRelicInventoryCache { entries, updated_at })
+    Ok(OwnedRelicInventoryCache {
+        entries,
+        updated_at,
+    })
 }
 
 fn save_owned_relic_inventory_cache(
@@ -9639,7 +9693,9 @@ fn save_owned_relic_inventory_cache(
          ON CONFLICT(cache_key) DO UPDATE SET updated_at = excluded.updated_at",
         params![updated_at],
     )?;
-    transaction.commit().context("failed to save owned relic cache")?;
+    transaction
+        .commit()
+        .context("failed to save owned relic cache")?;
     Ok(())
 }
 
@@ -9670,12 +9726,10 @@ pub async fn get_owned_relic_inventory_cache(
 pub async fn refresh_owned_relic_inventory(
     app: tauri::AppHandle,
 ) -> Result<OwnedRelicInventoryCache, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        refresh_owned_relic_inventory_cache_inner(&app)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || refresh_owned_relic_inventory_cache_inner(&app))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -9920,16 +9974,15 @@ mod tests {
         build_liquidity_confidence, build_manipulation_risk, build_market_snapshot,
         build_orderbook_pressure, build_relic_roi_score, build_supply_confidence,
         build_time_of_day_liquidity, build_trend_quality_breakdown, chance_for_refinement,
-        compute_pressure_ratio, compute_stability, compute_zone_bands,
-        confidence_percent, confidence_score, efficiency_score_percent,
-        extract_rank_stat_highlights, initialize_market_observatory_schema,
-        insert_statistics_rows_for_domain, liquidity_score_percent, normalize_variant_key,
-        persist_snapshot, pressure_label, resample_rows,
-        scoped_wfm_coalesce_key, scoped_wfm_orders_coalesce_key,
-        stale_arbitrage_scanner_progress, weighted_sell_percentile_price,
-        AnalyticsBucketSizeKey, AnalyticsChartPoint, AnalyticsDomainKey,
-        ArbitrageScannerProgress, InternalStatsRow, MarketConfidenceSummary, MarketSnapshot,
-        RelicRefinementChanceProfile, WfmDetailedOrder, WfmStatisticsRowApi,
+        compute_pressure_ratio, compute_stability, compute_zone_bands, confidence_percent,
+        confidence_score, efficiency_score_percent, extract_rank_stat_highlights,
+        initialize_market_observatory_schema, insert_statistics_rows_for_domain,
+        liquidity_score_percent, normalize_variant_key, persist_snapshot, pressure_label,
+        resample_rows, scoped_wfm_coalesce_key, scoped_wfm_orders_coalesce_key,
+        stale_arbitrage_scanner_progress, weighted_sell_percentile_price, AnalyticsBucketSizeKey,
+        AnalyticsChartPoint, AnalyticsDomainKey, ArbitrageScannerProgress, InternalStatsRow,
+        MarketConfidenceSummary, MarketSnapshot, RelicRefinementChanceProfile, WfmDetailedOrder,
+        WfmStatisticsRowApi,
     };
     use crate::wfm_scheduler::RequestPriority;
     use rusqlite::Connection;
@@ -10022,8 +10075,12 @@ mod tests {
             retry_attempt: None,
         };
 
-        super::persist_arbitrage_scanner_progress_with_stop_reset(&connection, &running_progress, true)
-            .expect("initial progress");
+        super::persist_arbitrage_scanner_progress_with_stop_reset(
+            &connection,
+            &running_progress,
+            true,
+        )
+        .expect("initial progress");
         super::request_arbitrage_scanner_stop(&connection).expect("request stop");
 
         let updated_progress = ArbitrageScannerProgress {
@@ -10259,26 +10316,24 @@ mod tests {
 
     #[test]
     fn merge_snapshot_chart_points_overwrites_latest_bucket_with_live_snapshot_values() {
-        let stats_points = vec![
-            AnalyticsChartPoint {
-                bucket_at: "2026-03-11T00:00:00Z".to_string(),
-                open_price: Some(20.0),
-                closed_price: Some(21.0),
-                low_price: Some(20.0),
-                high_price: Some(28.0),
-                lowest_sell: Some(20.0),
-                median_sell: Some(28.0),
-                moving_avg: Some(22.0),
-                weighted_avg: Some(23.0),
-                average_price: Some(24.0),
-                highest_buy: Some(18.0),
-                fair_value_low: Some(19.0),
-                fair_value_high: Some(25.0),
-                entry_zone: Some(20.0),
-                exit_zone: Some(24.0),
-                volume: 10.0,
-            },
-        ];
+        let stats_points = vec![AnalyticsChartPoint {
+            bucket_at: "2026-03-11T00:00:00Z".to_string(),
+            open_price: Some(20.0),
+            closed_price: Some(21.0),
+            low_price: Some(20.0),
+            high_price: Some(28.0),
+            lowest_sell: Some(20.0),
+            median_sell: Some(28.0),
+            moving_avg: Some(22.0),
+            weighted_avg: Some(23.0),
+            average_price: Some(24.0),
+            highest_buy: Some(18.0),
+            fair_value_low: Some(19.0),
+            fair_value_high: Some(25.0),
+            entry_zone: Some(20.0),
+            exit_zone: Some(24.0),
+            volume: 10.0,
+        }];
         let snapshot_points = vec![AnalyticsChartPoint {
             bucket_at: "2026-03-11T00:00:00Z".to_string(),
             open_price: Some(20.0),
@@ -10770,10 +10825,24 @@ mod tests {
         let first_snapshot = sample_snapshot("2026-03-10T00:15:00Z");
         let second_snapshot = sample_snapshot("2026-03-10T12:30:00Z");
 
-        persist_snapshot(&connection, item_id, slug, variant_key, seller_mode, &first_snapshot)
-            .expect("persist first snapshot");
-        persist_snapshot(&connection, item_id, slug, variant_key, seller_mode, &second_snapshot)
-            .expect("persist second snapshot");
+        persist_snapshot(
+            &connection,
+            item_id,
+            slug,
+            variant_key,
+            seller_mode,
+            &first_snapshot,
+        )
+        .expect("persist first snapshot");
+        persist_snapshot(
+            &connection,
+            item_id,
+            slug,
+            variant_key,
+            seller_mode,
+            &second_snapshot,
+        )
+        .expect("persist second snapshot");
 
         let stat_rows = vec![
             InternalStatsRow {
@@ -10823,7 +10892,10 @@ mod tests {
             .expect("time of day summary");
 
         assert_eq!(summary.buckets.len(), 24);
-        assert!(summary.buckets.iter().all(|bucket| (0.0..=1.0).contains(&bucket.heat_score)));
+        assert!(summary
+            .buckets
+            .iter()
+            .all(|bucket| (0.0..=1.0).contains(&bucket.heat_score)));
         assert_eq!(summary.buckets[0].sample_count, 1);
         assert_eq!(summary.buckets[12].sample_count, 1);
         assert!(summary.buckets[12].avg_hourly_volume > summary.buckets[0].avg_hourly_volume);
@@ -11563,8 +11635,14 @@ mod tests {
         );
 
         assert_eq!(pricing.recommended_exit_price, Some(63.0));
-        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_high), Some(64.0));
-        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_target), Some(63.0));
+        assert_eq!(
+            pricing.zone_bands.as_ref().map(|entry| entry.exit_high),
+            Some(64.0)
+        );
+        assert_eq!(
+            pricing.zone_bands.as_ref().map(|entry| entry.exit_target),
+            Some(63.0)
+        );
     }
 
     #[test]
@@ -11593,17 +11671,17 @@ mod tests {
             exit_target: 69.0,
         };
 
-        let pricing = super::build_shared_exit_pricing(
-            Some(59.0),
-            &rows,
-            Some(&zone),
-            None,
-            None,
-            &[],
-        );
+        let pricing =
+            super::build_shared_exit_pricing(Some(59.0), &rows, Some(&zone), None, None, &[]);
 
-        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_high), Some(69.0));
-        assert_eq!(pricing.zone_bands.as_ref().map(|entry| entry.exit_target), Some(67.0));
+        assert_eq!(
+            pricing.zone_bands.as_ref().map(|entry| entry.exit_high),
+            Some(69.0)
+        );
+        assert_eq!(
+            pricing.zone_bands.as_ref().map(|entry| entry.exit_target),
+            Some(67.0)
+        );
         assert_eq!(pricing.recommended_exit_price, Some(67.0));
     }
 
@@ -11630,14 +11708,19 @@ mod tests {
             sample_order("sell", 85.0, 9000, "bot_seller"), // wall
         ];
         for i in 0..89 {
-            orders.push(sample_order("sell", 89.0 + (i % 5) as f64, 2, &format!("seller_{i}")));
+            orders.push(sample_order(
+                "sell",
+                89.0 + (i % 5) as f64,
+                2,
+                &format!("seller_{i}"),
+            ));
         }
 
         // Without wall capping the wall dominates and percentile returns floor (≈85).
         // With the cap the wall weight is sqrt(50)≈7 vs 89 sellers at sqrt(2)≈1.4 each,
         // so the 40th percentile should land above the floor at 89p.
-        let price_at_40 = weighted_sell_percentile_price(&orders, 40.0)
-            .expect("should return a price");
+        let price_at_40 =
+            weighted_sell_percentile_price(&orders, 40.0).expect("should return a price");
         assert!(
             price_at_40 >= 89.0,
             "expected exit percentile above floor (got {price_at_40})"
@@ -11689,7 +11772,7 @@ mod tests {
                 low_price: None,
                 high_price: None,
                 lowest_sell: None,
-                median_sell: None,   // ← absent as in stats-only path
+                median_sell: None, // ← absent as in stats-only path
                 moving_avg: None,
                 weighted_avg: Some(weighted_avg),
                 average_price: None,
@@ -11747,11 +11830,11 @@ mod tests {
     #[test]
     fn efficiency_score_penalizes_high_risk_and_rewards_high_liquidity() {
         // Low risk, good liquidity, decent margin → should score well
-        let good = efficiency_score_percent(Some(80.0), Some(96.0), 75.0, 0)
-            .expect("efficiency score");
+        let good =
+            efficiency_score_percent(Some(80.0), Some(96.0), 75.0, 0).expect("efficiency score");
         // High risk (45% penalty) → should score much lower
-        let risky = efficiency_score_percent(Some(80.0), Some(96.0), 75.0, 45)
-            .expect("efficiency score");
+        let risky =
+            efficiency_score_percent(Some(80.0), Some(96.0), 75.0, 45).expect("efficiency score");
         assert!(good > risky, "high risk should reduce efficiency score");
         assert!(good <= 100.0 && good >= 0.0);
         assert!(risky <= 100.0 && risky >= 0.0);
