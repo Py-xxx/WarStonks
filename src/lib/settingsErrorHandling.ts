@@ -16,15 +16,15 @@ function toRawErrorMessage(error: unknown): string {
 function friendlySettingsErrorFallback(context: SettingsErrorContext): string {
   switch (context) {
     case 'settings-load':
-      return 'Couldn’t load app settings right now. Please try again. If it keeps happening, report it in Discord. Reference: SETTINGS-LOAD-01';
+      return 'Couldn’t load app settings right now. Please try again. If it keeps happening, report it in Discord.';
     case 'alecaframe-validate':
-      return 'Couldn’t validate that Alecaframe link right now. Check the link or token and try again. If it keeps happening, report it in Discord. Reference: ALECAFRAME-VALIDATE-01';
+      return 'Couldn’t validate that Alecaframe link right now. Check the link or token and try again. If it keeps happening, report it in Discord.';
     case 'alecaframe-save':
-      return 'Couldn’t save Alecaframe settings right now. Please try again. If it keeps happening, report it in Discord. Reference: ALECAFRAME-SAVE-01';
+      return 'Couldn’t save Alecaframe settings right now. Please try again. If it keeps happening, report it in Discord.';
     case 'alecaframe-refresh':
-      return 'Couldn’t refresh Alecaframe balances right now. Showing the last available wallet data if possible. If it keeps happening, report it in Discord. Reference: ALECAFRAME-WALLET-REFRESH-01';
+      return 'Couldn’t refresh Alecaframe balances right now. Showing the last available wallet data if possible. If it keeps happening, report it in Discord.';
     case 'discord-webhook-save':
-      return 'Couldn’t save Discord webhook settings right now. Please check the webhook and try again. If it keeps happening, report it in Discord. Reference: DISCORD-WEBHOOK-SAVE-01';
+      return 'Couldn’t save Discord webhook settings right now. Please check the webhook and try again. If it keeps happening, report it in Discord.';
     default:
       return 'Something went wrong. Please try again. If it keeps happening, report it in Discord.';
   }
@@ -47,10 +47,5 @@ export function formatSettingsErrorMessage(
   ) {
     return raw;
   }
-
-  if (raw.includes('Reference:')) {
-    return raw;
-  }
-
   return friendlySettingsErrorFallback(context);
 }
