@@ -1,4 +1,5 @@
 mod commands;
+mod error_log;
 mod item_catalog;
 mod market_observatory;
 mod settings;

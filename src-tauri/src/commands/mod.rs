@@ -8,10 +8,11 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
 
+use crate::error_log::log_feature_error_best_effort;
 use crate::item_catalog;
 use crate::wfm_scheduler::{
-    execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse, WfmSchedulerSnapshot,
-    wfm_scheduler_snapshot,
+    execute_coalesced_wfm_request, wfm_scheduler_snapshot, RequestPriority, WfmHttpResponse,
+    WfmSchedulerSnapshot,
 };
 
 const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
@@ -266,33 +267,40 @@ fn execute_wfm_bytes_request(
     coalesce_key: Option<String>,
 ) -> Result<WfmHttpResponse> {
     let action_label_owned = action_label.to_string();
-    execute_coalesced_wfm_request(priority, action_label, coalesce_key, None, || false, move || {
-        let response = builder
-            .send()
-            .with_context(|| format!("failed to {}", action_label_owned))?;
-        let status = response.status();
-        let retry_after = parse_retry_after_seconds(response.headers());
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+    execute_coalesced_wfm_request(
+        priority,
+        action_label,
+        coalesce_key,
+        None,
+        || false,
+        move || {
+            let response = builder
+                .send()
+                .with_context(|| format!("failed to {}", action_label_owned))?;
+            let status = response.status();
+            let retry_after = parse_retry_after_seconds(response.headers());
+            let headers = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .to_str()
+                        .ok()
+                        .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+                })
+                .collect();
+            let body = response
+                .bytes()
+                .with_context(|| format!("failed to read {} response body", action_label_owned))?
+                .to_vec();
+            Ok(WfmHttpResponse {
+                status: status.as_u16(),
+                body,
+                retry_after,
+                headers,
             })
-            .collect();
-        let body = response
-            .bytes()
-            .with_context(|| format!("failed to read {} response body", action_label_owned))?
-            .to_vec();
-        Ok(WfmHttpResponse {
-            status: status.as_u16(),
-            body,
-            retry_after,
-            headers,
-        })
-    })
+        },
+    )
 }
 
 fn fetch_wfstat_array(endpoint: &str, label: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -780,7 +788,10 @@ fn fetch_wfm_top_sell_orders_inner(
         let body = String::from_utf8_lossy(&response.body);
         let trimmed = body.trim();
         return Err(anyhow::anyhow!(if trimmed.is_empty() {
-            format!("WFM item orders request failed with status {}", response.status)
+            format!(
+                "WFM item orders request failed with status {}",
+                response.status
+            )
         } else {
             format!(
                 "WFM item orders request failed with status {}: {}",
@@ -824,18 +835,34 @@ fn run_initialize_app_catalog(
     app: tauri::AppHandle,
 ) -> Result<item_catalog::StartupSummary, String> {
     let (state_lock, state_signal) = startup_command_state();
-    let mut state = state_lock
-        .lock()
-        .map_err(|_| "startup command state lock poisoned".to_string())?;
+    let mut state = state_lock.lock().map_err(|_| {
+        let error = anyhow::anyhow!("startup command state lock poisoned");
+        log_feature_error_best_effort(
+            &app,
+            "bootstrap",
+            "startup-command-lock",
+            "Failed to acquire the startup command state lock.",
+            &error,
+        );
+        error.to_string()
+    })?;
 
     if let Some(result) = cached_startup_summary(&state) {
         return result;
     }
 
     while state.in_progress {
-        state = state_signal
-            .wait(state)
-            .map_err(|_| "startup command state lock poisoned".to_string())?;
+        state = state_signal.wait(state).map_err(|_| {
+            let error = anyhow::anyhow!("startup command state lock poisoned");
+            log_feature_error_best_effort(
+                &app,
+                "bootstrap",
+                "startup-command-wait",
+                "Failed while waiting for another startup initialization to finish.",
+                &error,
+            );
+            error.to_string()
+        })?;
 
         if let Some(result) = &state.last_result {
             return result.clone();
@@ -846,11 +873,19 @@ fn run_initialize_app_catalog(
     state.last_result = None;
     drop(state);
 
-    let result = item_catalog::initialize_app_catalog(app);
+    let result = item_catalog::initialize_app_catalog(app.clone());
 
-    let mut state = state_lock
-        .lock()
-        .map_err(|_| "startup command state lock poisoned".to_string())?;
+    let mut state = state_lock.lock().map_err(|_| {
+        let error = anyhow::anyhow!("startup command state lock poisoned");
+        log_feature_error_best_effort(
+            &app,
+            "bootstrap",
+            "startup-command-finalize",
+            "Failed to reacquire the startup command state lock after initialization.",
+            &error,
+        );
+        error.to_string()
+    })?;
     state.in_progress = false;
     state.last_result = Some(result.clone());
     state_signal.notify_all();
@@ -862,9 +897,20 @@ fn run_initialize_app_catalog(
 pub async fn initialize_app_catalog(
     app: tauri::AppHandle,
 ) -> Result<item_catalog::StartupSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || run_initialize_app_catalog(app))
+    let app_for_worker = app.clone();
+    tauri::async_runtime::spawn_blocking(move || run_initialize_app_catalog(app_for_worker))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| {
+            let wrapped = anyhow::anyhow!(error.to_string());
+            log_feature_error_best_effort(
+                &app,
+                "bootstrap",
+                "startup-command-spawn",
+                "The startup worker thread failed before initialization could finish.",
+                &wrapped,
+            );
+            wrapped.to_string()
+        })?
 }
 
 #[tauri::command]
