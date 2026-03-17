@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { WORLDSTATE_ENDPOINT_LABELS } from '../../lib/worldState';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -46,6 +47,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const totalAlerts = alerts.length + systemAlerts.length;
 
@@ -53,6 +55,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
     return (
       <div>
         {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
+        {actionError ? <div className="settings-inline-error">{actionError}</div> : null}
         <div className="empty-state">
           <span className="empty-primary">No active alerts</span>
           <span className="empty-sub">
@@ -69,6 +72,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   return (
     <div className={`alerts-panel${compact ? ' compact' : ''}`}>
       {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
+      {actionError ? <div className="settings-inline-error">{actionError}</div> : null}
       {visibleSystemAlerts.length > 0 ? (
         <div className="alerts-section alerts-section-card">
           <div className="alerts-section-header">
@@ -244,6 +248,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       className="act-btn"
                       type="button"
                       onClick={() => {
+                        setActionError(null);
                         const watchlistItem = watchlist.find(
                           (item) => item.id === alert.watchlistId,
                         );
@@ -269,6 +274,17 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                           { username: alert.username, platinum: alert.price },
                           alert.itemName,
                         )
+                          .then(() => {
+                            setActionError(null);
+                          })
+                          .catch(() => {
+                            setActionError(
+                              formatHomeErrorMessage(
+                                'alerts-copy',
+                                new Error('copy failed'),
+                              ),
+                            );
+                          })
                       }
                     >
                       Copy Message
@@ -297,13 +313,14 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
           onSubmit={(price) => {
             setPurchaseLoading(true);
             setPurchaseError(null);
+            setActionError(null);
             void markWatchlistItemBought(purchaseModal.watchlistId, price)
               .then((result) => {
                 setPurchaseSuccess(result.confirmationMessage);
                 setPurchaseModal(null);
               })
               .catch((error) => {
-                setPurchaseError(error instanceof Error ? error.message : String(error));
+                setPurchaseError(formatHomeErrorMessage('alerts-mark-bought', error));
               })
               .finally(() => {
                 setPurchaseLoading(false);

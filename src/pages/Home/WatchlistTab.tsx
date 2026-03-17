@@ -2,14 +2,13 @@ import { useState } from 'react';
 import { WatchlistPurchaseModal } from '../../components/WatchlistPurchaseModal';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { formatElapsedTime } from '../../lib/dateTime';
+import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { getWatchlistVisualState } from '../../lib/watchlist';
 import { useAppStore } from '../../stores/useAppStore';
 
 const COPY_RESET_DELAY_MS = 1800;
-const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
-
 export function WatchlistTab() {
   const watchlist = useAppStore((state) => state.watchlist);
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
@@ -139,7 +138,12 @@ export function WatchlistTab() {
                                     }, COPY_RESET_DELAY_MS);
                                   })
                                   .catch(() => {
-                                    setPurchaseError(COPY_ERROR_MESSAGE);
+                                    setPurchaseError(
+                                      formatHomeErrorMessage(
+                                        'watchlist-copy',
+                                        new Error('copy failed'),
+                                      ),
+                                    );
                                   });
                               }}
                             >
@@ -192,7 +196,7 @@ export function WatchlistTab() {
                 setPurchaseItemId(null);
               })
               .catch((error) => {
-                setPurchaseError(error instanceof Error ? error.message : String(error));
+                setPurchaseError(formatHomeErrorMessage('watchlist-mark-bought', error));
               })
               .finally(() => {
                 setPurchaseLoading(false);

@@ -72,6 +72,7 @@ import {
   hasRecentClosedBuyTradeAtPrice,
 } from '../lib/watchlistPurchase';
 import { orderQuickViewVariants } from '../lib/marketVariantFallback';
+import { formatHomeErrorMessage } from '../lib/homeErrorHandling';
 import { formatSettingsErrorMessage } from '../lib/settingsErrorHandling';
 import type {
   HomeSubTab,
@@ -2321,7 +2322,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         })
         .catch((error) => {
           console.error('[watchlist] failed to sync buy order', error);
-          set({ watchlistFormError: toErrorMessage(error) });
+          set({
+            watchlistFormError: formatHomeErrorMessage('watchlist-buy-sync', error),
+          });
         });
     }
   },
@@ -2387,7 +2390,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       .catch((error) => {
         console.error('[watchlist] failed to add explicit item', error);
         set({
-          watchlistFormError: toErrorMessage(error),
+          watchlistFormError: formatHomeErrorMessage('watchlist-add', error),
         });
       });
   },
@@ -2425,46 +2428,93 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
   },
   markWatchlistItemBought: async (id, price) => {
-    const state = get();
-    const item = state.watchlist.find((entry) => entry.id === id);
-    if (!item) {
-      throw new Error('That watchlist item could not be found.');
-    }
+    try {
+      const state = get();
+      const item = state.watchlist.find((entry) => entry.id === id);
+      if (!item) {
+        throw new Error('That watchlist item could not be found.');
+      }
 
-    const normalizedPrice = Math.max(1, Math.round(price));
-    if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
-      throw new Error('Bought price must be greater than zero.');
-    }
+      const normalizedPrice = Math.max(1, Math.round(price));
+      if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
+        throw new Error('Bought price must be greater than zero.');
+      }
 
-    const expectedRank = deriveVariantRankFromKey(item.variantKey);
-    const clearLinkedBuyOrder = () => {
-      set((currentState) => {
-        const nextWatchlist = clearLinkedBuyOrderFromWatchlistState(currentState.watchlist, id);
-        if (isSameWatchlistSequence(nextWatchlist, currentState.watchlist)) {
-          return currentState;
+      const expectedRank = deriveVariantRankFromKey(item.variantKey);
+      const clearLinkedBuyOrder = () => {
+        set((currentState) => {
+          const nextWatchlist = clearLinkedBuyOrderFromWatchlistState(currentState.watchlist, id);
+          if (isSameWatchlistSequence(nextWatchlist, currentState.watchlist)) {
+            return currentState;
+          }
+
+          writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
+          return { watchlist: nextWatchlist };
+        });
+      };
+
+      if (state.tradeAccount) {
+        const activeOverview = await getWfmTradeOverview(state.sellerMode);
+        const activeBuyOrder = findActiveWatchlistBuyOrder(item, activeOverview.buyOrders);
+
+        if (activeBuyOrder) {
+          let latestOverview = activeOverview;
+          if (
+            !isBuyOrderConfirmedForPurchase({
+              order: activeBuyOrder,
+              expectedPrice: normalizedPrice,
+              expectedRank,
+            })
+          ) {
+            latestOverview = await updateWfmBuyOrder(
+              {
+                orderId: activeBuyOrder.orderId,
+                price: normalizedPrice,
+                quantity: 1,
+                rank: expectedRank,
+                visible: true,
+              },
+              state.sellerMode,
+            );
+            latestOverview = await confirmWatchlistBuyOrderReadyForClose({
+              overview: latestOverview,
+              orderId: activeBuyOrder.orderId,
+              expectedPrice: normalizedPrice,
+              expectedRank,
+              sellerMode: state.sellerMode,
+            });
+          }
+
+          await closeWfmBuyOrder(activeBuyOrder.orderId, 1, state.sellerMode);
+          clearLinkedBuyOrder();
+          get().removeWatchlistItem(id);
+          return { confirmationMessage: 'Item has been marked as bought.' };
         }
 
-        writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
-        return { watchlist: nextWatchlist };
-      });
-    };
-
-    if (state.tradeAccount) {
-      const activeOverview = await getWfmTradeOverview(state.sellerMode);
-      const activeBuyOrder = findActiveWatchlistBuyOrder(item, activeOverview.buyOrders);
-
-      if (activeBuyOrder) {
-        let latestOverview = activeOverview;
+        const cachedTradeLog = await getCachedWfmProfileTradeLog(state.tradeAccount.name).catch(
+          () => null,
+        );
         if (
-          !isBuyOrderConfirmedForPurchase({
-            order: activeBuyOrder,
-            expectedPrice: normalizedPrice,
-            expectedRank,
-          })
+          cachedTradeLog
+          && hasRecentClosedBuyTradeAtPrice(
+            item,
+            normalizedPrice,
+            cachedTradeLog.entries,
+            Date.now(),
+          )
         ) {
-          latestOverview = await updateWfmBuyOrder(
+          clearLinkedBuyOrder();
+          get().removeWatchlistItem(id);
+          return { confirmationMessage: 'Item has been marked as bought.' };
+        }
+
+        const resolvedItem = await resolveWatchlistWfmIdentity(
+          buildAutocompleteItemFromWatchlistEntry(item),
+        );
+        if (resolvedItem.wfmId) {
+          const createdOverview = await createWfmBuyOrder(
             {
-              orderId: activeBuyOrder.orderId,
+              wfmId: resolvedItem.wfmId,
               price: normalizedPrice,
               quantity: 1,
               rank: expectedRank,
@@ -2472,72 +2522,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
             },
             state.sellerMode,
           );
-          latestOverview = await confirmWatchlistBuyOrderReadyForClose({
-            overview: latestOverview,
-            orderId: activeBuyOrder.orderId,
+          const createdOrderId =
+            findMatchingBuyOrderId(resolvedItem, item.variantKey, normalizedPrice, createdOverview);
+          if (!createdOrderId) {
+            throw new Error('Created the buy order but could not confirm it before closing.');
+          }
+          await confirmWatchlistBuyOrderReadyForClose({
+            overview: createdOverview,
+            orderId: createdOrderId,
             expectedPrice: normalizedPrice,
             expectedRank,
             sellerMode: state.sellerMode,
           });
+
+          await closeWfmBuyOrder(createdOrderId, 1, state.sellerMode);
         }
-
-        await closeWfmBuyOrder(activeBuyOrder.orderId, 1, state.sellerMode);
-        clearLinkedBuyOrder();
-        get().removeWatchlistItem(id);
-        return { confirmationMessage: 'Item has been marked as bought.' };
       }
 
-      const cachedTradeLog = await getCachedWfmProfileTradeLog(state.tradeAccount.name).catch(
-        () => null,
-      );
-      if (
-        cachedTradeLog
-        && hasRecentClosedBuyTradeAtPrice(
-          item,
-          normalizedPrice,
-          cachedTradeLog.entries,
-          Date.now(),
-        )
-      ) {
-        clearLinkedBuyOrder();
-        get().removeWatchlistItem(id);
-        return { confirmationMessage: 'Item has been marked as bought.' };
-      }
-
-      const resolvedItem = await resolveWatchlistWfmIdentity(
-        buildAutocompleteItemFromWatchlistEntry(item),
-      );
-      if (resolvedItem.wfmId) {
-        let createdOverview = await createWfmBuyOrder(
-          {
-            wfmId: resolvedItem.wfmId,
-            price: normalizedPrice,
-            quantity: 1,
-            rank: expectedRank,
-            visible: true,
-          },
-          state.sellerMode,
-        );
-        const createdOrderId =
-          findMatchingBuyOrderId(resolvedItem, item.variantKey, normalizedPrice, createdOverview);
-        if (!createdOrderId) {
-          throw new Error('Created the buy order but could not confirm it before closing.');
-        }
-        await confirmWatchlistBuyOrderReadyForClose({
-          overview: createdOverview,
-          orderId: createdOrderId,
-          expectedPrice: normalizedPrice,
-          expectedRank,
-          sellerMode: state.sellerMode,
-        });
-
-        await closeWfmBuyOrder(createdOrderId, 1, state.sellerMode);
-      }
+      clearLinkedBuyOrder();
+      get().removeWatchlistItem(id);
+      return { confirmationMessage: 'Item has been marked as bought.' };
+    } catch (error) {
+      throw new Error(formatHomeErrorMessage('watchlist-mark-bought', error));
     }
-
-    clearLinkedBuyOrder();
-    get().removeWatchlistItem(id);
-    return { confirmationMessage: 'Item has been marked as bought.' };
   },
   handleDetectedTradeBuys: async (buys) => {
     if (!buys.length) {
@@ -2891,7 +2898,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
                   ...entry,
                   retryCount: nextRetryCount,
                   nextScanAt: Date.now() + retryDelayMs,
-                  lastError: toErrorMessage(error),
+                  lastError: formatHomeErrorMessage('watchlist-refresh', error),
                 }
               : entry,
           ),
@@ -3049,6 +3056,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return;
       }
 
+      const friendlyMessage = formatHomeErrorMessage('dashboard-quick-view-load', error);
       set({
         quickView: {
           selectedItem: item,
@@ -3057,11 +3065,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           sparklineLoading: false,
           apiVersion: null,
           loading: false,
-          errorMessage: toErrorMessage(error),
+          errorMessage: friendlyMessage,
         },
         marketVariants: [],
         marketVariantsLoading: false,
-        marketVariantsError: toErrorMessage(error),
+        marketVariantsError: friendlyMessage,
         selectedMarketVariantKey: null,
         selectedMarketVariantLabel: null,
         selectedMarketAnalysis: null,
@@ -3179,15 +3187,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
           }));
         });
     } catch (error) {
+      const friendlyMessage = formatHomeErrorMessage('dashboard-quick-view-load', error);
       set((currentState) => ({
         selectedMarketAnalysisLoading: false,
-        selectedMarketAnalysisError: toErrorMessage(error),
+        selectedMarketAnalysisError: friendlyMessage,
         quickView: {
           ...currentState.quickView,
           sparklinePoints: [],
           sparklineLoading: false,
           loading: false,
-          errorMessage: toErrorMessage(error),
+          errorMessage: friendlyMessage,
         },
       }));
     }
@@ -3269,10 +3278,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return analysis;
       } catch (error) {
         if (requestId === marketAnalysisRequestSequence) {
+          const friendlyMessage = formatHomeErrorMessage('dashboard-analysis-load', error);
           set((currentState) => ({
             selectedMarketAnalysis: currentState.marketAnalysisCache[cacheKey] ?? currentState.selectedMarketAnalysis,
             selectedMarketAnalysisLoading: false,
-            selectedMarketAnalysisError: toErrorMessage(error),
+            selectedMarketAnalysisError: friendlyMessage,
           }));
         }
         throw error;
