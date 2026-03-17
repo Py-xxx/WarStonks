@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { WatchlistPurchaseModal } from '../../components/WatchlistPurchaseModal';
 import { formatElapsedTime, formatShortLocalDateTime } from '../../lib/dateTime';
+import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { buildWatchlistMarketSignals } from '../../lib/watchlistMarketSignals';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { copyWhisperMessage } from '../../lib/marketMessages';
@@ -11,7 +12,6 @@ import { useAppStore } from '../../stores/useAppStore';
 import type { ItemAnalysisResponse, WfmTopSellOrder } from '../../types';
 
 const COPY_RESET_DELAY_MS = 1800;
-const COPY_ERROR_MESSAGE = 'Unable to copy the whisper message.';
 const QUICK_VIEW_ORDER_HINT = 'Click a seller card to copy the whisper message.';
 const colorMap = {
   green: 'var(--accent-green)',
@@ -228,8 +228,13 @@ function WatchlistCard() {
                                   }, COPY_RESET_DELAY_MS);
                                 })
                                 .catch(() => {
-                                  setPurchaseError(COPY_ERROR_MESSAGE);
-                                });
+                                    setPurchaseError(
+                                      formatHomeErrorMessage(
+                                        'watchlist-copy',
+                                        new Error('copy failed'),
+                                      ),
+                                    );
+                                  });
                             }}
                           >
                             {copiedWatchlistId === item.id ? 'Copied' : 'Copy Message'}
@@ -287,7 +292,7 @@ function WatchlistCard() {
                 setPurchaseItemId(null);
               })
               .catch((error) => {
-                setPurchaseError(error instanceof Error ? error.message : String(error));
+                setPurchaseError(formatHomeErrorMessage('watchlist-mark-bought', error));
               })
               .finally(() => {
                 setPurchaseLoading(false);
@@ -439,6 +444,7 @@ function MetricsRow() {
 
 function QuickViewCard() {
   const quickView = useAppStore((s) => s.quickView);
+  const loadQuickViewItem = useAppStore((state) => state.loadQuickViewItem);
   const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
@@ -493,7 +499,9 @@ function QuickViewCard() {
       );
     } catch {
       setCopiedOrderId(null);
-      setCopyFeedback(COPY_ERROR_MESSAGE);
+      setCopyFeedback(
+        formatHomeErrorMessage('dashboard-quick-view-copy', new Error('copy failed')),
+      );
     }
   };
 
@@ -526,6 +534,15 @@ function QuickViewCard() {
           <div className="empty-state">
             <span className="empty-primary">Quick view failed to load</span>
             <span className="empty-sub">{quickView.errorMessage}</span>
+            <button
+              className="text-btn"
+              type="button"
+              onClick={() => {
+                void loadQuickViewItem(selectedItem);
+              }}
+            >
+              Retry quick view
+            </button>
           </div>
         ) : null}
 
@@ -688,6 +705,15 @@ function AnalysisCard() {
           <div className="empty-state">
             <span className="empty-primary">Analysis preview failed to load</span>
             <span className="empty-sub">{analysisError}</span>
+            <button
+              className="text-btn"
+              type="button"
+              onClick={() => {
+                void loadSelectedMarketAnalysis({ force: true });
+              }}
+            >
+              Retry analysis
+            </button>
           </div>
         ) : null}
 
