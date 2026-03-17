@@ -13,6 +13,7 @@ import {
   markWatchlistAddFeedback,
   WATCHLIST_ADD_SUCCESS_MESSAGE,
 } from '../../lib/watchlistAddFeedback';
+import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
@@ -105,6 +106,18 @@ function createRevealState<T extends string>(keys: readonly T[]): Record<T, bool
 function clearRevealTimeouts(timeoutsRef: MutableRefObject<number[]>) {
   timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
   timeoutsRef.current = [];
+}
+
+function buildMarketSelectionIdentity(
+  itemId: number | null,
+  variantKey: string | null,
+  sellerMode: string,
+) {
+  if (!itemId || !variantKey) {
+    return null;
+  }
+
+  return `${itemId}:${variantKey}:${sellerMode}`;
 }
 
 function AdaptiveInfoHint({
@@ -1689,11 +1702,46 @@ function buildEventContextEntries(
   return entries;
 }
 
-function EmptyAnalyticsState({ body }: { body: string }) {
+function EmptyAnalyticsState({
+  title = 'Analytics is ready when the market selection is ready',
+  body,
+  actionLabel = null,
+  onAction = null,
+}: {
+  title?: string;
+  body: string;
+  actionLabel?: string | null;
+  onAction?: (() => void) | null;
+}) {
   return (
     <div className="market-empty-state">
-      <span className="empty-primary">Analytics is ready when the market selection is ready</span>
+      <span className="empty-primary">{title}</span>
       <span className="empty-sub">{body}</span>
+      {actionLabel && onAction ? (
+        <button type="button" className="market-empty-state-action" onClick={onAction}>
+          {actionLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function MarketInlineNotice({
+  tone,
+  message,
+}: {
+  tone: 'warning' | 'error';
+  message: string;
+}) {
+  return (
+    <div
+      className={
+        tone === 'warning'
+          ? 'settings-inline-warning market-inline-notice'
+          : 'settings-inline-error market-inline-notice'
+      }
+    >
+      {message}
     </div>
   );
 }
@@ -1769,10 +1817,12 @@ function AnalyticsPanel({
 function AnalyticsTab() {
   const pageContentRef = useRef<HTMLDivElement | null>(null);
   const revealTimeoutsRef = useRef<number[]>([]);
+  const analyticsIdentityRef = useRef<string | null>(null);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
+  const loadQuickViewItem = useAppStore((state) => state.loadQuickViewItem);
   const sellerMode = useAppStore((state) => state.sellerMode);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
@@ -1800,6 +1850,7 @@ function AnalyticsTab() {
   useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey) {
       clearRevealTimeouts(revealTimeoutsRef);
+      analyticsIdentityRef.current = null;
       setAnalytics(null);
       setLoading(false);
       setErrorMessage(null);
@@ -1808,11 +1859,22 @@ function AnalyticsTab() {
     }
 
     let isMounted = true;
+    const selectionIdentity = buildMarketSelectionIdentity(
+      selectedItem.itemId,
+      selectedMarketVariantKey,
+      sellerMode,
+    );
+    const canKeepCurrentSnapshot =
+      Boolean(selectionIdentity)
+      && analyticsIdentityRef.current === selectionIdentity
+      && analytics !== null;
     clearRevealTimeouts(revealTimeoutsRef);
     setLoading(true);
     setErrorMessage(null);
-    setAnalytics(null);
-    setRevealedPanels(createRevealState(ANALYTICS_PANEL_SEQUENCE));
+    if (!canKeepCurrentSnapshot) {
+      setAnalytics(null);
+      setRevealedPanels(createRevealState(ANALYTICS_PANEL_SEQUENCE));
+    }
 
     void getItemAnalytics(
       selectedItem.itemId,
@@ -1826,6 +1888,7 @@ function AnalyticsTab() {
         if (!isMounted) {
           return;
         }
+        analyticsIdentityRef.current = selectionIdentity;
         setAnalytics(response);
         setLoading(false);
         setErrorMessage(null);
@@ -1835,9 +1898,16 @@ function AnalyticsTab() {
         if (!isMounted) {
           return;
         }
-        setAnalytics(null);
+        const friendlyMessage = formatMarketErrorMessage(
+          canKeepCurrentSnapshot ? 'market-analytics-refresh' : 'market-analytics-load',
+          error,
+        );
+        if (!canKeepCurrentSnapshot) {
+          analyticsIdentityRef.current = null;
+          setAnalytics(null);
+        }
         setLoading(false);
-        setErrorMessage(error instanceof Error ? error.message : String(error));
+        setErrorMessage(friendlyMessage);
         clearRevealTimeouts(revealTimeoutsRef);
       });
 
@@ -1856,6 +1926,7 @@ function AnalyticsTab() {
   const trendMetrics =
     analytics?.trendQualityBreakdown.tabs[trendTab] ??
     analytics?.trendQualityBreakdown.tabs.lowestSell;
+  const analyticsPanelError = analytics ? null : errorMessage;
 
   if (!selectedItem) {
     return (
@@ -1873,17 +1944,45 @@ function AnalyticsTab() {
     );
   }
 
+  if (marketVariantsError && marketVariants.length === 0 && !selectedMarketVariantKey) {
+    return (
+      <div className="page-content">
+        <EmptyAnalyticsState
+          title="Analytics couldn’t load"
+          body={marketVariantsError}
+          actionLabel="Retry"
+          onAction={() => {
+            void loadQuickViewItem(selectedItem);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
         <EmptyAnalyticsState body="This item has separate rank markets. Pick the rank variant in the top bar so analytics only loads the selected rank." />
-        {marketVariantsError ? <span className="watchlist-form-error">{marketVariantsError}</span> : null}
+        {marketVariantsError ? <MarketInlineNotice tone="error" message={marketVariantsError} /> : null}
       </div>
     );
   }
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
+      {errorMessage && analytics ? (
+        <MarketInlineNotice tone="warning" message={errorMessage} />
+      ) : null}
+      {errorMessage && !analytics && !loading ? (
+        <EmptyAnalyticsState
+          title="Analytics couldn’t load"
+          body={errorMessage}
+          actionLabel="Retry"
+          onAction={() => setRefreshNonce((value) => value + 1)}
+        />
+      ) : null}
+      {!errorMessage || analytics || loading ? (
+        <>
       <div className="market-header-actions">
         <div className="market-item-freshness">
           <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
@@ -1914,7 +2013,7 @@ function AnalyticsTab() {
         analytics={analytics}
         loading={loading}
         revealed={revealedPanels.chart}
-        errorMessage={errorMessage}
+        errorMessage={analyticsPanelError}
         domain={chartDomain}
         bucket={chartBucket}
         onDomainChange={setChartDomain}
@@ -1926,8 +2025,8 @@ function AnalyticsTab() {
               eyebrow="Market State"
               info="Current fair value, entry zone, exit zone, and zone quality derived from the latest analytics snapshot."
               infoPlacement="below"
-              loading={!revealedPanels.overview && !errorMessage}
-              errorMessage={!revealedPanels.overview ? errorMessage : null}
+              loading={!revealedPanels.overview && !analyticsPanelError}
+              errorMessage={!revealedPanels.overview ? analyticsPanelError : null}
               loadingLabel="Calculating entry and exit zones"
               headerAside={<ConfidenceBadge confidence={analytics?.entryExitZoneOverview.confidenceSummary} />}
             >
@@ -1973,8 +2072,8 @@ function AnalyticsTab() {
               eyebrow="Execution"
               info="Live cheapest sell, highest buy, spread, and visible depth showing whether execution currently favors entry or exit."
               infoPlacement="below"
-              loading={!revealedPanels.pressure && !errorMessage}
-              errorMessage={!revealedPanels.pressure ? errorMessage : null}
+              loading={!revealedPanels.pressure && !analyticsPanelError}
+              errorMessage={!revealedPanels.pressure ? analyticsPanelError : null}
               loadingLabel="Reading current orderbook pressure"
               headerAside={<ConfidenceBadge confidence={analytics?.orderbookPressure.confidenceSummary} />}
             >
@@ -2019,8 +2118,8 @@ function AnalyticsTab() {
               title="Trend Quality Breakdown"
               eyebrow="Structure"
               info="Short-term trend structure across multiple price views, including slope, confidence, stability, volatility, and reversal context."
-              loading={!revealedPanels.trend && !errorMessage}
-              errorMessage={!revealedPanels.trend ? errorMessage : null}
+              loading={!revealedPanels.trend && !analyticsPanelError}
+              errorMessage={!revealedPanels.trend ? analyticsPanelError : null}
               loadingLabel="Scoring short-term trend quality"
               headerAside={<ConfidenceBadge confidence={analytics?.trendQualityBreakdown.confidenceSummary} />}
             >
@@ -2088,8 +2187,8 @@ function AnalyticsTab() {
               title="Action Card"
               eyebrow="Readout"
               info="Condensed analytics recommendation that combines zone quality, adjusted edge, spread, and book bias into one suggested action."
-              loading={!revealedPanels.action && !errorMessage}
-              errorMessage={!revealedPanels.action ? errorMessage : null}
+              loading={!revealedPanels.action && !analyticsPanelError}
+              errorMessage={!revealedPanels.action ? analyticsPanelError : null}
               loadingLabel="Building the market readout"
               headerAside={<ConfidenceBadge confidence={analytics?.actionCard.confidenceSummary} />}
             >
@@ -2128,6 +2227,8 @@ function AnalyticsTab() {
               </div>
             </AnalyticsPanel>
           </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -2139,6 +2240,7 @@ function AnalysisTab() {
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
+  const loadQuickViewItem = useAppStore((state) => state.loadQuickViewItem);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const analysis = useAppStore((state) => state.selectedMarketAnalysis);
   const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
@@ -2238,7 +2340,7 @@ function AnalysisTab() {
         }
         setItemDetails(null);
         setItemDetailsLoading(false);
-        setItemDetailsError(error instanceof Error ? error.message : String(error));
+        setItemDetailsError(formatMarketErrorMessage('market-item-details-load', error));
       });
 
     void loadSelectedMarketAnalysis()
@@ -2268,11 +2370,10 @@ function AnalysisTab() {
         );
         queuePanelReveal(ANALYSIS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       })
-      .catch((error) => {
+      .catch(() => {
         if (!isMounted) {
           return;
         }
-        console.error('Failed to load selected market analysis', error);
         clearRevealTimeouts(revealTimeoutsRef);
       });
 
@@ -2308,11 +2409,34 @@ function AnalysisTab() {
     );
   }
 
+  if (marketVariantsError && marketVariants.length === 0 && !selectedMarketVariantKey) {
+    return (
+      <div className="page-content">
+        <EmptyAnalyticsState
+          title="Analysis couldn’t load"
+          body={marketVariantsError}
+          actionLabel="Retry"
+          onAction={() => {
+            void loadQuickViewItem(selectedItem);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
         <EmptyAnalyticsState body="Pick the correct rank in the top bar first so analysis never mixes rank-specific orders." />
-        {marketVariantsError ? <span className="watchlist-form-error">{marketVariantsError}</span> : null}
+        {marketVariantsError ? <MarketInlineNotice tone="error" message={marketVariantsError} /> : null}
+      </div>
+    );
+  }
+
+  if (analysisLoading && !analysis) {
+    return (
+      <div className="page-content">
+        <EmptyAnalyticsState body="Building the market analysis from live orders, analytics snapshots, and local item data." />
       </div>
     );
   }
@@ -2335,9 +2459,30 @@ function AnalysisTab() {
     analysis?.supplyContext.dropSources ?? [],
     autocompleteItems,
   );
+  const analysisDegradedMessage = analysisError && analysis ? analysisError : null;
+  const itemDetailsDegradedMessage =
+    itemDetailsError && effectiveItemDetails ? itemDetailsError : null;
 
   return (
     <div ref={pageContentRef} className="page-content market-page-content">
+      {analysisError && !analysis && !analysisLoading ? (
+        <EmptyAnalyticsState
+          title="Analysis couldn’t load"
+          body={analysisError}
+          actionLabel="Retry"
+          onAction={() => {
+            void loadSelectedMarketAnalysis({ force: true });
+          }}
+        />
+      ) : null}
+      {analysis ? (
+        <>
+      {analysisDegradedMessage ? (
+        <MarketInlineNotice tone="warning" message={analysisDegradedMessage} />
+      ) : null}
+      {itemDetailsDegradedMessage ? (
+        <MarketInlineNotice tone="warning" message={itemDetailsDegradedMessage} />
+      ) : null}
       <div className="market-header-actions">
         <div className="market-item-freshness">
           <span>Snapshot {formatRelativeTimestamp(analysis?.sourceSnapshotAt ?? null)}</span>
@@ -2789,7 +2934,7 @@ function AnalysisTab() {
                 eyebrow="Reference"
                 info="Reference data from the local catalog, including description, rank scaling, and item metadata."
                 loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
-                errorMessage={itemDetailsError}
+                errorMessage={effectiveItemDetails ? null : itemDetailsError}
                 loadingLabel="Loading item details from the local catalog"
                 className="market-panel-tone-neutral market-item-details-panel"
                 headerAside={
@@ -3020,6 +3165,8 @@ function AnalysisTab() {
           </AnalyticsPanel>
         </div>
       </div>
+        </>
+      ) : null}
     </div>
   );
 }

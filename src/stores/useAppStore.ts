@@ -73,6 +73,7 @@ import {
 } from '../lib/watchlistPurchase';
 import { orderQuickViewVariants } from '../lib/marketVariantFallback';
 import { formatHomeErrorMessage } from '../lib/homeErrorHandling';
+import { formatMarketErrorMessage } from '../lib/marketErrorHandling';
 import { formatSettingsErrorMessage } from '../lib/settingsErrorHandling';
 import type {
   HomeSubTab,
@@ -3057,6 +3058,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
 
       const friendlyMessage = formatHomeErrorMessage('dashboard-quick-view-load', error);
+      const marketFriendlyMessage = formatMarketErrorMessage('market-variant-load', error);
       set({
         quickView: {
           selectedItem: item,
@@ -3069,7 +3071,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         },
         marketVariants: [],
         marketVariantsLoading: false,
-        marketVariantsError: friendlyMessage,
+        marketVariantsError: marketFriendlyMessage,
         selectedMarketVariantKey: null,
         selectedMarketVariantLabel: null,
         selectedMarketAnalysis: null,
@@ -3188,9 +3190,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
         });
     } catch (error) {
       const friendlyMessage = formatHomeErrorMessage('dashboard-quick-view-load', error);
+      const marketFriendlyMessage = formatMarketErrorMessage('market-variant-load', error);
       set((currentState) => ({
         selectedMarketAnalysisLoading: false,
-        selectedMarketAnalysisError: friendlyMessage,
+        selectedMarketAnalysisError: marketFriendlyMessage,
         quickView: {
           ...currentState.quickView,
           sparklinePoints: [],
@@ -3278,7 +3281,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return analysis;
       } catch (error) {
         if (requestId === marketAnalysisRequestSequence) {
-          const friendlyMessage = formatHomeErrorMessage('dashboard-analysis-load', error);
+          const friendlyMessage = formatMarketErrorMessage(
+            force ? 'market-analysis-refresh' : 'market-analysis-load',
+            error,
+          );
           set((currentState) => ({
             selectedMarketAnalysis: currentState.marketAnalysisCache[cacheKey] ?? currentState.selectedMarketAnalysis,
             selectedMarketAnalysisLoading: false,
