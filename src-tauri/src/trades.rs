@@ -775,8 +775,8 @@ fn save_trade_credentials(app: &tauri::AppHandle, creds: &StoredTradeCredentials
 
     let mut updated = creds.clone();
     updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    let serialized = serde_json::to_string_pretty(&updated)
-        .context("failed to serialize trade credentials")?;
+    let serialized =
+        serde_json::to_string_pretty(&updated).context("failed to serialize trade credentials")?;
     fs::write(&path, serialized)
         .with_context(|| format!("failed to write trade credentials at {}", path.display()))
 }
@@ -1030,10 +1030,7 @@ fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
 }
 
-fn trade_record_is_before_cutoff(
-    record: &StoredTradeLogRecord,
-    cutoff: OffsetDateTime,
-) -> bool {
+fn trade_record_is_before_cutoff(record: &StoredTradeLogRecord, cutoff: OffsetDateTime) -> bool {
     parse_timestamp(&record.closed_at)
         .map(|closed_at| closed_at < cutoff)
         .unwrap_or(false)
@@ -1183,33 +1180,40 @@ fn execute_wfm_bytes_request(
     coalesce_key: Option<String>,
 ) -> Result<WfmHttpResponse> {
     let action_label_owned = action_label.to_string();
-    execute_coalesced_wfm_request(priority, action_label, coalesce_key, None, || false, move || {
-        let response = builder
-            .send()
-            .with_context(|| format!("failed to {}", action_label_owned))?;
-        let status = response.status();
-        let retry_after = parse_retry_after_seconds(response.headers());
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+    execute_coalesced_wfm_request(
+        priority,
+        action_label,
+        coalesce_key,
+        None,
+        || false,
+        move || {
+            let response = builder
+                .send()
+                .with_context(|| format!("failed to {}", action_label_owned))?;
+            let status = response.status();
+            let retry_after = parse_retry_after_seconds(response.headers());
+            let headers = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .to_str()
+                        .ok()
+                        .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+                })
+                .collect();
+            let body = response
+                .bytes()
+                .with_context(|| format!("failed to read {} response body", action_label_owned))?
+                .to_vec();
+            Ok(WfmHttpResponse {
+                status: status.as_u16(),
+                body,
+                retry_after,
+                headers,
             })
-            .collect();
-        let body = response
-            .bytes()
-            .with_context(|| format!("failed to read {} response body", action_label_owned))?
-            .to_vec();
-        Ok(WfmHttpResponse {
-            status: status.as_u16(),
-            body,
-            retry_after,
-            headers,
-        })
-    })
+        },
+    )
 }
 
 fn execute_wfm_request_with_priority(
@@ -1682,7 +1686,10 @@ fn build_trade_notification_items_for_wfm_entry(
             .map(|entry| entry.name.clone())
             .unwrap_or_else(|| component.component_slug.clone());
         let image_path = meta.and_then(|entry| entry.image_path);
-        let quantity = component.quantity_in_set.max(1).saturating_mul(trade_quantity);
+        let quantity = component
+            .quantity_in_set
+            .max(1)
+            .saturating_mul(trade_quantity);
 
         items.push(DiscordTradeNotificationItem {
             item_name: name,
@@ -2348,7 +2355,10 @@ fn fetch_profile_trade_log_inner_with_priority(
         let body = String::from_utf8_lossy(&response.body);
         let trimmed = body.trim();
         return Err(if trimmed.is_empty() {
-            anyhow!("request WFM trade history failed with status {}", response.status)
+            anyhow!(
+                "request WFM trade history failed with status {}",
+                response.status
+            )
         } else {
             anyhow!(
                 "request WFM trade history failed with status {}: {}",
@@ -2947,7 +2957,8 @@ fn save_trade_set_map_file(path: &Path, file: &TradeSetMapFile) -> Result<()> {
 
     let mut updated = file.clone();
     updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    let raw = serde_json::to_string_pretty(&updated).context("failed to serialize trade set map")?;
+    let raw =
+        serde_json::to_string_pretty(&updated).context("failed to serialize trade set map")?;
     fs::write(path, raw)
         .with_context(|| format!("failed to write trade set map at {}", path.display()))
 }
@@ -3012,13 +3023,14 @@ fn build_trade_set_map_inner(
     let mut sets = Vec::with_capacity(set_roots.len());
 
     for set_root in &set_roots {
-        let components = load_trade_set_components_from_catalog(&catalog_connection, &set_root.slug)?
-            .into_iter()
-            .map(|component| TradeSetMapComponentRecord {
-                slug: component.component_slug,
-                quantity_in_set: component.quantity_in_set.max(1),
-            })
-            .collect::<Vec<_>>();
+        let components =
+            load_trade_set_components_from_catalog(&catalog_connection, &set_root.slug)?
+                .into_iter()
+                .map(|component| TradeSetMapComponentRecord {
+                    slug: component.component_slug,
+                    quantity_in_set: component.quantity_in_set.max(1),
+                })
+                .collect::<Vec<_>>();
 
         sets.push(TradeSetMapSetRecord {
             slug: set_root.slug.clone(),
@@ -3364,7 +3376,10 @@ fn build_cost_basis_confidence(
     }
 
     if matched_quantity >= quantity.max(1) {
-        return (Some("full".to_string()), Some("Full Cost Basis".to_string()));
+        return (
+            Some("full".to_string()),
+            Some("Full Cost Basis".to_string()),
+        );
     }
 
     (
@@ -3653,7 +3668,12 @@ fn consume_set_component_buy_lots(
     components: &[TradeSetComponentRecord],
     sell_quantity: i64,
     sell_closed_at: &str,
-) -> (i64, i64, Vec<ConsumedBuyMatch>, Vec<DerivedSetComponentDetail>) {
+) -> (
+    i64,
+    i64,
+    Vec<ConsumedBuyMatch>,
+    Vec<DerivedSetComponentDetail>,
+) {
     if components.is_empty() || sell_quantity <= 0 {
         return (0, 0, Vec::new(), Vec::new());
     }
@@ -3685,15 +3705,16 @@ fn consume_set_component_buy_lots(
     let mut all_matches = Vec::new();
     let mut component_details = Vec::new();
     for component in components {
-        let (component_matched_quantity, component_cost, component_matches) = consume_matching_buy_lots(
-            records,
-            consumption,
-            &component.component_slug,
-            None,
-            component.quantity_in_set * sell_quantity,
-            sell_closed_at,
-            true,
-        );
+        let (component_matched_quantity, component_cost, component_matches) =
+            consume_matching_buy_lots(
+                records,
+                consumption,
+                &component.component_slug,
+                None,
+                component.quantity_in_set * sell_quantity,
+                sell_closed_at,
+                true,
+            );
         total_cost += component_cost;
         all_matches.extend(component_matches);
         component_details.push(DerivedSetComponentDetail {
@@ -3704,7 +3725,12 @@ fn consume_set_component_buy_lots(
         });
     }
 
-    (fully_supported_sets.max(0), total_cost, all_matches, component_details)
+    (
+        fully_supported_sets.max(0),
+        total_cost,
+        all_matches,
+        component_details,
+    )
 }
 
 fn derive_trade_ledger_with_components<F>(
@@ -3731,13 +3757,14 @@ where
         if record.slug.ends_with("_set") {
             let components = load_components(&record.slug);
             if !components.is_empty() {
-                let (set_quantity, set_cost, set_matches, component_details) = consume_set_component_buy_lots(
-                    records,
-                    &mut consumption,
-                    &components,
-                    remaining_quantity,
-                    &record.closed_at,
-                );
+                let (set_quantity, set_cost, set_matches, component_details) =
+                    consume_set_component_buy_lots(
+                        records,
+                        &mut consumption,
+                        &components,
+                        remaining_quantity,
+                        &record.closed_at,
+                    );
                 matched_quantity += set_quantity;
                 matched_cost += set_cost;
                 remaining_quantity -= set_quantity;
@@ -4200,8 +4227,12 @@ fn force_trade_log_resync_inner(
                 .iter()
                 .map(build_stored_trade_record_from_entry)
                 .collect::<Vec<_>>();
-            let imported =
-                build_alecaframe_trade_entries(app, trimmed_username, &baseline_date, &existing_records)?;
+            let imported = build_alecaframe_trade_entries(
+                app,
+                trimmed_username,
+                &baseline_date,
+                &existing_records,
+            )?;
             if !imported.is_empty() {
                 fetched_entries = append_unique_trade_entries(&fetched_entries, &imported);
             }
@@ -5257,7 +5288,8 @@ async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str)
             }
 
             if route == "event/status/set" {
-                latest_emitted_status = payload.payload.as_ref().and_then(parse_status_from_payload);
+                latest_emitted_status =
+                    payload.payload.as_ref().and_then(parse_status_from_payload);
                 continue;
             }
 
@@ -5274,7 +5306,9 @@ async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str)
             }
         }
 
-        Err(anyhow!("presence update confirmation was not emitted by WFM"))
+        Err(anyhow!(
+            "presence update confirmation was not emitted by WFM"
+        ))
     })
     .await
     .context("timed out while waiting for WFM presence update")?
@@ -5740,8 +5774,7 @@ pub async fn try_auto_sign_in_wfm_trade_account(
     .map_err(|error| error.to_string());
 
     if let Ok(Ok(mut session)) = maybe_session {
-        if let Ok(status) =
-            fetch_current_trade_status_ws(&session.token, &session.device_id).await
+        if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await
         {
             session.account.status = status;
             let _ = tauri::async_runtime::spawn_blocking({
@@ -6118,15 +6151,15 @@ pub async fn delete_wfm_buy_order(
 mod tests {
     use super::{
         build_cost_basis_confidence, build_trade_log_entries_from_statistics,
-        build_trade_notification_fingerprint,
-        collapse_grouped_trade_sets, compute_cost_basis_coverage, compute_current_value_coverage,
+        build_trade_notification_fingerprint, collapse_grouped_trade_sets,
+        compute_cost_basis_coverage, compute_current_value_coverage,
         derive_trade_log_entries_with_components, initialize_trades_cache_schema,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         merge_wfm_trade_log_entries, normalize_alecaframe_trade_payload, normalize_avatar_url,
         normalize_status_set_request, parse_status_from_payload, save_trade_log_rows_inner,
-        trade_record_is_before_cutoff, AlecaframeRawTradeRecord,
-        AlecaframeTradeItemRecord, AlecaframeTradeResponse, PortfolioTradeLogEntry,
-        StoredTradeLogRecord, TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
+        trade_record_is_before_cutoff, AlecaframeRawTradeRecord, AlecaframeTradeItemRecord,
+        AlecaframeTradeResponse, PortfolioTradeLogEntry, StoredTradeLogRecord,
+        TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
         WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
     };
     use crate::settings::DiscordTradeNotificationItem;
@@ -6772,7 +6805,10 @@ mod tests {
         );
         assert_eq!(
             build_cost_basis_confidence("sell", 2, 2, 50),
-            (Some("full".to_string()), Some("Full Cost Basis".to_string()))
+            (
+                Some("full".to_string()),
+                Some("Full Cost Basis".to_string())
+            )
         );
         assert_eq!(build_cost_basis_confidence("buy", 1, 1, 10), (None, None));
     }

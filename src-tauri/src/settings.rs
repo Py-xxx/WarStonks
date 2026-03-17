@@ -546,7 +546,9 @@ fn parse_alecaframe_relic_inventory(payload: &[u8]) -> Result<Vec<AlecaframeReli
             .trim()
             .to_string();
         if code.is_empty() {
-            return Err(anyhow!("Alecaframe relic inventory entry has an empty relic code."));
+            return Err(anyhow!(
+                "Alecaframe relic inventory entry has an empty relic code."
+            ));
         }
 
         entries.push(AlecaframeRelicInventoryEntry {
@@ -568,9 +570,7 @@ fn decode_alecaframe_relic_inventory_payload(payload: &[u8]) -> Result<Vec<u8>> 
         .collect::<Vec<u8>>();
 
     if trimmed.is_empty() {
-        return Err(anyhow!(
-            "Alecaframe relic inventory payload was empty."
-        ));
+        return Err(anyhow!("Alecaframe relic inventory payload was empty."));
     }
 
     if trimmed[0] == b'{' || trimmed[0] == b'[' || trimmed[0] == b'"' {
@@ -828,9 +828,7 @@ pub async fn refresh_alecaframe_wallet_snapshot(
             if let Err(error) =
                 crate::market_observatory::refresh_owned_relic_inventory_cache_inner(&app)
             {
-                eprintln!(
-                    "[alecaframe] background owned relic cache refresh failed: {error}"
-                );
+                eprintln!("[alecaframe] background owned relic cache refresh failed: {error}");
             }
         }
         Ok(snapshot)
@@ -842,10 +840,10 @@ pub async fn refresh_alecaframe_wallet_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_public_token, load_settings_from_path, map_currency_balance,
-        decode_alecaframe_relic_inventory_payload, parse_alecaframe_relic_inventory,
-        save_settings_to_path, select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings,
-        AppSettings, DiscordWebhookNotificationSettings, DiscordWebhookSettings,
+        decode_alecaframe_relic_inventory_payload, extract_public_token, load_settings_from_path,
+        map_currency_balance, parse_alecaframe_relic_inventory, save_settings_to_path,
+        select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings, AppSettings,
+        DiscordWebhookNotificationSettings, DiscordWebhookSettings,
     };
     use std::fs;
     use std::path::PathBuf;
