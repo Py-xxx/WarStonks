@@ -4,6 +4,7 @@ import {
   formatWorldStateDateTime,
   isWorldStateWindowActive,
 } from '../../lib/worldState';
+import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfstatFlashSale, WfstatNewsItem } from '../../types';
 
@@ -80,6 +81,7 @@ export function MarketNewsPanel() {
     () => flashSales.filter((sale) => !sale.expired).sort(sortFlashSales),
     [flashSales],
   );
+  const hasUsableData = sortedNews.length > 0 || visibleFlashSales.length > 0;
 
   return (
     <div className="market-news-stack">
@@ -109,7 +111,14 @@ export function MarketNewsPanel() {
         </div>
       </div>
 
-      {error ? <div className="settings-inline-error">{error}</div> : null}
+      <EventsPanelNotice
+        message={error}
+        tone={hasUsableData ? 'warning' : 'error'}
+        loading={loading}
+        onRefresh={() => {
+          void refreshWorldStateMarketNews();
+        }}
+      />
 
       <div className="market-news-layout">
         <section className="card market-news-card">
@@ -122,21 +131,28 @@ export function MarketNewsPanel() {
 
           <div className="card-body">
             {loading && sortedNews.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-primary">Loading Warframe news…</span>
-                <span className="empty-sub">
-                  Pulling the latest official notices from the worldstate snapshot.
-                </span>
-              </div>
+              <EventsPanelEmpty
+                title="Loading Warframe news…"
+                detail="Pulling the latest official notices from the live worldstate."
+              />
             ) : null}
 
-            {!loading && sortedNews.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-primary">No news items available</span>
-                <span className="empty-sub">
-                  The current worldstate snapshot did not include any visible news entries.
-                </span>
-              </div>
+            {!loading && sortedNews.length === 0 && error && !hasUsableData ? (
+              <EventsPanelEmpty
+                title="News couldn’t load"
+                detail={error}
+                actionLabel="Retry"
+                onAction={() => {
+                  void refreshWorldStateMarketNews();
+                }}
+              />
+            ) : null}
+
+            {!loading && sortedNews.length === 0 && (!error || hasUsableData) ? (
+              <EventsPanelEmpty
+                title="No news items available"
+                detail="The current worldstate snapshot did not include any visible news entries."
+              />
             ) : null}
 
             {sortedNews.length > 0 ? (
@@ -192,21 +208,28 @@ export function MarketNewsPanel() {
 
           <div className="card-body">
             {loading && visibleFlashSales.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-primary">Loading flash sales…</span>
-                <span className="empty-sub">
-                  Checking the live market state for active and upcoming sale windows.
-                </span>
-              </div>
+              <EventsPanelEmpty
+                title="Loading flash sales…"
+                detail="Checking the live market state for active and upcoming sale windows."
+              />
             ) : null}
 
-            {!loading && visibleFlashSales.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-primary">No flash sales available</span>
-                <span className="empty-sub">
-                  There are no active or upcoming flash sales in the current snapshot.
-                </span>
-              </div>
+            {!loading && visibleFlashSales.length === 0 && error && !hasUsableData ? (
+              <EventsPanelEmpty
+                title="Flash sales couldn’t load"
+                detail={error}
+                actionLabel="Retry"
+                onAction={() => {
+                  void refreshWorldStateMarketNews();
+                }}
+              />
+            ) : null}
+
+            {!loading && visibleFlashSales.length === 0 && (!error || hasUsableData) ? (
+              <EventsPanelEmpty
+                title="No flash sales available"
+                detail="There are no active or upcoming flash sales in the current snapshot."
+              />
             ) : null}
 
             {visibleFlashSales.length > 0 ? (

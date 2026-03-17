@@ -4,6 +4,7 @@ import {
   formatWorldStateDateTime,
   isWorldStateWindowActive,
 } from '../../lib/worldState';
+import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   WfstatAlert,
@@ -93,39 +94,29 @@ function PanelMeta({
 function PanelEmpty({
   title,
   detail,
+  actionLabel = null,
+  onAction = null,
 }: {
   title: string;
   detail: string;
+  actionLabel?: string | null;
+  onAction?: (() => void) | null;
 }) {
-  return (
-    <div className="empty-state activity-empty-state">
-      <span className="empty-primary">{title}</span>
-      <span className="empty-sub">{detail}</span>
-    </div>
-  );
+  return <EventsPanelEmpty title={title} detail={detail} actionLabel={actionLabel} onAction={onAction} />;
 }
 
 function PanelError({
   error,
+  tone,
   loading,
   onRefresh,
 }: {
   error: string | null;
+  tone: 'warning' | 'error';
   loading: boolean;
   onRefresh: () => void;
 }) {
-  if (!error) {
-    return null;
-  }
-
-  return (
-    <div className="activity-inline-state">
-      <span className="settings-inline-error">{error}</span>
-      <button className="text-btn" type="button" onClick={onRefresh}>
-        {loading ? 'Refreshing…' : 'Retry'}
-      </button>
-    </div>
-  );
+  return <EventsPanelNotice message={error} tone={tone} loading={loading} onRefresh={onRefresh} />;
 }
 
 function SortieCard({
@@ -147,6 +138,7 @@ function SortieCard({
     sortie &&
     !sortie.expired &&
     isWorldStateWindowActive(sortie.activation, sortie.expiry, nowMs);
+  const hasUsableSortie = Boolean(sortie);
 
   return (
     <section className="card activity-panel activity-panel-wide">
@@ -170,12 +162,16 @@ function SortieCard({
             Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
           </div>
         ) : null}
-        <PanelError error={error} loading={loading} onRefresh={onRefresh} />
+        <PanelError error={error} tone={hasUsableSortie ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {!sortie || !isActive ? (
           <PanelEmpty
-            title="No active sortie"
-            detail="The sortie panel will populate as soon as WFStat reports a live sortie."
+            title={!sortie && error ? 'Sortie couldn’t load' : 'No active sortie'}
+            detail={!sortie && error
+              ? error
+              : 'The sortie panel will populate as soon as the live worldstate reports a sortie.'}
+            actionLabel={!sortie && error ? 'Retry' : null}
+            onAction={!sortie && error ? onRefresh : null}
           />
         ) : (
           <div className="activity-stack">
@@ -232,6 +228,7 @@ function ArchonHuntCard({
     archonHunt &&
     !archonHunt.expired &&
     isWorldStateWindowActive(archonHunt.activation, archonHunt.expiry, nowMs);
+  const hasUsableArchonHunt = Boolean(archonHunt);
 
   return (
     <section className="card activity-panel activity-panel-wide">
@@ -255,12 +252,16 @@ function ArchonHuntCard({
             Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
           </div>
         ) : null}
-        <PanelError error={error} loading={loading} onRefresh={onRefresh} />
+        <PanelError error={error} tone={hasUsableArchonHunt ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {!archonHunt || !isActive ? (
           <PanelEmpty
-            title="No active archon hunt"
-            detail="The weekly Archon Hunt will appear here when the feed reports an active window."
+            title={!archonHunt && error ? 'Archon Hunt couldn’t load' : 'No active archon hunt'}
+            detail={!archonHunt && error
+              ? error
+              : 'The weekly Archon Hunt will appear here when the live worldstate reports an active window.'}
+            actionLabel={!archonHunt && error ? 'Retry' : null}
+            onAction={!archonHunt && error ? onRefresh : null}
           />
         ) : (
           <div className="activity-stack">
@@ -315,6 +316,7 @@ function AlertsCard({
   onRefresh: () => void;
 }) {
   const activeAlerts = alerts.filter((alert) => !alert.expired && Date.parse(alert.expiry ?? '') > nowMs);
+  const hasUsableAlerts = alerts.length > 0;
 
   return (
     <section className="card activity-panel">
@@ -336,12 +338,16 @@ function AlertsCard({
             Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
           </div>
         ) : null}
-        <PanelError error={error} loading={loading} onRefresh={onRefresh} />
+        <PanelError error={error} tone={hasUsableAlerts ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {activeAlerts.length === 0 ? (
           <PanelEmpty
-            title="No active alerts"
-            detail="WFStat is not reporting any live alert missions right now."
+            title={error && !hasUsableAlerts ? 'Alerts couldn’t load' : 'No active alerts'}
+            detail={error && !hasUsableAlerts
+              ? error
+              : 'The live worldstate is not reporting any alert missions right now.'}
+            actionLabel={error && !hasUsableAlerts ? 'Retry' : null}
+            onAction={error && !hasUsableAlerts ? onRefresh : null}
           />
         ) : (
           <div className="activity-list">
@@ -398,6 +404,7 @@ function ArbitrationCard({
     arbitration &&
     !arbitration.expired &&
     isWorldStateWindowActive(arbitration.activation, arbitration.expiry, nowMs);
+  const hasUsableArbitration = Boolean(arbitration);
 
   return (
     <section className="card activity-panel">
@@ -421,12 +428,16 @@ function ArbitrationCard({
             Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
           </div>
         ) : null}
-        <PanelError error={error} loading={loading} onRefresh={onRefresh} />
+        <PanelError error={error} tone={hasUsableArbitration ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {!arbitration || !isActive ? (
           <PanelEmpty
-            title="No active arbitration"
-            detail="When an arbitration is live, its node, faction, and countdown will show here."
+            title={!arbitration && error ? 'Arbitration couldn’t load' : 'No active arbitration'}
+            detail={!arbitration && error
+              ? error
+              : 'When an arbitration is live, its node, faction, and countdown will show here.'}
+            actionLabel={!arbitration && error ? 'Retry' : null}
+            onAction={!arbitration && error ? onRefresh : null}
           />
         ) : (
           <div className="activity-stack">
@@ -461,6 +472,7 @@ function InvasionsCard({
   onRefresh: () => void;
 }) {
   const activeInvasions = invasions.filter((invasion) => !invasion.completed);
+  const hasUsableInvasions = invasions.length > 0;
 
   return (
     <section className="card activity-panel activity-panel-tall">
@@ -482,12 +494,16 @@ function InvasionsCard({
             Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
           </div>
         ) : null}
-        <PanelError error={error} loading={loading} onRefresh={onRefresh} />
+        <PanelError error={error} tone={hasUsableInvasions ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {activeInvasions.length === 0 ? (
           <PanelEmpty
-            title="No active invasions"
-            detail="New invasions will appear here automatically when the worldstate changes."
+            title={error && !hasUsableInvasions ? 'Invasions couldn’t load' : 'No active invasions'}
+            detail={error && !hasUsableInvasions
+              ? error
+              : 'New invasions will appear here automatically when the worldstate changes.'}
+            actionLabel={error && !hasUsableInvasions ? 'Retry' : null}
+            onAction={error && !hasUsableInvasions ? onRefresh : null}
           />
         ) : (
           <div className="activity-list">
@@ -569,6 +585,7 @@ function SyndicateMissionsCard({
   const visibleMission = activeMissions.find(
     (mission) => (mission.syndicate ?? 'Unknown Syndicate') === selectedSyndicate,
   );
+  const hasUsableMissions = missions.length > 0;
 
   return (
     <section className="card activity-panel activity-panel-full">
@@ -590,12 +607,16 @@ function SyndicateMissionsCard({
             Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
           </div>
         ) : null}
-        <PanelError error={error} loading={loading} onRefresh={onRefresh} />
+        <PanelError error={error} tone={hasUsableMissions ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {activeMissions.length === 0 ? (
           <PanelEmpty
-            title="No active syndicate missions"
-            detail="Open-world and syndicate job rotations will appear here when active."
+            title={error && !hasUsableMissions ? 'Syndicate missions couldn’t load' : 'No active syndicate missions'}
+            detail={error && !hasUsableMissions
+              ? error
+              : 'Open-world and syndicate job rotations will appear here when active.'}
+            actionLabel={error && !hasUsableMissions ? 'Retry' : null}
+            onAction={error && !hasUsableMissions ? onRefresh : null}
           />
         ) : (
           <div className="activity-stack">

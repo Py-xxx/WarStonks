@@ -3,6 +3,7 @@ import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/w
 import { getRelicTierIcons } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
+import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
 import type { RelicTierIcon, WfstatFissure } from '../../types';
 
 type FissureMode = 'normal' | 'steel-path';
@@ -164,6 +165,7 @@ export function FissuresPanel() {
     [tierIcons],
   );
   const fallbackTierIcon = tierIcons[0]?.imagePath ?? null;
+  const hasUsableFissures = fissures.length > 0;
 
   return (
     <div className="card">
@@ -214,24 +216,38 @@ export function FissuresPanel() {
           </div>
         ) : null}
 
-        {error ? <div className="settings-inline-error">{error}</div> : null}
+        <EventsPanelNotice
+          message={error}
+          tone={hasUsableFissures ? 'warning' : 'error'}
+          loading={loading}
+          onRefresh={() => {
+            void refreshWorldStateFissures();
+          }}
+        />
 
         {loading && fissures.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-primary">Loading live fissures…</span>
-            <span className="empty-sub">
-              Fetching `GET /pc/fissures?language=en` from WarframeStat.
-            </span>
-          </div>
+          <EventsPanelEmpty
+            title="Loading live fissures…"
+            detail="Checking the latest fissure rotations from the live worldstate."
+          />
         ) : null}
 
-        {!loading && groupedFissures.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-primary">No {mode === 'steel-path' ? 'Steel Path ' : ''}fissures active</span>
-            <span className="empty-sub">
-              Switch modes or wait for the next worldstate refresh.
-            </span>
-          </div>
+        {!loading && groupedFissures.length === 0 && error && !hasUsableFissures ? (
+          <EventsPanelEmpty
+            title="Fissures couldn’t load"
+            detail={error}
+            actionLabel="Retry"
+            onAction={() => {
+              void refreshWorldStateFissures();
+            }}
+          />
+        ) : null}
+
+        {!loading && groupedFissures.length === 0 && (!error || hasUsableFissures) ? (
+          <EventsPanelEmpty
+            title={`No ${mode === 'steel-path' ? 'Steel Path ' : ''}fissures active`}
+            detail="Switch modes or wait for the next worldstate refresh."
+          />
         ) : null}
 
         {groupedFissures.length > 0 ? (

@@ -4,6 +4,7 @@ import {
   formatWorldStateDateTime,
   isWorldStateWindowActive,
 } from '../../lib/worldState';
+import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { VoidTraderInventoryItem } from '../../types';
@@ -79,6 +80,7 @@ export function VoidTraderPanel() {
     isActive ? voidTrader?.expiry ?? null : voidTrader?.activation ?? null,
     nowMs,
   );
+  const hasUsableVoidTrader = Boolean(voidTrader);
 
   return (
     <div className="card">
@@ -107,15 +109,20 @@ export function VoidTraderPanel() {
           </div>
         ) : null}
 
-        {error ? <div className="settings-inline-error">{error}</div> : null}
+        <EventsPanelNotice
+          message={error}
+          tone={hasUsableVoidTrader ? 'warning' : 'error'}
+          loading={loading}
+          onRefresh={() => {
+            void refreshWorldStateVoidTrader();
+          }}
+        />
 
         {loading && !voidTrader ? (
-          <div className="empty-state">
-            <span className="empty-primary">Loading Void Trader worldstate…</span>
-            <span className="empty-sub">
-              Fetching `GET /pc/voidTrader?language=en` from WarframeStat.
-            </span>
-          </div>
+          <EventsPanelEmpty
+            title="Loading Void Trader worldstate…"
+            detail="Checking the latest Void Trader state and inventory."
+          />
         ) : null}
 
         {voidTrader ? (
@@ -154,13 +161,10 @@ export function VoidTraderPanel() {
             </div>
 
             {!isActive ? (
-              <div className="empty-state void-trader-idle-state">
-                <span className="empty-primary">Baro Ki&apos;Teer is not in relay yet</span>
-                <span className="empty-sub">
-                  The countdown above tracks his next visit. Inventory will appear here as soon as
-                  the worldstate flips active.
-                </span>
-              </div>
+              <EventsPanelEmpty
+                title="Baro Ki&apos;Teer is not in relay yet"
+                detail="The countdown above tracks his next visit. Inventory will appear here as soon as the worldstate flips active."
+              />
             ) : null}
 
             {isActive && inventoryGroups.length > 0 ? (
@@ -218,23 +222,30 @@ export function VoidTraderPanel() {
             ) : null}
 
             {isActive && inventoryGroups.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-primary">Void Trader inventory is currently unavailable</span>
-                <span className="empty-sub">
-                  The feed shows Baro as active, but no inventory entries were returned yet.
-                </span>
-              </div>
+              <EventsPanelEmpty
+                title="Void Trader inventory is currently unavailable"
+                detail="The feed shows Baro as active, but no inventory entries were returned yet."
+              />
             ) : null}
           </div>
         ) : null}
 
-        {!loading && !voidTrader ? (
-          <div className="empty-state">
-            <span className="empty-primary">Void Trader data is unavailable</span>
-            <span className="empty-sub">
-              The first worldstate snapshot did not return Void Trader information.
-            </span>
-          </div>
+        {!loading && !voidTrader && error ? (
+          <EventsPanelEmpty
+            title="Void Trader couldn’t load"
+            detail={error}
+            actionLabel="Retry"
+            onAction={() => {
+              void refreshWorldStateVoidTrader();
+            }}
+          />
+        ) : null}
+
+        {!loading && !voidTrader && !error ? (
+          <EventsPanelEmpty
+            title="Void Trader data is unavailable"
+            detail="The first worldstate snapshot did not return Void Trader information."
+          />
         ) : null}
       </div>
     </div>
