@@ -72,6 +72,7 @@ import {
   hasRecentClosedBuyTradeAtPrice,
 } from '../lib/watchlistPurchase';
 import { orderQuickViewVariants } from '../lib/marketVariantFallback';
+import { formatSettingsErrorMessage } from '../lib/settingsErrorHandling';
 import type {
   HomeSubTab,
   PageId,
@@ -1202,6 +1203,7 @@ interface AppStore {
   closeAlecaframeModal: () => void;
   openDiscordWebhookModal: () => void;
   closeDiscordWebhookModal: () => void;
+  clearSettingsError: () => void;
   loadAppSettings: () => Promise<void>;
   refreshWalletSnapshot: () => Promise<void>;
   refreshWalletSnapshotSilently: () => Promise<void>;
@@ -1374,12 +1376,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       settingsSection: section,
       alecaframeModalOpen: false,
       discordWebhookModalOpen: false,
+      settingsError: null,
     }),
   closeSettingsSidebar: () =>
     set({
       settingsSidebarOpen: false,
       alecaframeModalOpen: false,
       discordWebhookModalOpen: false,
+      settingsError: null,
     }),
   setSettingsSection: (section) => set({ settingsSection: section }),
   openAlecaframeModal: () =>
@@ -1388,16 +1392,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
       settingsSection: 'alecaframe',
       alecaframeModalOpen: true,
       discordWebhookModalOpen: false,
+      settingsError: null,
     }),
-  closeAlecaframeModal: () => set({ alecaframeModalOpen: false }),
+  closeAlecaframeModal: () => set({ alecaframeModalOpen: false, settingsError: null }),
   openDiscordWebhookModal: () =>
     set({
       settingsSidebarOpen: true,
       settingsSection: 'discord-webhook',
       alecaframeModalOpen: false,
       discordWebhookModalOpen: true,
+      settingsError: null,
     }),
-  closeDiscordWebhookModal: () => set({ discordWebhookModalOpen: false }),
+  closeDiscordWebhookModal: () =>
+    set({ discordWebhookModalOpen: false, settingsError: null }),
+  clearSettingsError: () => set({ settingsError: null }),
   loadAppSettings: async () => {
     set({ settingsLoading: true, settingsError: null });
 
@@ -1411,11 +1419,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (error) {
       set({
         settingsLoading: false,
-        settingsError: toErrorMessage(error),
+        settingsError: formatSettingsErrorMessage('settings-load', error),
       });
     }
   },
   refreshWalletSnapshot: async () => {
+    const previousSnapshot = get().walletSnapshot;
     set({ walletLoading: true });
 
     try {
@@ -1427,8 +1436,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (error) {
       set({
         walletSnapshot: {
-          ...defaultWalletSnapshot,
-          errorMessage: toErrorMessage(error),
+          ...previousSnapshot,
+          enabled: previousSnapshot.enabled || get().appSettings.alecaframe.enabled,
+          configured:
+            previousSnapshot.configured || Boolean(get().appSettings.alecaframe.publicLink),
+          errorMessage: formatSettingsErrorMessage('alecaframe-refresh', error),
         },
         walletLoading: false,
       });
@@ -1445,6 +1457,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set({ walletSnapshot: snapshot });
       } catch (error) {
         console.warn('[alecaframe] background wallet refresh failed', error);
+        const previousSnapshot = get().walletSnapshot;
+        set({
+          walletSnapshot: {
+            ...previousSnapshot,
+            enabled: previousSnapshot.enabled || get().appSettings.alecaframe.enabled,
+            configured:
+              previousSnapshot.configured || Boolean(get().appSettings.alecaframe.publicLink),
+            errorMessage: formatSettingsErrorMessage('alecaframe-refresh', error),
+          },
+        });
       } finally {
         backgroundWalletRefreshPromise = null;
       }
@@ -1456,6 +1478,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ settingsLoading: true, settingsError: null });
 
     try {
+      const previousSnapshot = get().walletSnapshot;
       const settings = await saveAlecaframeSettings(input);
       set({
         appSettings: settings,
@@ -1465,15 +1488,30 @@ export const useAppStore = create<AppStore>((set, get) => ({
         walletLoading: true,
       });
 
-      const snapshot = await refreshAlecaframeWalletSnapshot();
-      set({
-        walletSnapshot: snapshot,
-        walletLoading: false,
-      });
+      try {
+        const snapshot = await refreshAlecaframeWalletSnapshot();
+        set({
+          walletSnapshot: snapshot,
+          walletLoading: false,
+        });
+      } catch (error) {
+        set({
+          walletSnapshot: {
+            ...previousSnapshot,
+            enabled: settings.alecaframe.enabled,
+            configured: Boolean(settings.alecaframe.publicLink),
+            usernameWhenPublic:
+              settings.alecaframe.usernameWhenPublic ?? previousSnapshot.usernameWhenPublic,
+            lastUpdate: settings.alecaframe.lastValidatedAt ?? previousSnapshot.lastUpdate,
+            errorMessage: formatSettingsErrorMessage('alecaframe-refresh', error),
+          },
+          walletLoading: false,
+        });
+      }
     } catch (error) {
       set({
         settingsLoading: false,
-        settingsError: toErrorMessage(error),
+        settingsError: formatSettingsErrorMessage('alecaframe-save', error),
       });
       throw error;
     }
@@ -1492,7 +1530,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (error) {
       set({
         settingsLoading: false,
-        settingsError: toErrorMessage(error),
+        settingsError: formatSettingsErrorMessage('discord-webhook-save', error),
       });
       throw error;
     }

@@ -169,7 +169,7 @@ export function SettingsSidebar() {
           })}
 
           {walletSnapshot.errorMessage ? (
-            <div className="settings-inline-error">{walletSnapshot.errorMessage}</div>
+            <div className="settings-inline-warning">{walletSnapshot.errorMessage}</div>
           ) : null}
 
           <div className="settings-nav-footer">

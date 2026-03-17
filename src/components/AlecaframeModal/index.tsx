@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { formatShortLocalDateTime, getUserTimeZone } from '../../lib/dateTime';
+import { formatSettingsErrorMessage } from '../../lib/settingsErrorHandling';
 import { testAlecaframePublicLink } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
 import type { AlecaframeValidationResult } from '../../types';
@@ -10,14 +11,6 @@ const CloseIcon = () => (
     <path d="m6 6 12 12" />
   </svg>
 );
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
-}
 
 function formatBalance(value: number | null): string {
   if (value === null) {
@@ -39,6 +32,7 @@ export function AlecaframeModal() {
   const saveAlecaframeConfiguration = useAppStore(
     (state) => state.saveAlecaframeConfiguration,
   );
+  const clearSettingsError = useAppStore((state) => state.clearSettingsError);
 
   const [enabled, setEnabled] = useState(false);
   const [publicLink, setPublicLink] = useState('');
@@ -59,7 +53,13 @@ export function AlecaframeModal() {
     setTestState('idle');
     setValidationResult(null);
     setTestedInput('');
-  }, [appSettings.alecaframe.enabled, appSettings.alecaframe.publicLink, modalOpen]);
+    clearSettingsError();
+  }, [
+    appSettings.alecaframe.enabled,
+    appSettings.alecaframe.publicLink,
+    clearSettingsError,
+    modalOpen,
+  ]);
 
   useEffect(() => {
     if (!modalOpen || !appSettings.alecaframe.enabled || !appSettings.alecaframe.publicLink) {
@@ -117,7 +117,7 @@ export function AlecaframeModal() {
     } catch (error) {
       setValidationResult(null);
       setTestedInput('');
-      setLocalError(toErrorMessage(error));
+      setLocalError(formatSettingsErrorMessage('alecaframe-validate', error));
       setTestState('error');
       return null;
     }
@@ -125,6 +125,7 @@ export function AlecaframeModal() {
 
   const handleSave = async () => {
     setLocalError(null);
+    clearSettingsError();
 
     if (enabled && !trimmedPublicLink) {
       setLocalError('Enter a valid Alecaframe public link before enabling the API.');
@@ -144,9 +145,14 @@ export function AlecaframeModal() {
         publicLink: trimmedPublicLink || null,
       });
     } catch (error) {
-      setLocalError(toErrorMessage(error));
+      setLocalError(formatSettingsErrorMessage('alecaframe-save', error));
     }
   };
+
+  const walletWarningMessage =
+    walletSnapshot.errorMessage && appSettings.alecaframe.enabled && appSettings.alecaframe.publicLink
+      ? walletSnapshot.errorMessage
+      : null;
 
   return (
     <>
@@ -310,6 +316,9 @@ export function AlecaframeModal() {
                 </span>
               </div>
             </div>
+            {walletWarningMessage ? (
+              <div className="settings-inline-warning">{walletWarningMessage}</div>
+            ) : null}
           </div>
         </div>
       </div>

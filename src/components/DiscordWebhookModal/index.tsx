@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { formatSettingsErrorMessage } from '../../lib/settingsErrorHandling';
 import { useAppStore } from '../../stores/useAppStore';
 
 const CloseIcon = () => (
@@ -7,14 +8,6 @@ const CloseIcon = () => (
     <path d="m6 6 12 12" />
   </svg>
 );
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
-}
 
 export function DiscordWebhookModal() {
   const modalOpen = useAppStore((state) => state.discordWebhookModalOpen);
@@ -25,6 +18,7 @@ export function DiscordWebhookModal() {
   const saveDiscordWebhookConfiguration = useAppStore(
     (state) => state.saveDiscordWebhookConfiguration,
   );
+  const clearSettingsError = useAppStore((state) => state.clearSettingsError);
 
   const [enabled, setEnabled] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -44,7 +38,8 @@ export function DiscordWebhookModal() {
     setTradeDetected(appSettings.discordWebhook.notifications.tradeDetected);
     setWorldstateOffline(appSettings.discordWebhook.notifications.worldstateOffline);
     setLocalError(null);
-  }, [appSettings.discordWebhook, modalOpen]);
+    clearSettingsError();
+  }, [appSettings.discordWebhook, clearSettingsError, modalOpen]);
 
   if (!modalOpen) {
     return null;
@@ -52,6 +47,7 @@ export function DiscordWebhookModal() {
 
   const handleSave = async () => {
     setLocalError(null);
+    clearSettingsError();
     try {
       await saveDiscordWebhookConfiguration({
         enabled,
@@ -63,7 +59,7 @@ export function DiscordWebhookModal() {
         },
       });
     } catch (error) {
-      setLocalError(toErrorMessage(error));
+      setLocalError(formatSettingsErrorMessage('discord-webhook-save', error));
     }
   };
 
