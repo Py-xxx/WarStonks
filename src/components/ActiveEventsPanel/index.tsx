@@ -4,6 +4,7 @@ import {
   formatWorldStateDateTime,
   getWorldStateEventProgressPercent,
 } from '../../lib/worldState';
+import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfstatEventReward, WfstatWorldStateEvent } from '../../types';
 
@@ -61,6 +62,8 @@ export function ActiveEventsPanel() {
     );
   };
 
+  const hasUsableEvents = events.length > 0;
+
   return (
     <div className="card">
       <div className="card-header">
@@ -88,24 +91,38 @@ export function ActiveEventsPanel() {
           </div>
         ) : null}
 
-        {error ? <div className="settings-inline-error">{error}</div> : null}
+        <EventsPanelNotice
+          message={error}
+          tone={hasUsableEvents ? 'warning' : 'error'}
+          loading={loading}
+          onRefresh={() => {
+            void refreshWorldStateEvents();
+          }}
+        />
 
         {loading && events.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-primary">Loading live worldstate events…</span>
-            <span className="empty-sub">
-              Fetching `GET /pc/events?language=en` from WarframeStat.
-            </span>
-          </div>
+          <EventsPanelEmpty
+            title="Loading live worldstate events…"
+            detail="Checking the latest active events from the live worldstate."
+          />
         ) : null}
 
-        {!loading && events.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-primary">No active events right now</span>
-            <span className="empty-sub">
-              Active event data will appear here as soon as WFStat reports live events.
-            </span>
-          </div>
+        {!loading && events.length === 0 && error ? (
+          <EventsPanelEmpty
+            title="Active events couldn’t load"
+            detail={error}
+            actionLabel="Retry"
+            onAction={() => {
+              void refreshWorldStateEvents();
+            }}
+          />
+        ) : null}
+
+        {!loading && events.length === 0 && !error ? (
+          <EventsPanelEmpty
+            title="No active events right now"
+            detail="Active event data will appear here as soon as the live worldstate reports an event."
+          />
         ) : null}
 
         {events.length > 0 ? (

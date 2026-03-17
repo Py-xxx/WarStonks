@@ -72,6 +72,7 @@ import {
   hasRecentClosedBuyTradeAtPrice,
 } from '../lib/watchlistPurchase';
 import { orderQuickViewVariants } from '../lib/marketVariantFallback';
+import { formatEventsErrorMessage } from '../lib/eventsErrorHandling';
 import { formatHomeErrorMessage } from '../lib/homeErrorHandling';
 import { formatMarketErrorMessage } from '../lib/marketErrorHandling';
 import { formatSettingsErrorMessage } from '../lib/settingsErrorHandling';
@@ -1567,7 +1568,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.events,
           restoreCachedWorldStateEvents,
@@ -1578,9 +1578,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
             ? state.worldStateEvents
             : (cachedSnapshot?.payload ?? []),
           worldStateEventsLoading: false,
-          worldStateEventsError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateEventsError: formatEventsErrorMessage('events-active-events', error, {
+            lastAvailableAt: state.worldStateEventsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateEventsNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -1633,7 +1633,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.alerts,
           restoreCachedWorldStateAlerts,
@@ -1644,9 +1643,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
             ? state.worldStateAlerts
             : (cachedSnapshot?.payload ?? []),
           worldStateAlertsLoading: false,
-          worldStateAlertsError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateAlertsError: formatEventsErrorMessage('events-alerts', error, {
+            lastAvailableAt: state.worldStateAlertsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateAlertsNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -1699,7 +1698,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.sortie,
           restoreCachedWorldStateSortie,
@@ -1708,9 +1706,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set((state) => ({
           worldStateSortie: state.worldStateSortie ?? cachedSnapshot?.payload ?? null,
           worldStateSortieLoading: false,
-          worldStateSortieError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateSortieError: formatEventsErrorMessage('events-sortie', error, {
+            lastAvailableAt: state.worldStateSortieLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateSortieNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -1762,7 +1760,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.arbitration,
           restoreCachedWorldStateArbitration,
@@ -1771,9 +1768,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set((state) => ({
           worldStateArbitration: state.worldStateArbitration ?? cachedSnapshot?.payload ?? null,
           worldStateArbitrationLoading: false,
-          worldStateArbitrationError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateArbitrationError: formatEventsErrorMessage('events-arbitration', error, {
+            lastAvailableAt: state.worldStateArbitrationLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateArbitrationNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -1826,7 +1823,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.archonHunt,
           restoreCachedWorldStateArchonHunt,
@@ -1835,9 +1831,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set((state) => ({
           worldStateArchonHunt: state.worldStateArchonHunt ?? cachedSnapshot?.payload ?? null,
           worldStateArchonHuntLoading: false,
-          worldStateArchonHuntError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateArchonHuntError: formatEventsErrorMessage('events-archon-hunt', error, {
+            lastAvailableAt: state.worldStateArchonHuntLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateArchonHuntNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -1890,7 +1886,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.fissures,
           restoreCachedWorldStateFissures,
@@ -1901,9 +1896,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
             ? state.worldStateFissures
             : (cachedSnapshot?.payload ?? []),
           worldStateFissuresLoading: false,
-          worldStateFissuresError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateFissuresError: formatEventsErrorMessage('events-fissures', error, {
+            lastAvailableAt: state.worldStateFissuresLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateFissuresNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -1960,7 +1955,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.marketNews,
           restoreCachedWorldStateMarketNews,
@@ -1974,9 +1968,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
               ? state.worldStateFlashSales
               : (cachedSnapshot?.payload.flashSales ?? []),
           worldStateMarketNewsLoading: false,
-          worldStateMarketNewsError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateMarketNewsError: formatEventsErrorMessage('events-market-news', error, {
+            lastAvailableAt: state.worldStateMarketNewsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateMarketNewsNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -2032,7 +2026,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.invasions,
           restoreCachedWorldStateInvasions,
@@ -2043,9 +2036,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
             ? state.worldStateInvasions
             : (cachedSnapshot?.payload ?? []),
           worldStateInvasionsLoading: false,
-          worldStateInvasionsError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateInvasionsError: formatEventsErrorMessage('events-invasions', error, {
+            lastAvailableAt: state.worldStateInvasionsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateInvasionsNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -2098,7 +2091,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.syndicateMissions,
           restoreCachedWorldStateSyndicateMissions,
@@ -2109,9 +2101,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
             ? state.worldStateSyndicateMissions
             : (cachedSnapshot?.payload ?? []),
           worldStateSyndicateMissionsLoading: false,
-          worldStateSyndicateMissionsError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateSyndicateMissionsError: formatEventsErrorMessage('events-syndicate-missions', error, {
+            lastAvailableAt: state.worldStateSyndicateMissionsLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateSyndicateMissionsNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
@@ -2165,7 +2157,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ),
         }));
       } catch (error) {
-        const errorMessage = toErrorMessage(error);
         const cachedSnapshot = await loadCachedWorldStateSnapshot(
           WORLDSTATE_ENDPOINT_KEYS.voidTrader,
           restoreCachedWorldStateVoidTrader,
@@ -2174,9 +2165,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set((state) => ({
           worldStateVoidTrader: state.worldStateVoidTrader ?? cachedSnapshot?.payload ?? null,
           worldStateVoidTraderLoading: false,
-          worldStateVoidTraderError: cachedSnapshot
-            ? `${errorMessage} Using cached data from ${cachedSnapshot.fetchedAt}.`
-            : errorMessage,
+          worldStateVoidTraderError: formatEventsErrorMessage('events-void-trader', error, {
+            lastAvailableAt: state.worldStateVoidTraderLastUpdatedAt ?? cachedSnapshot?.fetchedAt ?? null,
+          }),
           worldStateVoidTraderNextRefreshAt: new Date(
             Date.now() + WORLDSTATE_RETRY_DELAY_MS,
           ).toISOString(),
