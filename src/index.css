@@ -7313,28 +7313,9 @@ body {
   transform: none;
 }
 
-.scanner-inline-error {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 112, 112, 0.24);
-  border-radius: 12px;
-  background: rgba(103, 22, 26, 0.26);
-}
-
-.scanner-inline-error strong {
-  color: #ff9a9a;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.scanner-inline-error span {
-  color: rgba(255, 230, 230, 0.88);
-  font-size: 12px;
-  line-height: 1.55;
+.scanner-inline-state {
+  align-items: flex-start;
+  margin-bottom: 0;
 }
 
 .scanner-results-list {
