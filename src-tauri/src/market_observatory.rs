@@ -69,6 +69,16 @@ fn log_market_error_and_build_message(
     build_support_error_message(summary)
 }
 
+fn log_scanner_error_and_build_message(
+    app: &tauri::AppHandle,
+    stage: &str,
+    detail: &str,
+    summary: &str,
+    error: &anyhow::Error,
+) -> String {
+    log_market_error_and_build_message(app, "scanner", stage, detail, summary, error)
+}
+
 fn scoped_wfm_coalesce_key(prefix: &str, priority: RequestPriority, slug: &str) -> String {
     let priority_scope = match priority {
         RequestPriority::Instant => "instant",
@@ -9513,25 +9523,61 @@ pub async fn get_item_analysis(
 pub async fn get_arbitrage_scanner(
     app: tauri::AppHandle,
 ) -> Result<ArbitrageScannerResponse, String> {
+    let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        build_arbitrage_scanner_inner(app, |_| {}).map(|outcome| outcome.response)
+        build_arbitrage_scanner_inner(app_for_work, |_| {}).map(|outcome| outcome.response)
     })
     .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| {
+        let error = anyhow!("failed to join scanner snapshot worker: {error}");
+        log_scanner_error_and_build_message(
+            &app,
+            "load-snapshot-join",
+            "Failed to join the scanner snapshot worker.",
+            "Couldn’t load the latest scanner snapshot right now. Please try again.",
+            &error,
+        )
+    })?
+    .map_err(|error| {
+        log_scanner_error_and_build_message(
+            &app,
+            "load-snapshot",
+            "Failed to build the latest scanner snapshot.",
+            "Couldn’t load the latest scanner snapshot right now. Please try again.",
+            &error,
+        )
+    })
 }
 
 #[tauri::command]
 pub async fn get_arbitrage_scanner_state(
     app: tauri::AppHandle,
 ) -> Result<ArbitrageScannerState, String> {
+    let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = open_market_observatory_database(&app)?;
+        let connection = open_market_observatory_database(&app_for_work)?;
         load_arbitrage_scanner_state(&connection)
     })
     .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| {
+        let error = anyhow!("failed to join scanner state worker: {error}");
+        log_scanner_error_and_build_message(
+            &app,
+            "load-state-join",
+            "Failed to join the scanner state worker.",
+            "Couldn’t load scanner data right now. Please try again.",
+            &error,
+        )
+    })?
+    .map_err(|error| {
+        log_scanner_error_and_build_message(
+            &app,
+            "load-state",
+            "Failed to load the current scanner state.",
+            "Couldn’t load scanner data right now. Please try again.",
+            &error,
+        )
+    })
 }
 
 #[tauri::command]
@@ -9829,15 +9875,37 @@ pub async fn refresh_owned_relic_inventory(
 
 #[tauri::command]
 pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, String> {
-    let state_connection =
-        open_market_observatory_database(&app).map_err(|error| error.to_string())?;
-    let current_state =
-        load_arbitrage_scanner_state(&state_connection).map_err(|error| error.to_string())?;
+    let state_connection = open_market_observatory_database(&app).map_err(|error| {
+        log_scanner_error_and_build_message(
+            &app,
+            "start-open-database",
+            "Failed to open the market observatory database before starting the scanner.",
+            "Couldn’t start the scanner right now. Please try again.",
+            &error,
+        )
+    })?;
+    let current_state = load_arbitrage_scanner_state(&state_connection).map_err(|error| {
+        log_scanner_error_and_build_message(
+            &app,
+            "start-load-state",
+            "Failed to load the existing scanner state before starting a new run.",
+            "Couldn’t start the scanner right now. Please try again.",
+            &error,
+        )
+    })?;
     if current_state.progress.status == "running" {
         return Ok(false);
     }
 
-    let started_at = format_timestamp(now_utc()).map_err(|error| error.to_string())?;
+    let started_at = format_timestamp(now_utc()).map_err(|error| {
+        log_scanner_error_and_build_message(
+            &app,
+            "start-build-timestamp",
+            "Failed to build the scanner start timestamp.",
+            "Couldn’t start the scanner right now. Please try again.",
+            &error,
+        )
+    })?;
     let initial_progress = ArbitrageScannerProgress {
         scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
         status: "running".to_string(),
@@ -9859,16 +9927,60 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
         retry_attempt: None,
     };
     persist_arbitrage_scanner_progress_with_stop_reset(&state_connection, &initial_progress, true)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            log_scanner_error_and_build_message(
+                &app,
+                "start-persist-initial-progress",
+                "Failed to persist the initial scanner progress state.",
+                "Couldn’t start the scanner right now. Please try again.",
+                &error,
+            )
+        })?;
     emit_arbitrage_scanner_progress(&app, &initial_progress);
 
     let worker_app = app.clone();
-    let _ = std::thread::Builder::new()
+    let started_at_for_worker = started_at.clone();
+    let current_progress_for_worker = current_state.progress.clone();
+    std::thread::Builder::new()
         .name("warstonks-arbitrage-scanner".to_string())
         .spawn(move || {
         let progress_connection = match open_market_observatory_database(&worker_app) {
             Ok(connection) => connection,
-            Err(_) => return,
+            Err(error) => {
+                log_feature_error_best_effort(
+                    &worker_app,
+                    "scanner",
+                    "worker-open-database",
+                    "Failed to open the market observatory database inside the scanner worker.",
+                    &error,
+                );
+                let updated_at =
+                    format_timestamp(now_utc()).unwrap_or_else(|_| started_at_for_worker.clone());
+                let progress = ArbitrageScannerProgress {
+                    scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+                    status: "error".to_string(),
+                    progress_value: 0.0,
+                    stage_label: "Failed".to_string(),
+                    status_text: "Arbitrage scan failed to start.".to_string(),
+                    updated_at,
+                    started_at: Some(started_at_for_worker.clone()),
+                    last_completed_at: current_progress_for_worker.last_completed_at.clone(),
+                    last_error: Some(build_support_error_message(
+                        "Couldn’t start the scanner right now. Please try again.",
+                    )),
+                    current_set_name: None,
+                    current_component_name: None,
+                    completed_set_count: 0,
+                    total_set_count: 0,
+                    completed_component_count: 0,
+                    total_component_count: 0,
+                    skipped_entry_count: 0,
+                    retrying_item_name: None,
+                    retry_attempt: None,
+                };
+                emit_arbitrage_scanner_progress(&worker_app, &progress);
+                return;
+            }
         };
         let live_progress = Arc::new(Mutex::new(initial_progress.clone()));
         let heartbeat_stop = Arc::new(AtomicBool::new(false));
@@ -9880,7 +9992,16 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
             .spawn(move || {
                 let heartbeat_connection = match open_market_observatory_database(&heartbeat_app) {
                     Ok(connection) => connection,
-                    Err(_) => return,
+                    Err(error) => {
+                        log_feature_error_best_effort(
+                            &heartbeat_app,
+                            "scanner",
+                            "heartbeat-open-database",
+                            "Failed to open the market observatory database for scanner heartbeat updates.",
+                            &error,
+                        );
+                        return;
+                    }
                 };
                 while !heartbeat_stop_flag.load(AtomicOrdering::Relaxed) {
                     std::thread::sleep(Duration::from_secs(ARBITRAGE_SCANNER_HEARTBEAT_SECONDS));
@@ -9929,8 +10050,8 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                         stage_label: "Stopped".to_string(),
                         status_text: "Arbitrage scan stopped.".to_string(),
                         updated_at: outcome.response.computed_at.clone(),
-                        started_at: Some(started_at.clone()),
-                        last_completed_at: current_state.progress.last_completed_at.clone(),
+                        started_at: Some(started_at_for_worker.clone()),
+                        last_completed_at: current_progress_for_worker.last_completed_at.clone(),
                         last_error: None,
                         current_set_name: None,
                         current_component_name: None,
@@ -9981,7 +10102,7 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                         }
                     ),
                     updated_at: response.computed_at.clone(),
-                    started_at: Some(started_at.clone()),
+                    started_at: Some(started_at_for_worker.clone()),
                     last_completed_at: Some(response.computed_at.clone()),
                     last_error: None,
                     current_set_name: None,
@@ -10005,24 +10126,32 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                 emit_arbitrage_scanner_progress(&worker_app, &progress);
             }
             Err(error) => {
-                let updated_at = format_timestamp(now_utc()).unwrap_or_else(|_| started_at.clone());
+                let friendly_error = log_scanner_error_and_build_message(
+                    &worker_app,
+                    "run-scan",
+                    "Failed to build a fresh arbitrage scanner snapshot.",
+                    "Couldn’t complete the scanner right now. Please try again.",
+                    &error,
+                );
+                let updated_at =
+                    format_timestamp(now_utc()).unwrap_or_else(|_| started_at_for_worker.clone());
                 let progress = ArbitrageScannerProgress {
                     scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
                     status: "error".to_string(),
-                    progress_value: current_state.progress.progress_value,
+                    progress_value: current_progress_for_worker.progress_value,
                     stage_label: "Failed".to_string(),
                     status_text: "Arbitrage scan failed.".to_string(),
                     updated_at,
-                    started_at: Some(started_at.clone()),
-                    last_completed_at: current_state.progress.last_completed_at.clone(),
-                    last_error: Some(error.to_string()),
+                    started_at: Some(started_at_for_worker.clone()),
+                    last_completed_at: current_progress_for_worker.last_completed_at.clone(),
+                    last_error: Some(friendly_error),
                     current_set_name: None,
                     current_component_name: None,
-                    completed_set_count: current_state.progress.completed_set_count,
-                    total_set_count: current_state.progress.total_set_count,
-                    completed_component_count: current_state.progress.completed_component_count,
-                    total_component_count: current_state.progress.total_component_count,
-                    skipped_entry_count: current_state.progress.skipped_entry_count,
+                    completed_set_count: current_progress_for_worker.completed_set_count,
+                    total_set_count: current_progress_for_worker.total_set_count,
+                    completed_component_count: current_progress_for_worker.completed_component_count,
+                    total_component_count: current_progress_for_worker.total_component_count,
+                    skipped_entry_count: current_progress_for_worker.skipped_entry_count,
                     retrying_item_name: None,
                     retry_attempt: None,
                 };
@@ -10041,25 +10170,81 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
         if let Some(handle) = heartbeat_handle {
             let _ = handle.join();
         }
-    });
+    })
+    .map_err(|error| {
+        let error = anyhow!("failed to spawn arbitrage scanner worker: {error}");
+        let friendly_message = log_scanner_error_and_build_message(
+            &app,
+            "start-spawn-worker",
+            "Failed to spawn the arbitrage scanner worker thread.",
+            "Couldn’t start the scanner right now. Please try again.",
+            &error,
+        );
+        let updated_at = format_timestamp(now_utc()).unwrap_or_else(|_| started_at.clone());
+        let failed_progress = ArbitrageScannerProgress {
+            scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
+            status: "error".to_string(),
+            progress_value: 0.0,
+            stage_label: "Failed".to_string(),
+            status_text: "Arbitrage scan failed to start.".to_string(),
+            updated_at,
+            started_at: Some(started_at.clone()),
+            last_completed_at: current_state.progress.last_completed_at.clone(),
+            last_error: Some(friendly_message.clone()),
+            current_set_name: None,
+            current_component_name: None,
+            completed_set_count: 0,
+            total_set_count: 0,
+            completed_component_count: 0,
+            total_component_count: 0,
+            skipped_entry_count: 0,
+            retrying_item_name: None,
+            retry_attempt: None,
+        };
+        let _ = persist_arbitrage_scanner_progress_with_stop_reset(
+            &state_connection,
+            &failed_progress,
+            true,
+        );
+        emit_arbitrage_scanner_progress(&app, &failed_progress);
+        friendly_message
+    })?;
 
     Ok(true)
 }
 
 #[tauri::command]
 pub async fn stop_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, String> {
+    let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = open_market_observatory_database(&app)?;
+        let connection = open_market_observatory_database(&app_for_work)?;
         let stopped = request_arbitrage_scanner_stop(&connection)?;
         if stopped {
             let progress = load_arbitrage_scanner_progress(&connection)?;
-            emit_arbitrage_scanner_progress(&app, &progress);
+            emit_arbitrage_scanner_progress(&app_for_work, &progress);
         }
         Ok::<_, anyhow::Error>(stopped)
     })
     .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| {
+        let error = anyhow!("failed to join scanner stop worker: {error}");
+        log_scanner_error_and_build_message(
+            &app,
+            "stop-join",
+            "Failed to join the scanner stop worker.",
+            "Couldn’t stop the scanner right now. Please try again.",
+            &error,
+        )
+    })?
+    .map_err(|error| {
+        log_scanner_error_and_build_message(
+            &app,
+            "stop",
+            "Failed to stop the active scanner run.",
+            "Couldn’t stop the scanner right now. Please try again.",
+            &error,
+        )
+    })
 }
 
 #[cfg(test)]

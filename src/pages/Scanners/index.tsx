@@ -7,6 +7,10 @@ import {
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import {
+  formatScannerErrorMessage,
+  type ScannerErrorContext,
+} from '../../lib/scannerErrorHandling';
+import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
   WATCHLIST_ADD_SUCCESS_MESSAGE,
@@ -27,6 +31,11 @@ import type {
 
 type ScannerTab = 'arbitrage' | 'relic-roi';
 type RelicRefinementKey = 'intact' | 'exceptional' | 'flawless' | 'radiant';
+type ScannerErrorState = {
+  context: ScannerErrorContext;
+  message: string;
+  tone: 'warning' | 'error';
+};
 const RELIC_REFINEMENT_OPTIONS: Array<{ key: RelicRefinementKey; label: string }> = [
   { key: 'intact', label: 'Intact' },
   { key: 'exceptional', label: 'Exceptional' },
@@ -526,7 +535,7 @@ export function ScannersPage() {
   const [activeTab, setActiveTab] = useState<ScannerTab>('arbitrage');
   const [arbitrage, setArbitrage] = useState<ArbitrageScannerResponse | null>(null);
   const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [scannerError, setScannerError] = useState<ScannerErrorState | null>(null);
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
   const [expandedRelicSlug, setExpandedRelicSlug] = useState<string | null>(null);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
@@ -536,8 +545,29 @@ export function ScannersPage() {
   const [arbitrageSearch, setArbitrageSearch] = useState('');
   const [relicSearch, setRelicSearch] = useState('');
   const watchlistAddFeedbackTimeoutsRef = useRef(new Map<string, number>());
+  const lastSavedScanAtRef = useRef<string | null>(null);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const syncScannerStaleAlert = useAppStore((state) => state.syncScannerStaleAlert);
+
+  useEffect(() => {
+    lastSavedScanAtRef.current = arbitrage?.scanFinishedAt ?? progress?.lastCompletedAt ?? null;
+  }, [arbitrage?.scanFinishedAt, progress?.lastCompletedAt]);
+
+  const setScannerErrorFrom = useCallback(
+    (
+      context: ScannerErrorContext,
+      error: unknown,
+      options?: { lastCompletedAt?: string | null; tone?: 'warning' | 'error' },
+    ) => {
+      const lastCompletedAt = options?.lastCompletedAt ?? lastSavedScanAtRef.current;
+      setScannerError({
+        context,
+        message: formatScannerErrorMessage(context, error, { lastCompletedAt }),
+        tone: options?.tone ?? (lastCompletedAt ? 'warning' : 'error'),
+      });
+    },
+    [],
+  );
 
   const loadScannerState = useCallback(async (cancelled = false) => {
     try {
@@ -548,14 +578,26 @@ export function ScannersPage() {
       setArbitrage(response.latestScan);
       setProgress(response.progress);
       syncScannerStaleAlert(response.latestScan?.scanFinishedAt ?? null);
-      setErrorMessage(response.progress.status === 'error' ? response.progress.lastError : null);
+      if (response.progress.status === 'error') {
+        const lastCompletedAt = response.latestScan?.scanFinishedAt ?? response.progress.lastCompletedAt;
+        setScannerErrorFrom('scanner-run', response.progress.lastError, {
+          lastCompletedAt,
+          tone: lastCompletedAt ? 'warning' : 'error',
+        });
+      } else {
+        setScannerError(null);
+      }
     } catch (error) {
       if (cancelled) {
         return;
       }
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      const lastCompletedAt = lastSavedScanAtRef.current;
+      setScannerErrorFrom(lastCompletedAt ? 'scanner-state-refresh' : 'scanner-state-load', error, {
+        lastCompletedAt,
+        tone: lastCompletedAt ? 'warning' : 'error',
+      });
     }
-  }, [syncScannerStaleAlert]);
+  }, [setScannerErrorFrom, syncScannerStaleAlert]);
 
   useEffect(() => {
     let cancelled = false;
@@ -569,9 +611,12 @@ export function ScannersPage() {
 
       setProgress(nextProgress);
       if (nextProgress.status === 'error') {
-        setErrorMessage(nextProgress.lastError ?? 'Arbitrage scan failed.');
+        setScannerErrorFrom('scanner-run', nextProgress.lastError, {
+          lastCompletedAt: nextProgress.lastCompletedAt,
+          tone: nextProgress.lastCompletedAt ? 'warning' : 'error',
+        });
       } else {
-        setErrorMessage(null);
+        setScannerError(null);
       }
 
       if (nextProgress.status === 'success' || nextProgress.status === 'error') {
@@ -590,10 +635,10 @@ export function ScannersPage() {
       window.clearInterval(pollInterval);
       unsubscribe();
     };
-  }, [loadScannerState]);
+  }, [loadScannerState, setScannerErrorFrom]);
 
   const runArbitrageScan = async () => {
-    setErrorMessage(null);
+    setScannerError(null);
     try {
       const started = await startArbitrageScanner();
       if (started) {
@@ -631,12 +676,16 @@ export function ScannersPage() {
         );
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      const lastCompletedAt = lastSavedScanAtRef.current;
+      setScannerErrorFrom('scanner-start', error, {
+        lastCompletedAt,
+        tone: lastCompletedAt ? 'warning' : 'error',
+      });
     }
   };
 
   const stopArbitrageScan = async () => {
-    setErrorMessage(null);
+    setScannerError(null);
     try {
       const stopped = await stopArbitrageScanner();
       if (stopped) {
@@ -664,7 +713,7 @@ export function ScannersPage() {
         );
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setScannerErrorFrom('scanner-stop', error, { tone: 'error' });
     }
   };
 
@@ -773,6 +822,30 @@ export function ScannersPage() {
   const scanSummaryCounts = arbitrage
     ? `${arbitrage.scannedSetCount} sets · ${arbitrage.scannedComponentCount} components · ${arbitrage.scannedRelicCount} relics`
     : null;
+  const showInlineScannerNotice = Boolean(scannerError && hasSavedScan);
+  const showBlockingScannerEmptyState = Boolean(scannerError && !hasSavedScan && !isRunning);
+  const scannerErrorAction = scannerError
+    ? scannerError.context === 'scanner-run' || scannerError.context === 'scanner-start'
+      ? {
+          label: actionLabel,
+          onClick: () => {
+            void runArbitrageScan();
+          },
+        }
+      : scannerError.context === 'scanner-stop'
+        ? {
+            label: 'Try Again',
+            onClick: () => {
+              void stopArbitrageScan();
+            },
+          }
+        : {
+            label: 'Retry',
+            onClick: () => {
+              void loadScannerState();
+            },
+          }
+    : null;
 
   return (
     <>
@@ -866,10 +939,22 @@ export function ScannersPage() {
                       <span>{arbitrage.skippedSummaryText}</span>
                     </div>
                   ) : null}
-                  {errorMessage ? (
-                    <div className="scanner-inline-error" role="alert">
-                      <strong>Scanner failed</strong>
-                      <span>{errorMessage}</span>
+                  {showInlineScannerNotice && scannerError ? (
+                    <div className="activity-inline-state scanner-inline-state" role="alert">
+                      <span
+                        className={
+                          scannerError.tone === 'warning'
+                            ? 'settings-inline-warning'
+                            : 'settings-inline-error'
+                        }
+                      >
+                        {scannerError.message}
+                      </span>
+                      {scannerErrorAction ? (
+                        <button className="text-btn" type="button" onClick={scannerErrorAction.onClick}>
+                          {scannerErrorAction.label}
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -920,8 +1005,11 @@ export function ScannersPage() {
                     />
                   ))
                 ) : (
-                  <div className="scanners-empty-state scanner-results-empty-state">
-                    No sets match that search.
+                  <div className="empty-state scanners-empty-state scanner-results-empty-state">
+                    <span className="empty-primary">No sets match that search.</span>
+                    <span className="empty-sub">
+                      Try another set name or clear the search to see all saved scanner results.
+                    </span>
                   </div>
                 )}
               </div>
@@ -985,19 +1073,60 @@ export function ScannersPage() {
                   ))}
                 </div>
               ) : (
-                <div className="scanners-empty-state">
-                  {normalizedRelicSearch
-                    ? 'No relics match that relic or drop search.'
-                    : showOnlyUnvaulted
-                    ? 'No unvaulted relic ROI results are available in the cached scan.'
-                    : 'No relic ROI rows are available in the cached scan yet.'}
+                <div className="empty-state scanners-empty-state">
+                  <span className="empty-primary">
+                    {normalizedRelicSearch
+                      ? 'No relics match that relic or drop search.'
+                      : showOnlyUnvaulted
+                        ? 'No unvaulted relic ROI results are available in the saved scan.'
+                        : 'No relic ROI rows are available in the saved scan yet.'}
+                  </span>
+                  <span className="empty-sub">
+                    {normalizedRelicSearch
+                      ? 'Try another relic name or drop item search to inspect the saved relic ROI scan.'
+                      : showOnlyUnvaulted
+                        ? 'Turn off the Unvaulted Only filter or run a fresh scan if you expect more relic results.'
+                        : 'Run a fresh scan if you want to rebuild the saved relic ROI snapshot.'}
+                  </span>
                 </div>
               )
+            ) : showBlockingScannerEmptyState && scannerError ? (
+              <div className="empty-state scanners-empty-state">
+                <span className="empty-primary">Scanner data couldn’t load</span>
+                <span className="empty-sub">{scannerError.message}</span>
+                {scannerErrorAction ? (
+                  <button
+                    type="button"
+                    className="market-empty-state-action"
+                    onClick={scannerErrorAction.onClick}
+                  >
+                    {scannerErrorAction.label}
+                  </button>
+                ) : null}
+              </div>
             ) : !isRunning ? (
-              <div className="scanners-empty-state">
-                {normalizedArbitrageSearch
-                  ? 'No sets match that search.'
-                  : 'No cached scanner results yet. Start a scan to build and save the first result set.'}
+              <div className="empty-state scanners-empty-state">
+                <span className="empty-primary">
+                  {normalizedArbitrageSearch
+                    ? 'No sets match that search.'
+                    : 'No cached scanner results yet.'}
+                </span>
+                <span className="empty-sub">
+                  {normalizedArbitrageSearch
+                    ? 'Try another set name or clear the search to see all saved scanner results.'
+                    : 'Start a scan to build and save the first result set.'}
+                </span>
+                {!normalizedArbitrageSearch ? (
+                  <button
+                    type="button"
+                    className="market-empty-state-action"
+                    onClick={() => {
+                      void runArbitrageScan();
+                    }}
+                  >
+                    {actionLabel}
+                  </button>
+                ) : null}
               </div>
             ) : null}
         </div>
