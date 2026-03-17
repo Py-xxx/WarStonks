@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::error_log::log_feature_error_best_effort;
 use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
 const ITEM_CATALOG_SCHEMA_SQL: &str = include_str!("../sql/item_catalog.sql");
@@ -316,16 +317,50 @@ pub fn initialize_app_catalog(app: AppHandle) -> Result<StartupSummary, String> 
     initialize_app_catalog_inner(app).map_err(|error| error.to_string())
 }
 
+fn startup_step<T, F>(
+    app: &AppHandle,
+    stage_key: &str,
+    stage_label: &str,
+    status_text: &str,
+    progress_value: f64,
+    action: F,
+) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    emit_progress(app, stage_key, stage_label, status_text, progress_value);
+    action().map_err(|error| {
+        emit_progress(
+            app,
+            &format!("{stage_key}-failed"),
+            &format!("{stage_label} failed"),
+            "Startup hit an error at this step.",
+            progress_value,
+        );
+        log_feature_error_best_effort(
+            app,
+            "bootstrap",
+            stage_key,
+            &format!("{stage_label} failed. {status_text}"),
+            &error,
+        );
+        error
+    })
+}
+
+fn startup_warning(app: &AppHandle, stage_key: &str, detail: &str, error: &anyhow::Error) {
+    log_feature_error_best_effort(app, "bootstrap", stage_key, detail, error);
+}
+
 fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
-    emit_progress(
+    let paths = startup_step(
         &app,
         "startup",
         "Starting catalog sync",
         "Preparing storage and fetching source metadata.",
         0.02,
-    );
-
-    let paths = resolve_app_paths(&app)?;
+        || resolve_app_paths(&app).context("failed to prepare the startup storage paths"),
+    )?;
     let current_version = current_app_version();
     let previous_version = read_installed_version(&app);
     let version_mismatch = previous_version
@@ -333,47 +368,97 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         .map(|value| value != current_version)
         .unwrap_or(false);
     if version_mismatch {
-        purge_app_data_cache(&paths)?;
+        startup_step(
+            &app,
+            "startup-cache-reset",
+            "Refreshing app cache",
+            "A new app version was detected. Resetting cached startup data.",
+            0.05,
+            || purge_app_data_cache(&paths).context("failed to reset cached startup data"),
+        )?;
     }
     let now = iso_timestamp_now();
     let schema = reference_sql();
-    let alias_seed = parse_manual_alias_seed()?;
+    let alias_seed = startup_step(
+        &app,
+        "manual-alias-seed",
+        "Loading alias rules",
+        "Loading the manual alias rules used by the startup catalog import.",
+        0.06,
+        || parse_manual_alias_seed().context("failed to load manual alias rules"),
+    )?;
     let alias_seed_checksum = sha256_hex(MANUAL_ALIAS_SEED_JSON.as_bytes());
 
-    emit_progress(
+    let wfm_bytes = startup_step(
         &app,
         "wfm-fetch",
         "Checking warframe.market",
         "Downloading the latest item catalog from warframe.market.",
         0.08,
-    );
-    let wfm_bytes = fetch_wfm_to_file(
-        WFM_ITEMS_URL,
-        &paths.wfm_file_path,
-        RequestPriority::High,
-        "request WFM item catalog",
-        Some("catalog:wfm-items".to_string()),
+        || {
+            fetch_wfm_to_file(
+                WFM_ITEMS_URL,
+                &paths.wfm_file_path,
+                RequestPriority::High,
+                "request WFM item catalog",
+                Some("catalog:wfm-items".to_string()),
+            )
+            .context("failed to download the WFM item catalog")
+        },
     )?;
-    let wfm_json: Value =
-        serde_json::from_slice(&wfm_bytes).context("failed to parse WFM item response JSON")?;
-    let wfm_meta = build_wfm_meta(&wfm_json, &paths.wfm_file_path, &now, &wfm_bytes)?;
+    let wfm_json: Value = startup_step(
+        &app,
+        "wfm-parse",
+        "Reading warframe.market data",
+        "Checking the downloaded warframe.market catalog data.",
+        0.11,
+        || serde_json::from_slice(&wfm_bytes).context("failed to parse WFM item response JSON"),
+    )?;
+    let wfm_meta = startup_step(
+        &app,
+        "wfm-meta",
+        "Preparing WFM metadata",
+        "Inspecting the downloaded warframe.market catalog snapshot.",
+        0.12,
+        || build_wfm_meta(&wfm_json, &paths.wfm_file_path, &now, &wfm_bytes),
+    )?;
 
-    emit_progress(
+    let mut connection = startup_step(
         &app,
         "database-open",
         "Opening local catalog",
         "Ensuring the local item database schema is available.",
         0.14,
-    );
-    let mut connection = open_database(&paths.db_path)?;
-    apply_reference_schema(&connection, schema.sql)?;
+        || open_database(&paths.db_path).context("failed to open the local item catalog database"),
+    )?;
+    startup_step(
+        &app,
+        "database-schema",
+        "Preparing catalog schema",
+        "Applying the catalog database schema and migrations.",
+        0.17,
+        || {
+            apply_reference_schema(&connection, schema.sql)
+                .context("failed to apply the item catalog schema")
+        },
+    )?;
 
     let should_refresh = version_mismatch
-        || should_refresh_catalog(
-            &connection,
-            &wfm_meta,
-            &schema.checksum,
-            &alias_seed_checksum,
+        || startup_step(
+            &app,
+            "refresh-check",
+            "Checking local freshness",
+            "Checking whether the local catalog needs a refresh.",
+            0.2,
+            || {
+                should_refresh_catalog(
+                    &connection,
+                    &wfm_meta,
+                    &schema.checksum,
+                    &alias_seed_checksum,
+                )
+                .context("failed to compare local catalog freshness")
+            },
         )?;
 
     if !should_refresh {
@@ -385,7 +470,14 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             1.0,
         );
 
-        let _ = write_installed_version(&app, current_version);
+        if let Err(error) = write_installed_version(&app, current_version) {
+            startup_warning(
+                &app,
+                "startup-version-write",
+                "Startup completed, but the installed app version could not be recorded.",
+                &error,
+            );
+        }
         return Ok(StartupSummary {
             ready: true,
             refreshed: false,
@@ -393,57 +485,99 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             data_dir: paths.data_dir.display().to_string(),
             wfm_source_file: paths.wfm_file_path.display().to_string(),
             wfstat_source_file: Some(paths.wfstat_file_path.display().to_string()),
-            stats: load_existing_stats(&connection).unwrap_or_default(),
+            stats: match load_existing_stats(&connection) {
+                Ok(stats) => stats,
+                Err(error) => {
+                    startup_warning(
+                        &app,
+                        "startup-stats",
+                        "Startup completed, but the cached import statistics could not be loaded.",
+                        &error,
+                    );
+                    ImportStats::default()
+                }
+            },
             current_wfm_api_version: wfm_meta.api_version.clone(),
         });
     }
 
-    emit_progress(
+    let wfstat_bytes = startup_step(
         &app,
         "wfstat-fetch",
         "Refreshing WFStat",
         "Downloading the full unfiltered WFStat item catalog.",
         0.22,
-    );
-    let wfstat_bytes = fetch_http_to_file(WFSTAT_ITEMS_URL, &paths.wfstat_file_path)?;
-    let wfstat_json: Value = serde_json::from_slice(&wfstat_bytes)
-        .context("failed to parse WFStat item response JSON")?;
-    let wfstat_meta =
-        build_wfstat_meta(&wfstat_json, &paths.wfstat_file_path, &now, &wfstat_bytes)?;
+        || {
+            fetch_http_to_file(WFSTAT_ITEMS_URL, &paths.wfstat_file_path)
+                .context("failed to download the WFStat item catalog")
+        },
+    )?;
+    let wfstat_json: Value = startup_step(
+        &app,
+        "wfstat-parse",
+        "Reading WFStat data",
+        "Checking the downloaded WFStat catalog data.",
+        0.27,
+        || {
+            serde_json::from_slice(&wfstat_bytes)
+                .context("failed to parse WFStat item response JSON")
+        },
+    )?;
+    let wfstat_meta = startup_step(
+        &app,
+        "wfstat-meta",
+        "Preparing WFStat metadata",
+        "Inspecting the downloaded WFStat catalog snapshot.",
+        0.3,
+        || build_wfstat_meta(&wfstat_json, &paths.wfstat_file_path, &now, &wfstat_bytes),
+    )?;
 
-    emit_progress(
+    let import_context = startup_step(
         &app,
         "catalog-build",
         "Building canonical catalog",
         "Resolving canonical items, aliases, and cross-source matches.",
         0.36,
-    );
-    let import_context = build_import_context(&wfm_json, &wfstat_json)?;
+        || {
+            build_import_context(&wfm_json, &wfstat_json)
+                .context("failed to build the canonical item catalog")
+        },
+    )?;
 
     if import_context.stats.unmatched_wfm_items > 0 {
-        return Err(anyhow!(
+        let error = anyhow!(
             "catalog import aborted: {} WFM items remain unmatched",
             import_context.stats.unmatched_wfm_items
-        ));
+        );
+        startup_warning(
+            &app,
+            "catalog-validation",
+            "Startup validation failed because required WFM items could not be matched.",
+            &error,
+        );
+        return Err(error);
     }
 
-    emit_progress(
+    let summary = startup_step(
         &app,
         "database-import",
         "Writing SQLite catalog",
         "Replacing catalog rows in a single SQLite transaction.",
         0.58,
-    );
-    let summary = import_into_database(
-        &mut connection,
-        &paths,
-        &schema,
-        &alias_seed,
-        &alias_seed_checksum,
-        &wfm_meta,
-        &wfstat_meta,
-        &now,
-        import_context,
+        || {
+            import_into_database(
+                &mut connection,
+                &paths,
+                &schema,
+                &alias_seed,
+                &alias_seed_checksum,
+                &wfm_meta,
+                &wfstat_meta,
+                &now,
+                import_context,
+            )
+            .context("failed to write the refreshed catalog into SQLite")
+        },
     )?;
 
     emit_progress(
@@ -454,7 +588,14 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         1.0,
     );
 
-    let _ = write_installed_version(&app, current_version);
+    if let Err(error) = write_installed_version(&app, current_version) {
+        startup_warning(
+            &app,
+            "startup-version-write",
+            "Startup completed, but the installed app version could not be recorded.",
+            &error,
+        );
+    }
     Ok(summary)
 }
 
@@ -1706,8 +1847,8 @@ fn insert_wfstat_component_record(
         .copied()
         .ok_or_else(|| anyhow!("missing parent item_id for {}", parent_record.unique_name))?;
     let component_source_record_key = wfstat_component_source_record_key(component);
-    let item_count = get_i64_any(&component.raw, "itemCount")
-        .or_else(|| get_i64_any(&component.raw, "count"));
+    let item_count =
+        get_i64_any(&component.raw, "itemCount").or_else(|| get_i64_any(&component.raw, "count"));
 
     tx.execute(
         "INSERT INTO wfstat_item_components (
@@ -2927,7 +3068,10 @@ fn fetch_wfm_to_file(
         return Err(anyhow!(if trimmed.is_empty() {
             format!("{action_label} failed with status {}", response.status)
         } else {
-            format!("{action_label} failed with status {}: {trimmed}", response.status)
+            format!(
+                "{action_label} failed with status {}: {trimmed}",
+                response.status
+            )
         }));
     }
 
@@ -2991,9 +3135,8 @@ fn purge_app_data_cache(paths: &AppPaths) -> Result<()> {
         for entry in fs::read_dir(&paths.data_dir)
             .with_context(|| format!("failed to read {}", paths.data_dir.display()))?
         {
-            let entry = entry.with_context(|| {
-                format!("failed to enumerate {}", paths.data_dir.display())
-            })?;
+            let entry = entry
+                .with_context(|| format!("failed to enumerate {}", paths.data_dir.display()))?;
             let path = entry.path();
             let metadata = entry
                 .metadata()
