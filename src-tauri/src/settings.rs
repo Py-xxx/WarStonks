@@ -21,8 +21,8 @@ const ALECAFRAME_RELIC_INVENTORY_PATH: &str = "/api/stats/public/getRelicInvento
 const ALECAFRAME_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
 
-fn build_support_error_message(summary: &str, reference_code: &str) -> String {
-    format!("{summary} If it keeps happening, report it in Discord. Reference: {reference_code}")
+fn build_support_error_message(summary: &str) -> String {
+    format!("{summary} If it keeps happening, report it in Discord.")
 }
 
 fn log_settings_error_and_build_message(
@@ -31,11 +31,11 @@ fn log_settings_error_and_build_message(
     stage: &str,
     detail: &str,
     summary: &str,
-    reference_code: &str,
+    _reference_code: &str,
     error: &anyhow::Error,
 ) -> String {
     log_feature_error_best_effort(app, feature, stage, detail, error);
-    build_support_error_message(summary, reference_code)
+    build_support_error_message(summary)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -697,7 +697,6 @@ fn get_currency_balances_inner(app: &tauri::AppHandle) -> Result<WalletSnapshot>
                 configured: true,
                 error_message: Some(build_support_error_message(
                     "Couldn’t refresh Alecaframe balances right now.",
-                    "ALECAFRAME-WALLET-REFRESH-01",
                 )),
                 ..WalletSnapshot::default()
             })

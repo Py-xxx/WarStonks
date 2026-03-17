@@ -21,25 +21,25 @@ function toRawErrorMessage(error: unknown): string {
 function friendlyHomeErrorFallback(context: HomeErrorContext): string {
   switch (context) {
     case 'dashboard-quick-view-load':
-      return 'Couldn’t load quick view right now. Please try another search or retry in a moment. If it keeps happening, report it in Discord. Reference: HOME-QUICKVIEW-LOAD-01';
+      return 'Couldn’t load quick view right now. Please try another search or retry in a moment. If it keeps happening, report it in Discord.';
     case 'dashboard-quick-view-copy':
-      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord. Reference: HOME-QUICKVIEW-COPY-01';
+      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord.';
     case 'dashboard-analysis-load':
-      return 'Couldn’t build the analysis preview right now. Please try again. If it keeps happening, report it in Discord. Reference: HOME-ANALYSIS-LOAD-01';
+      return 'Couldn’t build the analysis preview right now. Please try again. If it keeps happening, report it in Discord.';
     case 'watchlist-add':
-      return 'Couldn’t add this item to the watchlist right now. Please try again. If it keeps happening, report it in Discord. Reference: WATCHLIST-ADD-01';
+      return 'Couldn’t add this item to the watchlist right now. Please try again. If it keeps happening, report it in Discord.';
     case 'watchlist-buy-sync':
-      return 'Added to the watchlist, but the linked buy order could not be synced right now. If it keeps happening, report it in Discord. Reference: WATCHLIST-BUY-SYNC-01';
+      return 'Added to the watchlist, but the linked buy order could not be synced right now. If it keeps happening, report it in Discord.';
     case 'watchlist-copy':
-      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord. Reference: WATCHLIST-COPY-01';
+      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord.';
     case 'watchlist-mark-bought':
-      return 'Couldn’t mark this item as bought right now. Please try again. If it keeps happening, report it in Discord. Reference: WATCHLIST-MARK-BOUGHT-01';
+      return 'Couldn’t mark this item as bought right now. Please try again. If it keeps happening, report it in Discord.';
     case 'watchlist-refresh':
-      return 'Couldn’t refresh this watchlist item right now. WarStonks will try again automatically. If it keeps happening, report it in Discord. Reference: WATCHLIST-REFRESH-01';
+      return 'Couldn’t refresh this watchlist item right now. WarStonks will try again automatically. If it keeps happening, report it in Discord.';
     case 'alerts-copy':
-      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord. Reference: ALERTS-COPY-01';
+      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord.';
     case 'alerts-mark-bought':
-      return 'Couldn’t mark this alert item as bought right now. Please try again. If it keeps happening, report it in Discord. Reference: ALERTS-MARK-BOUGHT-01';
+      return 'Couldn’t mark this alert item as bought right now. Please try again. If it keeps happening, report it in Discord.';
     default:
       return 'Something went wrong. Please try again. If it keeps happening, report it in Discord.';
   }
@@ -63,10 +63,5 @@ export function formatHomeErrorMessage(context: HomeErrorContext, error: unknown
   ) {
     return raw;
   }
-
-  if (raw.includes('Reference:')) {
-    return raw;
-  }
-
   return friendlyHomeErrorFallback(context);
 }
