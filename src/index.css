@@ -2122,17 +2122,17 @@ body {
 }
 
 .startup-panel {
-  width: min(760px, 100%);
+  width: min(720px, 100%);
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 28px;
-  border: 1px solid rgba(74, 158, 255, 0.16);
-  border-radius: 18px;
+  gap: 16px;
+  padding: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
   background:
-    linear-gradient(180deg, rgba(26, 30, 42, 0.94), rgba(16, 19, 26, 0.98)),
+    linear-gradient(180deg, rgba(25, 29, 39, 0.92), rgba(14, 17, 23, 0.98)),
     var(--bg-surface);
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
 }
 
 .startup-header {
@@ -2142,13 +2142,32 @@ body {
   gap: 16px;
 }
 
+.startup-header-copy {
+  display: grid;
+  gap: 8px;
+}
+
 .startup-eyebrow {
-  margin-bottom: 10px;
+  margin-bottom: 0;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.startup-title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 36px);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.startup-subtitle {
+  margin: 0;
+  max-width: 480px;
+  color: var(--text-secondary);
+  line-height: 1.6;
 }
 
 .startup-progress-chip {
@@ -2185,11 +2204,11 @@ body {
 }
 
 .startup-stage-label {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 700;
 }
 
-.startup-stage-key {
+.startup-stage-state {
   color: var(--accent-blue);
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
@@ -2200,7 +2219,7 @@ body {
 .startup-status-text {
   color: var(--text-secondary);
   line-height: 1.6;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .startup-progress-track {
@@ -2229,6 +2248,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 84px;
   padding: 14px 16px;
 }
 
@@ -2242,7 +2262,8 @@ body {
 
 .startup-info-value {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
   line-height: 1.5;
   word-break: break-word;
 }
@@ -2250,14 +2271,15 @@ body {
 .startup-error-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   padding: 18px;
   border-color: rgba(240, 79, 88, 0.28);
+  background: rgba(43, 18, 22, 0.48);
 }
 
 .startup-error-title {
   color: var(--accent-red);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -2268,13 +2290,13 @@ body {
 
 .startup-retry-button {
   align-self: flex-start;
-  height: 34px;
-  padding: 0 14px;
-  border: 1px solid rgba(74, 158, 255, 0.5);
-  border-radius: 8px;
-  background: rgba(74, 158, 255, 0.08);
-  color: var(--accent-blue);
-  font-size: 12px;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid rgba(74, 158, 255, 0.42);
+  border-radius: 10px;
+  background: rgba(74, 158, 255, 0.12);
+  color: #dce9ff;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }

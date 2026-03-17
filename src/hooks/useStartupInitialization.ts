@@ -30,7 +30,7 @@ interface StartupWorldStateTask {
 const INITIAL_PROGRESS: StartupProgress = {
   stageKey: 'startup',
   stageLabel: 'Starting WarStonks',
-  statusText: 'Preparing startup checks.',
+  statusText: 'Preparing your workspace.',
   progressValue: 0,
 };
 
@@ -54,11 +54,11 @@ function buildWorldStateProgress(
 
   return {
     stageKey,
-    stageLabel: 'Fetching event data',
+    stageLabel: 'Loading live event data',
     statusText:
       completedCount === 0
-        ? `Catalog initialization is complete. Loading ${totalCount} worldstate feeds before entering the app.`
-        : `${stageLabel} loaded. ${completedCount} of ${totalCount} worldstate feeds are ready.`,
+        ? 'Local setup is ready. Pulling in live event data before launch.'
+        : `${stageLabel} is ready. ${completedCount} of ${totalCount} live feeds have loaded.`,
     progressValue: progressBase + completionRatio * progressRange,
   };
 }
@@ -111,8 +111,8 @@ export function useStartupInitialization(): StartupState {
       try {
         setProgress({
           stageKey: 'startup-command',
-          stageLabel: 'Starting catalog sync',
-          statusText: 'Connecting startup progress and invoking the desktop initializer.',
+          stageLabel: 'Loading market data',
+          statusText: 'Preparing the local market catalog.',
           progressValue: 0.03,
         });
 
@@ -139,7 +139,7 @@ export function useStartupInitialization(): StartupState {
             setProgress((current) => ({
               ...current,
               statusText:
-                'Running startup initialization. Live progress is unavailable in this session.',
+                'Starting up. Live progress updates are temporarily unavailable.',
             }));
           });
 
@@ -152,8 +152,8 @@ export function useStartupInitialization(): StartupState {
 
         const setMapProgress: StartupProgress = {
           stageKey: 'trade-set-map',
-          stageLabel: 'Preparing set map',
-          statusText: 'Building the cached set component map for trade reconciliation.',
+          stageLabel: 'Preparing planning data',
+          statusText: 'Building set and component planning data.',
           progressValue: 0.88,
         };
 
@@ -171,7 +171,7 @@ export function useStartupInitialization(): StartupState {
         const tradeSessionProgress: StartupProgress = {
           stageKey: 'trade-session',
           stageLabel: 'Checking trade session',
-          statusText: 'Checking saved Warframe Market session and credentials.',
+          statusText: 'Checking your saved Warframe Market session.',
           progressValue: 0.89,
         };
 
