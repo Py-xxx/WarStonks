@@ -683,7 +683,7 @@ function SetCompletionScreenshotImportModal({
             <span className="card-label">Set Completion Import</span>
             <h3>
               Import Prime Components Screenshot{' '}
-              <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
+              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">Experimental</span>
             </h3>
           </div>
           <div className="settings-modal-actions">
@@ -921,7 +921,7 @@ function SetCompletionScreenshotImportWarningModal({
             <span className="card-label">Set Completion Import</span>
             <h3>
               Screenshot Import Guidance{' '}
-              <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
+              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">Experimental</span>
             </h3>
           </div>
           <div className="settings-modal-actions">
@@ -931,14 +931,14 @@ function SetCompletionScreenshotImportWarningModal({
           </div>
         </div>
         <div className="settings-modal-body">
-          <div className="settings-form-card">
-            <p className="watchlist-form-note">
-              This importer currently only works reliably with the in-game <strong>Vitruvian</strong> theme.
+          <div className="settings-form-card screenshot-import-guidance-card">
+            <p className="watchlist-form-note screenshot-import-guidance-note">
+              This importer currently only works reliably with the in-game <strong className="screenshot-import-guidance-theme">Vitruvian</strong> theme.
             </p>
-            <p className="watchlist-form-note">
+            <p className="watchlist-form-note screenshot-import-guidance-note">
               Make sure your mouse cursor is <strong>not visible</strong> in the screenshot.
             </p>
-            <p className="watchlist-form-note">
+            <p className="watchlist-form-note screenshot-import-guidance-note">
               The screenshot should show the full <strong>7×3 Prime Components grid</strong>, matching the example layout.
             </p>
             <div className="settings-form-actions">
@@ -2113,7 +2113,7 @@ export function OpportunitiesPage() {
                       disabled={!plannerCatalog.length}
                     >
                       <span>Import Screenshot</span>{' '}
-                      <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
+                      <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">Experimental</span>
                     </button>
                     <div className="set-planner-search-wrap">
                       <input

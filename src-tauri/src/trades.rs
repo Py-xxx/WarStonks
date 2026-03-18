@@ -1,6 +1,8 @@
+use crate::error_log::log_feature_error_best_effort;
 use crate::market_observatory::{
-    apply_owned_set_component_deltas, load_set_completion_screenshot_import_cutoff,
-    replace_owned_set_component_deltas, OwnedSetComponentDelta,
+    apply_owned_set_component_deltas, load_cached_trade_health_context,
+    load_set_completion_screenshot_import_cutoff, replace_owned_set_component_deltas,
+    CachedTradeHealthContext, OwnedSetComponentDelta,
 };
 use crate::settings::{
     load_settings_for_internal_use, send_trade_detected_discord_notification_inner,
@@ -88,6 +90,32 @@ pub struct TradeSellOrder {
     pub updated_at: String,
     pub health_score: Option<i64>,
     pub health_note: Option<String>,
+    pub health: Option<TradeListingHealth>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeListingHealth {
+    pub refreshed_at: String,
+    pub score: i64,
+    pub label: String,
+    pub tone: String,
+    pub action_label: String,
+    pub action_tone: String,
+    pub outlook_label: String,
+    pub posture_label: String,
+    pub market_direction: String,
+    pub reason: String,
+    pub sellers_ahead: i64,
+    pub quantity_ahead: i64,
+    pub tie_count: i64,
+    pub market_low: Option<i64>,
+    pub price_gap: Option<i64>,
+    pub recommended_price: Option<i64>,
+    pub liquidity_score: Option<i64>,
+    pub liquidity_label: Option<String>,
+    pub pressure_label: Option<String>,
+    pub is_degraded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1250,19 +1278,23 @@ fn extract_wfm_bytes_error(action_label: &str, response: &WfmHttpResponse) -> an
 
 /// Minimal response structs for the WFM V2 item orders endpoint.
 /// Only the fields needed to derive the lowest sell price are parsed.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TradeMarketOrderUser {
+    #[serde(default)]
+    ingame_name: Option<String>,
     #[serde(default)]
     status: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TradeMarketOrder {
     #[serde(rename = "type")]
     order_type: String,
-    platinum: i64,
+    platinum: f64,
+    #[serde(default)]
+    quantity: Option<i64>,
     #[serde(default)]
     rank: Option<i64>,
     #[serde(default)]
@@ -1277,6 +1309,31 @@ struct TradeMarketOrdersResponse {
     data: Vec<TradeMarketOrder>,
 }
 
+#[derive(Debug, Clone)]
+struct TradeHealthOrder {
+    price: f64,
+    quantity: i64,
+    username: String,
+}
+
+#[derive(Debug, Clone)]
+struct TradeHealthLiveContext {
+    sell_orders: Vec<TradeHealthOrder>,
+    market_low: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TradeHealthDecision {
+    score: i64,
+    label: &'static str,
+    tone: &'static str,
+    action_label: &'static str,
+    action_tone: &'static str,
+    outlook_label: &'static str,
+    posture_label: &'static str,
+    recommended_price: Option<i64>,
+}
+
 fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
     match status {
         Some("ingame") => true,
@@ -1285,14 +1342,215 @@ fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
     }
 }
 
+fn trade_health_variant_matches(rank: Option<i64>, required_rank: Option<i64>) -> bool {
+    match required_rank {
+        Some(value) => rank == Some(value),
+        None => rank.is_none() || rank == Some(0),
+    }
+}
+
+fn trade_health_variant_key(rank: Option<i64>) -> String {
+    match rank {
+        Some(value) => format!("rank:{value}"),
+        None => "base".to_string(),
+    }
+}
+
+fn normalize_trade_health_order(order: TradeMarketOrder) -> Option<TradeHealthOrder> {
+    Some(TradeHealthOrder {
+        price: order.platinum,
+        quantity: order.quantity.unwrap_or(1).max(1),
+        username: order.user.ingame_name?,
+    })
+}
+
+fn count_queue_ahead(
+    sell_orders: &[TradeHealthOrder],
+    your_price: i64,
+    account_name: &str,
+) -> (i64, i64, i64) {
+    let normalized_account_name = account_name.trim().to_ascii_lowercase();
+    let target_price = your_price as f64;
+    let mut sellers_ahead = 0_i64;
+    let mut quantity_ahead = 0_i64;
+    let mut tie_count = 0_i64;
+
+    for order in sell_orders {
+        if order.username.trim().to_ascii_lowercase() == normalized_account_name {
+            continue;
+        }
+        if order.price < target_price {
+            sellers_ahead += 1;
+            quantity_ahead += order.quantity;
+        } else if (order.price - target_price).abs() < f64::EPSILON {
+            tie_count += 1;
+        }
+    }
+
+    (sellers_ahead, quantity_ahead, tie_count)
+}
+
+fn calculate_trade_health_score(
+    price_gap: Option<i64>,
+    sellers_ahead: i64,
+    quantity_ahead: i64,
+    tie_count: i64,
+    market_direction: &str,
+    liquidity_score: Option<i64>,
+) -> i64 {
+    let mut score = 84.0;
+    score -= (sellers_ahead.min(8) as f64) * 5.0;
+    score -= (quantity_ahead.min(24) as f64) * 1.4;
+    score -= (tie_count.min(5) as f64) * 2.0;
+    score -= match price_gap {
+        Some(value) if value <= 0 => 0.0,
+        Some(value) => (value.min(10) as f64) * 3.0,
+        None => 10.0,
+    };
+    score += match market_direction {
+        "Rising" => 10.0,
+        "Falling" => -8.0,
+        _ => 0.0,
+    };
+    score += match liquidity_score {
+        Some(value) if value >= 75 => 10.0,
+        Some(value) if value >= 55 => 4.0,
+        Some(value) if value < 35 => -10.0,
+        Some(value) if value < 55 => -4.0,
+        _ => 0.0,
+    };
+    score.round().clamp(0.0, 100.0) as i64
+}
+
+fn derive_trade_health_reason(
+    decision: &TradeHealthDecision,
+    sellers_ahead: i64,
+    quantity_ahead: i64,
+    context: Option<&CachedTradeHealthContext>,
+) -> String {
+    let queue_summary = if sellers_ahead <= 0 {
+        "You are already sitting at the front of the visible sell queue.".to_string()
+    } else if quantity_ahead > 0 {
+        format!(
+            "{sellers_ahead} cheaper seller{} and {quantity_ahead} unit{} are still ahead of your listing.",
+            if sellers_ahead == 1 { "" } else { "s" },
+            if quantity_ahead == 1 { "" } else { "s" }
+        )
+    } else {
+        format!(
+            "{sellers_ahead} cheaper seller{} are still ahead of your listing.",
+            if sellers_ahead == 1 { "" } else { "s" }
+        )
+    };
+
+    let market_summary = context
+        .map(|entry| entry.trend_summary.clone())
+        .unwrap_or_else(|| "WarStonks is using live orderbook data only for this listing right now.".to_string());
+
+    if decision.action_label == "Wait for normalization" {
+        format!("{market_summary} {queue_summary}")
+    } else if decision.action_label == "Reprice to market" {
+        format!("{queue_summary} {market_summary}")
+    } else {
+        format!("{queue_summary} {market_summary}")
+    }
+}
+
+fn decide_trade_health(
+    your_price: i64,
+    market_low: Option<i64>,
+    sellers_ahead: i64,
+    quantity_ahead: i64,
+    tie_count: i64,
+    context: Option<&CachedTradeHealthContext>,
+) -> TradeHealthDecision {
+    let price_gap = market_low.map(|value| your_price - value);
+    let market_direction = context
+        .map(|entry| entry.trend_direction.as_str())
+        .unwrap_or("Flat");
+    let liquidity_score = context.and_then(|entry| entry.liquidity_score.map(|value| value.round() as i64));
+    let score = calculate_trade_health_score(
+        price_gap,
+        sellers_ahead,
+        quantity_ahead,
+        tie_count,
+        market_direction,
+        liquidity_score,
+    );
+    let posture_label = if price_gap.unwrap_or_default() < 0 {
+        "Leading"
+    } else if price_gap == Some(0) && sellers_ahead == 0 {
+        "At market"
+    } else if price_gap.unwrap_or(99) <= 2 && sellers_ahead <= 2 {
+        "Competitive"
+    } else if price_gap.unwrap_or(99) <= 5 && sellers_ahead <= 6 {
+        "Slightly above"
+    } else {
+        "Buried"
+    };
+
+    let weak_exit_zone = match (context, market_low) {
+        (Some(entry), Some(low))
+            if entry.exit_zone_low.is_some() && low + 3 < entry.exit_zone_low.unwrap_or(low as f64).round() as i64 =>
+        {
+            true
+        }
+        _ => false,
+    };
+
+    let (action_label, action_tone, outlook_label, recommended_price) = if market_low.is_none() {
+        ("Reprice to market", "amber", "Needs a refresh", None)
+    } else if weak_exit_zone && market_direction != "Rising" {
+        ("Wait for normalization", "amber", "Do not chase down", None)
+    } else if sellers_ahead == 0 && price_gap.unwrap_or_default() <= 0 {
+        ("Hold", "green", "Likely soon", None)
+    } else if sellers_ahead <= 2 && price_gap.unwrap_or(99) <= 2 {
+        (
+            "Trim by 1-2p",
+            "blue",
+            "Competitive, but may take time",
+            Some(your_price.saturating_sub(price_gap.unwrap_or_default().clamp(1, 2))),
+        )
+    } else if sellers_ahead >= 6 || quantity_ahead >= 10 || price_gap.unwrap_or_default() >= 4 {
+        ("Reprice to market", "red", "Unlikely at current price", market_low)
+    } else if liquidity_score.unwrap_or(60) < 35 {
+        ("Low priority listing", "amber", "Thin market", None)
+    } else {
+        ("Hold", "blue", "Needs patience", None)
+    };
+
+    let (label, tone) = if score >= 78 {
+        ("Strong", "green")
+    } else if score >= 62 {
+        ("Healthy", "blue")
+    } else if score >= 42 {
+        ("Watch", "amber")
+    } else if score >= 22 {
+        ("Weak", "red")
+    } else {
+        ("Action Needed", "red")
+    };
+
+    TradeHealthDecision {
+        score,
+        label,
+        tone,
+        action_label,
+        action_tone,
+        outlook_label,
+        posture_label,
+        recommended_price,
+    }
+}
+
 /// Fetches the lowest visible sell price for `slug` (optionally filtered by `rank`)
 /// from online/ingame sellers, using the given scheduler priority.
-fn fetch_sell_order_market_low_inner(
+fn fetch_trade_health_live_context_inner(
     slug: &str,
     rank: Option<i64>,
     seller_mode: &str,
     priority: RequestPriority,
-) -> Result<Option<i64>> {
+) -> Result<TradeHealthLiveContext> {
     let client = shared_wfm_client()?;
     let priority_label = match priority {
         RequestPriority::High => "high",
@@ -1322,19 +1580,35 @@ fn fetch_sell_order_market_low_inner(
     }
     let payload = serde_json::from_slice::<TradeMarketOrdersResponse>(&response.body)
         .context("failed to parse trade market orders response")?;
-    let market_low = payload
+    let sell_orders = payload
         .data
         .iter()
         .filter(|order| order.order_type == "sell")
         .filter(|order| order.visible.unwrap_or(true))
         .filter(|order| seller_mode_allows_status(order.user.status.as_deref(), seller_mode))
-        .filter(|order| match rank {
-            Some(required_rank) => order.rank == Some(required_rank),
-            None => order.rank.is_none() || order.rank == Some(0),
-        })
-        .map(|order| order.platinum)
+        .filter(|order| trade_health_variant_matches(order.rank, rank))
+        .cloned()
+        .filter_map(normalize_trade_health_order)
+        .collect::<Vec<_>>();
+
+    let market_low = sell_orders
+        .iter()
+        .map(|order| order.price.round() as i64)
         .min();
-    Ok(market_low)
+
+    Ok(TradeHealthLiveContext {
+        sell_orders,
+        market_low,
+    })
+}
+
+fn fetch_sell_order_market_low_inner(
+    slug: &str,
+    rank: Option<i64>,
+    seller_mode: &str,
+    priority: RequestPriority,
+) -> Result<Option<i64>> {
+    Ok(fetch_trade_health_live_context_inner(slug, rank, seller_mode, priority)?.market_low)
 }
 
 #[tauri::command]
@@ -1351,6 +1625,99 @@ pub async fn get_trade_sell_order_market_low(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_trade_sell_order_health(
+    app: tauri::AppHandle,
+    item_id: Option<i64>,
+    slug: String,
+    rank: Option<i64>,
+    your_price: i64,
+    seller_mode: String,
+    priority: String,
+) -> Result<TradeListingHealth, String> {
+    let app_for_work = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let priority = RequestPriority::from_wire(Some(priority.trim()), RequestPriority::Low);
+        let seller_mode = seller_mode.trim().to_string();
+        let live_context =
+            fetch_trade_health_live_context_inner(slug.trim(), rank, &seller_mode, priority)?;
+        let session = ensure_authenticated_session(&app_for_work)?;
+        let observatory = open_market_observatory_database(&app_for_work)?;
+        let variant_key = trade_health_variant_key(rank);
+        let cached_context = item_id
+            .map(|value| load_cached_trade_health_context(&observatory, value, &variant_key, &seller_mode))
+            .transpose()?
+            .flatten();
+        let (sellers_ahead, quantity_ahead, tie_count) =
+            count_queue_ahead(&live_context.sell_orders, your_price, &session.account.name);
+        let decision = decide_trade_health(
+            your_price,
+            live_context.market_low,
+            sellers_ahead,
+            quantity_ahead,
+            tie_count,
+            cached_context.as_ref(),
+        );
+        let market_direction = cached_context
+            .as_ref()
+            .map(|entry| entry.trend_direction.clone())
+            .unwrap_or_else(|| "Flat".to_string());
+        let price_gap = live_context.market_low.map(|value| your_price - value);
+        let reason =
+            derive_trade_health_reason(&decision, sellers_ahead, quantity_ahead, cached_context.as_ref());
+
+        Ok::<_, anyhow::Error>(TradeListingHealth {
+            refreshed_at: format_timestamp(now_utc())?,
+            score: decision.score,
+            label: decision.label.to_string(),
+            tone: decision.tone.to_string(),
+            action_label: decision.action_label.to_string(),
+            action_tone: decision.action_tone.to_string(),
+            outlook_label: decision.outlook_label.to_string(),
+            posture_label: decision.posture_label.to_string(),
+            market_direction,
+            reason,
+            sellers_ahead,
+            quantity_ahead,
+            tie_count,
+            market_low: live_context.market_low,
+            price_gap,
+            recommended_price: decision.recommended_price,
+            liquidity_score: cached_context
+                .as_ref()
+                .and_then(|entry| entry.liquidity_score.map(|value| value.round() as i64)),
+            liquidity_label: cached_context.as_ref().map(|entry| entry.liquidity_label.clone()),
+            pressure_label: cached_context.as_ref().map(|entry| entry.pressure_label.clone()),
+            is_degraded: cached_context
+                .as_ref()
+                .map(|entry| entry.is_degraded)
+                .unwrap_or(true),
+        })
+    })
+    .await
+    .map_err(|error| {
+        let error = anyhow!("failed to join trade listing health worker: {error}");
+        log_feature_error_best_effort(
+            &app,
+            "trades-health",
+            "refresh-listing-health-join",
+            "Failed to join the trade listing health refresh worker.",
+            &error,
+        );
+        "Couldn’t refresh listing health right now.".to_string()
+    })?
+    .map_err(|error| {
+        log_feature_error_best_effort(
+            &app,
+            "trades-health",
+            "refresh-listing-health",
+            "Failed to refresh the live trade listing health context.",
+            &error,
+        );
+        "Couldn’t refresh listing health right now.".to_string()
+    })
 }
 
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
@@ -5748,6 +6115,7 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
             updated_at: order.updated_at,
             health_score: None,
             health_note: None,
+            health: None,
         };
 
         if order.order_type == "sell" {
@@ -7496,5 +7864,40 @@ mod tests {
 
         assert!(persisted_entries.is_empty());
         assert!(new_entries.is_empty());
+    }
+
+    #[test]
+    fn decide_trade_health_prefers_hold_when_listing_is_already_at_market() {
+        let context = CachedTradeHealthContext {
+            trend_direction: "Flat".to_string(),
+            trend_summary: "Recent tracked floors are broadly stable.".to_string(),
+            liquidity_score: Some(68.0),
+            liquidity_label: "Tradable".to_string(),
+            pressure_label: "Balanced".to_string(),
+            exit_zone_low: Some(118.0),
+            is_degraded: false,
+        };
+
+        let decision = decide_trade_health(120, Some(120), 0, 0, 0, Some(&context));
+        assert_eq!(decision.action_label, "Hold");
+        assert_eq!(decision.outlook_label, "Likely soon");
+        assert!(decision.score >= 70);
+    }
+
+    #[test]
+    fn decide_trade_health_waits_when_live_floor_is_below_exit_zone() {
+        let context = CachedTradeHealthContext {
+            trend_direction: "Falling".to_string(),
+            trend_summary: "Recent tracked floors are still slipping.".to_string(),
+            liquidity_score: Some(60.0),
+            liquidity_label: "Tradable".to_string(),
+            pressure_label: "Exit Pressure".to_string(),
+            exit_zone_low: Some(90.0),
+            is_degraded: false,
+        };
+
+        let decision = decide_trade_health(88, Some(82), 3, 5, 1, Some(&context));
+        assert_eq!(decision.action_label, "Wait for normalization");
+        assert_eq!(decision.action_tone, "amber");
     }
 }

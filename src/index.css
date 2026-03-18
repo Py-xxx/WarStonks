@@ -636,6 +636,14 @@
   color: var(--accent-purple);
 }
 
+.screenshot-import-experimental-pill {
+  margin-left: 8px;
+  padding: 4px 7px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+
 .screenshot-import-summary-panel {
   display: grid;
   gap: 12px;
@@ -6317,6 +6325,111 @@ body {
   display: grid;
   gap: 10px;
 }
+.trade-health-page {
+  display: grid;
+  gap: 14px;
+}
+.trade-health-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.trade-health-summary-card {
+  padding: 14px 16px;
+}
+.trade-health-list {
+  display: grid;
+  gap: 12px;
+}
+.trade-health-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+.trade-health-card-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.trade-health-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}
+.trade-health-copy {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 10px;
+}
+.trade-health-copy-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.trade-health-item-name {
+  font-size: 14px;
+}
+.trade-health-item-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.trade-health-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.trade-health-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+.trade-health-metric {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.trade-health-metric-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.trade-health-metric strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.trade-health-reason {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+@media (max-width: 1100px) {
+  .trade-health-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .trade-health-summary-grid,
+  .trade-health-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .trade-health-card-main,
+  .trade-health-copy-top {
+    flex-direction: column;
+  }
+  .trade-health-badges {
+    justify-content: flex-start;
+  }
+}
 
 /* ── PORTFOLIO ── */
 .period-bar {
@@ -7387,6 +7500,25 @@ body {
 .watchlist-form-note {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.screenshot-import-guidance-card {
+  gap: 16px;
+}
+
+.screenshot-import-guidance-note {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.screenshot-import-guidance-note strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.screenshot-import-guidance-theme {
+  color: var(--accent-amber) !important;
 }
 
 .market-page-content {

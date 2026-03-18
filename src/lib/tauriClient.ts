@@ -22,6 +22,7 @@ import type {
   MarketTrackingSource,
   MarketVariant,
   TradeCreateListingInput,
+  TradeListingHealth,
   PortfolioPnlSummary,
   TradeOverview,
   PortfolioTradeLogState,
@@ -437,6 +438,24 @@ export async function getTradeMarketLow(
   priority: 'high' | 'medium' | 'low',
 ): Promise<number | null> {
   return invoke<number | null>('get_trade_sell_order_market_low', { slug, rank, sellerMode, priority });
+}
+
+export async function getTradeSellOrderHealth(
+  itemId: number | null,
+  slug: string,
+  rank: number | null,
+  yourPrice: number,
+  sellerMode: SellerMode,
+  priority: 'high' | 'medium' | 'low',
+): Promise<TradeListingHealth> {
+  return invoke<TradeListingHealth>('get_trade_sell_order_health', {
+    itemId,
+    slug,
+    rank,
+    yourPrice,
+    sellerMode,
+    priority,
+  });
 }
 
 export async function getWfmTopSellOrders(

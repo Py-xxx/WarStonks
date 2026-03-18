@@ -407,6 +407,17 @@ pub struct ItemAnalyticsResponse {
     pub action_card: AnalyticsActionCard,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CachedTradeHealthContext {
+    pub trend_direction: String,
+    pub trend_summary: String,
+    pub liquidity_score: Option<f64>,
+    pub liquidity_label: String,
+    pub pressure_label: String,
+    pub exit_zone_low: Option<f64>,
+    pub is_degraded: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisHeadline {
@@ -7735,7 +7746,7 @@ fn build_arbitrage_score(
 fn build_arbitrage_note(
     priced_component_count: usize,
     total_component_count: usize,
-    entry_ready_count: usize,
+    _entry_ready_count: usize,
     sale_state: &str,
     confidence_summary: &MarketConfidenceSummary,
 ) -> String {
@@ -7744,9 +7755,6 @@ fn build_arbitrage_note(
         parts.push(format!(
             "Incomplete component stats ({priced_component_count}/{total_component_count})"
         ));
-    }
-    if entry_ready_count > 0 {
-        parts.push(format!("Entry <= Price on {entry_ready_count} part(s)"));
     }
     parts.push(format!("Set sale state: {sale_state}"));
     if confidence_summary.level != "high" && !confidence_summary.reasons.is_empty() {
@@ -8193,14 +8201,12 @@ fn build_relic_roi_score(
 }
 
 fn build_relic_roi_note(
-    drop_count: usize,
-    priced_drop_count: usize,
-    refinement_label: &str,
+    _drop_count: usize,
+    _priced_drop_count: usize,
+    _refinement_label: &str,
     confidence_summary: &MarketConfidenceSummary,
 ) -> String {
-    let mut parts = vec![format!(
-        "{priced_drop_count}/{drop_count} priced prime drops at {refinement_label}"
-    )];
+    let mut parts = Vec::new();
     if confidence_summary.level != "high" && !confidence_summary.reasons.is_empty() {
         parts.push(confidence_summary.reasons.join(", "));
     }
@@ -9049,6 +9055,122 @@ fn load_cached_analytics(
         .context("failed to parse analytics cache payload")?;
 
     Ok(Some(parsed))
+}
+
+fn load_latest_trade_health_analytics(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+    seller_mode: &str,
+) -> Result<Option<ItemAnalyticsResponse>> {
+    let payload_json = connection
+        .query_row(
+            "SELECT payload_json
+             FROM analytics_cache
+             WHERE item_id = ?1
+               AND variant_key = ?2
+               AND seller_mode = ?3
+               AND domain_key = '48h'
+               AND bucket_size_key = '1h'
+             LIMIT 1",
+            params![item_id, variant_key, seller_mode],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    let Some(payload_json) = payload_json else {
+        return Ok(None);
+    };
+
+    let parsed = serde_json::from_str::<ItemAnalyticsResponse>(&payload_json)
+        .context("failed to parse trade health analytics cache payload")?;
+    Ok(Some(parsed))
+}
+
+fn snapshot_age_minutes(snapshot_at: Option<&str>) -> Option<i64> {
+    snapshot_at
+        .and_then(parse_timestamp)
+        .map(|timestamp| (now_utc() - timestamp).whole_minutes())
+}
+
+fn build_fallback_trade_health_context(recent_snapshots: &[MarketSnapshot]) -> Option<CachedTradeHealthContext> {
+    let latest = recent_snapshots.last()?;
+    let latest_floor = latest.lowest_sell?;
+    let first_floor = recent_snapshots
+        .first()
+        .and_then(|entry| entry.lowest_sell)
+        .unwrap_or(latest_floor);
+    let change_pct = if first_floor > 0.0 {
+        ((latest_floor - first_floor) / first_floor) * 100.0
+    } else {
+        0.0
+    };
+    let trend_direction = if change_pct >= 2.5 {
+        "Rising"
+    } else if change_pct <= -2.5 {
+        "Falling"
+    } else {
+        "Flat"
+    };
+    let trend_summary = match trend_direction {
+        "Rising" => "Recent tracked floors are drifting upward, which supports patient exits into strength.".to_string(),
+        "Falling" => "Recent tracked floors are still slipping, so forcing a reprice into weakness is often premature.".to_string(),
+        _ => "Recent tracked floors are broadly stable, so queue position matters more than directional momentum right now.".to_string(),
+    };
+    let liquidity_score = liquidity_score_percent(latest);
+    let latest_age_minutes = snapshot_age_minutes(Some(&latest.captured_at)).unwrap_or(999);
+    let is_degraded = recent_snapshots.len() < 4 || latest_age_minutes > 360;
+
+    Some(CachedTradeHealthContext {
+        trend_direction: trend_direction.to_string(),
+        trend_summary,
+        liquidity_score: Some(liquidity_score),
+        liquidity_label: liquidity_label(liquidity_score),
+        pressure_label: pressure_label(latest.pressure_ratio),
+        exit_zone_low: None,
+        is_degraded,
+    })
+}
+
+pub(crate) fn load_cached_trade_health_context(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+    seller_mode: &str,
+) -> Result<Option<CachedTradeHealthContext>> {
+    if let Some(analytics) =
+        load_latest_trade_health_analytics(connection, item_id, variant_key, seller_mode)?
+    {
+        let trend = build_trend_summary(&analytics.trend_quality_breakdown);
+        let latest_snapshot = analytics.current_snapshot.as_ref();
+        let liquidity_score = latest_snapshot.map(liquidity_score_percent);
+        let latest_age_minutes = snapshot_age_minutes(
+            analytics
+                .source_snapshot_at
+                .as_deref()
+                .or(Some(analytics.computed_at.as_str())),
+        )
+        .unwrap_or(999);
+        let is_degraded = latest_age_minutes > 360
+            || analytics.entry_exit_zone_overview.confidence_summary.is_degraded
+            || analytics.orderbook_pressure.confidence_summary.is_degraded
+            || trend.confidence_summary.is_degraded;
+
+        return Ok(Some(CachedTradeHealthContext {
+            trend_direction: trend.direction,
+            trend_summary: trend.summary,
+            liquidity_score,
+            liquidity_label: liquidity_score
+                .map(liquidity_label)
+                .unwrap_or_else(|| "Thin".to_string()),
+            pressure_label: analytics.orderbook_pressure.pressure_label,
+            exit_zone_low: analytics.entry_exit_zone_overview.exit_zone_low,
+            is_degraded,
+        }));
+    }
+
+    let recent = recent_snapshots(connection, item_id, variant_key, seller_mode, 12)?;
+    Ok(build_fallback_trade_health_context(&recent))
 }
 
 fn persist_analytics_cache(
@@ -11658,7 +11780,7 @@ mod tests {
         assert_eq!(entry.basket_entry_cost, Some(30.0));
         assert_eq!(entry.gross_margin, Some(12.0));
         assert_eq!(entry.components[0].quantity_in_set, 2);
-        assert!(entry.note.contains("Entry <= Price"));
+        assert!(entry.note.contains("Set sale state: Fast mover"));
     }
 
     #[test]

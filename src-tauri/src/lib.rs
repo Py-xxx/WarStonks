@@ -69,6 +69,7 @@ pub fn run() {
             trades::delete_wfm_sell_order,
             trades::delete_wfm_buy_order,
             trades::get_trade_sell_order_market_low,
+            trades::get_trade_sell_order_health,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
             commands::get_worldstate_sortie,

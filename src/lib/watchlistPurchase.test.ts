@@ -58,6 +58,7 @@ function createBuyOrder(input: Partial<TradeSellOrder> & Pick<TradeSellOrder, 'o
     updatedAt: input.updatedAt,
     healthScore: input.healthScore ?? null,
     healthNote: input.healthNote ?? null,
+    health: input.health ?? null,
   };
 }
 
