@@ -660,68 +660,12 @@ function SetCompletionScreenshotImportModal({
   onQuantityChange: (rowId: string, value: string) => void;
   onConfirm: () => Promise<void>;
 }) {
-  const [showGuidance, setShowGuidance] = useState(true);
-
-  useEffect(() => {
-    if (open) {
-      setShowGuidance(true);
-    }
-  }, [open]);
-
   if (!open) {
     return null;
   }
 
   return (
     <>
-      {showGuidance ? (
-        <>
-          <button
-            className="modal-backdrop"
-            type="button"
-            aria-label="Screenshot import guidance"
-            onClick={() => {}}
-          />
-          <div
-            className="settings-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Screenshot import requirements"
-          >
-            <div className="settings-modal-header">
-              <div className="settings-modal-title">
-                <span className="card-label">Set Completion Import</span>
-                <h3>
-                  Screenshot Import Guidance{' '}
-                  <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
-                </h3>
-              </div>
-            </div>
-            <div className="settings-modal-body">
-              <div className="settings-form-card">
-                <p className="watchlist-form-note">
-                  This importer currently only works reliably with the in-game <strong>Vitruvian</strong> theme.
-                </p>
-                <p className="watchlist-form-note">
-                  Make sure your mouse cursor is <strong>not visible</strong> in the screenshot.
-                </p>
-                <p className="watchlist-form-note">
-                  The screenshot should show the full <strong>7×3 Prime Components grid</strong>, matching the example layout.
-                </p>
-                <div className="settings-form-actions">
-                  <button
-                    type="button"
-                    className="settings-primary-btn"
-                    onClick={() => setShowGuidance(false)}
-                  >
-                    Got it
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      ) : null}
       <button
         className="modal-backdrop"
         type="button"
@@ -945,6 +889,73 @@ function SetCompletionScreenshotImportModal({
   );
 }
 
+function SetCompletionScreenshotImportWarningModal({
+  open,
+  onClose,
+  onContinue,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onContinue: () => void;
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <>
+      <button
+        className="modal-backdrop"
+        type="button"
+        aria-label="Close screenshot import guidance"
+        onClick={onClose}
+      />
+      <div
+        className="settings-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Screenshot import requirements"
+      >
+        <div className="settings-modal-header">
+          <div className="settings-modal-title">
+            <span className="card-label">Set Completion Import</span>
+            <h3>
+              Screenshot Import Guidance{' '}
+              <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
+            </h3>
+          </div>
+          <div className="settings-modal-actions">
+            <button className="settings-close-btn" type="button" aria-label="Close" onClick={onClose}>
+              ✕
+            </button>
+          </div>
+        </div>
+        <div className="settings-modal-body">
+          <div className="settings-form-card">
+            <p className="watchlist-form-note">
+              This importer currently only works reliably with the in-game <strong>Vitruvian</strong> theme.
+            </p>
+            <p className="watchlist-form-note">
+              Make sure your mouse cursor is <strong>not visible</strong> in the screenshot.
+            </p>
+            <p className="watchlist-form-note">
+              The screenshot should show the full <strong>7×3 Prime Components grid</strong>, matching the example layout.
+            </p>
+            <div className="settings-form-actions">
+              <button type="button" className="settings-secondary-btn" onClick={onClose}>
+                Cancel
+              </button>
+              <button type="button" className="settings-primary-btn" onClick={onContinue}>
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function OpportunitiesPage() {
   const [activeTab, setActiveTab] = useState<OppTab>('set-planner');
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
@@ -970,6 +981,7 @@ export function OpportunitiesPage() {
   const [componentQuery, setComponentQuery] = useState('');
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
   const [plannerTargetInputs, setPlannerTargetInputs] = useState<Record<string, string>>({});
+  const [screenshotImportGuidanceOpen, setScreenshotImportGuidanceOpen] = useState(false);
   const [screenshotImportOpen, setScreenshotImportOpen] = useState(false);
   const [screenshotImportScreenshots, setScreenshotImportScreenshots] = useState<
     ScreenshotImportPreparedScreenshot[]
@@ -1703,6 +1715,15 @@ export function OpportunitiesPage() {
     resetScreenshotImportSession();
   };
 
+  const closeScreenshotImportGuidance = () => {
+    setScreenshotImportGuidanceOpen(false);
+  };
+
+  const continueScreenshotImportFromGuidance = () => {
+    setScreenshotImportGuidanceOpen(false);
+    setScreenshotImportOpen(true);
+  };
+
   const processScreenshotImportFiles = async (
     files: File[],
     crop: SetCompletionImportCrop,
@@ -2085,15 +2106,15 @@ export function OpportunitiesPage() {
                     <label className="watchlist-add-label" htmlFor="planner-component-search">
                       Add owned component
                     </label>
-                    <button
+                  <button
                       type="button"
                       className="settings-secondary-btn screenshot-import-launch"
-                      onClick={() => setScreenshotImportOpen(true)}
+                      onClick={() => setScreenshotImportGuidanceOpen(true)}
                       disabled={!plannerCatalog.length}
                     >
-                      Import Screenshot
+                      <span>Import Screenshot</span>{' '}
+                      <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
                     </button>
-                    <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
                     <div className="set-planner-search-wrap">
                       <input
                         id="planner-component-search"
@@ -2796,6 +2817,11 @@ export function OpportunitiesPage() {
           </div>
         )}
       </div>
+      <SetCompletionScreenshotImportWarningModal
+        open={screenshotImportGuidanceOpen}
+        onClose={closeScreenshotImportGuidance}
+        onContinue={continueScreenshotImportFromGuidance}
+      />
       <SetCompletionScreenshotImportModal
         open={screenshotImportOpen}
         fileInputRef={screenshotFileInputRef}
