@@ -5,8 +5,10 @@ import {
 } from '../lib/tauriClient';
 import { useAppStore } from '../stores/useAppStore';
 
-const TRADE_POLL_INTERVAL_MS = 5_000;
-const TRADE_INITIAL_DELAY_MS = 1_000;
+const WFM_TRADE_POLL_INTERVAL_MS = 5_000;
+const ALECAFRAME_TRADE_POLL_INTERVAL_MS = 10_000;
+const WFM_INITIAL_DELAY_MS = 1_000;
+const ALECAFRAME_INITIAL_DELAY_MS = 2_500;
 
 export function useTradeDetection() {
   const tradeAccountName = useAppStore((state) => state.tradeAccount?.name ?? null);
@@ -20,19 +22,15 @@ export function useTradeDetection() {
     const sessionStartedAt = new Date().toISOString();
 
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let nextSource: 'wfm' | 'alecaframe' = 'wfm';
-
-    const scheduleNext = (delay: number) => {
-      if (cancelled) {
-        return;
-      }
-      timer = setTimeout(() => {
-        void runNext();
-      }, delay);
-    };
+    let wfmInFlight = false;
+    let alecaframeInFlight = false;
 
     const runWfm = async () => {
+      if (cancelled || wfmInFlight) {
+        return;
+      }
+
+      wfmInFlight = true;
       try {
         await refreshWfmTradeDetection(tradeAccountName, {
           sessionStartedAt,
@@ -40,12 +38,16 @@ export function useTradeDetection() {
       } catch (error) {
         console.error('[trades] failed to refresh WFM trade detection', error);
       } finally {
-        nextSource = 'alecaframe';
-        scheduleNext(TRADE_POLL_INTERVAL_MS);
+        wfmInFlight = false;
       }
     };
 
     const runAlecaframe = async () => {
+      if (cancelled || alecaframeInFlight) {
+        return;
+      }
+
+      alecaframeInFlight = true;
       try {
         const result = await refreshAlecaframeTradeDetection(tradeAccountName, {
           sessionStartedAt,
@@ -56,26 +58,29 @@ export function useTradeDetection() {
       } catch (error) {
         console.error('[trades] failed to refresh Alecaframe trade detection', error);
       } finally {
-        nextSource = 'wfm';
-        scheduleNext(TRADE_POLL_INTERVAL_MS);
+        alecaframeInFlight = false;
       }
     };
 
-    const runNext = async () => {
-      if (nextSource === 'wfm') {
-        await runWfm();
-      } else {
-        await runAlecaframe();
-      }
-    };
-
-    scheduleNext(TRADE_INITIAL_DELAY_MS);
+    const wfmInitialTimer = setTimeout(() => {
+      void runWfm();
+    }, WFM_INITIAL_DELAY_MS);
+    const alecaframeInitialTimer = setTimeout(() => {
+      void runAlecaframe();
+    }, ALECAFRAME_INITIAL_DELAY_MS);
+    const wfmInterval = setInterval(() => {
+      void runWfm();
+    }, WFM_TRADE_POLL_INTERVAL_MS);
+    const alecaframeInterval = setInterval(() => {
+      void runAlecaframe();
+    }, ALECAFRAME_TRADE_POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(wfmInitialTimer);
+      clearTimeout(alecaframeInitialTimer);
+      clearInterval(wfmInterval);
+      clearInterval(alecaframeInterval);
     };
   }, [tradeAccountName, handleDetectedBuys]);
 }
