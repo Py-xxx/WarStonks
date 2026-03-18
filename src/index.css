@@ -2400,6 +2400,39 @@ body {
   padding: 1px 5px;
   color: var(--text-muted);
 }
+.topbar-search-refresh {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-base);
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.topbar-search-refresh:hover:not(:disabled) {
+  border-color: rgba(74, 158, 255, 0.34);
+  color: var(--text-primary);
+  background: rgba(74, 158, 255, 0.08);
+}
+
+.topbar-search-refresh:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.topbar-search-refresh.is-loading svg {
+  animation: topbar-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes topbar-refresh-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .search-dropdown {
   position: absolute;
   top: calc(100% + 6px);

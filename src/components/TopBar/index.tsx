@@ -16,6 +16,13 @@ const SearchIcon = () => (
   </svg>
 );
 
+const RefreshIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+  </svg>
+);
+
 const GearIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <circle cx="12" cy="12" r="3"/>
@@ -75,7 +82,9 @@ export function TopBar() {
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const setTradeAccountStatus = useAppStore((s) => s.setTradeAccountStatus);
   const loadQuickViewItem = useAppStore((s) => s.loadQuickViewItem);
+  const loadSelectedMarketAnalysis = useAppStore((s) => s.loadSelectedMarketAnalysis);
   const selectedQuickViewItem = useAppStore((s) => s.quickView.selectedItem);
+  const quickViewLoading = useAppStore((s) => s.quickView.loading);
   const setActivePage = useAppStore((s) => s.setActivePage);
   const setSelectedMarketVariantKey = useAppStore((s) => s.setSelectedMarketVariantKey);
   const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
@@ -233,6 +242,19 @@ export function TopBar() {
     }
   };
 
+  const handleRefreshSelectedItem = async () => {
+    if (!selectedQuickViewItem || quickViewLoading) {
+      return;
+    }
+
+    try {
+      await loadQuickViewItem(selectedQuickViewItem);
+      await loadSelectedMarketAnalysis({ force: true });
+    } catch (error) {
+      console.error('[market] failed to refresh selected item', error);
+    }
+  };
+
   return (
     <header className="topbar">
       <div className="logo">WarStonks</div>
@@ -314,6 +336,19 @@ export function TopBar() {
             </div>
           ) : null}
         </div>
+
+        <button
+          className={`topbar-search-refresh${quickViewLoading ? ' is-loading' : ''}`}
+          type="button"
+          onClick={() => {
+            void handleRefreshSelectedItem();
+          }}
+          disabled={!selectedQuickViewItem || quickViewLoading}
+          aria-label="Refresh selected item"
+          title={selectedQuickViewItem ? 'Refresh selected item' : 'Search and select an item first'}
+        >
+          <RefreshIcon />
+        </button>
 
         {showMarketVariantSelect ? (
           <div className="topbar-market-variant">

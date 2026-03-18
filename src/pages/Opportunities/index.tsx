@@ -1913,9 +1913,9 @@ export function OpportunitiesPage() {
     }
 
     const value = plannerTargetInputs[`${setSlug}:${component.slug}`] ?? buildPlannerDefaultTarget(component);
-    const targetPrice = Number.parseFloat(value);
-    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
-      setErrorMessage('Enter a valid watch target before adding the component to the watchlist.');
+    const targetPrice = Number.parseInt(value, 10);
+    if (!Number.isInteger(targetPrice) || targetPrice <= 0) {
+      setErrorMessage('Enter a positive whole-number watch target before adding the component to the watchlist.');
       return;
     }
 

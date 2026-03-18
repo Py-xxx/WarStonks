@@ -1311,32 +1311,25 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                       </span>
                       <div>
                         <div className="item-name">{order.name}</div>
-                        <div className="item-id">
-                          {order.slug}
-                          {order.rank !== null ? ` · Rank ${order.rank}` : ''}
+                        <div className="trade-cell-age">
+                          {marketLowTimestamps[order.orderId]
+                            ? formatMarketLowAge(marketLowTimestamps[order.orderId])
+                            : listingType === 'sell' ? 'refreshing…' : null}
                         </div>
                       </div>
                     </div>
                   </td>
                   <td>
-                    <div className="trade-cell-label">Your price</div>
                     <div className="trade-cell-value">{formatPlatinumValue(order.yourPrice)}</div>
                   </td>
                   <td>
-                    <div className="trade-cell-label">Market low</div>
                     <div className="trade-cell-value">
                       {order.marketLow !== null && order.marketLow !== undefined
                         ? formatPlatinumValue(order.marketLow)
                         : <span className="trade-cell-pending">—</span>}
                     </div>
-                    <div className="trade-cell-age">
-                      {marketLowTimestamps[order.orderId]
-                        ? formatMarketLowAge(marketLowTimestamps[order.orderId])
-                        : listingType === 'sell' ? 'refreshing…' : null}
-                    </div>
                   </td>
                   <td>
-                    <div className="trade-cell-label">Gap</div>
                     <div className={`trade-cell-value ${getGapClassName(order.priceGap)}`}>
                       {order.marketLow !== null && order.marketLow !== undefined
                         ? formatGap(order.priceGap)
