@@ -49,8 +49,10 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
         <input
           className="price-input"
           type="number"
-          min="0"
-          step="0.1"
+          min="1"
+          step="1"
+          inputMode="numeric"
+          pattern="[0-9]*"
           placeholder="0"
           title="Desired price"
           value={targetInput}

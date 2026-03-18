@@ -193,6 +193,69 @@ fn scheduler_state() -> &'static (Mutex<SchedulerState>, Condvar) {
     STATE.get_or_init(|| (Mutex::new(SchedulerState::default()), Condvar::new()))
 }
 
+fn queue_for_priority(state: &SchedulerState, priority: RequestPriority) -> &VecDeque<RequestTicket> {
+    if let Some(index) = priority.normal_index() {
+        &state.normal_queues[index]
+    } else {
+        &state.instant_queue
+    }
+}
+
+fn queue_for_priority_mut(
+    state: &mut SchedulerState,
+    priority: RequestPriority,
+) -> &mut VecDeque<RequestTicket> {
+    if let Some(index) = priority.normal_index() {
+        &mut state.normal_queues[index]
+    } else {
+        &mut state.instant_queue
+    }
+}
+
+fn ticket_is_still_queued(state: &SchedulerState, priority: RequestPriority, ticket_id: u64) -> bool {
+    queue_for_priority(state, priority)
+        .iter()
+        .any(|ticket| ticket.id == ticket_id)
+}
+
+fn ticket_is_queue_head(state: &SchedulerState, priority: RequestPriority, ticket_id: u64) -> bool {
+    queue_for_priority(state, priority)
+        .front()
+        .map(|ticket| ticket.id == ticket_id)
+        .unwrap_or(false)
+}
+
+fn higher_priority_normal_work_exists(state: &SchedulerState, priority: RequestPriority) -> bool {
+    let Some(index) = priority.normal_index() else {
+        return false;
+    };
+
+    state.normal_queues[..index]
+        .iter()
+        .any(|queue| !queue.is_empty())
+}
+
+fn ticket_can_dispatch(
+    state: &SchedulerState,
+    priority: RequestPriority,
+    ticket_id: u64,
+    now: Instant,
+) -> bool {
+    if !ticket_is_queue_head(state, priority, ticket_id) {
+        return false;
+    }
+
+    if priority != RequestPriority::Instant && !state.instant_queue.is_empty() {
+        return false;
+    }
+
+    if higher_priority_normal_work_exists(state, priority) {
+        return false;
+    }
+
+    scheduler_available_for_priority(state, now, priority)
+}
+
 pub fn acquire_wfm_slot_interruptible<C>(
     priority: RequestPriority,
     label: &str,
@@ -260,10 +323,38 @@ where
             return Err(anyhow!("{label} cancelled before dispatch"));
         }
 
-        if let Some(granted_ticket) = try_grant(&mut state, now) {
+        if !ticket_is_still_queued(&state, priority, ticket_id) {
+            log_scheduler_event(
+                &mut state,
+                now,
+                "orphaned",
+                label,
+                priority,
+                Some(ticket_id),
+                None,
+                Some("ticket-missing".to_string()),
+                false,
+                None,
+                None,
+                None,
+                None,
+            );
+            condvar.notify_all();
+            return Err(anyhow!(
+                "{label} scheduler ticket {ticket_id} disappeared before dispatch"
+            ));
+        }
+
+        if ticket_can_dispatch(&state, priority, ticket_id, now) {
+            let queue = queue_for_priority_mut(&mut state, priority);
+            let granted_ticket = queue
+                .pop_front()
+                .expect("dispatchable scheduler ticket must be at the front of its queue");
             let waited_ms = now
                 .saturating_duration_since(granted_ticket.enqueued_at)
                 .as_millis() as u64;
+            state.recent_grants.push_back(now);
+            state.total_grants = state.total_grants.saturating_add(1);
             let reserved_instant_capacity = reserved_instant_capacity_in_use(&state);
             log_scheduler_event(
                 &mut state,
@@ -281,17 +372,15 @@ where
                 None,
             );
             condvar.notify_all();
-            if granted_ticket.id == ticket_id {
-                if waited_ms >= SLOW_WAIT_LOG_THRESHOLD.as_millis() as u64 {
-                    eprintln!(
-                        "[wfm-scheduler] delayed {} request '{}' by {} ms",
-                        priority.as_str(),
-                        granted_ticket.label,
-                        waited_ms
-                    );
-                }
-                return Ok(());
+            if waited_ms >= SLOW_WAIT_LOG_THRESHOLD.as_millis() as u64 {
+                eprintln!(
+                    "[wfm-scheduler] delayed {} request '{}' by {} ms",
+                    priority.as_str(),
+                    granted_ticket.label,
+                    waited_ms
+                );
             }
+            return Ok(());
         }
 
         let wait_reason = scheduler_wait_reason(&state, priority, now);
@@ -353,6 +442,7 @@ where
 
     let mut request_fn = Some(request_fn);
     let mut leader_generation: Option<u64> = None;
+    let mut logged_coalesced_wait = false;
     loop {
         if is_cancelled() {
             return Err(anyhow!("{label} cancelled before request coalesced"));
@@ -447,27 +537,31 @@ where
             }
 
             if wait_for_existing {
-                log_scheduler_event(
-                    &mut state,
-                    now,
-                    "waiting",
-                    label,
-                    priority,
-                    None,
-                    Some(coalesce_key.clone()),
-                    Some("coalesced".to_string()),
-                    false,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
+                if !logged_coalesced_wait {
+                    log_scheduler_event(
+                        &mut state,
+                        now,
+                        "waiting",
+                        label,
+                        priority,
+                        None,
+                        Some(coalesce_key.clone()),
+                        Some("coalesced".to_string()),
+                        false,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    logged_coalesced_wait = true;
+                }
                 let (next_state, _) = condvar
                     .wait_timeout(state, SCHEDULER_POLL_INTERVAL)
                     .unwrap();
                 drop(next_state);
                 continue;
             }
+
         }
 
         let request_started_at = Instant::now();
@@ -800,6 +894,7 @@ fn scheduler_wait_duration(state: &SchedulerState, now: Instant) -> Option<Durat
 /// wait until every higher-priority queue is empty. This is intentional:
 /// scanner traffic and other low-priority maintenance work should never
 /// compete with user interactions.
+#[cfg(test)]
 fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> {
     if state.instant_queue.is_empty() && state.normal_queues.iter().all(|q| q.is_empty()) {
         return None;
@@ -836,11 +931,7 @@ fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> 
 }
 
 fn remove_ticket(state: &mut SchedulerState, priority: RequestPriority, ticket_id: u64) {
-    let queue = if let Some(index) = priority.normal_index() {
-        &mut state.normal_queues[index]
-    } else {
-        &mut state.instant_queue
-    };
+    let queue = queue_for_priority_mut(state, priority);
 
     if let Some(position) = queue.iter().position(|ticket| ticket.id == ticket_id) {
         queue.remove(position);
@@ -1037,8 +1128,9 @@ fn now_rfc3339() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        stale_in_flight_generation, try_grant, CoalescedEntry, RequestPriority, RequestTicket,
-        SchedulerState, COALESCED_IN_FLIGHT_TIMEOUT, RATE_LIMIT_WINDOW,
+        stale_in_flight_generation, ticket_can_dispatch, try_grant, CoalescedEntry,
+        RequestPriority, RequestTicket, SchedulerState, COALESCED_IN_FLIGHT_TIMEOUT,
+        RATE_LIMIT_WINDOW,
     };
     use std::time::{Duration, Instant};
 
@@ -1159,6 +1251,56 @@ mod tests {
         let granted = try_grant(&mut state, now).expect("expected instant ticket");
         assert_eq!(granted.priority, RequestPriority::Instant);
         assert_eq!(state.recent_grants.len(), 3);
+    }
+
+    #[test]
+    fn ticket_can_dispatch_only_for_its_own_queue_head() {
+        let now = Instant::now();
+        let mut state = SchedulerState::default();
+        state.normal_queues[RequestPriority::High.normal_index().unwrap()].push_back(
+            RequestTicket {
+                id: 1,
+                label: "watchlist-a".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::High,
+            },
+        );
+        state.normal_queues[RequestPriority::High.normal_index().unwrap()].push_back(
+            RequestTicket {
+                id: 2,
+                label: "watchlist-b".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::High,
+            },
+        );
+
+        assert!(ticket_can_dispatch(&state, RequestPriority::High, 1, now));
+        assert!(!ticket_can_dispatch(&state, RequestPriority::High, 2, now));
+    }
+
+    #[test]
+    fn lower_priority_ticket_cannot_dispatch_while_higher_queue_has_work() {
+        let now = Instant::now();
+        let mut state = SchedulerState::default();
+        state.normal_queues[RequestPriority::High.normal_index().unwrap()].push_back(
+            RequestTicket {
+                id: 1,
+                label: "watchlist".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::High,
+            },
+        );
+        state.normal_queues[RequestPriority::Medium.normal_index().unwrap()].push_back(
+            RequestTicket {
+                id: 2,
+                label: "trade-history".to_string(),
+                enqueued_at: now,
+                priority: RequestPriority::Medium,
+            },
+        );
+
+        assert!(!ticket_can_dispatch(&state, RequestPriority::Medium, 2, now));
+        assert!(ticket_can_dispatch(&state, RequestPriority::High, 1, now));
     }
 
     #[test]

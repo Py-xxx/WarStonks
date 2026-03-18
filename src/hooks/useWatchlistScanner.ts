@@ -7,6 +7,17 @@ import {
 import { useAppStore } from '../stores/useAppStore';
 
 export function useWatchlistScanner() {
+  const watchlistScheduleVersion = useAppStore((state) => {
+    let nextScanAt = Number.POSITIVE_INFINITY;
+
+    for (const item of state.watchlist) {
+      if (item.nextScanAt < nextScanAt) {
+        nextScanAt = item.nextScanAt;
+      }
+    }
+
+    return `${state.watchlist.length}:${Number.isFinite(nextScanAt) ? nextScanAt : 0}`;
+  });
   const requestInFlightRef = useRef(false);
   const timeoutIdRef = useRef<number | null>(null);
 
@@ -65,11 +76,11 @@ export function useWatchlistScanner() {
         });
     };
 
-    scheduleNextTick(0);
+    scheduleNextTick(getNextWatchlistScanDelayMs(useAppStore.getState().watchlist));
 
     return () => {
       disposed = true;
       clearScheduledTick();
     };
-  }, []);
+  }, [watchlistScheduleVersion]);
 }

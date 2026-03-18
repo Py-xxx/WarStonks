@@ -3052,6 +3052,7 @@ where
     C: FnMut() -> bool,
 {
     let client = shared_wfm_client()?;
+    let request_timeout = Some(Duration::from_secs(WFM_DEFAULT_REQUEST_TIMEOUT_SECONDS));
     let response = execute_wfm_bytes_request(
         client
             .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
@@ -3067,7 +3068,7 @@ where
             variant_key,
             seller_mode,
         )),
-        None,
+        request_timeout,
         || is_cancelled(),
     )?;
     if response.status < 200 || response.status >= 300 {

@@ -503,6 +503,26 @@ function buildWatchlistAlertId(watchlistId: string, orderId: string): string {
   return `${watchlistId}:${orderId}`;
 }
 
+function sanitizePositiveIntegerInput(value: string): string {
+  const digitsOnly = value.replace(/\D+/g, '');
+  const trimmedLeadingZeroes = digitsOnly.replace(/^0+/, '');
+  return trimmedLeadingZeroes;
+}
+
+function parsePositiveWholeNumber(value: string): number | null {
+  const normalized = sanitizePositiveIntegerInput(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return parsed;
+}
+
 function buildWatchlistAlert(
   item: WatchlistItem,
   order: WfmTopSellOrder,
@@ -2231,7 +2251,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     writePersistedWatchlistState(get().watchlist, id);
   },
   setWatchlistTargetInput: (val) =>
-    set({ watchlistTargetInput: val, watchlistFormError: null }),
+    set({
+      watchlistTargetInput: sanitizePositiveIntegerInput(val),
+      watchlistFormError: null,
+    }),
   addSelectedQuickViewToWatchlist: () => {
     const state = get();
     const selectedItem = state.quickView.selectedItem;
@@ -2252,9 +2275,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
-    const targetPrice = Number.parseFloat(state.watchlistTargetInput);
-    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
-      set({ watchlistFormError: 'Enter a desired price greater than 0.' });
+    const targetPrice = parsePositiveWholeNumber(state.watchlistTargetInput);
+    if (targetPrice === null) {
+      set({ watchlistFormError: 'Enter a positive whole-number desired price.' });
       return;
     }
 
@@ -2321,8 +2344,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   addExplicitItemToWatchlist: (item, variantKey, variantLabel, targetPrice) => {
-    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
-      set({ watchlistFormError: 'Enter a desired price greater than 0.' });
+    if (!Number.isInteger(targetPrice) || targetPrice <= 0) {
+      set({ watchlistFormError: 'Enter a positive whole-number desired price.' });
       return;
     }
 
