@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import {
   closeWfmSellOrder,
   createWfmBuyOrder,
@@ -7,7 +8,7 @@ import {
   deleteWfmSellOrder,
   getItemAnalysis,
   getItemAnalytics,
-  getTradeMarketLow,
+  getTradeSellOrderHealth,
   getWfmAutocompleteItems,
   getWfmTradeOverview,
   updateWfmBuyOrder,
@@ -27,6 +28,7 @@ import type {
   TradeUpdateListingInput,
   WfmAutocompleteItem,
   SellerMode,
+  TradeListingHealth,
 } from '../../types';
 
 type ListingModalMode = 'create' | 'edit';
@@ -62,6 +64,7 @@ const tradeOverviewLoadPromises = new Map<SellerMode, Promise<TradeOverview>>();
 // Persists the last known market low value and timestamp across overview refreshes
 // and component remounts. Keyed by "slug:rank" so it survives order-id changes.
 const marketLowCache = new Map<string, { marketLow: number | null; refreshedAt: number }>();
+const tradeHealthCache = new Map<string, { health: TradeListingHealth; yourPrice: number }>();
 
 function marketLowKey(slug: string, rank: number | null): string {
   return rank !== null && rank !== undefined ? `${slug}:${rank}` : slug;
@@ -72,15 +75,29 @@ function hydrateOverviewFromCache(
 ): { overview: TradeOverview; timestamps: Record<string, number> } {
   const timestamps: Record<string, number> = {};
   const sellOrders = overview.sellOrders.map((order) => {
+    let nextOrder = order;
     const cached = marketLowCache.get(marketLowKey(order.slug, order.rank));
-    if (!cached) return order;
-    // Always restore the timestamp so the "X ago" label survives re-mounts.
-    timestamps[order.orderId] = cached.refreshedAt;
-    // Only fill in marketLow when the server returned null — a fresh server
-    // value always takes precedence over the cache.
-    if (order.marketLow !== null) return order;
-    const priceGap = cached.marketLow !== null ? order.yourPrice - cached.marketLow : null;
-    return { ...order, marketLow: cached.marketLow, priceGap };
+    if (cached) {
+      timestamps[order.orderId] = cached.refreshedAt;
+      if (nextOrder.marketLow === null) {
+        const priceGap = cached.marketLow !== null ? order.yourPrice - cached.marketLow : null;
+        nextOrder = { ...nextOrder, marketLow: cached.marketLow, priceGap };
+      }
+    }
+    const cachedHealth = tradeHealthCache.get(order.orderId);
+    if (cachedHealth && cachedHealth.yourPrice === order.yourPrice) {
+      nextOrder = {
+        ...nextOrder,
+        marketLow: cachedHealth.health.marketLow ?? nextOrder.marketLow,
+        priceGap:
+          cachedHealth.health.priceGap
+          ?? (cachedHealth.health.marketLow !== null ? order.yourPrice - cachedHealth.health.marketLow : nextOrder.priceGap),
+        healthScore: cachedHealth.health.score,
+        healthNote: cachedHealth.health.reason,
+        health: cachedHealth.health,
+      };
+    }
+    return nextOrder;
   });
   return { overview: { ...overview, sellOrders }, timestamps };
 }
@@ -90,12 +107,141 @@ function evictRemovedOrdersFromCache(
   nextOrders: TradeSellOrder[],
 ): void {
   const nextKeys = new Set(nextOrders.map((o) => marketLowKey(o.slug, o.rank)));
+  const nextOrderIds = new Set(nextOrders.map((order) => order.orderId));
   for (const o of prevOrders) {
     const key = marketLowKey(o.slug, o.rank);
     if (!nextKeys.has(key)) {
       marketLowCache.delete(key);
     }
+    if (!nextOrderIds.has(o.orderId)) {
+      tradeHealthCache.delete(o.orderId);
+    }
   }
+}
+
+function getTradeHealthToneClass(tone: string): string {
+  const normalized = tone.trim().toLowerCase();
+  if (normalized === 'green') return 'tone-green';
+  if (normalized === 'blue') return 'tone-blue';
+  if (normalized === 'red') return 'tone-red';
+  return 'tone-amber';
+}
+
+function getTradeHealthPriority(order: TradeSellOrder): number {
+  const health = order.health;
+  if (!health) return 5;
+  switch (health.label) {
+    case 'Action Needed':
+      return 0;
+    case 'Weak':
+      return 1;
+    case 'Watch':
+      return 2;
+    case 'Healthy':
+      return 3;
+    case 'Strong':
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function useTradeSellHealthRefresh({
+  enabled,
+  sellerMode,
+  setOverview,
+  onHealthRefreshed,
+}: {
+  enabled: boolean;
+  sellerMode: SellerMode;
+  setOverview: Dispatch<SetStateAction<TradeOverview | null>>;
+  onHealthRefreshed?: (orderId: string, refreshedAt: number) => void;
+}) {
+  const healthRefreshedAt = useRef<Record<string, number>>({});
+  const healthInFlight = useRef<Set<string>>(new Set());
+  const sellOrdersRef = useRef<TradeSellOrder[]>([]);
+
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
+    const REFRESH_INTERVAL_MS = 5_000;
+    const MEDIUM_THRESHOLD_MS = 45_000;
+    const HIGH_THRESHOLD_MS = 60_000;
+
+    const tick = () => {
+      for (const order of sellOrdersRef.current) {
+        if (healthInFlight.current.has(order.orderId)) {
+          continue;
+        }
+        const parsedHealthRefresh = order.health?.refreshedAt
+          ? Date.parse(order.health.refreshedAt)
+          : Number.NaN;
+        const lastRefresh = healthRefreshedAt.current[order.orderId]
+          ?? (Number.isFinite(parsedHealthRefresh) ? parsedHealthRefresh : 0);
+        const ageMs = Date.now() - (Number.isFinite(lastRefresh) ? lastRefresh : 0);
+        if (lastRefresh > 0 && ageMs < MEDIUM_THRESHOLD_MS) {
+          continue;
+        }
+        const priority: 'high' | 'medium' | 'low' =
+          ageMs >= HIGH_THRESHOLD_MS ? 'high' : ageMs >= MEDIUM_THRESHOLD_MS ? 'medium' : 'low';
+
+        healthInFlight.current.add(order.orderId);
+        void getTradeSellOrderHealth(
+          order.itemId,
+          order.slug,
+          order.rank,
+          order.yourPrice,
+          sellerMode,
+          priority,
+        )
+          .then((health) => {
+            const refreshedAt = Date.parse(health.refreshedAt);
+            const refreshedAtMs = Number.isFinite(refreshedAt) ? refreshedAt : Date.now();
+            healthRefreshedAt.current[order.orderId] = refreshedAtMs;
+            onHealthRefreshed?.(order.orderId, refreshedAtMs);
+            marketLowCache.set(marketLowKey(order.slug, order.rank), {
+              marketLow: health.marketLow,
+              refreshedAt: refreshedAtMs,
+            });
+            tradeHealthCache.set(order.orderId, { health, yourPrice: order.yourPrice });
+            setOverview((current) => {
+              if (!current) {
+                return current;
+              }
+              return {
+                ...current,
+                sellOrders: current.sellOrders.map((candidate) =>
+                  candidate.orderId === order.orderId
+                    ? {
+                        ...candidate,
+                        marketLow: health.marketLow,
+                        priceGap: health.priceGap,
+                        healthScore: health.score,
+                        healthNote: health.reason,
+                        health,
+                      }
+                    : candidate,
+                ),
+              };
+            });
+          })
+          .catch(() => {
+            // Non-blocking background refresh.
+          })
+          .finally(() => {
+            healthInFlight.current.delete(order.orderId);
+          });
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [enabled, onHealthRefreshed, sellerMode, setOverview]);
+
+  return { sellOrdersRef };
 }
 
 async function loadTradeOverviewSnapshot(sellerMode: SellerMode): Promise<TradeOverview> {
@@ -775,11 +921,196 @@ function SignInPanel() {
 }
 
 function HealthTab() {
+  const tradeAccount = useAppStore((s) => s.tradeAccount);
+  const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
+  const syncWatchlistTradeOverview = useAppStore((s) => s.syncWatchlistTradeOverview);
+  const sellerMode = useAppStore((s) => s.sellerMode);
+  const [overview, setOverview] = useState<TradeOverview | null>(() => tradeOverviewCache.get(sellerMode) ?? null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { sellOrdersRef } = useTradeSellHealthRefresh({
+    enabled: Boolean(tradeAccount),
+    sellerMode,
+    setOverview,
+    onHealthRefreshed: undefined,
+  });
+
+  useEffect(() => {
+    if (!tradeAccount) {
+      setOverview(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadOverview = async () => {
+      const cachedOverview = tradeOverviewCache.get(sellerMode) ?? null;
+      if (cachedOverview) {
+        setOverview(cachedOverview);
+      }
+      setLoading(!cachedOverview);
+      setError(null);
+      try {
+        const nextOverview = await loadTradeOverviewSnapshot(sellerMode);
+        const syncedOverview = await syncWatchlistTradeOverview(nextOverview);
+        if (!cancelled) {
+          const hydrated = hydrateOverviewFromCache(syncedOverview);
+          tradeOverviewCache.set(sellerMode, hydrated.overview);
+          setOverview(hydrated.overview);
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError('Couldn’t refresh listing health right now. Please try again. If it keeps happening, report it in Discord.');
+          void loadTradeAccount();
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadOverview();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTradeAccount, sellerMode, syncWatchlistTradeOverview, tradeAccount]);
+
+  sellOrdersRef.current = overview?.sellOrders ?? [];
+
+  const sellOrders = useMemo(
+    () =>
+      [...(overview?.sellOrders ?? [])].sort((left, right) => {
+        const priorityDelta = getTradeHealthPriority(left) - getTradeHealthPriority(right);
+        if (priorityDelta !== 0) {
+          return priorityDelta;
+        }
+        const scoreDelta = (left.health?.score ?? -1) - (right.health?.score ?? -1);
+        if (scoreDelta !== 0) {
+          return scoreDelta;
+        }
+        return left.name.localeCompare(right.name);
+      }),
+    [overview?.sellOrders],
+  );
+
+  const actionNeededCount = sellOrders.filter((order) => {
+    const label = order.health?.label ?? '';
+    return label === 'Action Needed' || label === 'Weak';
+  }).length;
+  const competitiveCount = sellOrders.filter((order) => {
+    const label = order.health?.label ?? '';
+    return label === 'Strong' || label === 'Healthy';
+  }).length;
+  const likelySoonCount = sellOrders.filter((order) => order.health?.outlookLabel === 'Likely soon').length;
+
   return (
-    <div className="trade-placeholder-card">
-      <span className="card-label">Trades</span>
-      <h3>Listing Health</h3>
-      <p>Health labels are visible in Sell Orders already, but backend health scoring is still pending.</p>
+    <div className="trade-health-page">
+      <div className="trade-health-summary-grid">
+        <div className="info-card trade-health-summary-card">
+          <div className="info-card-label">Needs Action</div>
+          <div className="info-card-val neutral">{actionNeededCount}</div>
+        </div>
+        <div className="info-card trade-health-summary-card">
+          <div className="info-card-label">Competitive</div>
+          <div className="info-card-val neutral">{competitiveCount}</div>
+        </div>
+        <div className="info-card trade-health-summary-card">
+          <div className="info-card-label">Likely Soon</div>
+          <div className="info-card-val neutral">{likelySoonCount}</div>
+        </div>
+      </div>
+
+      {error ? <div className="trade-inline-error">{error}</div> : null}
+
+      <div className="trade-health-list">
+        {loading && !overview ? (
+          <div className="trade-placeholder-card">
+            <span className="card-label">Trades</span>
+            <h3>Listing Health</h3>
+            <p>Building the current sell-order health view from your live listings.</p>
+          </div>
+        ) : null}
+
+        {!loading && sellOrders.length === 0 ? (
+          <div className="trade-placeholder-card">
+            <span className="card-label">Trades</span>
+            <h3>No Sell Listings</h3>
+            <p>Create a sell order to start tracking how your listings are performing against the live market.</p>
+          </div>
+        ) : null}
+
+        {sellOrders.map((order) => {
+          const health = order.health;
+          return (
+            <div key={order.orderId} className="trade-health-card">
+              <div className="trade-health-card-main">
+                <span className="item-thumb trade-item-thumb trade-health-thumb">
+                  {resolveWfmAssetUrl(order.imagePath) ? (
+                    <img src={resolveWfmAssetUrl(order.imagePath) ?? undefined} alt="" />
+                  ) : (
+                    <span>{order.name.slice(0, 1)}</span>
+                  )}
+                </span>
+                <div className="trade-health-copy">
+                  <div className="trade-health-copy-top">
+                    <div>
+                      <div className="item-name trade-health-item-name">{order.name}</div>
+                      <div className="trade-health-item-meta">
+                        {health ? `Updated ${formatShortLocalDateTime(health.refreshedAt)}` : 'Refreshing live health…'}
+                      </div>
+                    </div>
+                    <div className="trade-health-badges">
+                      <span className={`market-panel-badge ${getTradeHealthToneClass(health?.tone ?? 'amber')}`}>
+                        {health?.label ?? 'Building'}
+                      </span>
+                      <span className={`market-panel-badge ${getTradeHealthToneClass(health?.actionTone ?? 'blue')}`}>
+                        {health?.actionLabel ?? 'Profiling'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="trade-health-metrics">
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">Your price</span>
+                      <strong>{formatPlatinumValue(order.yourPrice)}</strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">Market low</span>
+                      <strong>{formatPlatinumValue(health?.marketLow ?? order.marketLow ?? null)}</strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">Queue</span>
+                      <strong>{health ? `${health.sellersAhead} ahead` : '—'}</strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">Direction</span>
+                      <strong>{health?.marketDirection ?? 'Profiling'}</strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">Outlook</span>
+                      <strong>{health?.outlookLabel ?? 'Building'}</strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">Suggested</span>
+                      <strong>
+                        {health?.recommendedPrice !== null && health?.recommendedPrice !== undefined
+                          ? formatPlatinumValue(health.recommendedPrice)
+                          : health?.actionLabel ?? '—'}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="trade-health-reason">
+                    {health?.reason ?? 'WarStonks is still building the live market picture for this listing.'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -808,13 +1139,13 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   // Display-layer state: epoch ms when each order's market_low was last fetched.
   // Kept in state so the "X ago" label re-renders when a fetch completes.
   const [marketLowTimestamps, setMarketLowTimestamps] = useState<Record<string, number>>({});
-  // Ref mirror of the above used inside the polling closure (avoids stale capture).
-  const marketLowRefreshedAt = useRef<Record<string, number>>({});
-  // Tracks which order_ids currently have an in-flight market_low fetch.
-  const marketLowInFlight = useRef<Set<string>>(new Set());
-  // Ref to the latest sell orders so the polling interval can read them without
-  // being listed as a dependency (which would reset the interval on every update).
-  const sellOrdersRef = useRef<TradeSellOrder[]>([]);
+  const { sellOrdersRef } = useTradeSellHealthRefresh({
+    enabled: Boolean(tradeAccount) && listingType === 'sell',
+    sellerMode,
+    setOverview,
+    onHealthRefreshed: (orderId, refreshedAt) =>
+      setMarketLowTimestamps((prev) => ({ ...prev, [orderId]: refreshedAt })),
+  });
 
   const listingSuggestions = useMemo(
     () =>
@@ -903,75 +1234,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     };
   }, [tradeAccount]);
 
-  // Keep the sell orders ref current so the polling tick can read the latest list
-  // without being a dependency of the interval effect.
   sellOrdersRef.current = overview?.sellOrders ?? [];
-
-  // Market low refresh — due-time scheduling with priority escalation.
-  // Low    priority for fresh orders (<45 s since last refresh).
-  // Medium priority when overdue by 45 s.
-  // High   priority when overdue by 60 s (the 1-minute target).
-  useEffect(() => {
-    if (!tradeAccount || listingType !== 'sell') {
-      return;
-    }
-
-    const REFRESH_INTERVAL_MS = 5_000;
-    const MEDIUM_THRESHOLD_MS = 45_000;
-    const HIGH_THRESHOLD_MS = 60_000;
-
-    const tick = () => {
-      for (const order of sellOrdersRef.current) {
-        if (marketLowInFlight.current.has(order.orderId)) {
-          continue;
-        }
-        const lastRefresh = marketLowRefreshedAt.current[order.orderId] ?? 0;
-        const ageMs = Date.now() - lastRefresh;
-        if (lastRefresh > 0 && ageMs < MEDIUM_THRESHOLD_MS) {
-          // Still fresh — skip until approaching the medium threshold.
-          continue;
-        }
-        const priority: 'high' | 'medium' | 'low' =
-          ageMs >= HIGH_THRESHOLD_MS ? 'high' : ageMs >= MEDIUM_THRESHOLD_MS ? 'medium' : 'low';
-
-        marketLowInFlight.current.add(order.orderId);
-        const { orderId, slug, rank } = order;
-        void getTradeMarketLow(slug, rank, sellerMode, priority)
-          .then((marketLow) => {
-            const now = Date.now();
-            marketLowRefreshedAt.current[orderId] = now;
-            marketLowCache.set(marketLowKey(slug, rank), { marketLow, refreshedAt: now });
-            setMarketLowTimestamps((prev) => ({ ...prev, [orderId]: now }));
-            setOverview((current) => {
-              if (!current) {
-                return current;
-              }
-              return {
-                ...current,
-                sellOrders: current.sellOrders.map((o) => {
-                  if (o.orderId !== orderId) {
-                    return o;
-                  }
-                  const priceGap = marketLow !== null ? o.yourPrice - marketLow : null;
-                  return { ...o, marketLow, priceGap };
-                }),
-              };
-            });
-          })
-          .catch(() => {
-            // Refresh failed — leave existing value, retry on next tick.
-          })
-          .finally(() => {
-            marketLowInFlight.current.delete(orderId);
-          });
-      }
-    };
-
-    tick();
-    const interval = setInterval(tick, REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tradeAccount, listingType, sellerMode]);
 
   // Ticker: forces the "X ago" labels to stay current between market_low fetches.
   useEffect(() => {
@@ -1337,10 +1600,20 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                     </div>
                   </td>
                   <td>
-                    <div className="trade-health-stack">
-                      <span className="badge badge-muted">Pending</span>
-                      <span className="health-note">Backend health scoring not wired yet.</span>
-                    </div>
+                    {listingType === 'sell' ? (
+                      <div className="trade-health-stack">
+                        <span className={`market-panel-badge ${getTradeHealthToneClass(order.health?.tone ?? 'amber')}`}>
+                          {order.health?.label ?? 'Building'}
+                        </span>
+                        <span className="health-note">
+                          {order.health
+                            ? `${order.health.actionLabel} · ${order.health.outlookLabel}`
+                            : 'Refreshing live orderbook and market context.'}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="trade-cell-pending">—</span>
+                    )}
                   </td>
                   <td>
                     <div className="trade-cell-value">{order.quantity}</div>

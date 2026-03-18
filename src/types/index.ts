@@ -121,6 +121,30 @@ export interface TradeSellOrder {
   updatedAt: string;
   healthScore: number | null;
   healthNote: string | null;
+  health: TradeListingHealth | null;
+}
+
+export interface TradeListingHealth {
+  refreshedAt: string;
+  score: number;
+  label: string;
+  tone: string;
+  actionLabel: string;
+  actionTone: string;
+  outlookLabel: string;
+  postureLabel: string;
+  marketDirection: string;
+  reason: string;
+  sellersAhead: number;
+  quantityAhead: number;
+  tieCount: number;
+  marketLow: number | null;
+  priceGap: number | null;
+  recommendedPrice: number | null;
+  liquidityScore: number | null;
+  liquidityLabel: string | null;
+  pressureLabel: string | null;
+  isDegraded: boolean;
 }
 
 export interface TradeOverview {
