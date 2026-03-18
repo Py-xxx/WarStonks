@@ -5,6 +5,7 @@ mod market_observatory;
 mod settings;
 mod trades;
 mod wfm_scheduler;
+mod wfm_queue_log;
 mod worldstate_cache;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -14,6 +15,7 @@ pub fn run() {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
+            wfm_queue_log::initialize_wfm_queue_log_best_effort(&app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -66,6 +68,7 @@ pub fn run() {
             trades::close_wfm_buy_order,
             trades::delete_wfm_sell_order,
             trades::delete_wfm_buy_order,
+            trades::get_trade_sell_order_market_low,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
             commands::get_worldstate_sortie,

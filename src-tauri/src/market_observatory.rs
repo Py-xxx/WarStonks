@@ -37,7 +37,10 @@ const SCANNER_ITEM_TOTAL_DEADLINE_SECONDS: u64 = 25;
 // Number of items to prefetch statistics for ahead of the current scan position.
 // Keeps up to SCANNER_PREFETCH_LOOKAHEAD + 1 concurrent HTTP slots occupied at once,
 // fully saturating the 3-req/s rate window instead of leaving it half-idle.
-const SCANNER_PREFETCH_LOOKAHEAD: usize = 2;
+// Maximum number of items processed concurrently by the scanner.  Each active
+// item holds one Low-priority WFM scheduler ticket, so this bounds how many
+// scanner threads are waiting on the rate-limited queue at any time.
+const SCANNER_WINDOW_SIZE: usize = 3;
 const WFM_DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 20;
 const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ARBITRAGE_SCANNER_HEARTBEAT_SECONDS: u64 = 3;
@@ -85,7 +88,6 @@ fn scoped_wfm_coalesce_key(prefix: &str, priority: RequestPriority, slug: &str) 
         RequestPriority::High => "high",
         RequestPriority::Medium => "medium",
         RequestPriority::Low => "low",
-        RequestPriority::Background => "background",
     };
     format!("{prefix}:{priority_scope}:{slug}")
 }
@@ -887,6 +889,15 @@ struct ScannerWorkUnit {
     attempt: usize,
 }
 
+/// Result sent back to the main scan loop when a sliding-window worker thread finishes.
+struct ScannerItemResult {
+    work_unit: ScannerWorkUnit,
+    /// `None` = success; `Some(msg)` = error message.
+    error: Option<String>,
+    /// Number of cold-cache WFM fetches performed by this worker.
+    refreshed_delta: usize,
+}
+
 struct ArbitrageScannerRunOutcome {
     response: ArbitrageScannerResponse,
     was_stopped: bool,
@@ -1342,6 +1353,20 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           sync_key TEXT PRIMARY KEY,
           component_slug TEXT NOT NULL,
           applied_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS set_completion_screenshot_baseline (
+          component_slug TEXT PRIMARY KEY,
+          component_item_id INTEGER,
+          component_name TEXT NOT NULL,
+          component_image_path TEXT,
+          quantity INTEGER NOT NULL,
+          imported_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS set_completion_import_meta (
+          meta_key TEXT PRIMARY KEY,
+          value_text TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS scanner_cache (
@@ -6963,6 +6988,13 @@ fn upsert_set_completion_owned_item(
              WHERE component_slug = ?1",
             params![slug],
         )?;
+        // Also remove from the protected baseline so a future trade-delta rebuild
+        // doesn't re-add the item from an old baseline entry.
+        connection.execute(
+            "DELETE FROM set_completion_screenshot_baseline
+             WHERE component_slug = ?1",
+            params![slug],
+        )?;
         return load_set_completion_owned_items(connection);
     }
 
@@ -6985,6 +7017,26 @@ fn upsert_set_completion_owned_item(
         params![slug, item_id, name, image_path, quantity, updated_at],
     )?;
 
+    // Persist the manually-set quantity into the baseline so it survives
+    // subsequent trade-delta rebuilds (e.g. from keep-item toggles).
+    connection.execute(
+        "INSERT INTO set_completion_screenshot_baseline (
+           component_slug,
+           component_item_id,
+           component_name,
+           component_image_path,
+           quantity,
+           imported_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(component_slug) DO UPDATE SET
+           component_item_id = excluded.component_item_id,
+           component_name = excluded.component_name,
+           component_image_path = excluded.component_image_path,
+           quantity = excluded.quantity,
+           imported_at = excluded.imported_at",
+        params![slug, item_id, name, image_path, quantity, updated_at],
+    )?;
+
     load_set_completion_owned_items(connection)
 }
 
@@ -6996,11 +7048,7 @@ fn replace_set_completion_owned_items(
         return load_set_completion_owned_items(connection);
     }
 
-    let transaction = connection
-        .transaction()
-        .context("failed to start screenshot import transaction")?;
-
-    let updated_at = format_timestamp(now_utc())?;
+    let imported_at = format_timestamp(now_utc())?;
     let mut seen_slugs = HashSet::new();
     for row in rows {
         if row.slug.trim().is_empty() {
@@ -7017,7 +7065,52 @@ fn replace_set_completion_owned_items(
         if !seen_slugs.insert(row.slug.clone()) {
             return Err(anyhow!("duplicate screenshot import row for {}", row.slug));
         }
+    }
 
+    let transaction = connection
+        .transaction()
+        .context("failed to start screenshot import transaction")?;
+
+    // Save the screenshot import timestamp so post-import trade filtering works.
+    transaction.execute(
+        "INSERT INTO set_completion_import_meta (meta_key, value_text)
+         VALUES ('screenshot_import_at', ?1)
+         ON CONFLICT(meta_key) DO UPDATE SET value_text = excluded.value_text",
+        params![imported_at],
+    )?;
+
+    // Replace the screenshot baseline — this is the protected source of truth.
+    transaction.execute("DELETE FROM set_completion_screenshot_baseline", [])?;
+
+    for row in rows {
+        transaction.execute(
+            "INSERT INTO set_completion_screenshot_baseline (
+               component_slug,
+               component_item_id,
+               component_name,
+               component_image_path,
+               quantity,
+               imported_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                row.slug,
+                row.item_id,
+                row.name,
+                row.image_path,
+                row.quantity,
+                imported_at,
+            ],
+        )?;
+    }
+
+    // Pre-import trade sync entries are now baked into the screenshot quantities —
+    // wipe the sync log so future rebuilds don't double-count them.
+    transaction.execute("DELETE FROM owned_set_component_trade_sync", [])?;
+
+    // Replace owned components from the screenshot data.
+    transaction.execute("DELETE FROM owned_set_components", [])?;
+
+    for row in rows {
         transaction.execute(
             "INSERT INTO owned_set_components (
                component_slug,
@@ -7026,20 +7119,14 @@ fn replace_set_completion_owned_items(
                component_image_path,
                quantity,
                updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(component_slug) DO UPDATE SET
-               component_item_id = excluded.component_item_id,
-               component_name = excluded.component_name,
-               component_image_path = excluded.component_image_path,
-               quantity = excluded.quantity,
-               updated_at = excluded.updated_at",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 row.slug,
                 row.item_id,
                 row.name,
                 row.image_path,
                 row.quantity,
-                updated_at,
+                imported_at,
             ],
         )?;
     }
@@ -7152,6 +7239,27 @@ fn apply_owned_set_component_deltas_inner(
         .context("failed to commit owned set component sync transaction")
 }
 
+fn load_screenshot_import_cutoff(connection: &Connection) -> Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT value_text
+             FROM set_completion_import_meta
+             WHERE meta_key = 'screenshot_import_at'
+             LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load screenshot import cutoff")
+}
+
+pub(crate) fn load_set_completion_screenshot_import_cutoff(
+    app: &tauri::AppHandle,
+) -> Result<Option<String>> {
+    let connection = open_market_observatory_database(app)?;
+    load_screenshot_import_cutoff(&connection)
+}
+
 fn replace_owned_set_component_deltas_inner(
     connection: &mut Connection,
     deltas: &[OwnedSetComponentDelta],
@@ -7161,9 +7269,41 @@ fn replace_owned_set_component_deltas_inner(
         .context("failed to start owned set component rebuild transaction")?;
     let rebuilt_at = format_timestamp(now_utc())?;
 
+    // Load the protected baseline (screenshot imports + manual edits). Trade
+    // deltas are layered on top — they never erase this baseline.
+    struct BaselineRow {
+        item_id: Option<i64>,
+        name: String,
+        image_path: Option<String>,
+        quantity: i64,
+    }
+    let baseline: BTreeMap<String, BaselineRow> = {
+        let mut stmt = transaction.prepare(
+            "SELECT component_slug, component_item_id, component_name,
+                    component_image_path, quantity
+             FROM set_completion_screenshot_baseline",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                BaselineRow {
+                    item_id: row.get(1)?,
+                    name: row.get(2)?,
+                    image_path: row.get(3)?,
+                    quantity: row.get(4)?,
+                },
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to load screenshot baseline")?
+            .into_iter()
+            .collect()
+    };
+
     transaction.execute("DELETE FROM owned_set_component_trade_sync", [])?;
     transaction.execute("DELETE FROM owned_set_components", [])?;
 
+    // Aggregate trade deltas per slug.
     let mut aggregated = BTreeMap::<String, OwnedSetComponentDelta>::new();
     for delta in deltas {
         if delta.sync_key.trim().is_empty()
@@ -7198,11 +7338,31 @@ fn replace_owned_set_component_deltas_inner(
         }
     }
 
-    for delta in aggregated.values() {
-        let next_quantity = delta.quantity_delta.max(0);
+    // Rebuild owned_set_components as: max(0, baseline_qty + trade_delta).
+    // Visit every slug that appears in either the baseline or the trade deltas.
+    let all_slugs: BTreeSet<&str> = baseline
+        .keys()
+        .map(String::as_str)
+        .chain(aggregated.keys().map(String::as_str))
+        .collect();
+
+    for slug in all_slugs {
+        let base_qty = baseline.get(slug).map(|b| b.quantity).unwrap_or(0);
+        let trade_delta = aggregated.get(slug).map(|d| d.quantity_delta).unwrap_or(0);
+        let next_quantity = (base_qty + trade_delta).max(0);
+
         if next_quantity <= 0 {
             continue;
         }
+
+        // Prefer catalog-resolved metadata from the delta; fall back to baseline.
+        let (item_id, name, image_path) = if let Some(d) = aggregated.get(slug) {
+            (d.item_id, d.name.as_str(), d.image_path.as_deref())
+        } else if let Some(b) = baseline.get(slug) {
+            (b.item_id, b.name.as_str(), b.image_path.as_deref())
+        } else {
+            continue;
+        };
 
         transaction.execute(
             "INSERT INTO owned_set_components (
@@ -7213,14 +7373,7 @@ fn replace_owned_set_component_deltas_inner(
                quantity,
                updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                delta.slug.as_str(),
-                delta.item_id,
-                delta.name.as_str(),
-                delta.image_path.as_deref(),
-                next_quantity,
-                rebuilt_at.as_str(),
-            ],
+            params![slug, item_id, name, image_path, next_quantity, rebuilt_at.as_str()],
         )?;
     }
 
@@ -8196,98 +8349,22 @@ fn build_arbitrage_scanner_inner(
     // without needing the AppHandle (avoids cloning a non-trivial handle per thread).
     let observatory_db_path = resolve_market_observatory_db_path(&app)?;
 
-    // AtomicBool shared with prefetch threads so we can cancel them when the scanner stops.
-    let prefetch_stop = Arc::new(AtomicBool::new(false));
+    // Shared stop signal — set true to ask all active worker threads to cancel
+    // their in-flight WFM request as soon as the scheduler checks cancellation.
+    let scanner_stop = Arc::new(AtomicBool::new(false));
 
-    // Tracks which item_ids currently have an in-flight prefetch thread so we never
-    // spin up duplicate fetches for the same item.
-    let prefetch_in_flight: Arc<Mutex<HashSet<i64>>> = Arc::new(Mutex::new(HashSet::new()));
-
-    // Channel for handing SQLite write tasks from HTTP-fetch threads to the single
-    // background writer.  Declared here (before kick_prefetch) so the closure can clone
-    // the sender.
+    // Channel for handing SQLite write tasks from worker threads to the single
+    // background writer.
     let (write_tx, write_rx) = mpsc::channel::<WriteTask>();
 
-    // Shared price model cache populated by both prefetch threads and the main loop.
-    // Using Arc<Mutex<_>> so prefetch threads can store models while the main loop reads.
+    // Unbounded channel: worker threads send their result back to the main loop.
+    let (result_tx, result_rx) = mpsc::channel::<ScannerItemResult>();
+
+    // Shared price model cache populated by worker threads and read by the
+    // results-building phase after the scan completes.
+    // Using Arc<Mutex<_>> so multiple worker threads can write concurrently.
     let shared_price_model_cache =
         Arc::new(Mutex::new(HashMap::<i64, Option<ScannerPriceModel>>::new()));
-
-    let kick_prefetch = |item_id: i64, slug: String| {
-        {
-            let mut in_flight = prefetch_in_flight
-                .lock()
-                .expect("prefetch_in_flight lock poisoned");
-            if in_flight.contains(&item_id) {
-                return;
-            }
-            in_flight.insert(item_id);
-        }
-        let db_path = observatory_db_path.clone();
-        let in_flight_arc = Arc::clone(&prefetch_in_flight);
-        let stopped = Arc::clone(&prefetch_stop);
-        let cache_arc = Arc::clone(&shared_price_model_cache);
-        let tx = write_tx.clone();
-        std::thread::spawn(move || {
-            // Check whether SQLite already has a fresh entry before going to the network.
-            let is_warm = Connection::open(&db_path)
-                .ok()
-                .and_then(|conn| {
-                    let usable = statistics_cache_is_usable(
-                        &conn,
-                        item_id,
-                        "base",
-                        AnalyticsDomainKey::ThirtyDays,
-                    )
-                    .unwrap_or(false);
-                    let fresh = latest_statistics_fetch_timestamp(&conn, item_id, "base")
-                        .ok()
-                        .flatten()
-                        .map(|ts| {
-                            (now_utc() - ts) < TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS)
-                        })
-                        .unwrap_or(false);
-                    if usable && fresh {
-                        // Build model from SQLite and store in the shared cache so the
-                        // main thread can find it without any network wait.
-                        let model = build_statistics_price_model(&conn, item_id, "base")
-                            .ok()
-                            .flatten();
-                        cache_arc
-                            .lock()
-                            .expect("shared_model_cache lock poisoned")
-                            .insert(item_id, model);
-                        Some(true)
-                    } else {
-                        Some(false)
-                    }
-                })
-                .unwrap_or(false);
-
-            if !is_warm && !stopped.load(AtomicOrdering::Relaxed) {
-                // Cold: fetch from WFM via the pipeline, compute model in-memory, send
-                // write task to the background writer, store model in shared cache.
-                match fetch_statistics_for_pipeline(item_id, &slug, "base", || {
-                    stopped.load(AtomicOrdering::Relaxed)
-                }) {
-                    Ok(task) => {
-                        let model = build_price_model_from_rows(&task.rows_by_domain);
-                        let _ = tx.send(task);
-                        cache_arc
-                            .lock()
-                            .expect("shared_model_cache lock poisoned")
-                            .insert(item_id, model);
-                    }
-                    Err(_) => {}
-                }
-            }
-
-            in_flight_arc
-                .lock()
-                .expect("prefetch_in_flight lock poisoned")
-                .remove(&item_id);
-        });
-    };
 
     let scanned_sets = load_scanner_sets_from_map(&app, &catalog_connection)?;
     let relic_roots = list_relic_roots_from_catalog(&catalog_connection)?;
@@ -8373,179 +8450,191 @@ fn build_arbitrage_scanner_inner(
         }
     }
 
-    while let Some(mut work_unit) = work_queue.pop_front() {
-        // Kick background prefetch threads for upcoming items before blocking on the
-        // current one.  Each thread fetches statistics into the SQLite cache so the
-        // main loop's ensure_statistics_cached_for_scan call returns immediately
-        // (cache hit) instead of waiting on the network.  This keeps up to
-        // SCANNER_PREFETCH_LOOKAHEAD + 1 concurrent HTTP requests in flight, which
-        // saturates the full 3-req/s rate window rather than using only 1 slot at a time.
-        for ahead in work_queue.iter().take(SCANNER_PREFETCH_LOOKAHEAD) {
-            if let Some(ahead_item_id) = ahead.item_id {
-                kick_prefetch(ahead_item_id, ahead.slug.clone());
-            }
-        }
-
-        if arbitrage_scanner_stop_requested(&observatory_connection)? {
-            prefetch_stop.store(true, AtomicOrdering::Relaxed);
-            was_stopped = true;
-            break;
-        }
-
-        runtime.current_set_name = work_unit.current_set_name.clone();
-        runtime.current_component_name = work_unit.current_component_name.clone();
-        runtime.retrying_item_name = if work_unit.attempt > 0 {
-            Some(work_unit.display_name.clone())
-        } else {
-            None
+    // Sliding-window scan: at most SCANNER_WINDOW_SIZE items are in-flight at once.
+    // Each worker thread holds one Low-priority WFM scheduler ticket; when it
+    // finishes (success or error) it sends its result back and the main loop
+    // immediately dispatches the next queued item.  This keeps the scheduler queue
+    // shallow so Instant/High-priority requests from other features never have to
+    // wait behind a wall of scanner tickets.
+    {
+        // Closure that spawns one worker thread per item.  Borrows shared state
+        // by reference (non-move) and clones the necessary handles for the thread.
+        let spawn_item = |work_unit: ScannerWorkUnit| {
+            let db_path = observatory_db_path.clone();
+            let cache = Arc::clone(&shared_price_model_cache);
+            let tx = write_tx.clone();
+            let stop = Arc::clone(&scanner_stop);
+            let rtx = result_tx.clone();
+            std::thread::spawn(move || {
+                let item_started = Instant::now();
+                let (error, refreshed_delta) = match work_unit.item_id {
+                    Some(item_id) => {
+                        let mut refreshed = 0_usize;
+                        let result = Connection::open(&db_path)
+                            .map_err(|e| anyhow::anyhow!("{e}"))
+                            .and_then(|conn| {
+                                get_or_build_scanner_price_model(
+                                    &conn,
+                                    &cache,
+                                    &tx,
+                                    item_id,
+                                    &work_unit.slug,
+                                    &mut refreshed,
+                                    || {
+                                        item_started.elapsed().as_secs()
+                                            >= SCANNER_ITEM_TOTAL_DEADLINE_SECONDS
+                                            || stop.load(AtomicOrdering::Relaxed)
+                                    },
+                                )
+                            });
+                        (result.err().map(|e| e.to_string()), refreshed)
+                    }
+                    None => (None, 0),
+                };
+                let _ = rtx.send(ScannerItemResult {
+                    work_unit,
+                    error,
+                    refreshed_delta,
+                });
+            });
         };
-        runtime.retry_attempt = if work_unit.attempt > 0 {
-            Some(work_unit.attempt)
-        } else {
-            None
-        };
-        emit_running_scanner_progress(
-            &mut on_progress,
-            &started_at,
-            completed_task_count,
-            total_task_count,
-            &runtime,
-            work_unit.stage_label,
-            if let Some(component_name) = &work_unit.current_component_name {
-                format!(
-                    "Scanning set {} · Component {}",
-                    work_unit
-                        .current_set_name
-                        .as_deref()
-                        .unwrap_or("Unknown Set"),
-                    component_name
-                )
+
+        // Seed the window.
+        let mut in_flight: usize = 0;
+        while in_flight < SCANNER_WINDOW_SIZE {
+            if let Some(work_unit) = work_queue.pop_front() {
+                spawn_item(work_unit);
+                in_flight += 1;
             } else {
-                format!(
-                    "Scanning set {} ({}/{})",
-                    work_unit
-                        .current_set_name
-                        .as_deref()
-                        .unwrap_or(work_unit.display_name.as_str()),
-                    runtime.completed_set_count + 1,
-                    total_set_count
-                )
-            },
-        )?;
-
-        let item_started = Instant::now();
-        let resolution = match work_unit.item_id {
-            Some(item_id) => get_or_build_scanner_price_model(
-                &observatory_connection,
-                &shared_price_model_cache,
-                &write_tx,
-                item_id,
-                &work_unit.slug,
-                &mut refreshed_statistics_count,
-                || {
-                    item_started.elapsed().as_secs() >= SCANNER_ITEM_TOTAL_DEADLINE_SECONDS
-                        || arbitrage_scanner_stop_requested(&observatory_connection)
-                            .unwrap_or(false)
-                },
-            ),
-            None => Ok(None),
-        };
-
-        match resolution {
-            Ok(_) => {
-                if matches!(work_unit.kind, ScannerWorkKind::Set) {
-                    refreshed_set_count += 1;
-                    runtime.completed_set_count += 1;
-                    runtime.current_component_name = None;
-                } else {
-                    runtime.completed_component_count += 1;
-                }
-                completed_task_count += 1;
-                runtime.retrying_item_name = None;
-                runtime.retry_attempt = None;
-                emit_running_scanner_progress(
-                    &mut on_progress,
-                    &started_at,
-                    completed_task_count,
-                    total_task_count,
-                    &runtime,
-                    work_unit.stage_label,
-                    format!(
-                        "{}. {} item(s) skipped so far.",
-                        work_unit.completion_text, runtime.skipped_entry_count
-                    ),
-                )?;
+                break;
             }
-            Err(error) => {
-                let next_attempt = work_unit.attempt + 1;
-                if next_attempt < SCANNER_ITEM_MAX_ATTEMPTS {
-                    eprintln!(
-                        "[scanner] deferring '{}' (item_id={:?}) attempt {}/{} after error: {}",
-                        work_unit.slug,
-                        work_unit.item_id,
-                        next_attempt,
-                        SCANNER_ITEM_MAX_ATTEMPTS,
-                        error
-                    );
-                    runtime.retrying_item_name = Some(work_unit.display_name.clone());
-                    runtime.retry_attempt = Some(next_attempt);
+        }
+
+        // Process results as they arrive and feed the next queued item.
+        while in_flight > 0 {
+            let result = match result_rx.recv() {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+            in_flight -= 1;
+            refreshed_statistics_count += result.refreshed_delta;
+
+            // Check for a stop request after each result.
+            if scanner_stop.load(AtomicOrdering::Relaxed)
+                || arbitrage_scanner_stop_requested(&observatory_connection)?
+            {
+                scanner_stop.store(true, AtomicOrdering::Relaxed);
+                was_stopped = true;
+                break;
+            }
+
+            match result.error {
+                None => {
+                    if matches!(result.work_unit.kind, ScannerWorkKind::Set) {
+                        refreshed_set_count += 1;
+                        runtime.completed_set_count += 1;
+                        runtime.current_component_name = None;
+                    } else {
+                        runtime.completed_component_count += 1;
+                    }
+                    completed_task_count += 1;
+                    runtime.retrying_item_name = None;
+                    runtime.retry_attempt = None;
+                    runtime.current_set_name = result.work_unit.current_set_name.clone();
+                    runtime.current_component_name =
+                        result.work_unit.current_component_name.clone();
                     emit_running_scanner_progress(
                         &mut on_progress,
                         &started_at,
                         completed_task_count,
                         total_task_count,
                         &runtime,
-                        work_unit.stage_label,
+                        result.work_unit.stage_label,
                         format!(
-                            "Deferred {} after a temporary failure. It will be retried later ({}/{}).",
-                            work_unit.display_name, next_attempt, SCANNER_ITEM_MAX_ATTEMPTS,
+                            "{}. {} item(s) skipped so far.",
+                            result.work_unit.completion_text, runtime.skipped_entry_count
                         ),
                     )?;
-                    work_unit.attempt = next_attempt;
-                    work_queue.push_back(work_unit);
-                    continue;
                 }
+                Some(ref error_msg) => {
+                    let next_attempt = result.work_unit.attempt + 1;
+                    if next_attempt < SCANNER_ITEM_MAX_ATTEMPTS {
+                        eprintln!(
+                            "[scanner] deferring '{}' (item_id={:?}) attempt {}/{} after error: {}",
+                            result.work_unit.slug,
+                            result.work_unit.item_id,
+                            next_attempt,
+                            SCANNER_ITEM_MAX_ATTEMPTS,
+                            error_msg,
+                        );
+                        runtime.retrying_item_name =
+                            Some(result.work_unit.display_name.clone());
+                        runtime.retry_attempt = Some(next_attempt);
+                        emit_running_scanner_progress(
+                            &mut on_progress,
+                            &started_at,
+                            completed_task_count,
+                            total_task_count,
+                            &runtime,
+                            result.work_unit.stage_label,
+                            format!(
+                                "Deferred {} after a temporary failure. It will be retried later ({}/{}).",
+                                result.work_unit.display_name,
+                                next_attempt,
+                                SCANNER_ITEM_MAX_ATTEMPTS,
+                            ),
+                        )?;
+                        let mut retry = result.work_unit;
+                        retry.attempt = next_attempt;
+                        work_queue.push_back(retry);
+                    } else {
+                        skipped_entry_count += 1;
+                        runtime.skipped_entry_count = skipped_entry_count;
+                        skipped_entries.push(ScannerSkippedEntry {
+                            name: result.work_unit.display_name.clone(),
+                            reason: error_msg.clone(),
+                        });
+                        if matches!(result.work_unit.kind, ScannerWorkKind::Set) {
+                            runtime.completed_set_count += 1;
+                            runtime.current_component_name = None;
+                        } else {
+                            runtime.completed_component_count += 1;
+                        }
+                        completed_task_count += 1;
+                        runtime.retrying_item_name = None;
+                        runtime.retry_attempt = None;
+                        eprintln!(
+                            "[scanner] skipped '{}' (item_id={:?}) after {} attempts: {}",
+                            result.work_unit.slug,
+                            result.work_unit.item_id,
+                            SCANNER_ITEM_MAX_ATTEMPTS,
+                            error_msg,
+                        );
+                        emit_running_scanner_progress(
+                            &mut on_progress,
+                            &started_at,
+                            completed_task_count,
+                            total_task_count,
+                            &runtime,
+                            result.work_unit.stage_label,
+                            format!(
+                                "Skipped {} after {} attempts. {} item(s) skipped so far.",
+                                result.work_unit.display_name,
+                                SCANNER_ITEM_MAX_ATTEMPTS,
+                                runtime.skipped_entry_count,
+                            ),
+                        )?;
+                    }
+                }
+            }
 
-                skipped_entry_count += 1;
-                runtime.skipped_entry_count = skipped_entry_count;
-                skipped_entries.push(ScannerSkippedEntry {
-                    name: work_unit.display_name.clone(),
-                    reason: error.to_string(),
-                });
-                if matches!(work_unit.kind, ScannerWorkKind::Set) {
-                    runtime.completed_set_count += 1;
-                    runtime.current_component_name = None;
-                } else {
-                    runtime.completed_component_count += 1;
-                }
-                completed_task_count += 1;
-                runtime.retrying_item_name = None;
-                runtime.retry_attempt = None;
-                eprintln!(
-                    "[scanner] skipped '{}' (item_id={:?}) after {} attempts: {}",
-                    work_unit.slug, work_unit.item_id, SCANNER_ITEM_MAX_ATTEMPTS, error
-                );
-                emit_running_scanner_progress(
-                    &mut on_progress,
-                    &started_at,
-                    completed_task_count,
-                    total_task_count,
-                    &runtime,
-                    work_unit.stage_label,
-                    format!(
-                        "Skipped {} after {} attempts. {} item(s) skipped so far.",
-                        work_unit.display_name,
-                        SCANNER_ITEM_MAX_ATTEMPTS,
-                        runtime.skipped_entry_count
-                    ),
-                )?;
+            // Dispatch next item into the now-free window slot.
+            if let Some(work_unit) = work_queue.pop_front() {
+                spawn_item(work_unit);
+                in_flight += 1;
             }
         }
-    }
-
-    // Prefetch threads are only useful during the sets/components phase.
-    // Signal them to exit before the pure-computation relic ROI phase begins.
-    prefetch_stop.store(true, AtomicOrdering::Relaxed);
+    } // spawn_item (and its borrows) dropped here
 
     // Drop main's sender so the writer thread sees EOF and exits cleanly once
     // it has drained all queued tasks.

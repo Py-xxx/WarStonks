@@ -3,6 +3,7 @@ import {
   refreshAlecaframeTradeDetection,
   refreshWfmTradeDetection,
 } from '../lib/tauriClient';
+import { getTradeDetectionRequestPriority } from '../lib/tradeDetectionPriority';
 import { useAppStore } from '../stores/useAppStore';
 
 const WFM_TRADE_POLL_INTERVAL_MS = 5_000;
@@ -80,11 +81,13 @@ export function useTradeDetection() {
       }
 
       const startedAt = Date.now();
+      const requestPriority = getTradeDetectionRequestPriority(lastWfmStartedAt, startedAt);
       lastWfmStartedAt = startedAt;
       wfmInFlight = true;
       try {
         await refreshWfmTradeDetection(tradeAccountName, {
           sessionStartedAt,
+          requestPriority,
         });
       } catch (error) {
         console.error('[trades] failed to refresh WFM trade detection', error);

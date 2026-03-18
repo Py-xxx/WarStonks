@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use crate::wfm_queue_log::log_wfm_queue_event_best_effort;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
@@ -8,9 +9,7 @@ use std::time::{Duration, Instant};
 const MAX_GRANTS_PER_WINDOW: usize = 3;
 const MAX_NON_INSTANT_GRANTS_PER_WINDOW: usize = 2;
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
-const NORMAL_PRIORITY_COUNT: usize = 4;
-const PRIORITY_QUANTA: [i32; NORMAL_PRIORITY_COUNT] = [8, 4, 2, 1];
-const MAX_DEFICIT_MULTIPLIER: i32 = 4;
+const NORMAL_PRIORITY_COUNT: usize = 3;
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const COALESCED_SUCCESS_TTL: Duration = Duration::from_millis(1);
 const COALESCED_ERROR_TTL: Duration = Duration::from_millis(1);
@@ -26,7 +25,6 @@ pub enum RequestPriority {
     High,
     Medium,
     Low,
-    Background,
 }
 
 impl RequestPriority {
@@ -36,7 +34,6 @@ impl RequestPriority {
             Self::High => 1,
             Self::Medium => 2,
             Self::Low => 3,
-            Self::Background => 4,
         }
     }
 
@@ -46,7 +43,6 @@ impl RequestPriority {
             Self::High => Some(0),
             Self::Medium => Some(1),
             Self::Low => Some(2),
-            Self::Background => Some(3),
         }
     }
 
@@ -59,7 +55,6 @@ impl RequestPriority {
             Some("high") => Self::High,
             Some("medium") => Self::Medium,
             Some("low") => Self::Low,
-            Some("background") => Self::Background,
             _ => default,
         }
     }
@@ -70,14 +65,13 @@ impl RequestPriority {
             Self::High => "high",
             Self::Medium => "medium",
             Self::Low => "low",
-            Self::Background => "background",
         }
     }
 
     fn lane(self) -> &'static str {
         match self {
             Self::Instant => "instant",
-            Self::High | Self::Medium | Self::Low | Self::Background => "normal",
+            Self::High | Self::Medium | Self::Low => "normal",
         }
     }
 }
@@ -137,7 +131,6 @@ pub struct WfmSchedulerSnapshot {
     pub high_queue_depth: usize,
     pub medium_queue_depth: usize,
     pub low_queue_depth: usize,
-    pub background_queue_depth: usize,
     pub recent_grants_in_window: usize,
     pub in_flight_coalesced_keys: usize,
     pub cached_coalesced_keys: usize,
@@ -152,8 +145,6 @@ pub struct WfmSchedulerSnapshot {
 struct SchedulerState {
     instant_queue: VecDeque<RequestTicket>,
     normal_queues: [VecDeque<RequestTicket>; NORMAL_PRIORITY_COUNT],
-    deficits: [i32; NORMAL_PRIORITY_COUNT],
-    cursor: usize,
     next_id: u64,
     recent_grants: VecDeque<Instant>,
     cooldown_until: Option<Instant>,
@@ -164,7 +155,7 @@ struct SchedulerState {
     total_coalesced_leaders: u64,
     total_coalesced_stale_evictions: u64,
     total_rate_limited_responses: u64,
-    priority_metrics: [QueueHealthPriorityMetrics; 5],
+    priority_metrics: [QueueHealthPriorityMetrics; 4],
     blocked_by_instant_queue: u64,
     blocked_by_reserved_instant_slot: u64,
     next_coalesced_generation: u64,
@@ -178,10 +169,7 @@ impl Default for SchedulerState {
                 VecDeque::new(),
                 VecDeque::new(),
                 VecDeque::new(),
-                VecDeque::new(),
             ],
-            deficits: [0; NORMAL_PRIORITY_COUNT],
-            cursor: 0,
             next_id: 1,
             recent_grants: VecDeque::new(),
             cooldown_until: None,
@@ -702,20 +690,23 @@ fn scheduler_available_for_priority(
     now: Instant,
     priority: RequestPriority,
 ) -> bool {
-    let cooldown_ready = state
-        .cooldown_until
-        .map(|instant| instant <= now)
-        .unwrap_or(true);
+    // Instant priority bypasses the 429 cooldown — it represents direct user
+    // actions (create order, mark sold) where a fast response (even a WFM
+    // error) is always better than silently blocking for up to 15 seconds.
+    let cooldown_ready = priority == RequestPriority::Instant
+        || state
+            .cooldown_until
+            .map(|instant| instant <= now)
+            .unwrap_or(true);
     if !cooldown_ready {
         return false;
     }
 
     let grant_limit = match priority {
         RequestPriority::Instant => MAX_GRANTS_PER_WINDOW,
-        RequestPriority::High
-        | RequestPriority::Medium
-        | RequestPriority::Low
-        | RequestPriority::Background => MAX_NON_INSTANT_GRANTS_PER_WINDOW,
+        RequestPriority::High | RequestPriority::Medium | RequestPriority::Low => {
+            MAX_NON_INSTANT_GRANTS_PER_WINDOW
+        }
     };
 
     state.recent_grants.len() < grant_limit
@@ -803,50 +794,30 @@ fn scheduler_wait_duration(state: &SchedulerState, now: Instant) -> Option<Durat
     }
 }
 
-fn replenish_deficits(state: &mut SchedulerState) {
-    for index in 0..NORMAL_PRIORITY_COUNT {
-        let max_deficit = PRIORITY_QUANTA[index] * MAX_DEFICIT_MULTIPLIER;
-        let updated = state.deficits[index] + PRIORITY_QUANTA[index];
-        state.deficits[index] = updated.min(max_deficit);
-    }
-}
-
-fn select_weighted_queue_index(state: &mut SchedulerState) -> Option<usize> {
-    for _ in 0..NORMAL_PRIORITY_COUNT {
-        let index = state.cursor;
-        state.cursor += 1;
-        if state.cursor >= NORMAL_PRIORITY_COUNT {
-            state.cursor = 0;
-        }
-
-        if !state.normal_queues[index].is_empty() && state.deficits[index] > 0 {
-            return Some(index);
-        }
-    }
-    None
-}
-
+/// Strict-priority grant: Instant drains first; among normal queues the
+/// highest-priority non-empty queue always wins (High → Medium → Low).
+/// There is no round-robin or quota accounting — lower-priority queues simply
+/// wait until every higher-priority queue is empty. This is intentional:
+/// scanner traffic and other low-priority maintenance work should never
+/// compete with user interactions.
 fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> {
-    if state.instant_queue.is_empty() && state.normal_queues.iter().all(|queue| queue.is_empty()) {
+    if state.instant_queue.is_empty() && state.normal_queues.iter().all(|q| q.is_empty()) {
         return None;
     }
 
-    if scheduler_available_for_priority(state, now, RequestPriority::Instant) {
-        if let Some(ticket) = state.instant_queue.pop_front() {
-            state.recent_grants.push_back(now);
-            state.total_grants = state.total_grants.saturating_add(1);
-            return Some(ticket);
-        }
-    } else {
+    // Must be under the absolute 3-req/sec rate limit to grant anything.
+    if !scheduler_available_for_priority(state, now, RequestPriority::Instant) {
         return None;
     }
 
-    if !state.instant_queue.is_empty() {
-        return None;
+    // Instant queue drains completely before any normal queue is considered.
+    if let Some(ticket) = state.instant_queue.pop_front() {
+        state.recent_grants.push_back(now);
+        state.total_grants = state.total_grants.saturating_add(1);
+        return Some(ticket);
     }
 
-    // Reserve the 3rd slot for instant traffic only when instant work is actually pending.
-    // When instant queue is empty, normal work may use all 3 slots.
+    // Reserve the 3rd slot for instant traffic when instant work is pending.
     let normal_grant_limit = if state.instant_queue.is_empty() {
         MAX_GRANTS_PER_WINDOW
     } else {
@@ -856,22 +827,9 @@ fn try_grant(state: &mut SchedulerState, now: Instant) -> Option<RequestTicket> 
         return None;
     }
 
-    let has_credit = state
-        .normal_queues
-        .iter()
-        .enumerate()
-        .any(|(index, queue)| !queue.is_empty() && state.deficits[index] > 0);
-    if !has_credit {
-        replenish_deficits(state);
-    }
-
-    let index = select_weighted_queue_index(state).or_else(|| {
-        replenish_deficits(state);
-        select_weighted_queue_index(state)
-    })?;
-
+    // Strict priority: first non-empty queue (High=0, Medium=1, Low=2) wins.
+    let index = state.normal_queues.iter().position(|q| !q.is_empty())?;
     let ticket = state.normal_queues[index].pop_front()?;
-    state.deficits[index] = state.deficits[index].saturating_sub(1);
     state.recent_grants.push_back(now);
     state.total_grants = state.total_grants.saturating_add(1);
     Some(ticket)
@@ -912,9 +870,6 @@ fn build_snapshot(state: &SchedulerState, now: Instant) -> WfmSchedulerSnapshot 
         medium_queue_depth: state.normal_queues[RequestPriority::Medium.normal_index().unwrap()]
             .len(),
         low_queue_depth: state.normal_queues[RequestPriority::Low.normal_index().unwrap()].len(),
-        background_queue_depth: state.normal_queues
-            [RequestPriority::Background.normal_index().unwrap()]
-        .len(),
         recent_grants_in_window: state.recent_grants.len(),
         in_flight_coalesced_keys,
         cached_coalesced_keys,
@@ -970,18 +925,18 @@ fn log_request_resolution(
 #[allow(clippy::too_many_arguments)]
 fn log_scheduler_event(
     state: &mut SchedulerState,
-    _now: Instant,
+    now: Instant,
     event: &str,
-    _request_label: &str,
+    request_label: &str,
     request_priority: RequestPriority,
-    _ticket_id: Option<u64>,
-    _coalesce_key: Option<String>,
+    ticket_id: Option<u64>,
+    coalesce_key: Option<String>,
     blocked_reason: Option<String>,
-    _reserved_instant_capacity: bool,
+    reserved_instant_capacity: bool,
     waited_ms: Option<u64>,
-    _total_ms: Option<u64>,
-    _network_ms: Option<u64>,
-    _status: Option<u16>,
+    total_ms: Option<u64>,
+    network_ms: Option<u64>,
+    status: Option<u16>,
 ) {
     if let Some(waited_ms) = waited_ms {
         if event == "granted" {
@@ -1005,6 +960,78 @@ fn log_scheduler_event(
             _ => {}
         }
     }
+
+    let cooldown_remaining_ms = state
+        .cooldown_until
+        .and_then(|instant| instant.checked_duration_since(now))
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let line = format!(
+        concat!(
+            "[{timestamp}] event={event} lane={lane} priority={priority} ",
+            "ticket={ticket} coalesce={coalesce} status={status} ",
+            "blocked={blocked} reservedInstant={reserved_instant} ",
+            "waitedMs={waited_ms} totalMs={total_ms} networkMs={network_ms} ",
+            "queueDepths=I{instant}/H{high}/M{medium}/L{low} ",
+            "recentGrants={recent_grants} cooldownMs={cooldown_ms} ",
+            "totals(grants={total_grants},coalescedHits={coalesced_hits},rateLimited={rate_limited}) ",
+            "label=\"{label}\"\n"
+        ),
+        timestamp = now_rfc3339(),
+        event = event,
+        lane = request_priority.lane(),
+        priority = request_priority.as_str(),
+        ticket = display_optional_u64(ticket_id),
+        coalesce = display_optional_str(coalesce_key.as_deref()),
+        status = display_optional_u16(status),
+        blocked = display_optional_str(blocked_reason.as_deref()),
+        reserved_instant = reserved_instant_capacity,
+        waited_ms = display_optional_u64(waited_ms),
+        total_ms = display_optional_u64(total_ms),
+        network_ms = display_optional_u64(network_ms),
+        instant = state.instant_queue.len(),
+        high = state.normal_queues[RequestPriority::High.normal_index().unwrap()].len(),
+        medium = state.normal_queues[RequestPriority::Medium.normal_index().unwrap()].len(),
+        low = state.normal_queues[RequestPriority::Low.normal_index().unwrap()].len(),
+        recent_grants = state.recent_grants.len(),
+        cooldown_ms = cooldown_remaining_ms,
+        total_grants = state.total_grants,
+        coalesced_hits = state.total_coalesced_hits,
+        rate_limited = state.total_rate_limited_responses,
+        label = escape_log_value(request_label),
+    );
+    log_wfm_queue_event_best_effort(line);
+}
+
+fn display_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|entry| entry.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn display_optional_u16(value: Option<u16>) -> String {
+    value
+        .map(|entry| entry.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn display_optional_str(value: Option<&str>) -> String {
+    value
+        .map(escape_log_value)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn escape_log_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+}
+
+fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 #[cfg(test)]
@@ -1044,10 +1071,6 @@ mod tests {
         assert_eq!(
             RequestPriority::from_wire(Some("instant"), RequestPriority::Low),
             RequestPriority::Instant
-        );
-        assert_eq!(
-            RequestPriority::from_wire(Some("background"), RequestPriority::High),
-            RequestPriority::Background
         );
         assert_eq!(
             RequestPriority::from_wire(Some("unknown"), RequestPriority::Medium),

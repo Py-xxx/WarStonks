@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   closeWfmSellOrder,
   createWfmBuyOrder,
   createWfmSellOrder,
   deleteWfmBuyOrder,
   deleteWfmSellOrder,
+  getItemAnalysis,
+  getItemAnalytics,
+  getTradeMarketLow,
   getWfmAutocompleteItems,
   getWfmTradeOverview,
   updateWfmBuyOrder,
@@ -16,6 +19,8 @@ import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
+  ItemAnalysisResponse,
+  ItemAnalyticsResponse,
   TradeCreateListingInput,
   TradeOverview,
   TradeSellOrder,
@@ -53,6 +58,45 @@ interface ListingModalState {
 const DEFAULT_MARK_SOLD_QTY = '1';
 const tradeOverviewCache = new Map<SellerMode, TradeOverview>();
 const tradeOverviewLoadPromises = new Map<SellerMode, Promise<TradeOverview>>();
+
+// Persists the last known market low value and timestamp across overview refreshes
+// and component remounts. Keyed by "slug:rank" so it survives order-id changes.
+const marketLowCache = new Map<string, { marketLow: number | null; refreshedAt: number }>();
+
+function marketLowKey(slug: string, rank: number | null): string {
+  return rank !== null && rank !== undefined ? `${slug}:${rank}` : slug;
+}
+
+function hydrateOverviewFromCache(
+  overview: TradeOverview,
+): { overview: TradeOverview; timestamps: Record<string, number> } {
+  const timestamps: Record<string, number> = {};
+  const sellOrders = overview.sellOrders.map((order) => {
+    const cached = marketLowCache.get(marketLowKey(order.slug, order.rank));
+    if (!cached) return order;
+    // Always restore the timestamp so the "X ago" label survives re-mounts.
+    timestamps[order.orderId] = cached.refreshedAt;
+    // Only fill in marketLow when the server returned null — a fresh server
+    // value always takes precedence over the cache.
+    if (order.marketLow !== null) return order;
+    const priceGap = cached.marketLow !== null ? order.yourPrice - cached.marketLow : null;
+    return { ...order, marketLow: cached.marketLow, priceGap };
+  });
+  return { overview: { ...overview, sellOrders }, timestamps };
+}
+
+function evictRemovedOrdersFromCache(
+  prevOrders: TradeSellOrder[],
+  nextOrders: TradeSellOrder[],
+): void {
+  const nextKeys = new Set(nextOrders.map((o) => marketLowKey(o.slug, o.rank)));
+  for (const o of prevOrders) {
+    const key = marketLowKey(o.slug, o.rank);
+    if (!nextKeys.has(key)) {
+      marketLowCache.delete(key);
+    }
+  }
+}
 
 async function loadTradeOverviewSnapshot(sellerMode: SellerMode): Promise<TradeOverview> {
   const inFlight = tradeOverviewLoadPromises.get(sellerMode);
@@ -140,6 +184,238 @@ function getGapClassName(value: number | null): string {
   return 'neutral';
 }
 
+function formatMarketLowAge(timestampMs: number | undefined): string {
+  if (!timestampMs) {
+    return 'refreshing…';
+  }
+  const ageSeconds = Math.floor((Date.now() - timestampMs) / 1000);
+  if (ageSeconds < 5) {
+    return 'just now';
+  }
+  if (ageSeconds < 60) {
+    return `${ageSeconds}s ago`;
+  }
+  const ageMinutes = Math.floor(ageSeconds / 60);
+  if (ageMinutes < 60) {
+    return `${ageMinutes}m ago`;
+  }
+  return `${Math.floor(ageMinutes / 60)}h ago`;
+}
+
+interface ListingAnalysisState {
+  analysis: ItemAnalysisResponse | null;
+  analytics: ItemAnalyticsResponse | null;
+  loading: boolean;
+  error: string | null;
+}
+
+function getTrendArrow(direction: string): string {
+  const d = direction.toLowerCase();
+  if (d === 'up' || d === 'rising') return '↑';
+  if (d === 'down' || d === 'falling' || d === 'declining') return '↓';
+  return '→';
+}
+
+function getLiquidityBadgeClass(label: string): string {
+  const l = label.toLowerCase();
+  if (l.includes('high') || l.includes('active') || l.includes('good') || l.includes('strong')) return 'good';
+  if (l.includes('low') || l.includes('poor') || l.includes('weak')) return 'bad';
+  return 'neutral';
+}
+
+function getZoneQualityClass(quality: string): string {
+  const q = quality.toLowerCase();
+  if (q.includes('high') || q.includes('strong') || q.includes('good') || q.includes('great')) return 'good';
+  if (q.includes('poor') || q.includes('weak') || q.includes('low')) return 'bad';
+  return 'neutral';
+}
+
+function getTrendClass(direction: string): string {
+  const d = direction.toLowerCase();
+  if (d === 'up' || d === 'rising') return 'good';
+  if (d === 'down' || d === 'falling' || d === 'declining') return 'bad';
+  return 'neutral';
+}
+
+function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }: {
+  analysis: ItemAnalysisResponse | null;
+  analytics: ItemAnalyticsResponse | null;
+  loading: boolean;
+  error: string | null;
+  orderType: 'sell' | 'buy';
+}) {
+  if (loading) {
+    return (
+      <div className="listing-analysis-panel">
+        <div className="listing-analysis-panel-header">
+          <span className="card-label">Market Analysis</span>
+        </div>
+        <div className="listing-analysis-loading">
+          <span className="listing-analysis-loading-dot" />
+          <span className="listing-analysis-loading-dot" />
+          <span className="listing-analysis-loading-dot" />
+          <span className="listing-analysis-loading-text">Fetching market data…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="listing-analysis-panel">
+        <div className="listing-analysis-panel-header">
+          <span className="card-label">Market Analysis</span>
+        </div>
+        <div className="listing-analysis-error">{error}</div>
+      </div>
+    );
+  }
+
+  if (!analysis) {
+    return (
+      <div className="listing-analysis-panel">
+        <div className="listing-analysis-panel-header">
+          <span className="card-label">Market Analysis</span>
+        </div>
+        <div className="listing-analysis-idle">
+          Select an item to see {orderType === 'buy' ? 'entry price' : 'exit price'} analysis
+        </div>
+      </div>
+    );
+  }
+
+  const { headline, liquidityDetail, trend } = analysis;
+  const snapshot = analytics?.currentSnapshot ?? null;
+  const pressure = analytics?.orderbookPressure ?? null;
+  const zones = analytics?.entryExitZoneOverview ?? null;
+  const heroPrice = orderType === 'buy' ? headline.entryPrice : headline.exitPrice;
+
+  return (
+    <div className="listing-analysis-panel">
+      <div className="listing-analysis-panel-header">
+        <span className="card-label">Market Analysis</span>
+        <span className="listing-analysis-freshness">{analysis.variantLabel}</span>
+      </div>
+
+      {/* Recommended entry / exit price */}
+      <div className="listing-analysis-section listing-analysis-exit-hero">
+        <div className="listing-analysis-exit-label">
+          {orderType === 'buy' ? 'Recommended entry' : 'Recommended exit'}
+        </div>
+        <div className="listing-analysis-exit-price">
+          {heroPrice !== null
+            ? formatPlatinumValue(heroPrice)
+            : <span className="listing-analysis-muted">—</span>}
+        </div>
+        {orderType === 'sell' && headline.exitPercentileLabel && (
+          <div className="listing-analysis-exit-sub">{headline.exitPercentileLabel}</div>
+        )}
+      </div>
+
+      {/* Liquidity */}
+      <div className="listing-analysis-section">
+        <div className="listing-analysis-section-title">Liquidity</div>
+        <div className="listing-analysis-row">
+          <span className="listing-analysis-metric">
+            {headline.liquidityScore !== null
+              ? Math.round(headline.liquidityScore)
+              : '—'}
+          </span>
+          <span className={`listing-analysis-badge ${getLiquidityBadgeClass(headline.liquidityLabel)}`}>
+            {headline.liquidityLabel}
+          </span>
+        </div>
+        {liquidityDetail.state && (
+          <div className="listing-analysis-note">{liquidityDetail.state}</div>
+        )}
+      </div>
+
+      {/* Market snapshot */}
+      {(snapshot || pressure) && (
+        <div className="listing-analysis-section">
+          <div className="listing-analysis-section-title">Market snapshot</div>
+          {snapshot?.lowestSell !== null && snapshot?.lowestSell !== undefined && (
+            <div className="listing-analysis-kv">
+              <span className="listing-analysis-kv-label">Floor</span>
+              <span className="listing-analysis-kv-value">{formatPlatinumValue(snapshot.lowestSell)}</span>
+            </div>
+          )}
+          {pressure?.spread !== null && pressure?.spread !== undefined && (
+            <div className="listing-analysis-kv">
+              <span className="listing-analysis-kv-label">Spread</span>
+              <span className="listing-analysis-kv-value">
+                {formatPlatinumValue(pressure.spread)}
+                {pressure.spreadPct !== null ? ` (${pressure.spreadPct.toFixed(1)}%)` : ''}
+              </span>
+            </div>
+          )}
+          {pressure?.pressureLabel && (
+            <div className="listing-analysis-kv">
+              <span className="listing-analysis-kv-label">Pressure</span>
+              <span className="listing-analysis-kv-value">{pressure.pressureLabel}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Entry / Exit zone */}
+      {orderType === 'buy' ? (
+        zones?.entryZoneLow !== null && zones?.entryZoneLow !== undefined
+          && zones?.entryZoneHigh !== null && zones?.entryZoneHigh !== undefined && (
+          <div className="listing-analysis-section">
+            <div className="listing-analysis-section-title">Entry zone</div>
+            <div className="listing-analysis-zone-band">
+              <span className="listing-analysis-zone-range">
+                {formatPlatinumValue(zones.entryZoneLow)} – {formatPlatinumValue(zones.entryZoneHigh)}
+              </span>
+              <span className={`listing-analysis-badge ${getZoneQualityClass(zones.zoneQuality)}`}>
+                {zones.zoneQuality}
+              </span>
+            </div>
+            {zones.entryRationale && (
+              <div className="listing-analysis-note">{zones.entryRationale}</div>
+            )}
+          </div>
+        )
+      ) : (
+        zones?.exitZoneLow !== null && zones?.exitZoneLow !== undefined
+          && zones?.exitZoneHigh !== null && zones?.exitZoneHigh !== undefined && (
+          <div className="listing-analysis-section">
+            <div className="listing-analysis-section-title">Exit zone</div>
+            <div className="listing-analysis-zone-band">
+              <span className="listing-analysis-zone-range">
+                {formatPlatinumValue(zones.exitZoneLow)} – {formatPlatinumValue(zones.exitZoneHigh)}
+              </span>
+              <span className={`listing-analysis-badge ${getZoneQualityClass(zones.zoneQuality)}`}>
+                {zones.zoneQuality}
+              </span>
+            </div>
+            {zones.exitRationale && (
+              <div className="listing-analysis-note">{zones.exitRationale}</div>
+            )}
+          </div>
+        )
+      )}
+
+      {/* Trend */}
+      <div className="listing-analysis-section">
+        <div className="listing-analysis-section-title">Trend</div>
+        <div className="listing-analysis-row">
+          <span className={`listing-analysis-trend-dir ${getTrendClass(trend.direction)}`}>
+            {getTrendArrow(trend.direction)} {trend.direction}
+          </span>
+          {trend.confidence !== null && (
+            <span className="listing-analysis-muted">{Math.round(trend.confidence)}% conf.</span>
+          )}
+        </div>
+        {trend.summary && (
+          <div className="listing-analysis-note listing-analysis-trend-summary">{trend.summary}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function initialsForName(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) {
@@ -170,6 +446,7 @@ function ListingModal({
   errorMessage,
   autocompleteReady,
   autocompleteError,
+  analysis,
   onClose,
   onSubmit,
   onChange,
@@ -181,6 +458,7 @@ function ListingModal({
   errorMessage: string | null;
   autocompleteReady: boolean;
   autocompleteError: string | null;
+  analysis: ListingAnalysisState | null;
   onClose: () => void;
   onSubmit: () => void;
   onChange: (patch: Partial<ListingModalState>) => void;
@@ -188,11 +466,157 @@ function ListingModal({
 }) {
   const rankApplicable = isRankApplicable(form.selectedItem);
   const typeLocked = form.mode === 'edit';
+  const showAnalysis = true;
+
+  const formContent = (
+    <>
+      <div className="listing-form-section listing-form-section-type">
+        <div className="listing-form-section-title">Order type</div>
+        <div className="trade-listing-type-tabs" role="tablist" aria-label="Listing type">
+          {(['sell', 'buy'] as TradeListingKind[]).map((type) => (
+            <button
+              key={type}
+              className={`trade-listing-type-tab${form.orderType === type ? ' active' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={form.orderType === type}
+              disabled={typeLocked}
+              onClick={() => onChange({ orderType: type })}
+            >
+              {type === 'sell' ? 'Sell' : 'Buy'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="listing-form-section listing-form-section-item">
+        <div className="listing-form-section-title">Item</div>
+        <div className="trade-listing-fieldset">
+          <label className="trade-listing-label" htmlFor="trade-listing-item">
+            Item name
+          </label>
+          <input
+            id="trade-listing-item"
+            className="field-input"
+            value={form.itemName}
+            onChange={(event) => onChange({ itemName: event.target.value, selectedItem: null, rank: '' })}
+            placeholder="Search local WFM catalog…"
+            disabled={form.mode === 'edit'}
+          />
+          {form.mode === 'create' ? (
+            <div className="trade-listing-autocomplete">
+              {!autocompleteReady && !autocompleteError ? (
+                <div className="trade-listing-autocomplete-state">Loading catalog…</div>
+              ) : null}
+              {autocompleteError ? (
+                <div className="trade-listing-autocomplete-state error">{autocompleteError}</div>
+              ) : null}
+              {autocompleteReady && suggestions.length > 0 ? (
+                <div className="trade-listing-autocomplete-list">
+                  {suggestions.map((item) => (
+                    <button
+                      key={item.wfmId ?? item.slug}
+                      className="trade-listing-autocomplete-option"
+                      type="button"
+                      onClick={() => onSelectItem(item)}
+                    >
+                      <span className="trade-listing-autocomplete-thumb">
+                        {resolveWfmAssetUrl(item.imagePath) ? (
+                          <img src={resolveWfmAssetUrl(item.imagePath) ?? undefined} alt="" />
+                        ) : (
+                          <span>{item.name.slice(0, 1)}</span>
+                        )}
+                      </span>
+                      <span className="trade-listing-autocomplete-copy">
+                        <span className="trade-listing-autocomplete-name">{item.name}</span>
+                        <span className="trade-listing-autocomplete-meta">
+                          {item.itemFamily ?? 'Item'}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="listing-form-section listing-form-section-details">
+        <div className="listing-form-section-title">Listing details</div>
+        <div className="trade-listing-grid">
+          <div className="trade-listing-fieldset">
+            <label className="trade-listing-label" htmlFor="trade-listing-price">
+              Price
+            </label>
+            <input
+              id="trade-listing-price"
+              className="field-input"
+              type="number"
+              min={1}
+              step={1}
+              value={form.price}
+              onChange={(event) => onChange({ price: event.target.value })}
+              placeholder="Price"
+            />
+          </div>
+          <div className="trade-listing-fieldset">
+            <label className="trade-listing-label" htmlFor="trade-listing-quantity">
+              Quantity
+            </label>
+            <input
+              id="trade-listing-quantity"
+              className="field-input"
+              type="number"
+              min={1}
+              step={1}
+              value={form.quantity}
+              onChange={(event) => onChange({ quantity: event.target.value })}
+              placeholder="Quantity"
+            />
+          </div>
+          {rankApplicable ? (
+            <div className="trade-listing-fieldset">
+              <label className="trade-listing-label" htmlFor="trade-listing-rank">
+                Rank
+              </label>
+              <select
+                id="trade-listing-rank"
+                className="field-input"
+                value={form.rank}
+                onChange={(event) => onChange({ rank: event.target.value })}
+              >
+                {Array.from({ length: (form.selectedItem?.maxRank ?? 0) + 1 }, (_, index) => (
+                  <option key={index} value={String(index)}>
+                    {index}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          <div className="trade-listing-fieldset trade-listing-toggle-field">
+            <span className="trade-listing-label">Visibility</span>
+            <button
+              className={`trade-visibility-toggle${form.visible ? ' on' : ''}`}
+              type="button"
+              onClick={() => onChange({ visible: !form.visible })}
+            >
+              <span className="trade-visibility-toggle-track" />
+              <span className="trade-visibility-toggle-copy">
+                {form.visible ? 'On' : 'Off'}
+              </span>
+            </button>
+          </div>
+        </div>
+        {errorMessage ? <div className="trade-inline-error">{errorMessage}</div> : null}
+      </div>
+    </>
+  );
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="settings-modal trade-listing-modal"
+        className={`settings-modal trade-listing-modal${showAnalysis ? ' has-analysis' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="trade-listing-modal-title"
@@ -212,139 +636,28 @@ function ListingModal({
           </button>
         </div>
 
-        <div className="settings-modal-body trade-listing-modal-body">
-          <div className="trade-listing-type-tabs" role="tablist" aria-label="Listing type">
-            {(['sell', 'buy'] as TradeListingKind[]).map((type) => (
-              <button
-                key={type}
-                className={`trade-listing-type-tab${form.orderType === type ? ' active' : ''}`}
-                type="button"
-                role="tab"
-                aria-selected={form.orderType === type}
-                disabled={typeLocked}
-                onClick={() => onChange({ orderType: type })}
-              >
-                {type === 'sell' ? 'Sell' : 'Buy'}
-              </button>
-            ))}
-          </div>
-          <div className="trade-listing-fieldset">
-            <label className="trade-listing-label" htmlFor="trade-listing-item">
-              Item name
-            </label>
-            <input
-              id="trade-listing-item"
-              className="field-input"
-              value={form.itemName}
-              onChange={(event) => onChange({ itemName: event.target.value, selectedItem: null, rank: '' })}
-              placeholder="Search local WFM catalog…"
-              disabled={form.mode === 'edit'}
-            />
-            {form.mode === 'create' ? (
-              <div className="trade-listing-autocomplete">
-                {!autocompleteReady && !autocompleteError ? (
-                  <div className="trade-listing-autocomplete-state">Loading catalog…</div>
-                ) : null}
-                {autocompleteError ? (
-                  <div className="trade-listing-autocomplete-state error">{autocompleteError}</div>
-                ) : null}
-                {autocompleteReady && suggestions.length > 0 ? (
-                  <div className="trade-listing-autocomplete-list">
-                    {suggestions.map((item) => (
-                      <button
-                        key={item.wfmId ?? item.slug}
-                        className="trade-listing-autocomplete-option"
-                        type="button"
-                        onClick={() => onSelectItem(item)}
-                      >
-                        <span className="trade-listing-autocomplete-thumb">
-                          {resolveWfmAssetUrl(item.imagePath) ? (
-                            <img src={resolveWfmAssetUrl(item.imagePath) ?? undefined} alt="" />
-                          ) : (
-                            <span>{item.name.slice(0, 1)}</span>
-                          )}
-                        </span>
-                        <span className="trade-listing-autocomplete-copy">
-                          <span className="trade-listing-autocomplete-name">{item.name}</span>
-                          <span className="trade-listing-autocomplete-meta">
-                            {item.itemFamily ?? 'Item'}
-                          </span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
+        {showAnalysis ? (
+          <div className="trade-listing-modal-columns">
+            <div className="trade-listing-form-col">
+              <div className="settings-modal-body trade-listing-modal-body">
+                {formContent}
               </div>
-            ) : null}
-          </div>
-
-          <div className="trade-listing-grid">
-            <div className="trade-listing-fieldset">
-              <label className="trade-listing-label" htmlFor="trade-listing-price">
-                Price
-              </label>
-              <input
-                id="trade-listing-price"
-                className="field-input"
-                type="number"
-                min={1}
-                step={1}
-                value={form.price}
-                onChange={(event) => onChange({ price: event.target.value })}
-                placeholder="Price"
+            </div>
+            <div className="trade-listing-analysis-col">
+              <ListingAnalysisPanel
+                analysis={analysis?.analysis ?? null}
+                analytics={analysis?.analytics ?? null}
+                loading={analysis?.loading ?? false}
+                error={analysis?.error ?? null}
+                orderType={form.orderType}
               />
             </div>
-            <div className="trade-listing-fieldset">
-              <label className="trade-listing-label" htmlFor="trade-listing-quantity">
-                Quantity
-              </label>
-              <input
-                id="trade-listing-quantity"
-                className="field-input"
-                type="number"
-                min={1}
-                step={1}
-                value={form.quantity}
-                onChange={(event) => onChange({ quantity: event.target.value })}
-                placeholder="Quantity"
-              />
-            </div>
-            {rankApplicable ? (
-              <div className="trade-listing-fieldset">
-                <label className="trade-listing-label" htmlFor="trade-listing-rank">
-                  Rank
-                </label>
-                <select
-                  id="trade-listing-rank"
-                  className="field-input"
-                  value={form.rank}
-                  onChange={(event) => onChange({ rank: event.target.value })}
-                >
-                  {Array.from({ length: (form.selectedItem?.maxRank ?? 0) + 1 }, (_, index) => (
-                    <option key={index} value={String(index)}>
-                      {index}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-            <div className="trade-listing-fieldset trade-listing-toggle-field">
-              <span className="trade-listing-label">Visibility</span>
-              <button
-                className={`trade-visibility-toggle${form.visible ? ' on' : ''}`}
-                type="button"
-                onClick={() => onChange({ visible: !form.visible })}
-              >
-                <span className="trade-visibility-toggle-track" />
-                <span className="trade-visibility-toggle-copy">
-                  {form.visible ? 'On' : 'Off'}
-                </span>
-              </button>
-            </div>
           </div>
-
-          {errorMessage ? <div className="trade-inline-error">{errorMessage}</div> : null}
-        </div>
+        ) : (
+          <div className="settings-modal-body trade-listing-modal-body">
+            {formContent}
+          </div>
+        )}
 
         <div className="settings-modal-actions">
           <button className="act-btn" type="button" onClick={onClose}>
@@ -490,6 +803,18 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const [listingActionPending, setListingActionPending] = useState(false);
   const [listingActionError, setListingActionError] = useState<string | null>(null);
   const [soldQuantities, setSoldQuantities] = useState<Record<string, string>>({});
+  // Analysis preview for the create-listing modal (cleared on modal close).
+  const [listingAnalysis, setListingAnalysis] = useState<ListingAnalysisState | null>(null);
+  // Display-layer state: epoch ms when each order's market_low was last fetched.
+  // Kept in state so the "X ago" label re-renders when a fetch completes.
+  const [marketLowTimestamps, setMarketLowTimestamps] = useState<Record<string, number>>({});
+  // Ref mirror of the above used inside the polling closure (avoids stale capture).
+  const marketLowRefreshedAt = useRef<Record<string, number>>({});
+  // Tracks which order_ids currently have an in-flight market_low fetch.
+  const marketLowInFlight = useRef<Set<string>>(new Set());
+  // Ref to the latest sell orders so the polling interval can read them without
+  // being listed as a dependency (which would reset the interval on every update).
+  const sellOrdersRef = useRef<TradeSellOrder[]>([]);
 
   const listingSuggestions = useMemo(
     () =>
@@ -520,8 +845,10 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         const nextOverview = await loadTradeOverviewSnapshot(sellerMode);
         const syncedOverview = await syncWatchlistTradeOverview(nextOverview);
         if (!cancelled) {
-          tradeOverviewCache.set(sellerMode, syncedOverview);
-          setOverview(syncedOverview);
+          const { overview: hydratedOverview, timestamps } = hydrateOverviewFromCache(syncedOverview);
+          tradeOverviewCache.set(sellerMode, hydratedOverview);
+          setOverview(hydratedOverview);
+          setMarketLowTimestamps((prev) => ({ ...prev, ...timestamps }));
           setOverviewError(null);
         }
       } catch (error) {
@@ -576,18 +903,168 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     };
   }, [tradeAccount]);
 
+  // Keep the sell orders ref current so the polling tick can read the latest list
+  // without being a dependency of the interval effect.
+  sellOrdersRef.current = overview?.sellOrders ?? [];
+
+  // Market low refresh — due-time scheduling with priority escalation.
+  // Low    priority for fresh orders (<45 s since last refresh).
+  // Medium priority when overdue by 45 s.
+  // High   priority when overdue by 60 s (the 1-minute target).
+  useEffect(() => {
+    if (!tradeAccount || listingType !== 'sell') {
+      return;
+    }
+
+    const REFRESH_INTERVAL_MS = 5_000;
+    const MEDIUM_THRESHOLD_MS = 45_000;
+    const HIGH_THRESHOLD_MS = 60_000;
+
+    const tick = () => {
+      for (const order of sellOrdersRef.current) {
+        if (marketLowInFlight.current.has(order.orderId)) {
+          continue;
+        }
+        const lastRefresh = marketLowRefreshedAt.current[order.orderId] ?? 0;
+        const ageMs = Date.now() - lastRefresh;
+        if (lastRefresh > 0 && ageMs < MEDIUM_THRESHOLD_MS) {
+          // Still fresh — skip until approaching the medium threshold.
+          continue;
+        }
+        const priority: 'high' | 'medium' | 'low' =
+          ageMs >= HIGH_THRESHOLD_MS ? 'high' : ageMs >= MEDIUM_THRESHOLD_MS ? 'medium' : 'low';
+
+        marketLowInFlight.current.add(order.orderId);
+        const { orderId, slug, rank } = order;
+        void getTradeMarketLow(slug, rank, sellerMode, priority)
+          .then((marketLow) => {
+            const now = Date.now();
+            marketLowRefreshedAt.current[orderId] = now;
+            marketLowCache.set(marketLowKey(slug, rank), { marketLow, refreshedAt: now });
+            setMarketLowTimestamps((prev) => ({ ...prev, [orderId]: now }));
+            setOverview((current) => {
+              if (!current) {
+                return current;
+              }
+              return {
+                ...current,
+                sellOrders: current.sellOrders.map((o) => {
+                  if (o.orderId !== orderId) {
+                    return o;
+                  }
+                  const priceGap = marketLow !== null ? o.yourPrice - marketLow : null;
+                  return { ...o, marketLow, priceGap };
+                }),
+              };
+            });
+          })
+          .catch(() => {
+            // Refresh failed — leave existing value, retry on next tick.
+          })
+          .finally(() => {
+            marketLowInFlight.current.delete(orderId);
+          });
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tradeAccount, listingType, sellerMode]);
+
+  // Ticker: forces the "X ago" labels to stay current between market_low fetches.
+  useEffect(() => {
+    if (listingType !== 'sell') {
+      return;
+    }
+    const interval = setInterval(() => {
+      setMarketLowTimestamps((prev) => ({ ...prev }));
+    }, 15_000);
+    return () => clearInterval(interval);
+  }, [listingType]);
+
+  // Fetch market analysis whenever the listing modal is open and an item is known.
+  // Both getItemAnalysis and getItemAnalytics use RequestPriority::Instant internally.
+  const analysisItem = listingModal?.selectedItem ?? null;
+
+  useEffect(() => {
+    if (!analysisItem) {
+      setListingAnalysis(null);
+      return;
+    }
+
+    setListingAnalysis({ analysis: null, analytics: null, loading: true, error: null });
+    let cancelled = false;
+    const { itemId, slug } = analysisItem;
+
+    // Fire analytics in background — fills in market snapshot once it arrives.
+    // Analytics failure is non-fatal; the main analysis section still renders.
+    void getItemAnalytics(itemId ?? 0, slug, null, sellerMode, '48h', '1h')
+      .then((analytics) => {
+        if (!cancelled) {
+          setListingAnalysis((prev) => (prev ? { ...prev, analytics } : null));
+        }
+      })
+      .catch(() => { /* non-fatal */ });
+
+    // Main analysis fires at Instant priority — panel renders as soon as this resolves.
+    void getItemAnalysis(itemId ?? 0, slug, null, sellerMode)
+      .then((analysis) => {
+        if (!cancelled) {
+          setListingAnalysis((prev) =>
+            prev
+              ? { ...prev, analysis, loading: false }
+              : { analysis, analytics: null, loading: false, error: null },
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setListingAnalysis({
+            analysis: null,
+            analytics: null,
+            loading: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisItem, sellerMode]);
+
+  // Auto-fill price with the recommended price when analysis arrives and the
+  // price field has not yet been touched by the user.
+  const recommendedAutoFillPrice =
+    listingModal?.orderType === 'buy'
+      ? (listingAnalysis?.analysis?.headline.entryPrice ?? null)
+      : (listingAnalysis?.analysis?.headline.exitPrice ?? null);
+  useEffect(() => {
+    if (recommendedAutoFillPrice === null) return;
+    setListingModal((current) => {
+      if (!current || current.price !== '') return current;
+      return { ...current, price: String(recommendedAutoFillPrice) };
+    });
+  }, [recommendedAutoFillPrice]);
+
   const applyOverview = async (nextOverview: TradeOverview) => {
-    tradeOverviewCache.set(sellerMode, nextOverview);
-    setOverview(nextOverview);
+    evictRemovedOrdersFromCache(overview?.sellOrders ?? [], nextOverview.sellOrders);
+    const { overview: hydratedOverview, timestamps } = hydrateOverviewFromCache(nextOverview);
+    tradeOverviewCache.set(sellerMode, hydratedOverview);
+    setOverview(hydratedOverview);
     setOverviewError(null);
+    setMarketLowTimestamps((prev) => ({ ...prev, ...timestamps }));
 
     const syncedOverview = await syncWatchlistTradeOverview(nextOverview);
-    tradeOverviewCache.set(sellerMode, syncedOverview);
-    setOverview(syncedOverview);
+    const { overview: hydratedSynced } = hydrateOverviewFromCache(syncedOverview);
+    tradeOverviewCache.set(sellerMode, hydratedSynced);
+    setOverview(hydratedSynced);
   };
 
   const openCreateListing = () => {
     setListingActionError(null);
+    setListingAnalysis(null);
     setListingModal(createListingModalState('create', listingType, null));
   };
 
@@ -603,6 +1080,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     }
     setListingActionError(null);
     setListingModal(null);
+    setListingAnalysis(null);
   };
 
   const handleListingModalSubmit = async () => {
@@ -667,13 +1145,18 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
               sellerMode,
             );
 
-      await applyOverview(nextOverview);
+      // Close the modal immediately — the order was created/updated on WFM's side.
+      // Apply the refreshed overview in the background so the table stays current.
       setListingModal(null);
+      setListingAnalysis(null);
+      setListingActionPending(false);
+      void applyOverview(nextOverview).catch((error) => {
+        setOverviewError(error instanceof Error ? error.message : String(error));
+      });
     } catch (error) {
       setListingActionError(error instanceof Error ? error.message : String(error));
-      void loadTradeAccount();
-    } finally {
       setListingActionPending(false);
+      void loadTradeAccount();
     }
   };
 
@@ -841,12 +1324,23 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                   </td>
                   <td>
                     <div className="trade-cell-label">Market low</div>
-                    <div className="trade-cell-value">{formatPlatinumValue(order.marketLow)}</div>
+                    <div className="trade-cell-value">
+                      {order.marketLow !== null && order.marketLow !== undefined
+                        ? formatPlatinumValue(order.marketLow)
+                        : <span className="trade-cell-pending">—</span>}
+                    </div>
+                    <div className="trade-cell-age">
+                      {marketLowTimestamps[order.orderId]
+                        ? formatMarketLowAge(marketLowTimestamps[order.orderId])
+                        : listingType === 'sell' ? 'refreshing…' : null}
+                    </div>
                   </td>
                   <td>
                     <div className="trade-cell-label">Gap</div>
                     <div className={`trade-cell-value ${getGapClassName(order.priceGap)}`}>
-                      {formatGap(order.priceGap)}
+                      {order.marketLow !== null && order.marketLow !== undefined
+                        ? formatGap(order.priceGap)
+                        : <span className="trade-cell-pending">—</span>}
                     </div>
                   </td>
                   <td>
@@ -918,6 +1412,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           errorMessage={listingActionError}
           autocompleteReady={!autocompleteLoading}
           autocompleteError={autocompleteError}
+          analysis={listingAnalysis}
           onClose={closeListingModal}
           onSubmit={() => void handleListingModalSubmit()}
           onChange={(patch) =>
