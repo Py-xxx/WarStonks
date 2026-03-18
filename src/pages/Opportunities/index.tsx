@@ -743,6 +743,11 @@ function SetCompletionScreenshotImportModal({
               Each screenshot is prepared independently and then merged into one review list.
             </p>
             <p className="watchlist-form-note">
+              <strong>Experimental:</strong> the screenshot import currently only works reliably with
+              the in-game <strong>Vitruvian</strong> theme selected, and your mouse cursor should not
+              be visible in the screenshots.
+            </p>
+            <p className="watchlist-form-note">
               Workflow: choose the screenshots and the detector will immediately extract the fixed
               palette and isolate the OCR crops for each one. Then press <strong>Scan</strong> to OCR
               each screenshot separately, match the rows against the set map, review any flagged rows,
