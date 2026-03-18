@@ -1,9 +1,10 @@
 import type { WatchlistItem, WfmTopSellOrder } from '../types';
 
-export type WatchlistRequestPriority = 'background' | 'medium' | 'high';
+export type WatchlistRequestPriority = 'low' | 'medium' | 'high';
 
 export const WATCHLIST_MIN_ITEM_SCAN_INTERVAL_MS = 15_000;
-export const WATCHLIST_HIGH_PRIORITY_AGE_MS = 30_000;
+export const WATCHLIST_MEDIUM_PRIORITY_AGE_MS = 15_000;
+export const WATCHLIST_HIGH_PRIORITY_AGE_MS = 45_000;
 export const WATCHLIST_SAFE_REQUESTS_PER_SECOND = 2;
 export const WATCHLIST_SCANNER_TICK_MS = Math.ceil(
   1000 / WATCHLIST_SAFE_REQUESTS_PER_SECOND,
@@ -51,11 +52,11 @@ export function getWatchlistRequestPriority(
     return 'high';
   }
 
-  if (ageMs >= WATCHLIST_MIN_ITEM_SCAN_INTERVAL_MS) {
+  if (ageMs >= WATCHLIST_MEDIUM_PRIORITY_AGE_MS) {
     return 'medium';
   }
 
-  return 'background';
+  return 'low';
 }
 
 export function getWatchlistRetryDelayMs(

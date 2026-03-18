@@ -328,6 +328,7 @@ export interface TradeDetectionRefreshResult {
 
 export interface TradeDetectionRefreshInput {
   sessionStartedAt: string | null;
+  requestPriority?: 'low' | 'medium' | 'high';
 }
 
 export interface TradeDetectedBuy {

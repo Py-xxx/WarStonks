@@ -430,6 +430,15 @@ export async function deleteWfmBuyOrder(
   return invoke<TradeOverview>('delete_wfm_buy_order', { orderId, sellerMode });
 }
 
+export async function getTradeMarketLow(
+  slug: string,
+  rank: number | null,
+  sellerMode: SellerMode,
+  priority: 'high' | 'medium' | 'low',
+): Promise<number | null> {
+  return invoke<number | null>('get_trade_sell_order_market_low', { slug, rank, sellerMode, priority });
+}
+
 export async function getWfmTopSellOrders(
   slug: string,
   sellerMode: SellerMode,
@@ -453,7 +462,7 @@ export async function getWfmItemOrders(
   slug: string,
   variantKey: string | null,
   sellerMode: SellerMode,
-  requestPriority?: 'instant' | 'high' | 'medium' | 'low' | 'background',
+  requestPriority?: 'instant' | 'high' | 'medium' | 'low',
   requestSource?: 'watchlist' | 'quick-view' | 'trades' | 'generic',
 ): Promise<WfmItemOrdersResponse> {
   return invoke<WfmItemOrdersResponse>('get_wfm_item_orders', {

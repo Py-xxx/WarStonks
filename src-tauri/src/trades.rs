@@ -1,5 +1,6 @@
 use crate::market_observatory::{
-    apply_owned_set_component_deltas, replace_owned_set_component_deltas, OwnedSetComponentDelta,
+    apply_owned_set_component_deltas, load_set_completion_screenshot_import_cutoff,
+    replace_owned_set_component_deltas, OwnedSetComponentDelta,
 };
 use crate::settings::{
     load_settings_for_internal_use, send_trade_detected_discord_notification_inner,
@@ -42,7 +43,7 @@ const PORTFOLIO_PROFIT_POINT_LIMIT: usize = 12;
 const ALECAFRAME_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
 const WFM_TRADE_LOG_LOCK_DAYS: i64 = 80;
-const ALECAFRAME_NOTIFICATION_DELAY_SECONDS: i64 = 90;
+const PENDING_NOTIFICATION_WINDOW_MINUTES: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://ws.warframe.market/socket";
@@ -365,6 +366,7 @@ pub struct TradeDetectionRefreshResult {
 #[serde(rename_all = "camelCase")]
 pub struct TradeDetectionRefreshInput {
     pub session_started_at: Option<String>,
+    pub request_priority: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1242,6 +1244,115 @@ fn extract_wfm_bytes_error(action_label: &str, response: &WfmHttpResponse) -> an
     }
 }
 
+// ---------------------------------------------------------------------------
+// Trade market low helpers
+// ---------------------------------------------------------------------------
+
+/// Minimal response structs for the WFM V2 item orders endpoint.
+/// Only the fields needed to derive the lowest sell price are parsed.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TradeMarketOrderUser {
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TradeMarketOrder {
+    #[serde(rename = "type")]
+    order_type: String,
+    platinum: i64,
+    #[serde(default)]
+    rank: Option<i64>,
+    #[serde(default)]
+    visible: Option<bool>,
+    user: TradeMarketOrderUser,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TradeMarketOrdersResponse {
+    #[serde(default)]
+    data: Vec<TradeMarketOrder>,
+}
+
+fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
+    match status {
+        Some("ingame") => true,
+        Some("online") => seller_mode == "ingame-online",
+        _ => false,
+    }
+}
+
+/// Fetches the lowest visible sell price for `slug` (optionally filtered by `rank`)
+/// from online/ingame sellers, using the given scheduler priority.
+fn fetch_sell_order_market_low_inner(
+    slug: &str,
+    rank: Option<i64>,
+    seller_mode: &str,
+    priority: RequestPriority,
+) -> Result<Option<i64>> {
+    let client = shared_wfm_client()?;
+    let priority_label = match priority {
+        RequestPriority::High => "high",
+        RequestPriority::Medium => "medium",
+        RequestPriority::Low => "low",
+        RequestPriority::Instant => "instant",
+    };
+    let coalesce_key = format!(
+        "trade-market-low:{}:{}:{}",
+        priority_label,
+        slug,
+        rank.map_or_else(|| "none".to_string(), |r| r.to_string()),
+    );
+    let response = execute_wfm_bytes_request(
+        client
+            .get(format!("{WFM_API_BASE_URL_V2}/orders/item/{slug}"))
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Language", "en")
+            .header("Platform", "pc")
+            .header("Crossplay", "true"),
+        priority,
+        "request trade market low",
+        Some(coalesce_key),
+    )?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_bytes_error("request trade market low", &response));
+    }
+    let payload = serde_json::from_slice::<TradeMarketOrdersResponse>(&response.body)
+        .context("failed to parse trade market orders response")?;
+    let market_low = payload
+        .data
+        .iter()
+        .filter(|order| order.order_type == "sell")
+        .filter(|order| order.visible.unwrap_or(true))
+        .filter(|order| seller_mode_allows_status(order.user.status.as_deref(), seller_mode))
+        .filter(|order| match rank {
+            Some(required_rank) => order.rank == Some(required_rank),
+            None => order.rank.is_none() || order.rank == Some(0),
+        })
+        .map(|order| order.platinum)
+        .min();
+    Ok(market_low)
+}
+
+#[tauri::command]
+pub async fn get_trade_sell_order_market_low(
+    slug: String,
+    rank: Option<i64>,
+    seller_mode: String,
+    priority: String,
+) -> Result<Option<i64>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let priority = RequestPriority::from_wire(Some(priority.trim()), RequestPriority::Low);
+        fetch_sell_order_market_low_inner(slug.trim(), rank, seller_mode.trim(), priority)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
     let response = execute_wfm_bytes_request(
         send_wfm_request(
@@ -1858,14 +1969,6 @@ fn build_trade_notification_candidates_for_alecaframe(
     candidates
 }
 
-fn should_send_alecaframe_trade_notification(candidate: &TradeNotificationCandidate) -> bool {
-    parse_timestamp(&candidate.closed_at)
-        .map(|closed_at| {
-            (now_utc() - closed_at).whole_seconds() >= ALECAFRAME_NOTIFICATION_DELAY_SECONDS
-        })
-        .unwrap_or(true)
-}
-
 fn trade_happened_after_session_start(
     candidate: &TradeNotificationCandidate,
     session_started_at: Option<&OffsetDateTime>,
@@ -1884,17 +1987,13 @@ fn send_trade_notification_candidates_inner(
     connection: &Connection,
     username: &str,
     candidates: &[TradeNotificationCandidate],
-    source: &str,
+    _source: &str,
     session_started_at: Option<&OffsetDateTime>,
 ) -> Result<i64> {
     let mut sent_count = 0_i64;
 
     for candidate in candidates {
         if !trade_happened_after_session_start(candidate, session_started_at) {
-            continue;
-        }
-
-        if source == "alecaframe" && !should_send_alecaframe_trade_notification(candidate) {
             continue;
         }
 
@@ -3251,20 +3350,11 @@ fn replace_trade_log_rows_inner(
 
     let last_updated_at = save_trade_log_rows_inner(connection, trimmed_username, entries)?;
 
-    connection
-        .execute(
-            "
-            DELETE FROM portfolio_trade_log_overrides
-            WHERE username = ?1
-              AND order_id NOT IN (
-                SELECT order_id
-                FROM portfolio_trade_log_cache
-                WHERE username = ?1
-              )
-            ",
-            params![trimmed_username],
-        )
-        .context("failed to prune stale trade log overrides")?;
+    // NOTE: stale override pruning is intentionally deferred to
+    // reconcile_trade_log_state_inner, which runs after
+    // normalize_grouped_trade_sets_inner has collapsed Set entries.
+    // Pruning here would discard keep-item overrides for Set entries whose
+    // collapsed IDs ("af-set-...") don't exist in the cache yet.
 
     Ok(last_updated_at)
 }
@@ -3507,12 +3597,30 @@ fn build_owned_set_component_deltas_for_entries(
     let normalized_records = normalize_trade_entries_for_owned_component_sync(app, entries)?;
     let catalog = open_catalog_database(app)?;
     let observatory = open_market_observatory_database(app)?;
+
+    // Any trade that closed before the screenshot import is irrelevant — its
+    // effect is already captured in the protected baseline.
+    let import_cutoff = load_set_completion_screenshot_import_cutoff(app)?;
+    let import_cutoff_time = import_cutoff
+        .as_deref()
+        .and_then(parse_timestamp);
+
     let mut deltas = Vec::new();
 
     for record in normalized_records {
         let normalized_order_type = record.order_type.trim().to_lowercase();
         if normalized_order_type == "buy" && record.keep_item {
             continue;
+        }
+
+        // Skip trades that were closed before the screenshot import — they're
+        // already reflected in the screenshot baseline and must not be counted again.
+        if let Some(cutoff) = import_cutoff_time {
+            if let Some(closed) = parse_timestamp(&record.closed_at) {
+                if closed <= cutoff {
+                    continue;
+                }
+            }
         }
 
         let direction = match normalized_order_type.as_str() {
@@ -4003,12 +4111,36 @@ fn normalize_grouped_trade_sets_inner(
     Ok(true)
 }
 
+fn prune_stale_trade_log_overrides_inner(
+    connection: &Connection,
+    username: &str,
+) -> Result<()> {
+    connection
+        .execute(
+            "
+            DELETE FROM portfolio_trade_log_overrides
+            WHERE username = ?1
+              AND order_id NOT IN (
+                SELECT order_id
+                FROM portfolio_trade_log_cache
+                WHERE username = ?1
+              )
+            ",
+            params![username],
+        )
+        .context("failed to prune stale trade log overrides")?;
+    Ok(())
+}
+
 fn reconcile_trade_log_state_inner(
     app: &tauri::AppHandle,
     connection: &mut Connection,
     username: &str,
 ) -> Result<PortfolioTradeLogState> {
     let _ = normalize_grouped_trade_sets_inner(app, connection, username)?;
+    // Prune stale overrides only after normalization so that collapsed Set
+    // entries ("af-set-...") are already present in the cache.
+    prune_stale_trade_log_overrides_inner(connection, username)?;
     let records = load_stored_trade_log_records_inner(connection, username)?;
     let entries = derive_trade_log_entries(app, &records);
     persist_derived_trade_log_entries_inner(connection, username, &entries)?;
@@ -4274,6 +4406,115 @@ fn refresh_trade_log_state_for_app(
     reconcile_trade_log_state_inner(app, &mut connection, username)
 }
 
+fn load_recent_trade_records_by_source(
+    connection: &Connection,
+    username: &str,
+    source: &str,
+    closed_at_cutoff: &str,
+) -> Result<Vec<StoredTradeLogRecord>> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              cache.order_id,
+              cache.item_name,
+              cache.slug,
+              cache.image_path,
+              cache.order_type,
+              cache.source,
+              cache.platinum,
+              cache.quantity,
+              cache.rank,
+              cache.closed_at,
+              cache.updated_at,
+              COALESCE(overrides.keep_item, cache.keep_item, 0),
+              cache.group_id,
+              cache.group_label,
+              cache.group_total_platinum,
+              cache.group_item_count,
+              cache.allocation_total_platinum,
+              cache.group_sort_order
+            FROM portfolio_trade_log_cache AS cache
+            LEFT JOIN portfolio_trade_log_overrides AS overrides
+              ON overrides.username = cache.username
+             AND overrides.order_id = cache.order_id
+            WHERE cache.username = ?1
+              AND cache.source = ?2
+              AND cache.closed_at >= ?3
+            ORDER BY cache.closed_at DESC
+            ",
+        )
+        .context("failed to prepare recent trade records query")?;
+
+    let rows = statement
+        .query_map(params![username, source, closed_at_cutoff], |row| {
+            Ok(StoredTradeLogRecord {
+                id: row.get(0)?,
+                item_name: row.get(1)?,
+                slug: row.get(2)?,
+                image_path: row.get(3)?,
+                order_type: row.get(4)?,
+                source: row.get(5)?,
+                platinum: row.get(6)?,
+                quantity: row.get(7)?,
+                rank: row.get(8)?,
+                closed_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                keep_item: row.get::<_, i64>(11)? != 0,
+                group_id: row.get(12)?,
+                group_label: row.get(13)?,
+                group_total_platinum: row.get(14)?,
+                group_item_count: row.get(15)?,
+                allocation_total_platinum: row.get(16)?,
+                group_sort_order: row.get(17)?,
+            })
+        })
+        .context("failed to query recent trade records")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to collect recent trade records")?;
+    Ok(rows)
+}
+
+/// Scans the last `PENDING_NOTIFICATION_WINDOW_MINUTES` of trade history and
+/// sends Discord notifications for any trades that don't yet have a fingerprint.
+/// This acts as a retry mechanism: if a webhook call failed (or was blocked by a
+/// filter) during an earlier poll, the notification is re-attempted here.
+fn check_pending_trade_notifications_inner(
+    app: &tauri::AppHandle,
+    connection: &Connection,
+    username: &str,
+    source: &str,
+    session_started_at: Option<&OffsetDateTime>,
+) -> Result<i64> {
+    let cutoff =
+        format_timestamp(now_utc() - time::Duration::minutes(PENDING_NOTIFICATION_WINDOW_MINUTES))
+            .context("failed to compute pending notification cutoff")?;
+
+    let records = load_recent_trade_records_by_source(connection, username, source, &cutoff)?;
+    if records.is_empty() {
+        return Ok(0);
+    }
+
+    let entries: Vec<PortfolioTradeLogEntry> = records
+        .iter()
+        .map(build_portfolio_entry_from_stored_record)
+        .collect();
+
+    let candidates = match source {
+        "wfm" => build_trade_notification_candidates_for_wfm(app, &entries)?,
+        _ => build_trade_notification_candidates_for_alecaframe(&entries),
+    };
+
+    send_trade_notification_candidates_inner(
+        app,
+        connection,
+        username,
+        &candidates,
+        source,
+        session_started_at,
+    )
+}
+
 fn refresh_wfm_trade_detection_inner(
     app: &tauri::AppHandle,
     username: &str,
@@ -4291,8 +4532,12 @@ fn refresh_wfm_trade_detection_inner(
         .session_started_at
         .as_deref()
         .and_then(parse_timestamp);
+    let request_priority = RequestPriority::from_wire(
+        input.request_priority.as_deref(),
+        RequestPriority::Low,
+    );
     let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
-    let fetched_entries = fetch_profile_trade_log_inner(trimmed_username)?;
+    let fetched_entries = fetch_profile_trade_log_inner_with_priority(trimmed_username, request_priority)?;
     let (persisted_entries, new_entries) = merge_wfm_trade_log_entries(&existing, &fetched_entries);
 
     if persisted_entries.is_empty() {
@@ -4307,29 +4552,35 @@ fn refresh_wfm_trade_detection_inner(
         });
     }
 
-    if new_entries.is_empty() {
-        return Ok(TradeDetectionRefreshResult {
-            source: "wfm".to_string(),
-            new_trade_count: 0,
-            notification_count: 0,
-            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
-            skipped: false,
-            message: None,
-            detected_buys: Vec::new(),
-        });
+    let mut notification_count = 0_i64;
+    let mut last_updated_at = None;
+
+    if !new_entries.is_empty() {
+        let updated_at =
+            save_trade_log_rows_inner(&mut connection, trimmed_username, &persisted_entries)?;
+        let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+        let owned_part_deltas =
+            build_owned_set_component_deltas_for_entries(app, &new_entries)?;
+        apply_owned_set_component_deltas(app, &owned_part_deltas)?;
+        let wfm_candidates =
+            build_trade_notification_candidates_for_wfm(app, &new_entries)?;
+        notification_count += send_trade_notification_candidates_inner(
+            app,
+            &connection,
+            trimmed_username,
+            &wfm_candidates,
+            "wfm",
+            session_started_at.as_ref(),
+        )?;
+        last_updated_at = Some(updated_at);
     }
 
-    let last_updated_at =
-        save_trade_log_rows_inner(&mut connection, trimmed_username, &persisted_entries)?;
-    let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
-    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &new_entries)?;
-    apply_owned_set_component_deltas(app, &owned_part_deltas)?;
-    let wfm_candidates = build_trade_notification_candidates_for_wfm(app, &new_entries)?;
-    let notification_count = send_trade_notification_candidates_inner(
+    // Retry notifications for any recent trades whose webhook call previously
+    // failed or was otherwise missed (webhook down, transient error, etc.).
+    notification_count += check_pending_trade_notifications_inner(
         app,
         &connection,
         trimmed_username,
-        &wfm_candidates,
         "wfm",
         session_started_at.as_ref(),
     )?;
@@ -4338,7 +4589,8 @@ fn refresh_wfm_trade_detection_inner(
         source: "wfm".to_string(),
         new_trade_count: new_entries.len() as i64,
         notification_count,
-        last_updated_at: Some(last_updated_at),
+        last_updated_at: last_updated_at
+            .or_else(|| load_trade_log_last_updated_at(&connection, trimmed_username).ok().flatten()),
         skipped: false,
         message: None,
         detected_buys: Vec::new(),
@@ -4390,39 +4642,27 @@ fn refresh_alecaframe_trade_detection_inner(
     let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
     let imported =
         build_alecaframe_trade_entries(app, trimmed_username, &baseline_date, &existing)?;
-    if imported.is_empty() {
-        return Ok(TradeDetectionRefreshResult {
-            source: "alecaframe".to_string(),
-            new_trade_count: 0,
-            notification_count: 0,
-            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
-            skipped: false,
-            message: None,
-            detected_buys: Vec::new(),
-        });
-    }
 
-    let last_updated_at = save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
-    let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
-    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &imported)?;
-    apply_owned_set_component_deltas(app, &owned_part_deltas)?;
-    let notification_count = send_trade_notification_candidates_inner(
-        app,
-        &connection,
-        trimmed_username,
-        &build_trade_notification_candidates_for_alecaframe(&imported),
-        "alecaframe",
-        session_started_at.as_ref(),
-    )?;
+    let mut notification_count = 0_i64;
+    let mut last_updated_at = None;
+    let mut detected_buys = Vec::new();
 
-    Ok(TradeDetectionRefreshResult {
-        source: "alecaframe".to_string(),
-        new_trade_count: imported.len() as i64,
-        notification_count,
-        last_updated_at: Some(last_updated_at),
-        skipped: false,
-        message: None,
-        detected_buys: imported
+    if !imported.is_empty() {
+        let updated_at =
+            save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
+        let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+        let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &imported)?;
+        apply_owned_set_component_deltas(app, &owned_part_deltas)?;
+        notification_count += send_trade_notification_candidates_inner(
+            app,
+            &connection,
+            trimmed_username,
+            &build_trade_notification_candidates_for_alecaframe(&imported),
+            "alecaframe",
+            session_started_at.as_ref(),
+        )?;
+        last_updated_at = Some(updated_at);
+        detected_buys = imported
             .iter()
             .filter(|entry| entry.order_type == "buy")
             .map(|entry| DetectedTradeBuy {
@@ -4431,7 +4671,26 @@ fn refresh_alecaframe_trade_detection_inner(
                 quantity: entry.quantity.max(1),
                 platinum: entry.platinum,
             })
-            .collect(),
+            .collect();
+    }
+
+    notification_count += check_pending_trade_notifications_inner(
+        app,
+        &connection,
+        trimmed_username,
+        "alecaframe",
+        session_started_at.as_ref(),
+    )?;
+
+    Ok(TradeDetectionRefreshResult {
+        source: "alecaframe".to_string(),
+        new_trade_count: imported.len() as i64,
+        notification_count,
+        last_updated_at: last_updated_at
+            .or_else(|| load_trade_log_last_updated_at(&connection, trimmed_username).ok().flatten()),
+        skipped: false,
+        message: None,
+        detected_buys,
     })
 }
 
