@@ -295,7 +295,6 @@ function ArbitrageRow({
             </span>
             <div className="farm-now-copy scanner-farm-copy">
               <strong>{entry.name}</strong>
-              <span className="farm-now-subtitle">{entry.note}</span>
               <div className="scanner-farm-badge-row">
                 <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
                   {entry.confidenceSummary.label}
@@ -455,7 +454,6 @@ function RelicRoiRow({
             </span>
             <div className="farm-now-copy scanner-farm-copy">
               <strong>{entry.name}</strong>
-              <span className="farm-now-subtitle">{summary?.note ?? entry.note}</span>
               <div className="scanner-farm-badge-row">
                 {entry.isUnvaulted ? (
                   <span className="market-panel-badge tone-green">Unvaulted</span>
