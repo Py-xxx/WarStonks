@@ -660,12 +660,68 @@ function SetCompletionScreenshotImportModal({
   onQuantityChange: (rowId: string, value: string) => void;
   onConfirm: () => Promise<void>;
 }) {
+  const [showGuidance, setShowGuidance] = useState(true);
+
+  useEffect(() => {
+    if (open) {
+      setShowGuidance(true);
+    }
+  }, [open]);
+
   if (!open) {
     return null;
   }
 
   return (
     <>
+      {showGuidance ? (
+        <>
+          <button
+            className="modal-backdrop"
+            type="button"
+            aria-label="Screenshot import guidance"
+            onClick={() => {}}
+          />
+          <div
+            className="settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Screenshot import requirements"
+          >
+            <div className="settings-modal-header">
+              <div className="settings-modal-title">
+                <span className="card-label">Set Completion Import</span>
+                <h3>
+                  Screenshot Import Guidance{' '}
+                  <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
+                </h3>
+              </div>
+            </div>
+            <div className="settings-modal-body">
+              <div className="settings-form-card">
+                <p className="watchlist-form-note">
+                  This importer currently only works reliably with the in-game <strong>Vitruvian</strong> theme.
+                </p>
+                <p className="watchlist-form-note">
+                  Make sure your mouse cursor is <strong>not visible</strong> in the screenshot.
+                </p>
+                <p className="watchlist-form-note">
+                  The screenshot should show the full <strong>7×3 Prime Components grid</strong>, matching the example layout.
+                </p>
+                <div className="settings-form-actions">
+                  <button
+                    type="button"
+                    className="settings-primary-btn"
+                    onClick={() => setShowGuidance(false)}
+                  >
+                    Got it
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
       <button
         className="modal-backdrop"
         type="button"
@@ -681,7 +737,10 @@ function SetCompletionScreenshotImportModal({
         <div className="settings-modal-header">
           <div className="settings-modal-title">
             <span className="card-label">Set Completion Import</span>
-            <h3>Import Prime Components Screenshot</h3>
+            <h3>
+              Import Prime Components Screenshot{' '}
+              <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
+            </h3>
           </div>
           <div className="settings-modal-actions">
             <button className="settings-close-btn" type="button" aria-label="Close" onClick={onClose}>
@@ -741,11 +800,6 @@ function SetCompletionScreenshotImportModal({
             <p className="watchlist-form-note">
               Use one or more screenshots from the in-game <strong>Prime Components</strong> tab.
               Each screenshot is prepared independently and then merged into one review list.
-            </p>
-            <p className="watchlist-form-note">
-              <strong>Experimental:</strong> the screenshot import currently only works reliably with
-              the in-game <strong>Vitruvian</strong> theme selected, and your mouse cursor should not
-              be visible in the screenshots.
             </p>
             <p className="watchlist-form-note">
               Workflow: choose the screenshots and the detector will immediately extract the fixed
@@ -2039,6 +2093,7 @@ export function OpportunitiesPage() {
                     >
                       Import Screenshot
                     </button>
+                    <span className="scanner-run-pill scanner-run-pill-warning">Experimental</span>
                     <div className="set-planner-search-wrap">
                       <input
                         id="planner-component-search"
