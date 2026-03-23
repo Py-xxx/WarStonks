@@ -8,6 +8,7 @@ src-tauri/gen
 src-tauri/tauri.dev.generated.json
 Resources/
 .codex/
+WARSTONKS_CASE_STUDY.md
 
 # OS / editor files
 .DS_Store
