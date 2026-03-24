@@ -6144,7 +6144,7 @@ fn try_restore_trade_session_state(app: &tauri::AppHandle) -> Result<TradeSessio
                 account: None,
             })
         }
-    };
+    }
 }
 
 fn resolve_catalog_trade_item_meta(
