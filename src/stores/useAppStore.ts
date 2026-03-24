@@ -6,7 +6,6 @@ import {
   deleteWfmBuyOrder,
   ensureMarketTracking,
   getCachedWfmProfileTradeLog,
-  getWfmTradeSessionState,
   getWfmAutocompleteItems,
   getAppSettings,
   getItemAnalytics,
@@ -25,6 +24,7 @@ import {
   signInWfmTradeAccount,
   signOutWfmTradeAccount,
   stopMarketTracking,
+  tryAutoSignInWfmTradeAccount,
 } from '../lib/tauriClient';
 import {
   fetchWorldStateAlertsSnapshot,
@@ -3373,7 +3373,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ tradeAccountLoading: true, tradeAccountError: null });
 
       try {
-        const sessionState = await getWfmTradeSessionState();
+        const sessionState = await tryAutoSignInWfmTradeAccount();
         let nextWatchlist = get().watchlist;
         let nextSelectedWatchlistId = get().selectedWatchlistId;
 

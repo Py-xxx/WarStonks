@@ -5994,6 +5994,31 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     })
 }
 
+fn should_attempt_trade_session_reauth(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("401")
+        || message.contains("403")
+        || message.contains("expired")
+        || message.contains("auth")
+        || message.contains("token")
+}
+
+fn restore_saved_trade_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
+    let Some(creds) = load_trade_credentials(app)? else {
+        return Ok(None);
+    };
+
+    let input = TradeSignInInput {
+        email: creds.email.trim().to_string(),
+        password: creds.password.trim().to_string(),
+        stay_logged_in: true,
+    };
+
+    let session = sign_in_inner(&input)?;
+    save_session(app, &session)?;
+    Ok(Some(session))
+}
+
 fn load_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
     let path = build_trades_session_path(app)?;
     load_session_from_path(&path)
@@ -6011,21 +6036,115 @@ fn clear_session(app: &tauri::AppHandle) -> Result<()> {
 
 fn ensure_authenticated_session(app: &tauri::AppHandle) -> Result<StoredTradeSession> {
     let client = shared_wfm_client()?;
-    let Some(mut session) = load_session(app)? else {
-        return Err(anyhow!("Sign in to Warframe Market first."));
-    };
-
-    match fetch_me_with_token(&client, &session.token) {
-        Ok(account) => {
-            session.account = account;
-            save_session(app, &session)?;
-            Ok(session)
-        }
-        Err(error) => {
-            clear_session(app)?;
-            Err(anyhow!("Warframe Market session expired: {error}"))
+    if let Some(mut session) = load_session(app)? {
+        match fetch_me_with_token(&client, &session.token) {
+            Ok(account) => {
+                session.account = account;
+                save_session(app, &session)?;
+                return Ok(session);
+            }
+            Err(error) if should_attempt_trade_session_reauth(&error) => {
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "validate-session",
+                    "Stored Warframe Market session appears to be expired. Attempting automatic re-authentication.",
+                    &error,
+                );
+                clear_session(app)?;
+                if let Some(session) = restore_saved_trade_session(app)? {
+                    return Ok(session);
+                }
+                return Err(anyhow!("Warframe Market session expired. Please sign in again."));
+            }
+            Err(error) => {
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "validate-session",
+                    "Failed to verify the current Warframe Market session.",
+                    &error,
+                );
+                return Err(anyhow!(
+                    "Couldn’t verify your Warframe Market session right now."
+                ));
+            }
         }
     }
+
+    if let Some(session) = restore_saved_trade_session(app)? {
+        return Ok(session);
+    }
+
+    Err(anyhow!("Sign in to Warframe Market first."))
+}
+
+fn refresh_trade_session_status_if_possible(
+    app: &tauri::AppHandle,
+    session: &mut StoredTradeSession,
+) -> Result<()> {
+    match tauri::async_runtime::block_on(fetch_current_trade_status_ws(
+        &session.token,
+        &session.device_id,
+    )) {
+        Ok(status) => {
+            session.account.status = status;
+            save_session(app, session)?;
+            Ok(())
+        }
+        Err(error) => {
+            log_feature_error_best_effort(
+                app,
+                "trades-session",
+                "refresh-ws-status",
+                "Failed to refresh the current Warframe Market websocket status.",
+                &error,
+            );
+            Ok(())
+        }
+    }
+}
+
+fn build_connected_trade_session_state(
+    app: &tauri::AppHandle,
+    mut session: StoredTradeSession,
+) -> Result<TradeSessionState> {
+    refresh_trade_session_status_if_possible(app, &mut session)?;
+    Ok(TradeSessionState {
+        connected: true,
+        account: Some(session.account),
+    })
+}
+
+fn load_or_restore_trade_session_state(app: &tauri::AppHandle) -> Result<TradeSessionState> {
+    let session = ensure_authenticated_session(app)?;
+    build_connected_trade_session_state(app, session)
+}
+
+fn try_restore_trade_session_state(app: &tauri::AppHandle) -> Result<TradeSessionState> {
+    match load_or_restore_trade_session_state(app) {
+        Ok(state) => Ok(state),
+        Err(error) => {
+            if load_trade_credentials(app)?.is_none() {
+                return Ok(TradeSessionState {
+                    connected: false,
+                    account: None,
+                });
+            }
+
+            log_feature_error_best_effort(
+                app,
+                "trades-session",
+                "restore-session",
+                "Failed to restore the remembered Warframe Market session automatically.",
+                &error,
+            );
+            Ok(TradeSessionState {
+                connected: false,
+                account: None,
+            })
+        }
+    };
 }
 
 fn resolve_catalog_trade_item_meta(
@@ -6291,37 +6410,13 @@ fn delete_order_inner(
 pub async fn get_wfm_trade_session_state(
     app: tauri::AppHandle,
 ) -> Result<TradeSessionState, String> {
-    let maybe_session = tauri::async_runtime::spawn_blocking({
+    tauri::async_runtime::spawn_blocking({
         let app = app.clone();
-        move || ensure_authenticated_session(&app)
+        move || try_restore_trade_session_state(&app)
     })
     .await
-    .map_err(|error| error.to_string())?;
-
-    match maybe_session {
-        Ok(mut session) => {
-            if let Ok(status) =
-                fetch_current_trade_status_ws(&session.token, &session.device_id).await
-            {
-                session.account.status = status;
-                let _ = tauri::async_runtime::spawn_blocking({
-                    let app = app.clone();
-                    let session = session.clone();
-                    move || save_session(&app, &session)
-                })
-                .await;
-            }
-
-            Ok(TradeSessionState {
-                connected: true,
-                account: Some(session.account),
-            })
-        }
-        Err(_) => Ok(TradeSessionState {
-            connected: false,
-            account: None,
-        }),
-    }
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -6393,87 +6488,13 @@ pub async fn sign_out_wfm_trade_account(app: tauri::AppHandle) -> Result<(), Str
 pub async fn try_auto_sign_in_wfm_trade_account(
     app: tauri::AppHandle,
 ) -> Result<TradeSessionState, String> {
-    let maybe_session = tauri::async_runtime::spawn_blocking({
+    tauri::async_runtime::spawn_blocking({
         let app = app.clone();
-        move || ensure_authenticated_session(&app)
-    })
-    .await
-    .map_err(|error| error.to_string());
-
-    if let Ok(Ok(mut session)) = maybe_session {
-        if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await
-        {
-            session.account.status = status;
-            let _ = tauri::async_runtime::spawn_blocking({
-                let app = app.clone();
-                let session = session.clone();
-                move || save_session(&app, &session)
-            })
-            .await;
-        }
-
-        return Ok(TradeSessionState {
-            connected: true,
-            account: Some(session.account),
-        });
-    }
-
-    let maybe_creds = tauri::async_runtime::spawn_blocking({
-        let app = app.clone();
-        move || load_trade_credentials(&app)
+        move || try_restore_trade_session_state(&app)
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error: anyhow::Error| error.to_string())?;
-
-    let Some(creds) = maybe_creds else {
-        return Ok(TradeSessionState {
-            connected: false,
-            account: None,
-        });
-    };
-
-    let input = TradeSignInInput {
-        email: creds.email.clone(),
-        password: creds.password.clone(),
-        stay_logged_in: true,
-    };
-
-    let mut session = match tauri::async_runtime::spawn_blocking({
-        let app = app.clone();
-        let input = input.clone();
-        move || {
-            let session = sign_in_inner(&input)?;
-            save_session(&app, &session)?;
-            Ok::<StoredTradeSession, anyhow::Error>(session)
-        }
-    })
-    .await
     .map_err(|error| error.to_string())
-    {
-        Ok(Ok(session)) => session,
-        _ => {
-            return Ok(TradeSessionState {
-                connected: false,
-                account: None,
-            });
-        }
-    };
-
-    if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
-        session.account.status = status;
-        let _ = tauri::async_runtime::spawn_blocking({
-            let app = app.clone();
-            let session = session.clone();
-            move || save_session(&app, &session)
-        })
-        .await;
-    }
-
-    Ok(TradeSessionState {
-        connected: true,
-        account: Some(session.account),
-    })
 }
 
 #[tauri::command]
@@ -7899,5 +7920,14 @@ mod tests {
         let decision = decide_trade_health(88, Some(82), 3, 5, 1, Some(&context));
         assert_eq!(decision.action_label, "Wait for normalization");
         assert_eq!(decision.action_tone, "amber");
+    }
+
+    #[test]
+    fn trade_session_reauth_detection_matches_expiry_signals() {
+        assert!(should_attempt_trade_session_reauth(&anyhow!("request failed with status 401")));
+        assert!(should_attempt_trade_session_reauth(&anyhow!("session expired")));
+        assert!(!should_attempt_trade_session_reauth(&anyhow!(
+            "failed to reach warframe market"
+        )));
     }
 }

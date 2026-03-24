@@ -6412,6 +6412,14 @@ body {
   font-size: 12px;
   line-height: 1.6;
 }
+.trade-session-expired-modal {
+  width: min(420px, calc(100vw - 32px));
+}
+.trade-session-expired-copy {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
 @media (max-width: 1100px) {
   .trade-health-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
