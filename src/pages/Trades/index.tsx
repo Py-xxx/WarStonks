@@ -348,6 +348,14 @@ function formatMarketLowAge(timestampMs: number | undefined): string {
   return `${Math.floor(ageMinutes / 60)}h ago`;
 }
 
+function isTradeSessionExpiredMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes('session expired')
+    || normalized.includes('sign in to warframe market first')
+  );
+}
+
 interface ListingAnalysisState {
   analysis: ItemAnalysisResponse | null;
   analytics: ItemAnalyticsResponse | null;
@@ -1134,6 +1142,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const [listingActionPending, setListingActionPending] = useState(false);
   const [listingActionError, setListingActionError] = useState<string | null>(null);
   const [soldQuantities, setSoldQuantities] = useState<Record<string, string>>({});
+  const [sessionExpiredPopupOpen, setSessionExpiredPopupOpen] = useState(false);
   // Analysis preview for the create-listing modal (cleared on modal close).
   const [listingAnalysis, setListingAnalysis] = useState<ListingAnalysisState | null>(null);
   // Display-layer state: epoch ms when each order's market_low was last fetched.
@@ -1346,6 +1355,18 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     setListingAnalysis(null);
   };
 
+  const handleTradeActionFailure = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isTradeSessionExpiredMessage(message)) {
+      setSessionExpiredPopupOpen(true);
+      setOverviewError(null);
+      void loadTradeAccount();
+      return;
+    }
+    setOverviewError(message);
+    void loadTradeAccount();
+  };
+
   const handleListingModalSubmit = async () => {
     if (!listingModal) {
       return;
@@ -1417,7 +1438,15 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         setOverviewError(error instanceof Error ? error.message : String(error));
       });
     } catch (error) {
-      setListingActionError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      if (isTradeSessionExpiredMessage(message)) {
+        setSessionExpiredPopupOpen(true);
+        setListingActionError(null);
+        void loadTradeAccount();
+        setListingActionPending(false);
+        return;
+      }
+      setListingActionError(message);
       setListingActionPending(false);
       void loadTradeAccount();
     }
@@ -1439,8 +1468,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       );
       await applyOverview(nextOverview);
     } catch (error) {
-      setOverviewError(error instanceof Error ? error.message : String(error));
-      void loadTradeAccount();
+      handleTradeActionFailure(error);
     }
   };
 
@@ -1452,8 +1480,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           : await deleteWfmBuyOrder(orderId, sellerMode);
       await applyOverview(nextOverview);
     } catch (error) {
-      setOverviewError(error instanceof Error ? error.message : String(error));
-      void loadTradeAccount();
+      handleTradeActionFailure(error);
     }
   };
 
@@ -1461,7 +1488,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     try {
       await signOutTradeAccount();
     } catch (error) {
-      setOverviewError(error instanceof Error ? error.message : String(error));
+      handleTradeActionFailure(error);
     }
   };
 
@@ -1669,6 +1696,47 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           </table>
         ) : null}
       </div>
+
+      {sessionExpiredPopupOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            className="settings-modal trade-session-expired-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="trade-session-expired-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div className="settings-modal-title">
+                <span className="card-label">Trades</span>
+                <h3 id="trade-session-expired-title">Session expired</h3>
+              </div>
+              <button
+                className="settings-close-btn"
+                type="button"
+                onClick={() => setSessionExpiredPopupOpen(false)}
+                aria-label="Close session expired popup"
+              >
+                ×
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <p className="trade-session-expired-copy">
+                Your session has expired, please try again.
+              </p>
+            </div>
+            <div className="settings-modal-actions">
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={() => setSessionExpiredPopupOpen(false)}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {listingModal ? (
         <ListingModal
