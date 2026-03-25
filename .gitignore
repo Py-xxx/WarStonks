@@ -6,7 +6,9 @@ dist
 src-tauri/target
 src-tauri/gen
 src-tauri/tauri.dev.generated.json
-Resources/
+Resources/*
+!Resources/pics/
+!Resources/pics/**
 .codex/
 WARSTONKS_CASE_STUDY.md
 
@@ -21,3 +23,5 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+__pycache__/
+*.pyc

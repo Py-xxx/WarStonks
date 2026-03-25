@@ -34,6 +34,8 @@ It brings live market data, analysis, scanners, watchlists, relic planning, and 
 
 If you actively use Warframe Market and want better timing, better visibility, and less manual checking, this app is built for that.
 
+![WarStonks dashboard](Resources/pics/dashboard.png)
+
 ## Download
 
 Download the latest version from [Releases](https://github.com/Py-xxx/WarStonks/releases).
@@ -98,6 +100,9 @@ The deep-dive page for a specific item.
 
 This is where you decide whether an item is worth acting on.
 
+![Item analysis view](Resources/pics/analysis.png)
+![Item analytics view](Resources/pics/analytics.png)
+
 ### Events
 
 Warframe worldstate tracking in one place.
@@ -130,6 +135,9 @@ Actionable planning tools powered by scanner and inventory data.
 
 This is the part of the app that turns raw data into a next move.
 
+![Set completion planner](Resources/pics/set1.png)
+![What to farm now](Resources/pics/set2.png)
+
 ### Trades
 
 Your Warframe Market operations tab.
@@ -140,6 +148,9 @@ Your Warframe Market operations tab.
 - watchlist-linked order automation
 
 Built for keeping active trading organized.
+
+![Trade listing health](Resources/pics/tradeHealth.png)
+![Trade log view](Resources/pics/log1.png)
 
 ### Portfolio
 
@@ -152,6 +163,8 @@ Your local trade record and performance layer.
 - trade breakdowns and coverage metrics
 
 This is where you see whether your process is actually working.
+
+![Portfolio summary](Resources/pics/portfilio.png)
 
 ### Guide
 

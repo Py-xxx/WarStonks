@@ -103,7 +103,7 @@ export function Sidebar() {
   const [appVersion, setAppVersion] = useState<string>('…');
 
   const handleOpenDiscord = () => {
-    void openExternalUrl('https://discord.gg/QuSm3fPZT6').catch((error) => {
+    void openExternalUrl('https://discord.com/invite/jMZYkP2URF').catch((error) => {
       console.warn('[sidebar] failed to open Discord invite', error);
     });
   };
