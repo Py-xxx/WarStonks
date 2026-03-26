@@ -352,6 +352,10 @@ fn startup_warning(app: &AppHandle, stage_key: &str, detail: &str, error: &anyho
     log_feature_error_best_effort(app, "bootstrap", stage_key, detail, error);
 }
 
+fn is_unmatched_wfm_outcome(outcome: &MatchOutcome) -> bool {
+    outcome.method == "unmatched"
+}
+
 fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
     let paths = startup_step(
         &app,
@@ -545,17 +549,16 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
     )?;
 
     if import_context.stats.unmatched_wfm_items > 0 {
-        let error = anyhow!(
-            "catalog import aborted: {} WFM items remain unmatched",
+        let warning = anyhow!(
+            "catalog import continuing without {} unmatched WFM items",
             import_context.stats.unmatched_wfm_items
         );
         startup_warning(
             &app,
             "catalog-validation",
-            "Startup validation failed because required WFM items could not be matched.",
-            &error,
+            "Some WFM items could not be matched during startup. Continuing with the matched catalog only.",
+            &warning,
         );
-        return Err(error);
     }
 
     let summary = startup_step(
@@ -1361,8 +1364,8 @@ fn insert_wfm_record(
         .get(&record.id)
         .ok_or_else(|| anyhow!("missing match outcome for WFM record {}", record.id))?;
 
-    if outcome.method == "unmatched" {
-        return Err(anyhow!("WFM item {} was left unmatched", record.id));
+    if is_unmatched_wfm_outcome(outcome) {
+        return Ok(());
     }
 
     let item_id = item_ids
@@ -3458,9 +3461,9 @@ fn get_bool_as_i64(value: &Value, key: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_name, parse_variant_info, split_blueprint_name,
+        is_unmatched_wfm_outcome, normalize_name, parse_variant_info, split_blueprint_name,
         wfstat_component_source_record_key, WfstatComponentRecord, WFSTAT_ITEMS_COLUMN_COUNT,
-        WFSTAT_ITEMS_INSERT_SQL,
+        WFSTAT_ITEMS_INSERT_SQL, MatchOutcome,
     };
     use serde_json::json;
 
@@ -3519,5 +3522,26 @@ mod tests {
             wfstat_component_source_record_key(&left),
             wfstat_component_source_record_key(&right)
         );
+    }
+
+    #[test]
+    fn unmatched_wfm_outcomes_are_skipped_during_import() {
+        let unmatched = MatchOutcome {
+            canonical_key: "unmatched:test".to_string(),
+            method: "unmatched",
+            matched_field: None,
+            matched_value: None,
+            notes: None,
+        };
+        let matched = MatchOutcome {
+            canonical_key: "item:test".to_string(),
+            method: "market_slug",
+            matched_field: Some("slug".to_string()),
+            matched_value: Some("test_item".to_string()),
+            notes: None,
+        };
+
+        assert!(is_unmatched_wfm_outcome(&unmatched));
+        assert!(!is_unmatched_wfm_outcome(&matched));
     }
 }
