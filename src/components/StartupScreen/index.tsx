@@ -36,13 +36,13 @@ function formatStartupErrorMessage(errorMessage: string): string {
     return 'WarStonks could not restore your Warframe Market session. Please retry, then sign in again if needed.';
   }
   if (/network|timed out|timeout|fetch/i.test(normalized)) {
-    return 'WarStonks could not finish loading online data. Check your connection and try again.';
+    return 'WarStonks could not finish loading online data. Check your connection and try again. If it keeps happening, report it in Discord.';
   }
   if (/database|sqlite|catalog/i.test(normalized)) {
-    return 'WarStonks could not prepare its local data. Please retry startup. If it keeps happening, restart the app.';
+    return 'WarStonks could not finish preparing its local data. Please retry startup. If it keeps happening, restart the app and report it in Discord.';
   }
 
-  return 'WarStonks could not finish starting up. Please retry. If it keeps happening, restart the app and try again.';
+  return 'WarStonks could not finish starting up. Please retry. If it keeps happening, restart the app and report it in Discord.';
 }
 
 export function StartupScreen({
