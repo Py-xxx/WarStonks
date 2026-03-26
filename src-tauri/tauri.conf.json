@@ -1,6 +1,6 @@
 {
   "productName": "WarStonks",
-  "version": "3.0.4",
+  "version": "3.0.5",
   "identifier": "com.warstonks.app",
   "build": {
     "frontendDist": "../dist",
