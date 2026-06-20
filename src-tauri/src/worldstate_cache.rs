@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tauri::Manager;
 
 const WORLDSTATE_CACHE_DIR_NAME: &str = "worldstate";
@@ -90,6 +91,15 @@ fn save_worldstate_cache_entry_inner(
     if trimmed_endpoint.is_empty() {
         anyhow::bail!("worldstate cache endpoint key cannot be empty");
     }
+
+    // Serialize concurrent saves: without this lock, two Tauri commands running on
+    // the thread pool can interleave their read→modify→write cycles and one save
+    // silently discards the other's entry.
+    static FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = FILE_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| anyhow::anyhow!("worldstate cache file lock was poisoned"))?;
 
     let path = build_worldstate_cache_path(app)?;
     let mut cache = load_cache_from_path(&path)?;

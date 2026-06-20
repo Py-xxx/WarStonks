@@ -1420,8 +1420,49 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           payload_json TEXT NOT NULL,
           source_snapshot_at TEXT,
           source_stats_fetched_at TEXT,
-          PRIMARY KEY (item_id, variant_key, domain_key, bucket_size_key)
+          PRIMARY KEY (item_id, variant_key, seller_mode, domain_key, bucket_size_key)
         );
+
+        CREATE TABLE IF NOT EXISTS recommendation_outcomes (
+          outcome_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          item_id             INTEGER NOT NULL,
+          slug                TEXT NOT NULL,
+          variant_key         TEXT NOT NULL,
+          seller_mode         TEXT NOT NULL,
+          outcome_type        TEXT NOT NULL DEFAULT 'buy_trade',
+          recommended_at      TEXT NOT NULL,
+          efficiency_score    REAL,
+          efficiency_label    TEXT,
+          liquidity_score     REAL,
+          liquidity_label     TEXT,
+          pressure_label      TEXT,
+          suggested_action    TEXT,
+          action_tone         TEXT,
+          entry_zone_low      REAL,
+          entry_zone_high     REAL,
+          exit_zone_low       REAL,
+          exit_zone_high      REAL,
+          floor_at_rec        REAL,
+          entry_window_hours  INTEGER NOT NULL DEFAULT 48,
+          holding_window_days INTEGER NOT NULL DEFAULT 7,
+          entry_triggered     INTEGER,
+          entry_price         REAL,
+          entry_triggered_at  TEXT,
+          exit_triggered      INTEGER,
+          exit_price          REAL,
+          exit_triggered_at   TEXT,
+          mark_to_market_price REAL,
+          realized_return     REAL,
+          return_per_day      REAL,
+          days_held           REAL,
+          outcome_graded_at   TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_rec_outcomes_grading
+          ON recommendation_outcomes (outcome_graded_at, recommended_at);
+
+        CREATE INDEX IF NOT EXISTS idx_rec_outcomes_item
+          ON recommendation_outcomes (item_id, variant_key, seller_mode, recommended_at DESC);
         ",
     )?;
 
@@ -1524,6 +1565,47 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         if !has_column {
             connection.execute(column_sql, [])?;
         }
+    }
+
+    // Rebuild analytics_cache if its PRIMARY KEY predates the seller_mode column.
+    // SQLite cannot ALTER a PRIMARY KEY in place, so we check the stored CREATE TABLE
+    // statement and recreate the table when seller_mode is absent from the key.
+    let analytics_cache_sql = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'analytics_cache'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let needs_pk_rebuild = analytics_cache_sql
+        .map(|sql| !sql.contains("seller_mode, domain_key"))
+        .unwrap_or(false);
+    if needs_pk_rebuild {
+        connection.execute_batch(
+            "
+            ALTER TABLE analytics_cache RENAME TO analytics_cache_old;
+            CREATE TABLE analytics_cache (
+              item_id INTEGER NOT NULL,
+              slug TEXT NOT NULL,
+              variant_key TEXT NOT NULL,
+              seller_mode TEXT NOT NULL DEFAULT 'ingame',
+              domain_key TEXT NOT NULL,
+              bucket_size_key TEXT NOT NULL,
+              cache_version INTEGER NOT NULL DEFAULT 1,
+              computed_at TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              source_snapshot_at TEXT,
+              source_stats_fetched_at TEXT,
+              PRIMARY KEY (item_id, variant_key, seller_mode, domain_key, bucket_size_key)
+            );
+            INSERT OR IGNORE INTO analytics_cache
+              SELECT item_id, slug, variant_key, seller_mode, domain_key, bucket_size_key,
+                     cache_version, computed_at, payload_json, source_snapshot_at,
+                     source_stats_fetched_at
+              FROM analytics_cache_old;
+            DROP TABLE analytics_cache_old;
+            ",
+        )?;
     }
 
     Ok(())
@@ -2920,7 +3002,20 @@ fn compute_pressure_ratio(
     Some((quantity_ratio * 0.65) + (count_ratio * 0.35))
 }
 
-fn pressure_label(pressure_ratio: Option<f64>) -> String {
+/// Minimum number of live buy (WTB) orders before the pressure ratio is trusted
+/// to read anything other than "Balanced". On Warframe.Market most trading happens
+/// by buyers browsing WTS listings rather than posting WTB, so buy-side books are
+/// frequently 0–2 orders deep. A pressure ratio built on that little data is noise,
+/// not signal, and would otherwise swing the action card to Entry/Exit Pressure on a
+/// single stale WTB listing.
+const MIN_BUY_ORDERS_FOR_PRESSURE: i64 = 5;
+
+fn pressure_label(pressure_ratio: Option<f64>, buy_order_count: i64) -> String {
+    // Gate the directional reading behind a minimum buy-order count. Below it, the
+    // book is too thin on the demand side to infer pressure, so report Balanced.
+    if buy_order_count < MIN_BUY_ORDERS_FOR_PRESSURE {
+        return "Balanced".to_string();
+    }
     match pressure_ratio {
         Some(value) if value >= 1.1 => "Entry Pressure".to_string(),
         Some(value) if value <= 0.9 => "Exit Pressure".to_string(),
@@ -3271,6 +3366,14 @@ fn prune_old_rows(connection: &Connection) -> Result<()> {
         "DELETE FROM orderbook_snapshots
          WHERE captured_at < ?1",
         params![cutoff],
+    )?;
+    // Keep 90 days of recommendation outcomes so the calibration buckets retain a
+    // meaningful window of history. Beyond that the rows are unbounded growth.
+    let outcome_cutoff =
+        format_timestamp(now_utc() - TimeDuration::days(OUTCOME_RETENTION_DAYS))?;
+    connection.execute(
+        "DELETE FROM recommendation_outcomes WHERE recommended_at < ?1",
+        params![outcome_cutoff],
     )?;
     Ok(())
 }
@@ -3998,14 +4101,20 @@ fn build_historical_exit_profile(rows: &[InternalStatsRow]) -> HistoricalExitPro
     };
 
     let recent_volume_cutoff = now_utc() - TimeDuration::days(7);
-    let recent_volume = rows
+    let recent_rows = rows
         .iter()
         .filter(|row| row.bucket_at >= recent_volume_cutoff)
-        .map(|row| row.volume)
-        .sum::<f64>();
+        .collect::<Vec<_>>();
+    // Both sides are average-volume-per-bucket so the ratio is unit-consistent
+    // regardless of the bucket granularity (hourly vs daily) feeding this path.
+    let recent_volume_avg = if recent_rows.is_empty() {
+        0.0
+    } else {
+        recent_rows.iter().map(|row| row.volume).sum::<f64>() / recent_rows.len() as f64
+    };
     let baseline_volume = rows.iter().map(|row| row.volume).sum::<f64>() / rows.len().max(1) as f64;
     let relative_volume = if baseline_volume > 0.0 {
-        Some((recent_volume / 7.0) / baseline_volume)
+        Some(recent_volume_avg / baseline_volume)
     } else {
         None
     };
@@ -4102,7 +4211,7 @@ fn choose_live_exit_percentile(snapshot: &MarketSnapshot, liquidity_score: f64) 
         49.0
     };
 
-    match pressure_label(snapshot.pressure_ratio) {
+    match pressure_label(snapshot.pressure_ratio, snapshot.buy_order_count) {
         label if label == "Exit Pressure" => percentile -= 11.0,
         label if label == "Balanced" => percentile -= 6.0,
         _ => {}
@@ -4619,7 +4728,7 @@ fn build_orderbook_pressure(snapshot: Option<&MarketSnapshot>) -> OrderbookPress
             entry_depth: snapshot.entry_depth,
             exit_depth: snapshot.exit_depth,
             pressure_ratio: snapshot.pressure_ratio,
-            pressure_label: pressure_label(snapshot.pressure_ratio),
+            pressure_label: pressure_label(snapshot.pressure_ratio, snapshot.buy_order_count),
             confidence_summary,
         },
         None => OrderbookPressureSummary {
@@ -5071,6 +5180,13 @@ fn unstable_buy_pressure_active(snapshots: &[MarketSnapshot]) -> bool {
     if snapshots.len() < 6 {
         return false;
     }
+    // Don't fire on items with near-zero buy activity — a pressure_ratio that
+    // bounces between 0.0 and 0.1 on a 1-buy-order market is noise, not instability.
+    let avg_buy_orders = snapshots.iter().map(|s| s.buy_order_count as f64).sum::<f64>()
+        / snapshots.len() as f64;
+    if avg_buy_orders < 3.0 {
+        return false;
+    }
 
     snapshot_std_dev(
         &snapshots
@@ -5169,6 +5285,28 @@ fn build_supply_confidence(
     }
 }
 
+/// Linearly interpolates x against a sorted list of (input, output) anchor pairs.
+/// Values outside the range are clamped to the first/last anchor.
+fn piecewise_lerp(x: f64, anchors: &[(f64, f64)]) -> f64 {
+    if anchors.is_empty() {
+        return 0.0;
+    }
+    if x <= anchors[0].0 {
+        return anchors[0].1;
+    }
+    if x >= anchors[anchors.len() - 1].0 {
+        return anchors[anchors.len() - 1].1;
+    }
+    for window in anchors.windows(2) {
+        let (x0, y0) = window[0];
+        let (x1, y1) = window[1];
+        if x <= x1 {
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+        }
+    }
+    anchors[anchors.len() - 1].1
+}
+
 fn liquidity_score_percent(snapshot: &MarketSnapshot) -> f64 {
     let demand_ratio = compute_pressure_ratio(
         snapshot.buy_quantity,
@@ -5177,35 +5315,21 @@ fn liquidity_score_percent(snapshot: &MarketSnapshot) -> f64 {
         snapshot.sell_order_count,
     )
     .unwrap_or(0.0);
-    let demand_balance = if demand_ratio >= 1.35 {
-        100.0
-    } else if demand_ratio >= 1.10 {
-        80.0
-    } else if demand_ratio >= 0.85 {
-        60.0
-    } else if demand_ratio >= 0.60 {
-        40.0
-    } else {
-        20.0
-    };
+    // Smoothly interpolate between the same anchor points as before, removing
+    // the cliff effects that caused 25-point jumps at arbitrary threshold values.
+    let demand_balance = piecewise_lerp(
+        demand_ratio,
+        &[(0.60, 20.0), (0.85, 40.0), (1.10, 60.0), (1.35, 80.0), (1.60, 100.0)],
+    );
 
-    let low_price_competition = if snapshot.near_floor_seller_count <= 2
-        && snapshot.near_floor_quantity <= 5
-        && snapshot.unique_sell_users <= 2
-    {
-        100.0
-    } else if snapshot.near_floor_seller_count <= 4
-        && snapshot.near_floor_quantity <= 10
-        && snapshot.unique_sell_users <= 4
-    {
-        80.0
-    } else if snapshot.near_floor_seller_count <= 7 && snapshot.near_floor_quantity <= 20 {
-        60.0
-    } else if snapshot.near_floor_seller_count <= 12 && snapshot.near_floor_quantity <= 40 {
-        40.0
-    } else {
-        20.0
-    };
+    // Use near_floor_seller_count as the primary competition pressure signal,
+    // blended with a quantity factor to preserve the multi-dimensional intent.
+    let competition_index = snapshot.near_floor_seller_count as f64 * 0.65
+        + (snapshot.near_floor_quantity as f64 / 4.0) * 0.35;
+    let low_price_competition = piecewise_lerp(
+        competition_index,
+        &[(2.0, 100.0), (5.0, 80.0), (9.5, 60.0), (16.0, 40.0), (24.0, 20.0)],
+    );
 
     // Cap raw sell/buy quantity at 10x their respective order counts before weighting.
     // Without this, a single wall listing (e.g. one order with 9000 units) inflates
@@ -5216,24 +5340,16 @@ fn liquidity_score_percent(snapshot: &MarketSnapshot) -> f64 {
     let activity_index = (snapshot.sell_order_count + snapshot.buy_order_count) as f64 * 0.35
         + (capped_sell_qty + capped_buy_qty) * 0.45
         + (snapshot.unique_sell_users + snapshot.unique_buy_users) as f64 * 0.20;
-    let market_depth = if activity_index >= 120.0 {
-        100.0
-    } else if activity_index >= 80.0 {
-        80.0
-    } else if activity_index >= 45.0 {
-        60.0
-    } else if activity_index >= 20.0 {
-        40.0
-    } else {
-        20.0
-    };
+    let market_depth = piecewise_lerp(
+        activity_index,
+        &[(20.0, 20.0), (45.0, 40.0), (80.0, 60.0), (120.0, 80.0), (160.0, 100.0)],
+    );
 
     let spread_tightness = match snapshot.spread_pct {
-        Some(value) if value <= 2.0 => 100.0,
-        Some(value) if value <= 5.0 => 80.0,
-        Some(value) if value <= 10.0 => 60.0,
-        Some(value) if value <= 20.0 => 40.0,
-        Some(_) => 20.0,
+        Some(value) => piecewise_lerp(
+            value,
+            &[(2.0, 100.0), (5.0, 80.0), (10.0, 60.0), (20.0, 40.0), (35.0, 20.0)],
+        ),
         None => 20.0,
     };
 
@@ -5288,14 +5404,16 @@ fn weighted_sell_percentile_price(
     let total_weight = ladder.iter().map(|entry| entry.1).sum::<f64>();
     let target_weight = total_weight * (percentile / 100.0);
     let mut running_weight = 0.0;
-    for (price, weight) in ladder {
+    for &(price, weight) in &ladder {
         running_weight += weight;
         if running_weight >= target_weight {
             return Some(price);
         }
     }
 
-    prices.last().copied()
+    // Fallback: use the highest price that survived the outlier filter, not the
+    // pre-filter list which can contain wall prices the filter was meant to exclude.
+    ladder.last().map(|&(price, _)| price)
 }
 
 fn recommended_exit_price(
@@ -5331,11 +5449,13 @@ fn efficiency_score_percent(
     let profit_percent = ((exit - entry) / entry).max(0.0);
     let profit_normalization = (profit_percent / 0.25).clamp(0.0, 1.0);
     let market_quality = (liquidity_score / 100.0).clamp(0.0, 1.0);
+    // Profit is 65%, liquidity is 35% — one path each, no double-counting.
+    // The previous formula had liquidity in both base_score and a multiplier,
+    // making it the dominant factor regardless of the stated weights.
     let base_score = (0.65 * profit_normalization) + (0.35 * market_quality);
-    let liquidity_multiplier = 0.70 + (0.60 * market_quality);
     let risk_penalty = (100 - efficiency_penalty_pct).max(0) as f64 / 100.0;
 
-    Some((100.0 * base_score * liquidity_multiplier * risk_penalty).clamp(0.0, 100.0))
+    Some((100.0 * base_score * risk_penalty).clamp(0.0, 100.0))
 }
 
 fn efficiency_label(score: Option<f64>) -> String {
@@ -5464,14 +5584,18 @@ fn build_manipulation_risk(
     }
 
     let allow_pattern_signals = confidence_summary.level != "low" && snapshots.len() >= 6;
-    let price_wall_active = snapshot
-        .depth_levels
-        .iter()
-        .filter(|level| level.side == "sell")
-        .map(|level| level.quantity as f64 / snapshot.sell_quantity.max(1) as f64)
-        .reduce(f64::max)
-        .unwrap_or(0.0)
-        >= 0.40;
+    // Require at least 8 sell orders before firing the price-wall signal.
+    // On thin books (3–4 sellers) a single concentrated listing is normal,
+    // not a manipulation pattern, so gating avoids systematic false positives.
+    let price_wall_active = snapshot.sell_order_count >= 8
+        && snapshot
+            .depth_levels
+            .iter()
+            .filter(|level| level.side == "sell")
+            .map(|level| level.quantity as f64 / snapshot.sell_quantity.max(1) as f64)
+            .reduce(f64::max)
+            .unwrap_or(0.0)
+            >= 0.40;
     let liquidity_withdrawal_signal =
         allow_pattern_signals && liquidity_withdrawal_active(&snapshots);
     let volatile_undercut_signal = allow_pattern_signals && volatile_undercut_active(&snapshots);
@@ -7707,17 +7831,21 @@ fn build_arbitrage_score(
     component_entries: &[ArbitrageScannerComponentEntry],
     confidence_summary: &MarketConfidenceSummary,
 ) -> f64 {
-    let margin_score = match (
-        gross_margin.unwrap_or_default(),
-        roi_pct.unwrap_or_default(),
-    ) {
-        (gross, roi) if gross >= 40.0 || roi >= 35.0 => 100.0,
-        (gross, roi) if gross >= 25.0 || roi >= 22.0 => 82.0,
-        (gross, roi) if gross >= 15.0 || roi >= 14.0 => 64.0,
-        (gross, roi) if gross >= 8.0 || roi >= 8.0 => 46.0,
-        (gross, _) if gross > 0.0 => 28.0,
-        _ => 0.0,
-    };
+    // Score the absolute-plat margin and the percentage ROI independently, then take
+    // the better of the two (the original logic was an OR across the same tiers).
+    // Interpolating between the tier anchors removes the cliff effect where one extra
+    // plat of margin could jump the score 18 points.
+    let gross = gross_margin.unwrap_or_default();
+    let roi = roi_pct.unwrap_or_default();
+    let gross_component = piecewise_lerp(
+        gross,
+        &[(0.0, 0.0), (8.0, 46.0), (15.0, 64.0), (25.0, 82.0), (40.0, 100.0)],
+    );
+    let roi_component = piecewise_lerp(
+        roi,
+        &[(0.0, 0.0), (8.0, 46.0), (14.0, 64.0), (22.0, 82.0), (35.0, 100.0)],
+    );
+    let margin_score = gross_component.max(roi_component);
 
     let acquisition_score = if component_entries.is_empty() {
         20.0
@@ -9126,7 +9254,7 @@ fn build_fallback_trade_health_context(recent_snapshots: &[MarketSnapshot]) -> O
         trend_summary,
         liquidity_score: Some(liquidity_score),
         liquidity_label: liquidity_label(liquidity_score),
-        pressure_label: pressure_label(latest.pressure_ratio),
+        pressure_label: pressure_label(latest.pressure_ratio, latest.buy_order_count),
         exit_zone_low: None,
         is_degraded,
     })
@@ -9194,7 +9322,7 @@ fn persist_analytics_cache(
            source_snapshot_at,
            source_stats_fetched_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-         ON CONFLICT(item_id, variant_key, domain_key, bucket_size_key) DO UPDATE SET
+         ON CONFLICT(item_id, variant_key, seller_mode, domain_key, bucket_size_key) DO UPDATE SET
            slug = excluded.slug,
            seller_mode = excluded.seller_mode,
            cache_version = excluded.cache_version,
@@ -9390,7 +9518,491 @@ fn build_item_analytics_inner(
         analytics_domain_key,
         analytics_bucket_size_key,
     )?;
+    // Best-effort: errors here must never fail the analytics response.
+    let _ = maybe_emit_recommendation_outcome(&connection, &response, &seller_mode);
     Ok(response)
+}
+
+// ─── Backtest / recommendation outcome tracking ───────────────────────────────
+
+const OUTCOME_EMIT_INTERVAL_HOURS: i64 = 6;
+const OUTCOME_ENTRY_WINDOW_HOURS: i64 = 48;
+const OUTCOME_HOLDING_WINDOW_DAYS: i64 = 7;
+const OUTCOME_RETENTION_DAYS: i64 = 90;
+
+/// Emit one outcome row per item per seller_mode per 6 hours if no open (ungraded)
+/// row already exists for this item. Errors are suppressed — the caller must not fail.
+///
+/// Every recommendation the analytics engine produces is a buy/enter decision at a
+/// confidence level ("Buy" / "Hold" / "Caution" / "Wait"); the engine has no "Sell"
+/// action, so every recorded row is a buy_trade. Tracking the weaker actions too lets
+/// the calibration answer "if I had entered despite a Wait signal, how did it go?".
+fn maybe_emit_recommendation_outcome(
+    connection: &Connection,
+    response: &ItemAnalyticsResponse,
+    seller_mode: &str,
+) -> Result<()> {
+    let snapshot = match response.current_snapshot.as_ref() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    let zone = &response.entry_exit_zone_overview;
+    // A gradeable buy thesis needs both an entry trigger (entry_zone_high) and an
+    // exit target (exit_zone_low). Without both, the row could never be scored.
+    let (Some(entry_zone_high), Some(exit_zone_low)) = (zone.entry_zone_high, zone.exit_zone_low)
+    else {
+        return Ok(());
+    };
+
+    let now = now_utc();
+    let emit_cutoff = format_timestamp(now - TimeDuration::hours(OUTCOME_EMIT_INTERVAL_HOURS))?;
+
+    // Guard 1: skip if we emitted a row for this item recently.
+    let recent_exists: bool = connection.query_row(
+        "SELECT COUNT(*) > 0 FROM recommendation_outcomes
+         WHERE item_id = ?1 AND variant_key = ?2 AND seller_mode = ?3
+           AND recommended_at > ?4",
+        params![response.item_id, response.variant_key, seller_mode, emit_cutoff],
+        |row| row.get(0),
+    )?;
+    if recent_exists {
+        return Ok(());
+    }
+
+    // Guard 2: skip if there's an open (ungraded, entry not yet triggered) trade —
+    // enforces non-overlapping trades so autocorrelated snapshots aren't double-counted.
+    let open_trade_exists: bool = connection.query_row(
+        "SELECT COUNT(*) > 0 FROM recommendation_outcomes
+         WHERE item_id = ?1 AND variant_key = ?2 AND seller_mode = ?3
+           AND outcome_graded_at IS NULL
+           AND (entry_triggered IS NULL OR entry_triggered = 0)",
+        params![response.item_id, response.variant_key, seller_mode],
+        |row| row.get(0),
+    )?;
+    if open_trade_exists {
+        return Ok(());
+    }
+
+    let action = response.action_card.suggested_action.as_str();
+    let liquidity_score = liquidity_score_percent(snapshot);
+    let recommended_at = format_timestamp(now)?;
+
+    connection.execute(
+        "INSERT INTO recommendation_outcomes (
+           item_id, slug, variant_key, seller_mode, outcome_type,
+           recommended_at,
+           liquidity_score, liquidity_label,
+           pressure_label, suggested_action, action_tone,
+           entry_zone_low, entry_zone_high, exit_zone_low, exit_zone_high,
+           floor_at_rec,
+           entry_window_hours, holding_window_days
+         ) VALUES (
+           ?1, ?2, ?3, ?4, 'buy_trade',
+           ?5,
+           ?6, ?7,
+           ?8, ?9, ?10,
+           ?11, ?12, ?13, ?14,
+           ?15,
+           ?16, ?17
+         )",
+        params![
+            response.item_id,
+            response.slug,
+            response.variant_key,
+            seller_mode,
+            recommended_at,
+            liquidity_score,
+            liquidity_label(liquidity_score),
+            response.action_card.pressure_label,
+            action,
+            response.action_card.tone,
+            zone.entry_zone_low,
+            entry_zone_high,
+            exit_zone_low,
+            zone.exit_zone_high,
+            snapshot.lowest_sell,
+            OUTCOME_ENTRY_WINDOW_HOURS,
+            OUTCOME_HOLDING_WINDOW_DAYS,
+        ],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacktestBucketStats {
+    pub label: String,
+    pub trade_count: i64,
+    pub hit_rate: Option<f64>,
+    pub median_return_pct: Option<f64>,
+    pub median_days_held: Option<f64>,
+    pub p25_return_pct: Option<f64>,
+    pub p75_return_pct: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacktestSummary {
+    pub total_graded: i64,
+    pub total_pending: i64,
+    pub total_open: i64,
+    pub buy_trade_stats: Vec<BacktestBucketStats>,
+    pub rolling_30d_hit_rate: Option<f64>,
+    pub rolling_30d_trade_count: i64,
+    pub generated_at: String,
+}
+
+fn grade_pending_outcomes_inner(connection: &Connection) -> Result<i64> {
+    let now = now_utc();
+    let window_cutoff =
+        format_timestamp(now - TimeDuration::days(OUTCOME_HOLDING_WINDOW_DAYS))?;
+
+    // Load outcomes that are past their holding window and have not been graded.
+    let mut stmt = connection.prepare(
+        "SELECT outcome_id, item_id, variant_key, seller_mode,
+                recommended_at, entry_zone_high, exit_zone_low,
+                entry_window_hours, holding_window_days
+         FROM recommendation_outcomes
+         WHERE outcome_graded_at IS NULL
+           AND recommended_at <= ?1",
+    )?;
+
+    struct PendingOutcome {
+        outcome_id: i64,
+        item_id: i64,
+        variant_key: String,
+        seller_mode: String,
+        recommended_at: String,
+        entry_zone_high: Option<f64>,
+        exit_zone_low: Option<f64>,
+        entry_window_hours: i64,
+        holding_window_days: i64,
+    }
+
+    let pending: Vec<PendingOutcome> = stmt
+        .query_map(params![window_cutoff], |row| {
+            Ok(PendingOutcome {
+                outcome_id: row.get(0)?,
+                item_id: row.get(1)?,
+                variant_key: row.get(2)?,
+                seller_mode: row.get(3)?,
+                recommended_at: row.get(4)?,
+                entry_zone_high: row.get(5)?,
+                exit_zone_low: row.get(6)?,
+                entry_window_hours: row.get(7)?,
+                holding_window_days: row.get(8)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let graded_at = format_timestamp(now)?;
+    let mut graded_count = 0i64;
+
+    for outcome in pending {
+        let Some(rec_time) = parse_timestamp(&outcome.recommended_at) else {
+            continue;
+        };
+        let entry_deadline = rec_time + TimeDuration::hours(outcome.entry_window_hours);
+        let holding_deadline_dt = rec_time + TimeDuration::days(outcome.holding_window_days);
+        let holding_deadline = format_timestamp(holding_deadline_dt)?;
+
+        // Fetch all snapshots in the holding window. Parse timestamps to compare
+        // chronologically — RFC3339 fractional seconds are variable-length, so raw
+        // string comparison is not reliably ordered.
+        let mut snap_stmt = connection.prepare(
+            "SELECT captured_at, lowest_sell
+             FROM orderbook_snapshots
+             WHERE item_id = ?1 AND variant_key = ?2 AND seller_mode = ?3
+               AND captured_at >= ?4 AND captured_at <= ?5
+             ORDER BY captured_at ASC",
+        )?;
+        let snapshots: Vec<(OffsetDateTime, Option<f64>)> = snap_stmt
+            .query_map(
+                params![
+                    outcome.item_id,
+                    outcome.variant_key,
+                    outcome.seller_mode,
+                    outcome.recommended_at,
+                    holding_deadline
+                ],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<f64>>(1)?)),
+            )?
+            .filter_map(|r| r.ok())
+            .filter_map(|(ts, floor)| parse_timestamp(&ts).map(|dt| (dt, floor)))
+            .collect();
+
+        // No usable snapshots in a fully-elapsed window (item untracked or snapshots
+        // pruned). Mark it graded-as-abandoned so it stops blocking new emissions and
+        // doesn't accumulate as permanent pending state. realized_return stays NULL so
+        // it never pollutes the calibration buckets.
+        if snapshots.is_empty() {
+            connection.execute(
+                "UPDATE recommendation_outcomes SET
+                   entry_triggered = 0, exit_triggered = 0, outcome_graded_at = ?1
+                 WHERE outcome_id = ?2",
+                params![graded_at, outcome.outcome_id],
+            )?;
+            graded_count += 1;
+            continue;
+        }
+
+        let entry_hit = snapshots.iter().find(|(ts, floor)| {
+            *ts <= entry_deadline
+                && floor
+                    .zip(outcome.entry_zone_high)
+                    .map(|(f, z)| f <= z)
+                    .unwrap_or(false)
+        });
+        let (entry_triggered, entry_price, entry_time): (i64, Option<f64>, Option<OffsetDateTime>) =
+            match entry_hit {
+                Some((ts, floor)) => (1, *floor, Some(*ts)),
+                None => (0, None, None),
+            };
+
+        let last_floor = snapshots.last().and_then(|(_, f)| *f);
+        let (exit_triggered, exit_price, exit_time): (i64, Option<f64>, Option<OffsetDateTime>) =
+            if entry_triggered == 1 && entry_price.is_some() {
+                let entry_ts = entry_time.unwrap_or(rec_time);
+                match snapshots.iter().find(|(ts, floor)| {
+                    *ts >= entry_ts
+                        && floor
+                            .zip(outcome.exit_zone_low)
+                            .map(|(f, z)| f >= z)
+                            .unwrap_or(false)
+                }) {
+                    Some((ts, floor)) => (1, *floor, Some(*ts)),
+                    None => (0, None, None),
+                }
+            } else {
+                (0, None, None)
+            };
+
+        // Mark to market at the last observed floor when no exit fired (only relevant
+        // for entered trades — capital that got stuck still counts against the score).
+        let mark_to_market = if entry_triggered == 1 { last_floor } else { None };
+        let effective_exit = exit_price.or(mark_to_market);
+        let realized_return = entry_price.zip(effective_exit).and_then(|(entry, exit)| {
+            if entry > 0.0 {
+                Some((exit - entry) / entry)
+            } else {
+                None
+            }
+        });
+
+        let days_held = entry_time.map(|start| {
+            let end = exit_time.unwrap_or(holding_deadline_dt);
+            (end - start).whole_seconds().max(0) as f64 / 86400.0
+        });
+
+        let return_per_day = realized_return.zip(days_held).and_then(|(ret, days)| {
+            if days > 0.0 { Some(ret / days) } else { None }
+        });
+
+        let entry_triggered_at = entry_time.map(format_timestamp).transpose()?;
+        let exit_triggered_at = exit_time.map(format_timestamp).transpose()?;
+
+        connection.execute(
+            "UPDATE recommendation_outcomes SET
+               entry_triggered = ?1, entry_price = ?2, entry_triggered_at = ?3,
+               exit_triggered = ?4, exit_price = ?5, exit_triggered_at = ?6,
+               mark_to_market_price = ?7,
+               realized_return = ?8, return_per_day = ?9, days_held = ?10,
+               outcome_graded_at = ?11
+             WHERE outcome_id = ?12",
+            params![
+                entry_triggered,
+                entry_price,
+                entry_triggered_at,
+                exit_triggered,
+                exit_price,
+                exit_triggered_at,
+                mark_to_market,
+                realized_return,
+                return_per_day,
+                days_held,
+                graded_at,
+                outcome.outcome_id,
+            ],
+        )?;
+        graded_count += 1;
+    }
+
+    Ok(graded_count)
+}
+
+fn percentile_from_sorted(sorted: &[f64], p: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
+    Some(sorted[idx.min(sorted.len() - 1)])
+}
+
+fn build_bucket_stats(label: &str, returns: &mut Vec<f64>, hit_count: i64) -> BacktestBucketStats {
+    returns.sort_by(|a, b| a.total_cmp(b));
+    let trade_count = returns.len() as i64;
+    let hit_rate = if trade_count > 0 {
+        Some(hit_count as f64 / trade_count as f64)
+    } else {
+        None
+    };
+    BacktestBucketStats {
+        label: label.to_string(),
+        trade_count,
+        hit_rate,
+        median_return_pct: percentile_from_sorted(returns, 50.0).map(|r| r * 100.0),
+        median_days_held: None, // filled separately when needed
+        p25_return_pct: percentile_from_sorted(returns, 25.0).map(|r| r * 100.0),
+        p75_return_pct: percentile_from_sorted(returns, 75.0).map(|r| r * 100.0),
+    }
+}
+
+fn build_backtest_summary_inner(connection: &Connection) -> Result<BacktestSummary> {
+    let now = now_utc();
+    let generated_at = format_timestamp(now)?;
+
+    let total_graded: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM recommendation_outcomes WHERE outcome_graded_at IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    let total_pending: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM recommendation_outcomes WHERE outcome_graded_at IS NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    let total_open: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM recommendation_outcomes
+         WHERE outcome_graded_at IS NULL AND (entry_triggered IS NULL OR entry_triggered = 0)",
+        [],
+        |row| row.get(0),
+    )?;
+
+    // Rolling 30d hit rate over entered buy trades (fraction that reached exit).
+    // Filter to entry_triggered = 1 so trades that never opened — and abandoned rows
+    // with no snapshot data — don't drag the denominator down.
+    let rolling_cutoff = format_timestamp(now - TimeDuration::days(30))?;
+    let (rolling_hit_count, rolling_total): (i64, i64) = connection.query_row(
+        "SELECT
+           SUM(CASE WHEN exit_triggered = 1 THEN 1 ELSE 0 END),
+           COUNT(*)
+         FROM recommendation_outcomes
+         WHERE outcome_type = 'buy_trade'
+           AND outcome_graded_at IS NOT NULL
+           AND entry_triggered = 1
+           AND recommended_at >= ?1",
+        params![rolling_cutoff],
+        |row| Ok((row.get::<_, i64>(0).unwrap_or(0), row.get::<_, i64>(1).unwrap_or(0))),
+    )?;
+    let rolling_30d_hit_rate = if rolling_total > 0 {
+        Some(rolling_hit_count as f64 / rolling_total as f64)
+    } else {
+        None
+    };
+
+    // Per-action-label bucket stats for buy trades
+    let mut stmt = connection.prepare(
+        "SELECT suggested_action, realized_return, exit_triggered
+         FROM recommendation_outcomes
+         WHERE outcome_type = 'buy_trade' AND outcome_graded_at IS NOT NULL
+           AND entry_triggered = 1 AND realized_return IS NOT NULL",
+    )?;
+
+    struct GradedRow {
+        action: String,
+        realized_return: f64,
+        exit_triggered: i64,
+    }
+    let graded_rows: Vec<GradedRow> = stmt
+        .query_map([], |row| {
+            Ok(GradedRow {
+                action: row.get(0)?,
+                realized_return: row.get(1)?,
+                exit_triggered: row.get::<_, i64>(2).unwrap_or(0),
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let actions = ["Buy", "Hold", "Caution", "Wait"];
+    let mut buy_trade_stats: Vec<BacktestBucketStats> = actions
+        .iter()
+        .map(|label| {
+            let mut returns: Vec<f64> = graded_rows
+                .iter()
+                .filter(|r| r.action == *label)
+                .map(|r| r.realized_return)
+                .collect();
+            let hits = graded_rows
+                .iter()
+                .filter(|r| r.action == *label && r.exit_triggered == 1)
+                .count() as i64;
+            build_bucket_stats(label, &mut returns, hits)
+        })
+        .collect();
+
+    // Fill in median_days_held per bucket
+    let mut days_stmt = connection.prepare(
+        "SELECT suggested_action, days_held
+         FROM recommendation_outcomes
+         WHERE outcome_type = 'buy_trade' AND outcome_graded_at IS NOT NULL
+           AND entry_triggered = 1 AND days_held IS NOT NULL
+         ORDER BY days_held ASC",
+    )?;
+    let days_rows: Vec<(String, f64)> = days_stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for stat in &mut buy_trade_stats {
+        let mut days: Vec<f64> = days_rows
+            .iter()
+            .filter(|(a, _)| a == &stat.label)
+            .map(|(_, d)| *d)
+            .collect();
+        days.sort_by(|a, b| a.total_cmp(b));
+        stat.median_days_held = percentile_from_sorted(&days, 50.0);
+    }
+
+    Ok(BacktestSummary {
+        total_graded,
+        total_pending,
+        total_open,
+        buy_trade_stats,
+        rolling_30d_hit_rate,
+        rolling_30d_trade_count: rolling_total,
+        generated_at,
+    })
+}
+
+#[tauri::command]
+pub async fn grade_recommendation_outcomes(
+    app: tauri::AppHandle,
+) -> Result<i64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)
+            .map_err(|e| e.to_string())?;
+        grade_pending_outcomes_inner(&connection).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_backtest_summary(
+    app: tauri::AppHandle,
+) -> Result<BacktestSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_market_observatory_database(&app)
+            .map_err(|e| e.to_string())?;
+        // Grade any newly-eligible outcomes first so the summary is current.
+        let _ = grade_pending_outcomes_inner(&connection);
+        build_backtest_summary_inner(&connection).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -9606,6 +10218,10 @@ pub async fn refresh_market_tracking(
                 refreshed_items += 1;
             }
         }
+
+        // Grade outcomes whose holding window has elapsed. Best-effort: errors
+        // here must not block the snapshot refresh result.
+        let _ = grade_pending_outcomes_inner(&connection);
 
         Ok::<_, anyhow::Error>(TrackingRefreshSummary {
             refreshed_items,
@@ -10643,8 +11259,12 @@ mod tests {
     fn computes_pressure_ratio_and_labels() {
         let strong_entry = compute_pressure_ratio(100, 40, 20, 10).expect("ratio");
         assert!(strong_entry > 1.1);
-        assert_eq!(pressure_label(Some(strong_entry)), "Entry Pressure");
-        assert_eq!(pressure_label(Some(0.5)), "Exit Pressure");
+        // With enough buy orders the directional reading comes through.
+        assert_eq!(pressure_label(Some(strong_entry), 10), "Entry Pressure");
+        assert_eq!(pressure_label(Some(0.5), 10), "Exit Pressure");
+        // Below the minimum buy-order count the signal is gated to Balanced.
+        assert_eq!(pressure_label(Some(strong_entry), 2), "Balanced");
+        assert_eq!(pressure_label(Some(0.5), 2), "Balanced");
     }
 
     #[test]
@@ -11855,11 +12475,15 @@ mod tests {
         });
         let mut shared_price_model_cache = std::collections::HashMap::new();
         shared_price_model_cache.insert(42_i64, cached_model.clone());
+        let shared_price_model_cache =
+            std::sync::Arc::new(std::sync::Mutex::new(shared_price_model_cache));
+        let (write_tx, _write_rx) = std::sync::mpsc::channel();
         let mut refreshed_statistics_count = 0usize;
 
         let reused = super::get_or_build_scanner_price_model(
             &connection,
-            &mut shared_price_model_cache,
+            &shared_price_model_cache,
+            &write_tx,
             42,
             "example_prime_part",
             &mut refreshed_statistics_count,

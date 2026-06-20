@@ -4,6 +4,7 @@ import {
   getWfmAutocompleteItems,
   getItemAnalytics,
   getItemDetailSummary,
+  getBacktestSummary,
   openExternalUrl,
   stopMarketTracking,
 } from '../../lib/tauriClient';
@@ -18,6 +19,8 @@ import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   AnalyticsChartPoint,
+  BacktestBucketStats,
+  BacktestSummary,
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
   ItemDetailSummary,
@@ -1826,6 +1829,7 @@ function AnalyticsTab() {
   const sellerMode = useAppStore((state) => state.sellerMode);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
+  const [backtestSummary, setBacktestSummary] = useState<BacktestSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -1922,6 +1926,10 @@ function AnalyticsTab() {
       ).catch(() => undefined);
     };
   }, [selectedItem, selectedMarketVariantKey, refreshNonce, chartDomain, chartBucket, sellerMode]);
+
+  useEffect(() => {
+    getBacktestSummary().then(setBacktestSummary).catch(() => undefined);
+  }, []);
 
   const trendMetrics =
     analytics?.trendQualityBreakdown.tabs[trendTab] ??
@@ -2224,11 +2232,46 @@ function AnalyticsTab() {
                   ))}
                 </div>
                 <ConfidenceNote confidence={analytics?.actionCard.confidenceSummary} />
+                <ActionCardTrackRecord
+                  action={analytics?.actionCard.suggestedAction ?? null}
+                  backtestSummary={backtestSummary}
+                />
               </div>
             </AnalyticsPanel>
           </div>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function ActionCardTrackRecord({
+  action,
+  backtestSummary,
+}: {
+  action: string | null;
+  backtestSummary: BacktestSummary | null;
+}) {
+  if (!action || !backtestSummary) return null;
+
+  const stats = backtestSummary.buyTradeStats.find((s) => s.label === action);
+
+  if (!stats || stats.tradeCount < 5 || stats.hitRate === null || stats.medianReturnPct === null) {
+    return null;
+  }
+
+  const hitPct = Math.round(stats.hitRate * 100);
+  const returnSign = stats.medianReturnPct >= 0 ? '+' : '';
+  const dayNote = stats.medianDaysHeld !== null ? ` over ~${stats.medianDaysHeld.toFixed(1)}d` : '';
+  const tone =
+    stats.medianReturnPct >= 5 ? 'green' : stats.medianReturnPct >= 0 ? 'amber' : 'red';
+
+  return (
+    <div className={`market-track-record tone-${tone}`}>
+      <span className="market-track-record-label">Track record</span>
+      <span>
+        {`${action} signals here: ${hitPct}% hit rate, median ${returnSign}${stats.medianReturnPct.toFixed(1)}%${dayNote} (${stats.tradeCount} graded trades)`}
+      </span>
     </div>
   );
 }
@@ -3171,6 +3214,214 @@ function AnalysisTab() {
   );
 }
 
+// ─── Calibration tab ──────────────────────────────────────────────────────────
+
+const MIN_TRADES_FOR_DISPLAY = 5;
+
+function formatReturnPct(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  const sign = value >= 0 ? '+' : '';
+  return `${sign}${value.toFixed(1)}%`;
+}
+
+function returnTone(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  return value >= 5 ? ' tone-green' : value >= 0 ? ' tone-amber' : ' tone-red';
+}
+
+function CalibrationBucketCard({ stat }: { stat: BacktestBucketStats }) {
+  const enough = stat.tradeCount >= MIN_TRADES_FOR_DISPLAY;
+  const hitPct = stat.hitRate !== null ? Math.round(stat.hitRate * 100) : null;
+
+  return (
+    <div className="card market-panel calib-bucket-card">
+      <div className="card-header">
+        <div className="market-panel-header">
+          <div className="market-panel-header-copy">
+            <span className="panel-title-eyebrow">Action</span>
+            <span className="card-label">{stat.label}</span>
+          </div>
+          {enough && hitPct !== null && (
+            <div className="market-panel-header-aside">
+              <span className={`market-panel-badge${returnTone(stat.medianReturnPct)}`}>
+                {hitPct}% hit
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="card-body market-panel-body">
+        {!enough ? (
+          <p className="calib-insufficient">
+            {stat.tradeCount === 0
+              ? 'No graded trades yet.'
+              : `Only ${stat.tradeCount} graded trade${stat.tradeCount === 1 ? '' : 's'} — need ${MIN_TRADES_FOR_DISPLAY} to show stats.`}
+          </p>
+        ) : (
+          <>
+            <div className="market-metric-grid">
+              <div className="market-metric-card">
+                <span className="market-metric-label">Median Return</span>
+                <span className={`market-metric-value${returnTone(stat.medianReturnPct)}`}>
+                  {formatReturnPct(stat.medianReturnPct)}
+                </span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Hit Rate</span>
+                <span className="market-metric-value">{hitPct !== null ? `${hitPct}%` : '—'}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Trades</span>
+                <span className="market-metric-value">{stat.tradeCount}</span>
+              </div>
+              <div className="market-metric-card">
+                <span className="market-metric-label">Median Days Held</span>
+                <span className="market-metric-value">
+                  {stat.medianDaysHeld !== null ? `${stat.medianDaysHeld?.toFixed(1)}d` : '—'}
+                </span>
+              </div>
+            </div>
+            <div className="calib-return-band">
+              <span className="market-copy-title">Return range (p25 → p75)</span>
+              <span className={`calib-band-value${returnTone(stat.p25ReturnPct)}`}>
+                {formatReturnPct(stat.p25ReturnPct)}
+              </span>
+              <span className="calib-band-sep">→</span>
+              <span className={`calib-band-value${returnTone(stat.p75ReturnPct)}`}>
+                {formatReturnPct(stat.p75ReturnPct)}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CalibrationTab() {
+  const [summary, setSummary] = useState<BacktestSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    getBacktestSummary()
+      .then(setSummary)
+      .catch((err: unknown) => setError(String(err)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const rolling30dHitPct =
+    summary?.rolling30dHitRate !== null && summary?.rolling30dHitRate !== undefined
+      ? Math.round(summary.rolling30dHitRate * 100)
+      : null;
+
+  return (
+    <div className="market-page-content">
+      <div className="market-page-scroll-area" style={{ paddingTop: 16 }}>
+        <div className="market-analytics-grid">
+
+          <AnalyticsPanel
+            title="Backtest Status"
+            eyebrow="Track Record"
+            info="Live counts of how many recommendations have been graded (holding window elapsed) vs. still open. Grading runs automatically each time you open this tab."
+            loading={loading}
+            loadingLabel="Loading backtest data"
+          >
+            {error ? (
+              <p className="calib-insufficient">{error}</p>
+            ) : (
+              <div className="market-pressure-row">
+                <div>
+                  <span className="market-copy-title">Graded</span>
+                  <span>{summary?.totalGraded ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="market-copy-title">Pending</span>
+                  <span>{summary?.totalPending ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="market-copy-title">Open Positions</span>
+                  <span>{summary?.totalOpen ?? '—'}</span>
+                </div>
+              </div>
+            )}
+            {!error && summary && (
+              <div className="market-copy-block" style={{ marginTop: 8 }}>
+                <span className="market-copy-title">Rolling 30-day hit rate (buy trades)</span>
+                <span
+                  className={`calib-rolling-hit${returnTone(rolling30dHitPct)}`}
+                >
+                  {rolling30dHitPct !== null
+                    ? `${rolling30dHitPct}% across ${summary.rolling30dTradeCount} graded trade${summary.rolling30dTradeCount === 1 ? '' : 's'}`
+                    : 'Not enough data yet'}
+                </span>
+              </div>
+            )}
+          </AnalyticsPanel>
+
+          <AnalyticsPanel
+            title="Buy Trade Calibration"
+            eyebrow="Buy / Hold / Caution / Wait"
+            info="For each suggested action, shows the realized median return, hit rate (exit zone reached within 7 days), and interquartile return range across all graded buy trades. Needs at least 5 graded trades per label to display."
+            loading={loading}
+            loadingLabel="Loading calibration data"
+          >
+            {error ? (
+              <p className="calib-insufficient">{error}</p>
+            ) : (
+              <div className="calib-bucket-grid">
+                {(summary?.buyTradeStats ?? []).map((stat) => (
+                  <CalibrationBucketCard key={stat.label} stat={stat} />
+                ))}
+              </div>
+            )}
+          </AnalyticsPanel>
+
+          <AnalyticsPanel
+            title="How This Works"
+            eyebrow="Methodology"
+            info="Describes the backtest trade model used to grade recommendations."
+          >
+            <div className="market-copy-block">
+              <span className="market-copy-title">Entry model</span>
+              <p>
+                Each time analytics are computed for a tracked item, one recommendation is recorded
+                (at most once per 6 hours per item). Entry is considered triggered if the live floor
+                drops into the entry zone within 48 hours.
+              </p>
+            </div>
+            <div className="market-copy-block">
+              <span className="market-copy-title">Exit model</span>
+              <p>
+                After entry, exit is triggered if the floor rises to the exit zone low within 7 days.
+                If no exit occurs, the trade is marked to market at the floor on day 7.
+              </p>
+            </div>
+            <div className="market-copy-block">
+              <span className="market-copy-title">Realized return</span>
+              <p>
+                (exit price − entry price) ÷ entry price. No transaction fee. Mark-to-market is
+                used when the exit zone is not reached, so stuck capital is counted against the score.
+              </p>
+            </div>
+            <div className="market-copy-block">
+              <span className="market-copy-title">Limitations</span>
+              <p>
+                Floor price is used as a fill proxy — real fills depend on availability and
+                counterparty online status. The first several weeks of data will show low trade
+                counts; the calibration becomes meaningful once 5+ trades per action bucket are graded.
+              </p>
+            </div>
+          </AnalyticsPanel>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MarketPage() {
   const marketSubTab = useAppStore((s) => s.marketSubTab);
   const setMarketSubTab = useAppStore((s) => s.setMarketSubTab);
@@ -3184,7 +3435,7 @@ export function MarketPage() {
       <div className="subnav market-page-subnav">
         <div className="subnav-left">
           <span className="page-title">Market</span>
-          {(['analysis', 'analytics'] as const).map((tab) => (
+          {(['analysis', 'analytics', 'calibration'] as const).map((tab) => (
             <span
               key={tab}
               className={`subtab${marketSubTab === tab ? ' active' : ''}`}
@@ -3199,7 +3450,7 @@ export function MarketPage() {
         </div>
       </div>
 
-      {marketSubTab === 'analytics' ? <AnalyticsTab /> : <AnalysisTab />}
+      {marketSubTab === 'analytics' ? <AnalyticsTab /> : marketSubTab === 'calibration' ? <CalibrationTab /> : <AnalysisTab />}
     </>
   );
 }

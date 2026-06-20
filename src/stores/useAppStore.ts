@@ -1316,8 +1316,8 @@ interface AppStore {
   tradePeriod: TradePeriod;
   setTradePeriod: (p: TradePeriod) => void;
 
-  marketSubTab: 'analysis' | 'analytics';
-  setMarketSubTab: (tab: 'analysis' | 'analytics') => void;
+  marketSubTab: 'analysis' | 'analytics' | 'calibration';
+  setMarketSubTab: (tab: 'analysis' | 'analytics' | 'calibration') => void;
 
   eventsSubTab: 'active-events' | 'void-trader' | 'fissures' | 'activities' | 'market-news';
   setEventsSubTab: (tab: 'active-events' | 'void-trader' | 'fissures' | 'activities' | 'market-news') => void;

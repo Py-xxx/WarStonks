@@ -9,6 +9,7 @@ use crate::settings::{
     DiscordTradeDetectedNotificationInput, DiscordTradeNotificationItem,
 };
 use anyhow::{anyhow, Context, Result};
+use keyring::Entry as KeychainEntry;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::blocking::Client;
 use reqwest::Method;
@@ -19,7 +20,7 @@ use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
 use time::format_description::well_known::Rfc3339;
@@ -36,6 +37,9 @@ const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const TRADES_CREDENTIALS_FILE_NAME: &str = "wfm-credentials.json";
+const KEYCHAIN_SERVICE: &str = "warstonks";
+const KEYCHAIN_WFM_SESSION_KEY: &str = "wfm-session";
+const KEYCHAIN_WFM_CREDENTIALS_KEY: &str = "wfm-credentials";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
@@ -687,24 +691,26 @@ fn shared_wfm_client() -> Result<Client> {
     }
 }
 
-fn build_trades_session_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve app data directory")?;
-    Ok(app_data_dir
-        .join(TRADES_DIR_NAME)
-        .join(TRADES_SESSION_FILE_NAME))
+
+fn session_cache() -> &'static Mutex<Option<StoredTradeSession>> {
+    static CACHE: OnceLock<Mutex<Option<StoredTradeSession>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
 }
 
-fn build_trades_credentials_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve app data directory")?;
-    Ok(app_data_dir
-        .join(TRADES_DIR_NAME)
-        .join(TRADES_CREDENTIALS_FILE_NAME))
+fn get_session_from_cache() -> Option<StoredTradeSession> {
+    session_cache().lock().ok().and_then(|g| g.clone())
+}
+
+fn set_session_in_cache(session: &StoredTradeSession) {
+    if let Ok(mut guard) = session_cache().lock() {
+        *guard = Some(session.clone());
+    }
+}
+
+fn clear_session_cache() {
+    if let Ok(mut guard) = session_cache().lock() {
+        *guard = None;
+    }
 }
 
 fn build_item_catalog_path(app: &tauri::AppHandle) -> Result<PathBuf> {
@@ -741,83 +747,103 @@ fn build_trade_set_map_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     Ok(app_data_dir.join("data").join(TRADE_SET_MAP_FILE_NAME))
 }
 
-fn load_session_from_path(path: &Path) -> Result<Option<StoredTradeSession>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read trade session at {}", path.display()))?;
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let session = serde_json::from_str::<StoredTradeSession>(&raw)
-        .with_context(|| format!("failed to parse trade session at {}", path.display()))?;
-    Ok(Some(session))
-}
-
-fn save_session_to_path(path: &Path, session: &StoredTradeSession) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create trades directory {}", parent.display()))?;
-    }
-
-    let mut updated = session.clone();
-    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    let serialized =
-        serde_json::to_string_pretty(&updated).context("failed to serialize trade session")?;
-    fs::write(path, serialized)
-        .with_context(|| format!("failed to write trade session at {}", path.display()))
-}
-
-fn clear_session_path(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_file(path)
-            .with_context(|| format!("failed to remove trade session at {}", path.display()))?;
-    }
-    Ok(())
-}
-
 fn load_trade_credentials(app: &tauri::AppHandle) -> Result<Option<StoredTradeCredentials>> {
-    let path = build_trades_credentials_path(app)?;
-    if !path.exists() {
-        return Ok(None);
+    let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_CREDENTIALS_KEY)
+        .context("failed to open keychain for WFM credentials")?;
+    match entry.get_password() {
+        Ok(json) => {
+            let creds = serde_json::from_str::<StoredTradeCredentials>(&json)
+                .context("failed to parse WFM credentials from keychain")?;
+            Ok(Some(creds))
+        }
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => {
+            log_feature_error_best_effort(
+                app,
+                "trades-session",
+                "load-credentials-keychain",
+                "Failed to read WFM credentials from the OS keychain — user will need to sign in again.",
+                &anyhow!("{error}"),
+            );
+            Ok(None)
+        }
     }
-
-    let raw = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read trade credentials at {}", path.display()))?;
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let creds = serde_json::from_str::<StoredTradeCredentials>(&raw)
-        .with_context(|| format!("failed to parse trade credentials at {}", path.display()))?;
-    Ok(Some(creds))
 }
 
-fn save_trade_credentials(app: &tauri::AppHandle, creds: &StoredTradeCredentials) -> Result<()> {
-    let path = build_trades_credentials_path(app)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create trades directory {}", parent.display()))?;
-    }
-
+fn save_trade_credentials(_app: &tauri::AppHandle, creds: &StoredTradeCredentials) -> Result<()> {
+    let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_CREDENTIALS_KEY)
+        .context("failed to open keychain for WFM credentials")?;
     let mut updated = creds.clone();
     updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    let serialized =
-        serde_json::to_string_pretty(&updated).context("failed to serialize trade credentials")?;
-    fs::write(&path, serialized)
-        .with_context(|| format!("failed to write trade credentials at {}", path.display()))
+    let json =
+        serde_json::to_string(&updated).context("failed to serialize WFM credentials")?;
+    entry
+        .set_password(&json)
+        .context("failed to save WFM credentials to the OS keychain")
 }
 
-fn clear_trade_credentials(app: &tauri::AppHandle) -> Result<()> {
-    let path = build_trades_credentials_path(app)?;
-    if path.exists() {
-        fs::remove_file(&path)
-            .with_context(|| format!("failed to remove trade credentials at {}", path.display()))?;
+fn clear_trade_credentials(_app: &tauri::AppHandle) -> Result<()> {
+    let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_CREDENTIALS_KEY)
+        .context("failed to open keychain for WFM credentials")?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(anyhow!("failed to clear WFM credentials from keychain: {error}")),
     }
-    Ok(())
+}
+
+fn load_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
+    let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_SESSION_KEY)
+        .context("failed to open keychain for WFM session")?;
+    match entry.get_password() {
+        Ok(json) => {
+            let session = serde_json::from_str::<StoredTradeSession>(&json)
+                .context("failed to parse WFM session from keychain")?;
+            Ok(Some(session))
+        }
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => {
+            log_feature_error_best_effort(
+                app,
+                "trades-session",
+                "load-session-keychain",
+                "Failed to read WFM session from the OS keychain.",
+                &anyhow!("{error}"),
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn save_session(_app: &tauri::AppHandle, session: &StoredTradeSession) -> Result<()> {
+    let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_SESSION_KEY)
+        .context("failed to open keychain for WFM session")?;
+    let mut updated = session.clone();
+    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    let json = serde_json::to_string(&updated).context("failed to serialize WFM session")?;
+    entry
+        .set_password(&json)
+        .context("failed to save WFM session to the OS keychain")
+}
+
+fn clear_session(_app: &tauri::AppHandle) -> Result<()> {
+    let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_SESSION_KEY)
+        .context("failed to open keychain for WFM session")?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(anyhow!("failed to clear WFM session from keychain: {error}")),
+    }
+}
+
+fn cleanup_legacy_trade_files(app: &tauri::AppHandle) {
+    let Ok(app_data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    for name in [TRADES_SESSION_FILE_NAME, TRADES_CREDENTIALS_FILE_NAME] {
+        let path = app_data_dir.join(TRADES_DIR_NAME).join(name);
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
@@ -3577,6 +3603,109 @@ fn load_trade_set_components_for_slug(
     Ok(Vec::new())
 }
 
+fn write_trade_log_rows_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    username: &str,
+    entries: &[PortfolioTradeLogEntry],
+    last_updated_at: &str,
+) -> Result<()> {
+    let mut insert_statement = tx
+        .prepare(
+            "
+            INSERT INTO portfolio_trade_log_cache (
+              username,
+              order_id,
+              item_name,
+              slug,
+              image_path,
+              order_type,
+              source,
+              platinum,
+              quantity,
+              rank,
+              closed_at,
+              updated_at,
+              group_id,
+              group_label,
+              group_total_platinum,
+              group_item_count,
+              allocation_total_platinum,
+              group_sort_order,
+              keep_item
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+              COALESCE(
+                (SELECT keep_item
+                 FROM portfolio_trade_log_overrides
+                 WHERE username = ?1 AND order_id = ?2),
+                ?19
+              )
+            )
+            ON CONFLICT(username, order_id) DO UPDATE SET
+              item_name = excluded.item_name,
+              slug = excluded.slug,
+              image_path = excluded.image_path,
+              order_type = excluded.order_type,
+              source = excluded.source,
+              platinum = excluded.platinum,
+              quantity = excluded.quantity,
+              rank = excluded.rank,
+              closed_at = excluded.closed_at,
+              updated_at = excluded.updated_at,
+              group_id = excluded.group_id,
+              group_label = excluded.group_label,
+              group_total_platinum = excluded.group_total_platinum,
+              group_item_count = excluded.group_item_count,
+              allocation_total_platinum = excluded.allocation_total_platinum,
+              group_sort_order = excluded.group_sort_order
+            ",
+        )
+        .context("failed to prepare trade log cache upsert")?;
+
+    for entry in entries {
+        insert_statement
+            .execute(params![
+                username,
+                entry.id,
+                entry.item_name,
+                entry.slug,
+                entry.image_path,
+                entry.order_type,
+                entry.source,
+                entry.platinum,
+                entry.quantity,
+                entry.rank,
+                entry.closed_at,
+                entry.updated_at,
+                entry.group_id,
+                entry.group_label,
+                entry.group_total_platinum,
+                entry.group_item_count,
+                entry.allocation_total_platinum,
+                entry.group_sort_order.unwrap_or(0),
+                if entry.keep_item { 1 } else { 0 },
+            ])
+            .context("failed to upsert cached trade log row")?;
+    }
+
+    tx.execute(
+        "
+        INSERT INTO portfolio_trade_log_cache_meta (
+          username,
+          last_updated_at,
+          entry_count
+        ) VALUES (?1, ?2, ?3)
+        ON CONFLICT(username) DO UPDATE SET
+          last_updated_at = excluded.last_updated_at,
+          entry_count = excluded.entry_count
+        ",
+        params![username, last_updated_at, entries.len() as i64],
+    )
+    .context("failed to upsert cached trade log metadata")?;
+
+    Ok(())
+}
+
 fn save_trade_log_rows_inner(
     connection: &mut Connection,
     username: &str,
@@ -3588,109 +3717,13 @@ fn save_trade_log_rows_inner(
     }
 
     let last_updated_at = format_timestamp(now_utc())?;
-    let transaction = connection
+    let tx = connection
         .transaction()
         .context("failed to start trade log cache transaction")?;
 
-    {
-        let mut insert_statement = transaction
-            .prepare(
-                "
-                INSERT INTO portfolio_trade_log_cache (
-                  username,
-                  order_id,
-                  item_name,
-                  slug,
-                  image_path,
-                  order_type,
-                  source,
-                  platinum,
-                  quantity,
-                  rank,
-                  closed_at,
-                  updated_at,
-                  group_id,
-                  group_label,
-                  group_total_platinum,
-                  group_item_count,
-                  allocation_total_platinum,
-                  group_sort_order,
-                  keep_item
-                ) VALUES (
-                  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                  COALESCE(
-                    (SELECT keep_item
-                     FROM portfolio_trade_log_overrides
-                     WHERE username = ?1 AND order_id = ?2),
-                    ?19
-                  )
-                )
-                ON CONFLICT(username, order_id) DO UPDATE SET
-                  item_name = excluded.item_name,
-                  slug = excluded.slug,
-                  image_path = excluded.image_path,
-                  order_type = excluded.order_type,
-                  source = excluded.source,
-                  platinum = excluded.platinum,
-                  quantity = excluded.quantity,
-                  rank = excluded.rank,
-                  closed_at = excluded.closed_at,
-                  updated_at = excluded.updated_at,
-                  group_id = excluded.group_id,
-                  group_label = excluded.group_label,
-                  group_total_platinum = excluded.group_total_platinum,
-                  group_item_count = excluded.group_item_count,
-                  allocation_total_platinum = excluded.allocation_total_platinum,
-                  group_sort_order = excluded.group_sort_order
-                ",
-            )
-            .context("failed to prepare trade log cache upsert")?;
+    write_trade_log_rows_in_transaction(&tx, trimmed_username, entries, &last_updated_at)?;
 
-        for entry in entries {
-            insert_statement
-                .execute(params![
-                    trimmed_username,
-                    entry.id,
-                    entry.item_name,
-                    entry.slug,
-                    entry.image_path,
-                    entry.order_type,
-                    entry.source,
-                    entry.platinum,
-                    entry.quantity,
-                    entry.rank,
-                    entry.closed_at,
-                    entry.updated_at,
-                    entry.group_id,
-                    entry.group_label,
-                    entry.group_total_platinum,
-                    entry.group_item_count,
-                    entry.allocation_total_platinum,
-                    entry.group_sort_order.unwrap_or(0),
-                    if entry.keep_item { 1 } else { 0 },
-                ])
-                .context("failed to upsert cached trade log row")?;
-        }
-    }
-
-    transaction
-        .execute(
-            "
-            INSERT INTO portfolio_trade_log_cache_meta (
-              username,
-              last_updated_at,
-              entry_count
-            ) VALUES (?1, ?2, ?3)
-            ON CONFLICT(username) DO UPDATE SET
-              last_updated_at = excluded.last_updated_at,
-              entry_count = excluded.entry_count
-            ",
-            params![trimmed_username, last_updated_at, entries.len() as i64],
-        )
-        .context("failed to upsert cached trade log metadata")?;
-
-    transaction
-        .commit()
+    tx.commit()
         .context("failed to commit trade log cache transaction")?;
 
     Ok(last_updated_at)
@@ -3708,14 +3741,21 @@ fn replace_trade_log_rows_inner(
         ));
     }
 
-    connection
-        .execute(
-            "DELETE FROM portfolio_trade_log_cache WHERE username = ?1",
-            params![trimmed_username],
-        )
-        .context("failed to clear cached trade log rows for replacement")?;
+    let last_updated_at = format_timestamp(now_utc())?;
+    let tx = connection
+        .transaction()
+        .context("failed to start trade log replacement transaction")?;
 
-    let last_updated_at = save_trade_log_rows_inner(connection, trimmed_username, entries)?;
+    tx.execute(
+        "DELETE FROM portfolio_trade_log_cache WHERE username = ?1",
+        params![trimmed_username],
+    )
+    .context("failed to clear cached trade log rows for replacement")?;
+
+    write_trade_log_rows_in_transaction(&tx, trimmed_username, entries, &last_updated_at)?;
+
+    tx.commit()
+        .context("failed to commit trade log replacement transaction")?;
 
     // NOTE: stale override pruning is intentionally deferred to
     // reconcile_trade_log_state_inner, which runs after
@@ -6016,67 +6056,42 @@ fn restore_saved_trade_session(app: &tauri::AppHandle) -> Result<Option<StoredTr
 
     let session = sign_in_inner(&input)?;
     save_session(app, &session)?;
+    set_session_in_cache(&session);
     Ok(Some(session))
 }
 
-fn load_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
-    let path = build_trades_session_path(app)?;
-    load_session_from_path(&path)
-}
-
-fn save_session(app: &tauri::AppHandle, session: &StoredTradeSession) -> Result<()> {
-    let path = build_trades_session_path(app)?;
-    save_session_to_path(&path, session)
-}
-
-fn clear_session(app: &tauri::AppHandle) -> Result<()> {
-    let path = build_trades_session_path(app)?;
-    clear_session_path(&path)
-}
-
 fn ensure_authenticated_session(app: &tauri::AppHandle) -> Result<StoredTradeSession> {
-    let client = shared_wfm_client()?;
-    if let Some(mut session) = load_session(app)? {
-        match fetch_me_with_token(&client, &session.token) {
-            Ok(account) => {
-                session.account = account;
-                save_session(app, &session)?;
-                return Ok(session);
-            }
-            Err(error) if should_attempt_trade_session_reauth(&error) => {
-                log_feature_error_best_effort(
-                    app,
-                    "trades-session",
-                    "validate-session",
-                    "Stored Warframe Market session appears to be expired. Attempting automatic re-authentication.",
-                    &error,
-                );
-                clear_session(app)?;
-                if let Some(session) = restore_saved_trade_session(app)? {
-                    return Ok(session);
-                }
-                return Err(anyhow!("Warframe Market session expired. Please sign in again."));
-            }
-            Err(error) => {
-                log_feature_error_best_effort(
-                    app,
-                    "trades-session",
-                    "validate-session",
-                    "Failed to verify the current Warframe Market session.",
-                    &error,
-                );
-                return Err(anyhow!(
-                    "Couldn’t verify your Warframe Market session right now."
-                ));
-            }
-        }
-    }
-
-    if let Some(session) = restore_saved_trade_session(app)? {
+    // Return the in-memory cached session without any network call. The token is
+    // trusted until an actual WFM API call returns 401, at which point the caller
+    // clears the cache and this function re-auths from credentials.
+    if let Some(session) = get_session_from_cache() {
         return Ok(session);
     }
 
+    // Cache miss: try the keychain-persisted session token first to avoid a full
+    // credential re-auth (which counts against WFM login rate limits).
+    if let Some(session) = load_session(app)? {
+        set_session_in_cache(&session);
+        return Ok(session);
+    }
+
+    // No persisted token: sign in with saved credentials.
+    if let Some(session) = restore_saved_trade_session(app)? {
+        return Ok(session); // restore_saved_trade_session populates the cache
+    }
+
     Err(anyhow!("Sign in to Warframe Market first."))
+}
+
+/// Clears the in-memory and persisted session, then re-authenticates from saved
+/// credentials. Called when a real WFM API call returns a 401/auth error.
+fn reauth_session(app: &tauri::AppHandle) -> Result<StoredTradeSession> {
+    clear_session_cache();
+    let _ = clear_session(app);
+    if let Some(session) = restore_saved_trade_session(app)? {
+        return Ok(session);
+    }
+    Err(anyhow!("Warframe Market session expired. Please sign in again."))
 }
 
 fn refresh_trade_session_status_if_possible(
@@ -6202,9 +6217,24 @@ fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
 }
 
 fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
-    let session = ensure_authenticated_session(app)?;
+    let mut session = ensure_authenticated_session(app)?;
     let connection = open_catalog_database(app)?;
-    let orders = fetch_my_orders(&shared_wfm_client()?, &session.token)?;
+    let client = shared_wfm_client()?;
+    let orders = match fetch_my_orders(&client, &session.token) {
+        Ok(orders) => orders,
+        Err(ref error) if should_attempt_trade_session_reauth(error) => {
+            log_feature_error_best_effort(
+                app,
+                "trades-session",
+                "reauth-on-401",
+                "WFM orders fetch returned an auth error — re-authenticating automatically.",
+                error,
+            );
+            session = reauth_session(app)?;
+            fetch_my_orders(&client, &session.token)?
+        }
+        Err(error) => return Err(error),
+    };
     let mut sell_orders = Vec::new();
     let mut buy_orders = Vec::new();
 
@@ -6293,7 +6323,7 @@ fn create_order_inner(
         payload["rank"] = json!(rank);
     }
 
-    execute_wfm_request_with_priority(
+    let result = execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::POST,
@@ -6303,7 +6333,16 @@ fn create_order_inner(
         .json(&payload),
         &format!("create {order_type} order"),
         RequestPriority::Instant,
-    )?;
+    );
+    if let Err(ref error) = result {
+        if should_attempt_trade_session_reauth(error) {
+            // Clear the stale cached token so the next call re-authenticates automatically.
+            // Don't silently retry mutations — let the caller surface the error.
+            clear_session_cache();
+            let _ = clear_session(app);
+        }
+    }
+    result?;
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -6334,7 +6373,7 @@ fn update_order_inner(
         payload["rank"] = json!(rank);
     }
 
-    execute_wfm_request_with_priority(
+    let result = execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::PATCH,
@@ -6344,7 +6383,14 @@ fn update_order_inner(
         .json(&payload),
         &format!("update {order_type} order"),
         RequestPriority::Instant,
-    )?;
+    );
+    if let Err(ref error) = result {
+        if should_attempt_trade_session_reauth(error) {
+            clear_session_cache();
+            let _ = clear_session(app);
+        }
+    }
+    result?;
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -6365,7 +6411,7 @@ fn close_order_inner(
         return Err(anyhow!("Quantity to close must be greater than zero."));
     }
 
-    execute_wfm_request_with_priority(
+    let result = execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::POST,
@@ -6375,7 +6421,14 @@ fn close_order_inner(
         .json(&json!({ "quantity": quantity })),
         &format!("close {order_type} order"),
         RequestPriority::Instant,
-    )?;
+    );
+    if let Err(ref error) = result {
+        if should_attempt_trade_session_reauth(error) {
+            clear_session_cache();
+            let _ = clear_session(app);
+        }
+    }
+    result?;
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -6392,7 +6445,7 @@ fn delete_order_inner(
         return Err(anyhow!("Unsupported order type."));
     }
 
-    execute_wfm_request_with_priority(
+    let result = execute_wfm_request_with_priority(
         send_wfm_request(
             &client,
             Method::DELETE,
@@ -6401,7 +6454,14 @@ fn delete_order_inner(
         ),
         &format!("delete {order_type} order"),
         RequestPriority::Instant,
-    )?;
+    );
+    if let Err(ref error) = result {
+        if should_attempt_trade_session_reauth(error) {
+            clear_session_cache();
+            let _ = clear_session(app);
+        }
+    }
+    result?;
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -6437,6 +6497,7 @@ pub async fn sign_in_wfm_trade_account(
         move || {
             let session = sign_in_inner(&input)?;
             save_session(&app, &session)?;
+            set_session_in_cache(&session);
             Ok::<StoredTradeSession, anyhow::Error>(session)
         }
     })
@@ -6476,6 +6537,7 @@ pub async fn sign_in_wfm_trade_account(
 #[tauri::command]
 pub async fn sign_out_wfm_trade_account(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        clear_session_cache();
         clear_session(&app)?;
         clear_trade_credentials(&app)
     })
@@ -6490,7 +6552,10 @@ pub async fn try_auto_sign_in_wfm_trade_account(
 ) -> Result<TradeSessionState, String> {
     tauri::async_runtime::spawn_blocking({
         let app = app.clone();
-        move || try_restore_trade_session_state(&app)
+        move || {
+            cleanup_legacy_trade_files(&app);
+            try_restore_trade_session_state(&app)
+        }
     })
     .await
     .map_err(|error| error.to_string())?
@@ -6518,7 +6583,10 @@ pub async fn set_wfm_trade_status(
     tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         let session = session.clone();
-        move || save_session(&app, &session)
+        move || {
+            set_session_in_cache(&session);
+            save_session(&app, &session)
+        }
     })
     .await
     .map_err(|error| error.to_string())?
@@ -6798,19 +6866,26 @@ pub async fn delete_wfm_buy_order(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_cost_basis_confidence, build_trade_log_entries_from_statistics,
-        build_trade_notification_fingerprint, collapse_grouped_trade_sets,
-        compute_cost_basis_coverage, compute_current_value_coverage,
+        append_unique_trade_entries, build_cost_basis_confidence,
+        build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
+        build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
+        compute_current_value_coverage, decide_trade_health,
         derive_trade_log_entries_with_components, initialize_trades_cache_schema,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
-        merge_wfm_trade_log_entries, normalize_alecaframe_trade_payload, normalize_avatar_url,
-        normalize_status_set_request, parse_status_from_payload, save_trade_log_rows_inner,
-        trade_record_is_before_cutoff, AlecaframeRawTradeRecord, AlecaframeTradeItemRecord,
-        AlecaframeTradeResponse, PortfolioTradeLogEntry, StoredTradeLogRecord,
-        TradeSetComponentRecord, TradeSetRootRecord, WfmProfileClosedOrder,
-        WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName, WfmProfileStatisticsPayload,
+        map_trade_set_components_from_file, merge_wfm_trade_log_entries,
+        normalize_alecaframe_trade_payload, normalize_avatar_url, normalize_status_set_request,
+        parse_status_from_payload, replace_trade_log_rows_inner, save_trade_log_rows_inner,
+        should_attempt_trade_session_reauth, trade_record_is_before_cutoff,
+        AlecaframeRawTradeRecord, AlecaframeTradeItemRecord, AlecaframeTradeResponse,
+        PortfolioTradeLogEntry, StoredTradeLogRecord, TradeSetComponentRecord,
+        TradeSetMapComponentRecord, TradeSetMapFile, TradeSetMapSetRecord, TradeSetRootRecord,
+        WfmProfileClosedOrder, WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName,
+        WfmProfileStatisticsPayload,
     };
+    use crate::market_observatory::CachedTradeHealthContext;
     use crate::settings::DiscordTradeNotificationItem;
+    use anyhow::anyhow;
+    use rusqlite::params;
     use rusqlite::Connection;
     use serde_json::json;
     use time::format_description::well_known::Rfc3339;

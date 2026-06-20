@@ -51,6 +51,7 @@ import type {
   WfstatVoidTrader,
   WfmAutocompleteItem,
   WfmTopSellOrder,
+  BacktestSummary,
 } from '../types';
 
 // Check if running inside Tauri
@@ -579,6 +580,14 @@ export async function getItemAnalysis(
     variantKey,
     sellerMode,
   });
+}
+
+export async function gradeRecommendationOutcomes(): Promise<number> {
+  return invoke<number>('grade_recommendation_outcomes');
+}
+
+export async function getBacktestSummary(): Promise<BacktestSummary> {
+  return invoke<BacktestSummary>('get_backtest_summary');
 }
 
 export async function getArbitrageScanner(): Promise<ArbitrageScannerResponse> {

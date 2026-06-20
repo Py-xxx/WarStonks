@@ -1245,3 +1245,23 @@ export interface PersistedWorldStateCacheEntry {
   fetchedAt: string;
   nextRefreshAt: string | null;
 }
+
+export interface BacktestBucketStats {
+  label: string;
+  tradeCount: number;
+  hitRate: number | null;
+  medianReturnPct: number | null;
+  medianDaysHeld: number | null;
+  p25ReturnPct: number | null;
+  p75ReturnPct: number | null;
+}
+
+export interface BacktestSummary {
+  totalGraded: number;
+  totalPending: number;
+  totalOpen: number;
+  buyTradeStats: BacktestBucketStats[];
+  rolling30dHitRate: number | null;
+  rolling30dTradeCount: number;
+  generatedAt: string;
+}
