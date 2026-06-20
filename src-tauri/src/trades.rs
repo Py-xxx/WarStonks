@@ -6073,6 +6073,66 @@ fn should_attempt_trade_session_reauth(error: &anyhow::Error) -> bool {
         || message.contains("token")
 }
 
+// Automatic re-authentication retry policy. Kept short because the re-auth happens on
+// the user-facing restore path (Trades tab open / overview load) — a few seconds of
+// total backoff buys resilience against transient WFM hiccups without stalling the UI.
+const TRADE_REAUTH_MAX_ATTEMPTS: u32 = 3;
+const TRADE_REAUTH_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+const TRADE_REAUTH_MAX_BACKOFF: Duration = Duration::from_secs(4);
+
+/// Classifies a sign-in failure as transient (worth retrying) vs permanent.
+///
+/// Permanent failures — a wrong/changed password (HTTP 400/401/403) — must NOT be
+/// retried: retrying can't fix bad credentials and would hammer WFM's login endpoint,
+/// risking a rate-limit lockout. Transient failures — network blips, timeouts, rate
+/// limiting (429), and server errors (5xx) — are safe to retry with backoff.
+fn is_transient_signin_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+
+    // Credential/authorization rejections are permanent.
+    if message.contains("failed with status 400")
+        || message.contains("failed with status 401")
+        || message.contains("failed with status 403")
+    {
+        return false;
+    }
+
+    // Rate limiting and server-side errors are transient.
+    if message.contains("failed with status 429") || message.contains("failed with status 5") {
+        return true;
+    }
+
+    // Network-layer failures that never reached an HTTP status are transient.
+    message.contains("failed to request")
+        || message.contains("timed out")
+        || message.contains("timeout")
+        || message.contains("connection")
+        || message.contains("connect")
+        || message.contains("dns")
+        || message.contains("network")
+}
+
+/// Signs in, retrying transient failures with exponential backoff. Permanent failures
+/// (bad credentials) return immediately so the user is told to sign in again rather than
+/// the app silently spinning.
+fn sign_in_with_backoff(input: &TradeSignInInput) -> Result<StoredTradeSession> {
+    let mut backoff = TRADE_REAUTH_INITIAL_BACKOFF;
+    let mut attempt = 1;
+    loop {
+        match sign_in_inner(input) {
+            Ok(session) => return Ok(session),
+            Err(error) => {
+                if attempt >= TRADE_REAUTH_MAX_ATTEMPTS || !is_transient_signin_error(&error) {
+                    return Err(error);
+                }
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(TRADE_REAUTH_MAX_BACKOFF);
+                attempt += 1;
+            }
+        }
+    }
+}
+
 fn restore_saved_trade_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
     let Some(creds) = load_trade_credentials(app)? else {
         return Ok(None);
@@ -6084,7 +6144,9 @@ fn restore_saved_trade_session(app: &tauri::AppHandle) -> Result<Option<StoredTr
         stay_logged_in: true,
     };
 
-    let session = sign_in_inner(&input)?;
+    // Retry transient sign-in failures so a brief WFM/network hiccup doesn't force a
+    // manual sign-in; a genuine credential rejection still surfaces immediately.
+    let session = sign_in_with_backoff(&input)?;
     save_session(app, &session)?;
     set_session_in_cache(&session);
     Ok(Some(session))
