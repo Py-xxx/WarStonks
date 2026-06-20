@@ -1008,8 +1008,9 @@ mod tests {
         decode_alecaframe_relic_inventory_payload, extract_public_token, load_settings_from_path,
         map_currency_balance, parse_alecaframe_relic_inventory, save_settings_to_path,
         select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings, AppSettings,
-        DiscordWebhookNotificationSettings, DiscordWebhookSettings,
+        DiscordWebhookNotificationSettings, DiscordWebhookSettings, BASE64_STANDARD,
     };
+    use base64::Engine;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};

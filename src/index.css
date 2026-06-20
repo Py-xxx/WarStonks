@@ -9958,3 +9958,85 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ─── Calibration tab ─────────────────────────────────────────────────────── */
+
+.market-track-record {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(152, 170, 210, 0.10);
+  background: rgba(16, 22, 38, 0.5);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.market-track-record-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.market-track-record.tone-green { border-color: rgba(61, 214, 140, 0.18); color: #a8f0cd; }
+.market-track-record.tone-amber { border-color: rgba(240, 160, 48, 0.18); color: #f5cc80; }
+.market-track-record.tone-red   { border-color: rgba(240, 79, 88, 0.18);  color: #ff9ba0; }
+
+.calib-bucket-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.calib-bucket-card .market-panel-body {
+  gap: 8px;
+}
+
+.calib-insufficient {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.calib-return-band {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.calib-band-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.calib-band-sep {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.calib-rolling-hit {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.calib-rolling-hit.tone-green { color: var(--color-green); }
+.calib-rolling-hit.tone-amber { color: var(--color-amber); }
+.calib-rolling-hit.tone-red   { color: var(--color-red); }
+
+.calib-band-value.tone-green { color: var(--color-green); }
+.calib-band-value.tone-amber { color: var(--color-amber); }
+.calib-band-value.tone-red   { color: var(--color-red); }
+
+.market-metric-value.tone-green { color: var(--color-green); }
+.market-metric-value.tone-amber { color: var(--color-amber); }
+.market-metric-value.tone-red   { color: var(--color-red); }
