@@ -5,8 +5,10 @@ import {
   selectNextWatchlistItemToScan,
 } from '../lib/watchlist';
 import { useAppStore } from '../stores/useAppStore';
+import { useDocumentVisibility } from './useDocumentVisibility';
 
 export function useWatchlistScanner() {
+  const isVisible = useDocumentVisibility();
   const watchlistScheduleVersion = useAppStore((state) => {
     let nextScanAt = Number.POSITIVE_INFINITY;
 
@@ -26,6 +28,12 @@ export function useWatchlistScanner() {
   }, []);
 
   useEffect(() => {
+    // Pause scanning while hidden so WebView2 throttling can't queue a backlog of
+    // scans that all flush through the rate-limited WFM scheduler on window restore.
+    if (!isVisible) {
+      return undefined;
+    }
+
     let disposed = false;
 
     const clearScheduledTick = () => {
@@ -82,5 +90,5 @@ export function useWatchlistScanner() {
       disposed = true;
       clearScheduledTick();
     };
-  }, [watchlistScheduleVersion]);
+  }, [watchlistScheduleVersion, isVisible]);
 }
