@@ -10,6 +10,7 @@ Resources/*
 !Resources/pics/
 !Resources/pics/**
 .codex/
+.claude/
 WARSTONKS_CASE_STUDY.md
 
 # OS / editor files
