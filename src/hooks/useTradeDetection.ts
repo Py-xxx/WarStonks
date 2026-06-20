@@ -30,6 +30,11 @@ export function useTradeDetection() {
   const tradeAccountName = useAppStore((state) => state.tradeAccount?.name ?? null);
   const handleDetectedBuys = useAppStore((state) => state.handleDetectedTradeBuys);
 
+  // NOTE: trade detection deliberately keeps running while the window is hidden, so
+  // background trades (and Discord notifications) are still captured while the user is
+  // in-game with the app minimized. It is lightweight and self-rescheduling with an
+  // in-flight guard, so — unlike the heavier market/watchlist pollers — it cannot
+  // build up a WebView2-throttled backlog that floods the scheduler on resume.
   useEffect(() => {
     if (!tradeAccountName) {
       return;

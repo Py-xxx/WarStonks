@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { WORLDSTATE_RETRY_DELAY_MS } from '../lib/worldState';
+import { useDocumentVisibility } from './useDocumentVisibility';
 
 interface UseWorldStateRefreshOptions {
   lastUpdatedAt: string | null;
@@ -11,16 +12,23 @@ interface UseWorldStateRefreshOptions {
 
 export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
   const { lastUpdatedAt, nextRefreshAt, error, loading, refresh } = options;
+  const isVisible = useDocumentVisibility();
 
   useEffect(() => {
-    if (lastUpdatedAt || nextRefreshAt || error || loading) {
+    if (!isVisible || lastUpdatedAt || nextRefreshAt || error || loading) {
       return;
     }
 
     void refresh();
-  }, [error, lastUpdatedAt, loading, nextRefreshAt, refresh]);
+  }, [error, isVisible, lastUpdatedAt, loading, nextRefreshAt, refresh]);
 
   useEffect(() => {
+    // Don't keep a refresh timer armed while hidden; re-arm on resume. The effect
+    // re-runs when isVisible flips, so a due refresh fires promptly once visible.
+    if (!isVisible) {
+      return undefined;
+    }
+
     const targetMs = nextRefreshAt
       ? Date.parse(nextRefreshAt)
       : error
@@ -36,5 +44,5 @@ export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
     }, Math.max(0, targetMs - Date.now()));
 
     return () => window.clearTimeout(timeoutId);
-  }, [error, nextRefreshAt, refresh]);
+  }, [error, isVisible, nextRefreshAt, refresh]);
 }

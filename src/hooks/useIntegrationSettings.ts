@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import { useDocumentVisibility } from './useDocumentVisibility';
 
 const WALLET_REFRESH_INTERVAL_MS = 60_000;
 
@@ -8,13 +9,15 @@ export function useIntegrationSettings() {
   const alecaframePublicLink = useAppStore((state) => state.appSettings.alecaframe.publicLink);
   const loadAppSettings = useAppStore((state) => state.loadAppSettings);
   const refreshWalletSnapshotSilently = useAppStore((state) => state.refreshWalletSnapshotSilently);
+  const isVisible = useDocumentVisibility();
 
   useEffect(() => {
     void loadAppSettings();
   }, [loadAppSettings]);
 
   useEffect(() => {
-    if (!alecaframeEnabled || !alecaframePublicLink) {
+    // Pause the wallet poll while hidden so it doesn't backlog under WebView2 throttling.
+    if (!alecaframeEnabled || !alecaframePublicLink || !isVisible) {
       return undefined;
     }
 
@@ -25,5 +28,5 @@ export function useIntegrationSettings() {
     }, WALLET_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [alecaframeEnabled, alecaframePublicLink, refreshWalletSnapshotSilently]);
+  }, [alecaframeEnabled, alecaframePublicLink, refreshWalletSnapshotSilently, isVisible]);
 }

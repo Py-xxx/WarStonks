@@ -454,9 +454,13 @@ struct WfmOwnOrder {
     id: String,
     #[serde(rename = "type")]
     order_type: String,
+    // v2 currently serializes these as integers, but the v1 statistics endpoint
+    // silently switched platinum to floats — accept either here to stay robust.
+    #[serde(deserialize_with = "deserialize_lenient_i64")]
     platinum: i64,
+    #[serde(deserialize_with = "deserialize_lenient_i64")]
     quantity: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_optional_i64")]
     rank: Option<i64>,
     #[serde(default)]
     visible: Option<bool>,
@@ -481,12 +485,38 @@ struct WfmProfileClosedOrder {
     id: String,
     item: WfmProfileClosedOrderItem,
     updated_at: String,
+    #[serde(deserialize_with = "deserialize_lenient_i64")]
     quantity: i64,
     closed_date: String,
     order_type: String,
+    // WFM serializes platinum (and other numeric trade fields) as JSON floats
+    // (e.g. `30.0`) as of mid-2026; they were previously integers. Accept either
+    // representation so a number-type change in the API doesn't break parsing.
+    #[serde(deserialize_with = "deserialize_lenient_i64")]
     platinum: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_optional_i64")]
     mod_rank: Option<i64>,
+}
+
+/// Deserialize a JSON number into i64, accepting both integer (`30`) and float
+/// (`30.0`) encodings. Warframe trade values are always whole numbers; WFM started
+/// serializing them as floats, which a plain `i64` field rejects.
+fn deserialize_lenient_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = f64::deserialize(deserializer)?;
+    Ok(value.round() as i64)
+}
+
+/// Optional variant of [`deserialize_lenient_i64`] — tolerates absent/null and both
+/// integer and float number encodings.
+fn deserialize_lenient_optional_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    Ok(value.map(|number| number.round() as i64))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -6131,9 +6161,76 @@ fn build_connected_trade_session_state(
     })
 }
 
+/// Validate the current session (in-memory cache, then keychain) with a live `/me`
+/// call and, if it has expired, transparently re-authenticate from saved credentials.
+///
+/// This is the user-facing restore path (Trades tab open, startup auto-sign-in). Unlike
+/// [`ensure_authenticated_session`] — which trusts the cached token for high-frequency
+/// internal calls and relies on a later 401 to trigger re-auth — this path proactively
+/// confirms the session is live so the UI never shows a stale "logged out" state while a
+/// valid set of saved credentials could log the user straight back in.
+///
+/// Returns `Ok(None)` only when there is no usable session and no saved credentials.
+fn restore_or_reauth_validated_session(
+    app: &tauri::AppHandle,
+) -> Result<Option<StoredTradeSession>> {
+    let client = shared_wfm_client()?;
+
+    let candidate = match get_session_from_cache() {
+        Some(session) => Some(session),
+        None => load_session(app)?,
+    };
+
+    if let Some(mut session) = candidate {
+        match fetch_me_with_token(&client, &session.token) {
+            Ok(account) => {
+                session.account = account;
+                set_session_in_cache(&session);
+                let _ = save_session(app, &session);
+                return Ok(Some(session));
+            }
+            Err(error) if should_attempt_trade_session_reauth(&error) => {
+                // Genuine expiry/auth failure — drop the dead session and fall through
+                // to a credential re-auth below.
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "validate-session",
+                    "Saved Warframe Market session is no longer valid; re-authenticating from saved credentials.",
+                    &error,
+                );
+                clear_session_cache();
+                let _ = clear_session(app);
+            }
+            Err(error) => {
+                // Transient/network error (not an auth failure): keep trusting the
+                // cached session rather than flipping the user to a logged-out state
+                // on a connectivity blip.
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "validate-session",
+                    "Couldn't reach Warframe Market to validate the session; keeping the current session.",
+                    &error,
+                );
+                return Ok(Some(session));
+            }
+        }
+    }
+
+    // No usable session (or it just expired): re-auth from saved credentials.
+    // Returns Ok(None) when no credentials are stored.
+    restore_saved_trade_session(app)
+}
+
 fn load_or_restore_trade_session_state(app: &tauri::AppHandle) -> Result<TradeSessionState> {
-    let session = ensure_authenticated_session(app)?;
-    build_connected_trade_session_state(app, session)
+    match restore_or_reauth_validated_session(app)? {
+        Some(session) => build_connected_trade_session_state(app, session),
+        None => Ok(TradeSessionState {
+            connected: false,
+            account: None,
+        }),
+    }
 }
 
 fn try_restore_trade_session_state(app: &tauri::AppHandle) -> Result<TradeSessionState> {
