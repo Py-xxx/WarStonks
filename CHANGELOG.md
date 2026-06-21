@@ -22,6 +22,16 @@ All notable changes since the `3.0.5-Fix` release (`eb3c3b7`).
   backoff. Permanent failures (wrong/changed password — `400/401/403`) return immediately
   and never hammer the login endpoint.
 - Only a manual **Disconnect** clears the saved credentials.
+- **Persistent presence connection.** While you're signed in, the app now holds a single
+  long-lived background WebSocket to Warframe.Market — the same thing a browser tab does —
+  for the whole time the app is open. This keeps your session alive and holds your
+  online/ingame status instead of WFM dropping you offline shortly after it's set. The
+  connection reconnects automatically (including after a session re-auth), re-applies your
+  chosen status, and persists your choice across app restarts. Choosing "invisible" keeps
+  the connection (so you stay logged in) while appearing offline; only signing out releases
+  it. This removes the need to keep a warframe.market browser tab open, and — because an
+  active connection keeps the WFM session alive — should also reduce how often the session
+  expires and signs you out.
 
 ### Fixes
 

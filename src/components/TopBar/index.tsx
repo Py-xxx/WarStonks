@@ -487,44 +487,29 @@ export function TopBar() {
             </button>
 
             {tradeMenuOpen ? (
-              <div className="trade-menu-dropdown">
-                <div className="trade-menu-header">
-                  <span className="card-label">Warframe Market</span>
-                  <span className="trade-menu-status-copy">
-                    Choose how your presence appears on warframe.market.
-                  </span>
-                </div>
-
-                <div className="trade-menu-section">
-                  <span className="trade-menu-section-title">Presence</span>
-                  <div className="trade-menu-status-grid">
-                    {([
-                      { value: 'ingame', label: 'Ingame' },
-                      { value: 'online', label: 'Online' },
-                      { value: 'invisible', label: 'Invisible' },
-                    ] as const).map((option) => {
-                      const isActive =
-                        (tradeAccount.status === 'offline' ? 'invisible' : tradeAccount.status) === option.value;
-                      return (
-                        <button
-                          key={option.value}
-                          className={`trade-menu-status-btn${isActive ? ' active' : ''}`}
-                          type="button"
-                          disabled={tradeAccountLoading}
-                          onClick={() => void handleSetPresence(option.value)}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="trade-menu-actions">
-                  <button type="button" className="trade-menu-link" onClick={handleOpenTrades}>
-                    Open Trades
-                  </button>
-                </div>
+              <div className="trade-menu-dropdown" role="listbox" aria-label="Presence">
+                {([
+                  { value: 'online', label: 'Online' },
+                  { value: 'ingame', label: 'In Game' },
+                  { value: 'invisible', label: 'Invisible' },
+                ] as const).map((option) => {
+                  const isActive =
+                    (tradeAccount.status === 'offline' ? 'invisible' : tradeAccount.status) === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      className={`trade-menu-option${isActive ? ' active' : ''}`}
+                      type="button"
+                      role="option"
+                      aria-selected={isActive}
+                      disabled={tradeAccountLoading}
+                      onClick={() => void handleSetPresence(option.value)}
+                    >
+                      <span className={`trade-menu-option-dot ${getTradeStatusToneClass(option.value)}`} />
+                      {option.label}
+                    </button>
+                  );
+                })}
 
                 {tradeAccountError ? (
                   <div className="trade-menu-error">{tradeAccountError}</div>

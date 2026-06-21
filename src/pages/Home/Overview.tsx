@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
-import { WatchlistPurchaseModal } from '../../components/WatchlistPurchaseModal';
-import { formatElapsedTime, formatShortLocalDateTime } from '../../lib/dateTime';
+import { WatchlistTable } from '../../components/WatchlistTable';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
+import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { buildWatchlistMarketSignals } from '../../lib/watchlistMarketSignals';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { copyWhisperMessage } from '../../lib/marketMessages';
-import { getWatchlistVisualState } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { useDocumentVisibility } from '../../hooks/useDocumentVisibility';
 import { useAppStore } from '../../stores/useAppStore';
 import type { ItemAnalysisResponse, WfmTopSellOrder } from '../../types';
 
@@ -98,17 +99,23 @@ function buildDashboardEventDetail(node: string | null, expiry: string | null): 
 }
 
 function getAnalysisPreviewTone(analysis: ItemAnalysisResponse | null): 'green' | 'amber' | 'red' {
-  const label = analysis?.headline.confidenceSummary.level ?? 'low';
-  if (analysis?.manipulationRisk.riskLevel.toLowerCase().includes('high')) {
-    return 'red';
-  }
-  if (label === 'high' && (analysis?.headline.netMargin ?? 0) > 0) {
-    return 'green';
-  }
-  if (label === 'medium') {
+  if (!analysis) {
     return 'amber';
   }
-  return 'red';
+  const level = analysis.headline.confidenceSummary.level;
+  const netMargin = analysis.headline.netMargin ?? 0;
+  // Red is reserved for genuinely negative signals — manipulation risk or a losing
+  // (negative) margin. Low confidence is caution (amber), not danger.
+  if (analysis.manipulationRisk.riskLevel.toLowerCase().includes('high')) {
+    return 'red';
+  }
+  if (netMargin < 0) {
+    return 'red';
+  }
+  if (level === 'high' && netMargin > 0) {
+    return 'green';
+  }
+  return 'amber';
 }
 
 function buildAnalysisPreviewLabel(analysis: ItemAnalysisResponse | null): string {
@@ -128,178 +135,20 @@ function buildAnalysisPreviewLabel(analysis: ItemAnalysisResponse | null): strin
 }
 
 function WatchlistCard() {
-  const watchlist = useAppStore((state) => state.watchlist);
-  const selectedId = useAppStore((state) => state.selectedWatchlistId);
-  const setSelected = useAppStore((state) => state.setSelectedWatchlist);
-  const removeItem = useAppStore((state) => state.removeWatchlistItem);
-  const markWatchlistItemBought = useAppStore((state) => state.markWatchlistItemBought);
-  const [purchaseItemId, setPurchaseItemId] = useState<string | null>(null);
-  const [purchaseLoading, setPurchaseLoading] = useState(false);
-  const [purchaseError, setPurchaseError] = useState<string | null>(null);
-  const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
-  const [copiedWatchlistId, setCopiedWatchlistId] = useState<string | null>(null);
-  const watchlistRows = watchlist.map((item) => ({
-    item,
-    visualState: getWatchlistVisualState(item),
-  }));
-  const purchaseItem = watchlist.find((item) => item.id === purchaseItemId) ?? null;
+  const watchlistCount = useAppStore((state) => state.watchlist.length);
 
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-label">Watchlist</span>
-        <span className="badge badge-blue">{watchlist.length} items</span>
+        <span className="badge badge-blue">{watchlistCount} items</span>
       </div>
 
       <div className="card-body card-body-compact">
         <WatchlistAddControls compact />
       </div>
 
-      {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
-
-      {watchlist.length === 0 ? (
-        <div className="empty-state">
-          <span className="empty-primary">No watchlist items yet</span>
-          <span className="empty-sub">Search for an item, set your desired price, and add it to start monitoring live sell orders.</span>
-        </div>
-      ) : (
-        <>
-          <table className="wl-table">
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Target</th>
-                <th>Current</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {watchlistRows.map(({ item, visualState }) => (
-                  <tr
-                    key={item.id}
-                    onClick={() => setSelected(item.id)}
-                    className={`watchlist-row watchlist-row-${visualState.tone}${
-                      selectedId === item.id ? ' selected' : ''
-                    }`}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>
-                      <div className="wl-item-cell">
-                        <span>{item.displayName}</span>
-                        <span className="td-muted">Refreshed {formatElapsedTime(item.lastUpdatedAt)}</span>
-                      </div>
-                    </td>
-                    <td className="td-muted">{item.targetPrice} pt</td>
-                    <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
-                    <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
-                      {visualState.label}
-                    </td>
-                    <td>
-                      <div className="watchlist-actions">
-                        <button
-                          className="act-btn"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setPurchaseError(null);
-                            setPurchaseSuccess(null);
-                            setPurchaseItemId(item.id);
-                          }}
-                        >
-                          Mark as bought
-                        </button>
-                        {visualState.tone === 'red' && item.currentSeller && item.currentPrice !== null ? (
-                          <button
-                            className="act-btn"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void copyWhisperMessage(
-                                { username: item.currentSeller!, platinum: item.currentPrice! },
-                                item.displayName,
-                              )
-                                .then(() => {
-                                  setCopiedWatchlistId(item.id);
-                                  window.setTimeout(() => {
-                                    setCopiedWatchlistId((current) =>
-                                      current === item.id ? null : current,
-                                    );
-                                  }, COPY_RESET_DELAY_MS);
-                                })
-                                .catch(() => {
-                                    setPurchaseError(
-                                      formatHomeErrorMessage(
-                                        'watchlist-copy',
-                                        new Error('copy failed'),
-                                      ),
-                                    );
-                                  });
-                            }}
-                          >
-                            {copiedWatchlistId === item.id ? 'Copied' : 'Copy Message'}
-                          </button>
-                        ) : null}
-                        <button
-                          className="act-btn danger"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            removeItem(item.id);
-                          }}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="wl-footer">
-            <span>Adaptive scans · min 10s per item</span>
-            {selectedId ? (
-              <span className="selected">
-                Selected:{' '}
-                <span style={{ color: 'var(--text-primary)' }}>
-                  {watchlist.find((w) => w.id === selectedId)?.displayName}
-                </span>
-              </span>
-            ) : null}
-          </div>
-        </>
-      )}
-
-      {purchaseItem ? (
-        <WatchlistPurchaseModal
-          itemName={purchaseItem.displayName}
-          defaultPrice={purchaseItem.targetPrice}
-          loading={purchaseLoading}
-          errorMessage={purchaseError}
-          onClose={() => {
-            if (purchaseLoading) {
-              return;
-            }
-            setPurchaseItemId(null);
-            setPurchaseError(null);
-          }}
-          onSubmit={(price) => {
-            setPurchaseLoading(true);
-            setPurchaseError(null);
-            void markWatchlistItemBought(purchaseItem.id, price)
-              .then((result) => {
-                setPurchaseSuccess(result.confirmationMessage);
-                setPurchaseItemId(null);
-              })
-              .catch((error) => {
-                setPurchaseError(formatHomeErrorMessage('watchlist-mark-bought', error));
-              })
-              .finally(() => {
-                setPurchaseLoading(false);
-              });
-          }}
-        />
-      ) : null}
+      <WatchlistTable variant="compact" />
     </div>
   );
 }
@@ -311,15 +160,21 @@ function EventsCard() {
   const refreshWorldStateEvents = useAppStore((state) => state.refreshWorldStateEvents);
   const setActivePage = useAppStore((state) => state.setActivePage);
   const setEventsSubTab = useAppStore((state) => state.setEventsSubTab);
+  const isVisible = useDocumentVisibility();
   const [nowMs, setNowMs] = useState(Date.now());
 
   useEffect(() => {
+    // Don't tick the countdown while the window is hidden (WebView2 throttles it anyway).
+    if (!isVisible) {
+      return undefined;
+    }
+    setNowMs(Date.now());
     const intervalId = window.setInterval(() => {
       setNowMs(Date.now());
     }, 1000);
 
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [isVisible]);
 
   const openActiveEventsPage = () => {
     setActivePage('events');
@@ -445,6 +300,8 @@ function MetricsRow() {
 function QuickViewCard() {
   const quickView = useAppStore((s) => s.quickView);
   const loadQuickViewItem = useAppStore((state) => state.loadQuickViewItem);
+  const analysis = useAppStore((state) => state.selectedMarketAnalysis);
+  const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
   const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
@@ -454,6 +311,9 @@ function QuickViewCard() {
   const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath);
   const sparklinePath = buildSparklinePath(quickView.sparklinePoints);
   const spreadLabel = formatSpreadLabel(quickView.sellOrders);
+  // Use the same recommended exit the Market analysis computes for this item; it's the
+  // adaptive exit price from the shared analysis pipeline, not a placeholder.
+  const exitPrice = analysis?.headline.exitPrice ?? null;
   const mainStats = [
     {
       label: 'Entry Price',
@@ -462,8 +322,9 @@ function QuickViewCard() {
     },
     {
       label: 'Exit Price',
-      value: 'Pending',
-      pending: true,
+      value: exitPrice !== null ? `${Math.round(exitPrice)} pt` : analysisLoading ? 'Building…' : '—',
+      pending: exitPrice === null,
+      accent: exitPrice !== null ? 'var(--accent-blue)' : undefined,
     },
     {
       label: 'Quantity',
@@ -572,7 +433,7 @@ function QuickViewCard() {
               <div>
                 <div className="qv-stat-label">Cheapest Seller</div>
                 <div className="qv-focus-user">{mainOrder.username}</div>
-                <div className="qv-focus-status">{mainOrder.status ?? 'online'}</div>
+                <div className="qv-focus-status">{mainOrder.status ?? 'Unknown'}</div>
               </div>
               <button className="btn-sm" onClick={() => void handleCopy(mainOrder)}>
                 {copiedOrderId === mainOrder.orderId ? 'Copied' : 'Copy Message'}
@@ -787,14 +648,24 @@ function AnalysisCard() {
 export function Overview() {
   return (
     <div className="dashboard">
-      <MetricsRow />
+      <ErrorBoundary label="Market signals">
+        <MetricsRow />
+      </ErrorBoundary>
       <div className="content-row">
-        <QuickViewCard />
-        <AnalysisCard />
+        <ErrorBoundary label="Quick View">
+          <QuickViewCard />
+        </ErrorBoundary>
+        <ErrorBoundary label="Analysis Preview">
+          <AnalysisCard />
+        </ErrorBoundary>
       </div>
       <div className="watchlist-row-shell">
-        <WatchlistCard />
-        <EventsCard />
+        <ErrorBoundary label="Watchlist">
+          <WatchlistCard />
+        </ErrorBoundary>
+        <ErrorBoundary label="Events">
+          <EventsCard />
+        </ErrorBoundary>
       </div>
     </div>
   );

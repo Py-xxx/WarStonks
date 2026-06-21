@@ -687,6 +687,19 @@ export async function listenToArbitrageScannerProgress(
   });
 }
 
+export async function listenToWfmPresenceChange(
+  onPresence: (status: string) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<string>('wfm-presence-changed', (event) => {
+    onPresence(event.payload);
+  });
+}
+
 // Future commands — add typed stubs here as the backend grows:
 // export async function fetchMarketData(itemId: string): Promise<MarketData> { ... }
 // export async function syncTradeOrders(): Promise<TradeOrder[]> { ... }

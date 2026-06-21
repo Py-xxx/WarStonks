@@ -16,6 +16,10 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             wfm_queue_log::initialize_wfm_queue_log_best_effort(&app.handle());
+            // Hold the user's Warframe.Market presence over a persistent connection so it
+            // survives session re-auth and doesn't lapse to offline. Idles until a presence
+            // is chosen / restored from disk.
+            trades::start_presence_keeper(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
