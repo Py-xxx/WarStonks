@@ -20,9 +20,10 @@ use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::time::timeout;
@@ -6010,6 +6011,296 @@ async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str)
     .context("timed out while waiting for WFM presence update")?
 }
 
+// ─── Persistent presence keeper ───────────────────────────────────────────────
+//
+// On Warframe.Market your online/ingame presence only lasts while a WebSocket stays
+// connected — the moment it drops, WFM marks you offline after its heartbeat grace
+// window. The transient connect→set→disconnect calls used elsewhere therefore can't
+// hold presence (which is why a browser tab was needed). This keeper holds a single
+// long-lived connection that re-applies the desired status, answers pings, and
+// reconnects automatically — including after a session re-auth, picking up the fresh
+// token each time.
+
+const TRADES_PRESENCE_FILE_NAME: &str = "wfm-presence.json";
+const PRESENCE_CHANGED_EVENT: &str = "wfm-presence-changed";
+const PRESENCE_KEEPALIVE_SECONDS: u64 = 20;
+const PRESENCE_STARTUP_DELAY_SECONDS: u64 = 8;
+
+fn presence_desired_status() -> &'static Mutex<Option<String>> {
+    static DESIRED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    DESIRED.get_or_init(|| Mutex::new(None))
+}
+
+fn get_desired_presence() -> Option<String> {
+    presence_desired_status().lock().ok().and_then(|guard| guard.clone())
+}
+
+fn set_desired_presence(status: Option<String>) {
+    if let Ok(mut guard) = presence_desired_status().lock() {
+        *guard = status;
+    }
+}
+
+/// The presence status the keeper should currently be holding. We hold a connection
+/// whenever the user is signed in (keeping the WFM session alive the way a browser tab
+/// does); the chosen presence only decides what status to set. An unset/invisible choice
+/// is held as `invisible` — connected and logged in, but appearing offline to others.
+fn effective_presence_status() -> &'static str {
+    match get_desired_presence().as_deref() {
+        Some("ingame") => "ingame",
+        Some("online") => "online",
+        _ => "invisible",
+    }
+}
+
+fn presence_file_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .context("failed to resolve app data directory")?
+        .join(TRADES_DIR_NAME)
+        .join(TRADES_PRESENCE_FILE_NAME))
+}
+
+fn load_persisted_desired_presence(app: &tauri::AppHandle) -> Option<String> {
+    let path = presence_file_path(app).ok()?;
+    let text = fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<Value>(&text).ok()?;
+    value
+        .get("desiredStatus")
+        .and_then(Value::as_str)
+        .map(|status| status.to_string())
+}
+
+fn save_persisted_desired_presence(app: &tauri::AppHandle, status: Option<&str>) {
+    let Ok(path) = presence_file_path(app) else {
+        return;
+    };
+    match status {
+        Some(status) => {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if let Ok(serialized) = serde_json::to_string(&json!({ "desiredStatus": status })) {
+                let _ = fs::write(path, serialized);
+            }
+        }
+        None => {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// Records the desired presence in memory, persists it across restarts, and makes sure
+/// the keeper task is running so it gets applied and held.
+fn apply_desired_presence(app: &tauri::AppHandle, status: Option<&str>) {
+    set_desired_presence(status.map(|value| value.to_string()));
+    save_persisted_desired_presence(app, status);
+    start_presence_keeper(app.clone());
+}
+
+fn presence_keeper_started() -> &'static AtomicBool {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    &STARTED
+}
+
+/// Spawns the presence keeper exactly once. Loads any persisted desired status so the
+/// user's presence is restored automatically after an app restart.
+pub fn start_presence_keeper(app: tauri::AppHandle) {
+    if presence_keeper_started().swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if get_desired_presence().is_none() {
+        if let Some(persisted) = load_persisted_desired_presence(&app) {
+            set_desired_presence(Some(persisted));
+        }
+    }
+    tauri::async_runtime::spawn(run_presence_keeper(app));
+}
+
+async fn resolve_presence_session(app: &tauri::AppHandle) -> Option<StoredTradeSession> {
+    if let Some(session) = get_session_from_cache() {
+        return Some(session);
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_authenticated_session(&app).ok())
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn run_presence_keeper(app: tauri::AppHandle) {
+    // Let startup auto-sign-in settle so the keeper doesn't race it into a duplicate re-auth.
+    tokio::time::sleep(Duration::from_secs(PRESENCE_STARTUP_DELAY_SECONDS)).await;
+
+    // Escalating backoff bounds how often we retry when something is persistently wrong
+    // (e.g. credentials no longer valid), so the keeper can never hammer WFM's login.
+    let reset_backoff = Duration::from_secs(2);
+    let max_backoff = Duration::from_secs(60);
+    let mut backoff = reset_backoff;
+
+    loop {
+        // We hold a connection whenever the user is signed in — this keeps the WFM
+        // session alive (like a browser tab) regardless of whether they're shown online
+        // or invisible. If no session can be resolved, the user is signed out.
+        let Some(session) = resolve_presence_session(&app).await else {
+            // Signed out (or a sign-in attempt failed). Idle a fixed interval rather than
+            // escalating, so a fresh sign-in is picked up promptly without hammering login.
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            backoff = reset_backoff;
+            continue;
+        };
+
+        let status = effective_presence_status();
+
+        match hold_presence_connection(&app, &session, status).await {
+            Ok(()) => {
+                // Graceful exit (desired changed / connection closed). Brief pause avoids a
+                // tight reconnect loop if WFM closes the socket immediately.
+                backoff = reset_backoff;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(error) => {
+                log_feature_error_best_effort(
+                    &app,
+                    "trades-presence",
+                    "hold-connection",
+                    "Presence websocket dropped; will reconnect.",
+                    &error,
+                );
+                if should_attempt_trade_session_reauth(&error) {
+                    // Token likely expired — refresh it so the next connect uses a live token.
+                    let app_for_reauth = app.clone();
+                    let reauth_ok = tauri::async_runtime::spawn_blocking(move || {
+                        reauth_session(&app_for_reauth).is_ok()
+                    })
+                    .await
+                    .unwrap_or(false);
+                    if reauth_ok {
+                        // Fresh token in hand — reconnect immediately.
+                        backoff = reset_backoff;
+                        continue;
+                    }
+                }
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+            }
+        }
+    }
+}
+
+/// Holds a single authenticated presence connection: applies `desired`, answers pings,
+/// emits observed status changes, and returns `Ok(())` when the desired status changes
+/// or the socket closes (so the caller reconnects), or `Err` on a connection failure.
+async fn hold_presence_connection(
+    app: &tauri::AppHandle,
+    session: &StoredTradeSession,
+    desired: &str,
+) -> Result<()> {
+    let requested_status = normalize_status_set_request(desired)?;
+    let mut ws_stream = connect_wfm_websocket(&session.token, &session.device_id).await?;
+
+    let mut authenticated = false;
+    let mut status_sent = false;
+
+    loop {
+        // Release the connection when the session cache is cleared (sign-out, or a 401
+        // elsewhere) so the keeper re-resolves — on sign-out this drops us offline.
+        if get_session_from_cache().is_none() {
+            return Ok(());
+        }
+        // React to the user changing their presence: when the effective status changes,
+        // return so the keeper reconnects and applies the new one.
+        if effective_presence_status() != desired {
+            return Ok(());
+        }
+
+        let next = timeout(Duration::from_secs(PRESENCE_KEEPALIVE_SECONDS), ws_stream.next()).await;
+        let message = match next {
+            // No traffic within the window: send a ping to keep the socket alive and to
+            // detect a dead connection on the next read.
+            Err(_) => {
+                ws_stream
+                    .send(Message::Ping(Vec::new().into()))
+                    .await
+                    .context("failed to send presence keepalive ping")?;
+                continue;
+            }
+            Ok(None) => return Ok(()), // closed cleanly — reconnect
+            Ok(Some(message)) => message.context("failed to read presence websocket message")?,
+        };
+
+        match message {
+            Message::Ping(payload) => {
+                ws_stream
+                    .send(Message::Pong(payload))
+                    .await
+                    .context("failed to answer presence websocket ping")?;
+            }
+            Message::Close(_) => return Ok(()),
+            Message::Text(text) => {
+                let Ok(payload) = serde_json::from_str::<WfmWsMessage>(&text) else {
+                    continue;
+                };
+                let route = payload
+                    .route
+                    .split('|')
+                    .nth(1)
+                    .unwrap_or(payload.route.as_str())
+                    .to_string();
+
+                if !authenticated {
+                    if route == "cmd/auth/signIn:ok" {
+                        authenticated = true;
+                    } else if route == "cmd/auth/signIn:error" {
+                        return Err(anyhow!("presence websocket authentication failed (401)"));
+                    } else {
+                        continue;
+                    }
+                }
+
+                if authenticated && !status_sent {
+                    status_sent = true;
+                    let status_message = WfmWsMessage {
+                        route: "@wfm|cmd/status/set".to_string(),
+                        payload: Some(json!({ "status": requested_status })),
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        ref_id: None,
+                    };
+                    ws_stream
+                        .send(Message::Text(
+                            serde_json::to_string(&status_message)
+                                .context("failed to serialize presence status message")?
+                                .into(),
+                        ))
+                        .await
+                        .context("failed to send presence status message")?;
+                    continue;
+                }
+
+                if route == "event/status/set" || route == "cmd/status/set:ok" {
+                    if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload)
+                    {
+                        record_observed_presence(app, &status);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Updates the cached session's status and notifies the frontend so the UI reflects the
+/// presence WFM is actually reporting.
+fn record_observed_presence(app: &tauri::AppHandle, status: &str) {
+    if let Ok(mut guard) = session_cache().lock() {
+        if let Some(session) = guard.as_mut() {
+            session.account.status = status.to_string();
+        }
+    }
+    let _ = app.emit(PRESENCE_CHANGED_EVENT, status.to_string());
+}
+
 fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     let client = shared_wfm_client()?;
     let trimmed_email = input.email.trim();
@@ -6436,9 +6727,10 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
     sell_orders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
     buy_orders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
 
+    // Active trade value reflects only visible SELL orders — it's the plat you have
+    // listed for sale, not what you're bidding to buy.
     let active_trade_value = sell_orders
         .iter()
-        .chain(buy_orders.iter())
         .filter(|order| order.visible)
         .map(|order| order.your_price * order.quantity)
         .sum::<i64>();
@@ -6695,6 +6987,11 @@ pub async fn sign_in_wfm_trade_account(
 
 #[tauri::command]
 pub async fn sign_out_wfm_trade_account(app: tauri::AppHandle) -> Result<(), String> {
+    // Stop maintaining presence and clear the cached session synchronously so the keeper
+    // releases its held connection promptly (the user goes offline on sign-out).
+    set_desired_presence(None);
+    save_persisted_desired_presence(&app, None);
+    clear_session_cache();
     tauri::async_runtime::spawn_blocking(move || {
         clear_session_cache();
         clear_session(&app)?;
@@ -6737,7 +7034,7 @@ pub async fn set_wfm_trade_status(
     let next_status = set_current_trade_status_ws(&session.token, &session.device_id, &status)
         .await
         .map_err(|error| error.to_string())?;
-    session.account.status = next_status;
+    session.account.status = next_status.clone();
 
     tauri::async_runtime::spawn_blocking({
         let app = app.clone();
@@ -6750,6 +7047,11 @@ pub async fn set_wfm_trade_status(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error: anyhow::Error| error.to_string())?;
+
+    // Record the chosen presence and (re)start the keeper so a persistent connection
+    // holds it — otherwise WFM marks the user offline once the transient set above
+    // disconnects, and the status is lost on the next session re-auth.
+    apply_desired_presence(&app, Some(normalize_status_label(&next_status).as_str()));
 
     Ok(TradeSessionState {
         connected: true,

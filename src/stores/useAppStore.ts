@@ -1255,6 +1255,8 @@ interface AppStore {
   selectedWatchlistId: string | null;
   watchlistTargetInput: string;
   watchlistFormError: string | null;
+  watchlistActionError: string | null;
+  setWatchlistActionError: (message: string | null) => void;
   setSelectedWatchlist: (id: string | null) => void;
   setWatchlistTargetInput: (val: string) => void;
   addSelectedQuickViewToWatchlist: () => void;
@@ -2246,6 +2248,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectedWatchlistId: restoredSelectedWatchlistId,
   watchlistTargetInput: '',
   watchlistFormError: null,
+  watchlistActionError: null,
+  setWatchlistActionError: (message) => set({ watchlistActionError: message }),
   setSelectedWatchlist: (id) => {
     set({ selectedWatchlistId: id });
     writePersistedWatchlistState(get().watchlist, id);
@@ -2422,9 +2426,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ).catch((error) => {
         console.error('[watchlist] failed to stop tracking item', error);
       });
-      void removeWatchlistBuyOrder(itemToRemove.linkedBuyOrderId, state.sellerMode).catch((error) => {
-        console.error('[watchlist] failed to remove linked buy order', error);
-      });
+      if (itemToRemove.linkedBuyOrderId) {
+        void removeWatchlistBuyOrder(itemToRemove.linkedBuyOrderId, state.sellerMode).catch(
+          (error) => {
+            console.error('[watchlist] failed to remove linked buy order', error);
+            // Surface it: the item is gone from the watchlist, but its WFM buy order may
+            // still be live, so the user can clean it up manually.
+            set({
+              watchlistActionError: `Removed ${itemToRemove.displayName} from the watchlist, but its linked Warframe.Market buy order may still be live — check your buy orders in the Trades tab.`,
+            });
+          },
+        );
+      }
     }
 
     set((currentState) => {
@@ -2439,6 +2452,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         alerts: currentState.alerts.filter((alert) => alert.watchlistId !== id),
         selectedWatchlistId: nextSelectedWatchlistId,
         watchlistFormError: null,
+        // Clear any stale orphaned-order notice; the async buy-order removal above will
+        // re-set it only if this removal's cleanup actually fails.
+        watchlistActionError: null,
       };
     });
   },

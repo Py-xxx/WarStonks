@@ -1,5 +1,6 @@
 import { useAppStore } from '../../stores/useAppStore';
 import type { HomeSubTab } from '../../types';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { Overview } from './Overview';
 import { WatchlistTab } from './WatchlistTab';
 import { AlertsTab } from './AlertsTab';
@@ -68,9 +69,11 @@ export function HomePage() {
         </div>
       </div>
 
-      {homeSubTab === 'overview'    && <Overview />}
-      {homeSubTab === 'watchlist'   && <WatchlistTab />}
-      {homeSubTab === 'alerts'      && <AlertsTab />}
+      <ErrorBoundary label="Dashboard">
+        {homeSubTab === 'overview'    && <Overview />}
+        {homeSubTab === 'watchlist'   && <WatchlistTab />}
+        {homeSubTab === 'alerts'      && <AlertsTab />}
+      </ErrorBoundary>
     </div>
   );
 }

@@ -2685,75 +2685,52 @@ body {
 }
 .trade-menu-dropdown {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 6px);
   right: 0;
-  width: 268px;
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 12px;
+  width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(12, 16, 22, 0.98);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
   z-index: 180;
 }
-.trade-menu-header,
-.trade-menu-section {
-  display: grid;
-  gap: 6px;
-}
-.trade-menu-status-copy {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.trade-menu-actions {
+.trade-menu-option {
   display: flex;
-  justify-content: flex-start;
-}
-.trade-menu-link {
-  padding: 0;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 7px;
   border: none;
   background: transparent;
-  color: var(--accent-blue);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.trade-menu-section-title {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.trade-menu-status-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.trade-menu-status-btn {
-  min-height: 34px;
-  padding: 0 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-base);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
+  text-align: left;
   cursor: pointer;
 }
-.trade-menu-status-btn:hover {
-  border-color: rgba(74, 158, 255, 0.32);
-  background: rgba(74, 158, 255, 0.08);
+.trade-menu-option:hover {
+  background: rgba(74, 158, 255, 0.10);
 }
-.trade-menu-status-btn.active {
-  border-color: rgba(74, 158, 255, 0.42);
-  background: rgba(74, 158, 255, 0.14);
+.trade-menu-option.active {
+  background: rgba(74, 158, 255, 0.16);
   color: #eef5ff;
 }
-.trade-menu-status-btn:disabled {
+.trade-menu-option:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+.trade-menu-option-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 .trade-menu-error {
   padding: 10px 12px;
@@ -3085,6 +3062,33 @@ body {
   border: 1px solid rgba(255, 193, 87, 0.22);
   background: rgba(255, 193, 87, 0.08);
   color: #ffe0a1;
+}
+
+/* Inline watchlist action errors (copy failure, orphaned buy order) with a dismiss. */
+.watchlist-copy-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.watchlist-copy-error .text-btn {
+  flex-shrink: 0;
+}
+
+/* Error-boundary fallback card. */
+.error-boundary-card .empty-state {
+  padding: 24px 16px;
+}
+
+/* Destructive confirm button variant. */
+.btn-primary.danger {
+  background: var(--accent-red, #f04f58);
+  border-color: var(--accent-red, #f04f58);
+  color: #fff;
+}
+.btn-primary.danger:hover {
+  filter: brightness(1.08);
 }
 
 .settings-modal {
@@ -5766,6 +5770,56 @@ body {
 }
 .listing-table tr:hover td { background: var(--bg-elevated); }
 .listing-table tr:last-child td { border-bottom: none; }
+
+/* Hidden orders are dimmed so on/off visibility is obvious at a glance. */
+.listing-table tr.trade-row-hidden td { opacity: 0.45; }
+.listing-table tr.trade-row-hidden:hover td { opacity: 0.7; }
+.listing-table tr.trade-row-hidden td:nth-child(2) { opacity: 1; }
+
+/* Per-row visibility toggle pill. */
+.trade-row-visibility {
+  min-width: 64px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.trade-row-visibility.on {
+  border-color: rgba(61, 214, 140, 0.4);
+  background: rgba(61, 214, 140, 0.12);
+  color: var(--accent-green, #3dd68c);
+}
+.trade-row-visibility.off {
+  border-color: var(--border);
+  background: var(--bg-base);
+  color: var(--text-muted);
+}
+.trade-row-visibility:hover:not(:disabled) { filter: brightness(1.15); }
+.trade-row-visibility:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Show All / Hide All toolbar above the listing table. */
+.trade-visibility-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 0 2px;
+}
+.trade-visibility-bar-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.trade-visibility-bar-actions {
+  display: flex;
+  gap: 8px;
+}
 
 .item-cell { display: flex; align-items: center; gap: 10px; }
 .item-thumb {

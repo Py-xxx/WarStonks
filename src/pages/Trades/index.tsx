@@ -1143,6 +1143,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const [listingActionError, setListingActionError] = useState<string | null>(null);
   const [soldQuantities, setSoldQuantities] = useState<Record<string, string>>({});
   const [sessionExpiredPopupOpen, setSessionExpiredPopupOpen] = useState(false);
+  const [visibilityActionPending, setVisibilityActionPending] = useState(false);
   // Analysis preview for the create-listing modal (cleared on modal close).
   const [listingAnalysis, setListingAnalysis] = useState<ListingAnalysisState | null>(null);
   // Display-layer state: epoch ms when each order's market_low was last fetched.
@@ -1332,6 +1333,61 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     const { overview: hydratedSynced } = hydrateOverviewFromCache(syncedOverview);
     tradeOverviewCache.set(sellerMode, hydratedSynced);
     setOverview(hydratedSynced);
+  };
+
+  const updateOrderFn = listingType === 'sell' ? updateWfmSellOrder : updateWfmBuyOrder;
+
+  const handleToggleOrderVisibility = async (order: TradeSellOrder) => {
+    try {
+      const nextOverview = await updateOrderFn(
+        {
+          orderId: order.orderId,
+          price: order.yourPrice,
+          quantity: order.quantity,
+          rank: order.rank ?? null,
+          visible: !order.visible,
+        } satisfies TradeUpdateListingInput,
+        sellerMode,
+      );
+      await applyOverview(nextOverview);
+    } catch (error) {
+      handleTradeActionFailure(error);
+    }
+  };
+
+  const handleSetAllVisibility = async (visible: boolean) => {
+    // Only touch orders that aren't already in the desired state. Each update returns a
+    // refreshed overview; applying the last one reflects every change. Buy and sell lists
+    // are independent because this only iterates the current tab's `orders`.
+    const targets = orders.filter((order) => order.visible !== visible);
+    if (targets.length === 0 || visibilityActionPending) {
+      return;
+    }
+
+    setVisibilityActionPending(true);
+    setOverviewError(null);
+    try {
+      let latestOverview: TradeOverview | null = null;
+      for (const order of targets) {
+        latestOverview = await updateOrderFn(
+          {
+            orderId: order.orderId,
+            price: order.yourPrice,
+            quantity: order.quantity,
+            rank: order.rank ?? null,
+            visible,
+          } satisfies TradeUpdateListingInput,
+          sellerMode,
+        );
+      }
+      if (latestOverview) {
+        await applyOverview(latestOverview);
+      }
+    } catch (error) {
+      handleTradeActionFailure(error);
+    } finally {
+      setVisibilityActionPending(false);
+    }
   };
 
   const openCreateListing = () => {
@@ -1564,6 +1620,32 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
 
       {overviewError ? <div className="trade-inline-error">{overviewError}</div> : null}
 
+      {orders.length > 0 ? (
+        <div className="trade-visibility-bar">
+          <span className="trade-visibility-bar-label">
+            {orders.filter((order) => order.visible).length}/{orders.length} {listingType} orders visible
+          </span>
+          <div className="trade-visibility-bar-actions">
+            <button
+              className="act-btn"
+              type="button"
+              disabled={visibilityActionPending || orders.every((order) => order.visible)}
+              onClick={() => void handleSetAllVisibility(true)}
+            >
+              Show All
+            </button>
+            <button
+              className="act-btn"
+              type="button"
+              disabled={visibilityActionPending || orders.every((order) => !order.visible)}
+              onClick={() => void handleSetAllVisibility(false)}
+            >
+              Hide All
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="card trade-list-card">
         {overviewLoading && !overview ? (
           <div className="empty-state">
@@ -1579,6 +1661,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             <thead>
               <tr>
                 <th>Item</th>
+                <th>Visible</th>
                 <th>Your Price</th>
                 <th>Market Low</th>
                 <th>Price Gap</th>
@@ -1589,7 +1672,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             </thead>
             <tbody>
               {orders.map((order) => (
-                <tr key={order.orderId}>
+                <tr key={order.orderId} className={order.visible ? undefined : 'trade-row-hidden'}>
                   <td>
                     <div className="item-cell">
                       <span className="item-thumb trade-item-thumb">
@@ -1608,6 +1691,18 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                         </div>
                       </div>
                     </div>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className={`trade-row-visibility${order.visible ? ' on' : ' off'}`}
+                      disabled={visibilityActionPending}
+                      onClick={() => void handleToggleOrderVisibility(order)}
+                      title={order.visible ? 'Visible on warframe.market — click to hide' : 'Hidden from warframe.market — click to show'}
+                      aria-label={order.visible ? 'Hide this order' : 'Show this order'}
+                    >
+                      {order.visible ? 'Visible' : 'Hidden'}
+                    </button>
                   </td>
                   <td>
                     <div className="trade-cell-value">{formatPlatinumValue(order.yourPrice)}</div>
@@ -1680,7 +1775,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
 
               {overview && orders.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <div className="empty-state">
                       <span className="empty-primary">
                         No {listingType === 'sell' ? 'sell' : 'buy'} orders
