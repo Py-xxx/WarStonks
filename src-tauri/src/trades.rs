@@ -6165,23 +6165,14 @@ async fn run_presence_keeper(app: tauri::AppHandle) {
                     &app,
                     "trades-presence",
                     "hold-connection",
-                    "Presence websocket dropped; will reconnect.",
+                    "Presence websocket dropped; backing off and reconnecting (auth session left intact).",
                     &error,
                 );
-                if should_attempt_trade_session_reauth(&error) {
-                    // Token likely expired — refresh it so the next connect uses a live token.
-                    let app_for_reauth = app.clone();
-                    let reauth_ok = tauri::async_runtime::spawn_blocking(move || {
-                        reauth_session(&app_for_reauth).is_ok()
-                    })
-                    .await
-                    .unwrap_or(false);
-                    if reauth_ok {
-                        // Fresh token in hand — reconnect immediately.
-                        backoff = reset_backoff;
-                        continue;
-                    }
-                }
+                // CRITICAL: never clear or re-auth the trade session from the presence
+                // path. A websocket hiccup must not sign the user out. The HTTP path
+                // refreshes the token on its own 401s, and this keeper picks up the new
+                // token on its next resolve. (Previously this called reauth_session, which
+                // wiped the in-memory + keychain session and bounced the user to sign-in.)
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(max_backoff);
             }
@@ -6529,10 +6520,17 @@ fn restore_or_reauth_validated_session(
 ) -> Result<Option<StoredTradeSession>> {
     let client = shared_wfm_client()?;
 
-    let candidate = match get_session_from_cache() {
-        Some(session) => Some(session),
-        None => load_session(app)?,
-    };
+    // Trust the in-memory cached session as-is: it was established/refreshed during this
+    // run, so validating it with another /me call only risks a false logout if that call
+    // hits a transient 401/403/rate-limit. If the cached token has actually expired, the
+    // real order/overview API calls return 401 and trigger re-auth on their own.
+    if let Some(session) = get_session_from_cache() {
+        return Ok(Some(session));
+    }
+
+    // Cold start: only a keychain-loaded session (which may have expired since last run)
+    // gets a live /me validation before we trust it.
+    let candidate = load_session(app)?;
 
     if let Some(mut session) = candidate {
         match fetch_me_with_token(&client, &session.token) {
