@@ -1782,6 +1782,7 @@ function AnalyticsPanel({
   errorMessage = null,
   loadingLabel = 'Loading panel',
   className = '',
+  accent = 'blue',
   headerAside = null,
 }: {
   title: string;
@@ -1793,10 +1794,11 @@ function AnalyticsPanel({
   errorMessage?: string | null;
   loadingLabel?: string;
   className?: string;
+  accent?: 'blue' | 'green' | 'amber' | 'purple';
   headerAside?: ReactNode;
 }) {
   return (
-    <div className={`card market-panel ${className}`.trim()}>
+    <div className={`card market-panel accent-${accent} ${className}`.trim()}>
       <div className="card-header">
         <div className="market-panel-header">
           <div className="market-panel-header-copy">

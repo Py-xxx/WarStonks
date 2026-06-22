@@ -1965,7 +1965,7 @@ export function OpportunitiesPage() {
             <section className="market-panel set-planner-main-panel">
               <div className="set-planner-header">
                 <div>
-                  <span className="panel-title-eyebrow">Completion Opportunities</span>
+                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />Completion Opportunities</span>
                   <h3>Set Completion Planner</h3>
                   <p>
                     Uses your owned prime parts plus the cached Arbitrage scan to estimate the remaining
@@ -2215,7 +2215,7 @@ export function OpportunitiesPage() {
             <section className="market-panel owned-relics-panel">
               <div className="owned-relics-header">
                 <div>
-                  <span className="panel-title-eyebrow">Owned Relics</span>
+                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />Owned Relics</span>
                   <h3>Relic Inventory</h3>
                   <p>
                     Pulls your Alecaframe relic inventory and breaks down counts by refinement.
@@ -2350,7 +2350,7 @@ export function OpportunitiesPage() {
             <section className="market-panel farm-now-panel">
               <div className="farm-now-header">
                 <div>
-                  <span className="panel-title-eyebrow">What To Farm Now</span>
+                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />What To Farm Now</span>
                   <h3>
                     {farmNowTab === 'set-completion'
                       ? 'Relics For Set Completion'

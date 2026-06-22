@@ -44,7 +44,10 @@ const SCANNER_WINDOW_SIZE: usize = 3;
 const WFM_DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 20;
 const ARBITRAGE_SCANNER_STALE_MINUTES: i64 = 2;
 const ARBITRAGE_SCANNER_HEARTBEAT_SECONDS: u64 = 3;
-const ANALYTICS_CACHE_VERSION: i64 = 5;
+// Bump whenever the entry/exit zone or pricing math changes so cached analytics
+// recompute instead of serving values from the old formula. v6: recency/volume-weighted
+// zone anchors + regime guard.
+const ANALYTICS_CACHE_VERSION: i64 = 6;
 const ARBITRAGE_SCANNER_KEY: &str = "arbitrage";
 const ARBITRAGE_SCANNER_PROGRESS_EVENT: &str = "arbitrage-scanner-progress";
 const RELIC_REFINEMENT_INTACT: &str = "intact";
@@ -3841,37 +3844,124 @@ fn percentile_price(sorted_values: &[f64], percentile: f64) -> Option<f64> {
     Some(lower_value + ((upper_value - lower_value) * weight))
 }
 
+// ── Recency- and volume-weighted zone anchors ─────────────────────────────────
+// These anchors are the single source of truth for "good" entry/exit zones across the
+// whole app (Analytics, Analysis, Quick View, arbitrage scanner, set planner). Prices
+// drift over time — a vaulting, prime access, or riven dispo change can move a market in
+// days — so each historical bucket is weighted by:
+//   • exponential recency decay (7-day half-life), so month-old prices barely count, and
+//   • trade volume (capped), so a level is only "proven" if real trades happened there.
+// A regime guard additionally discards pre-shift history outright when the recent price
+// level has diverged sharply from the wider window.
+const ZONE_HISTORY_WINDOW_DAYS: i64 = 30;
+const ZONE_RECENT_WINDOW_DAYS: i64 = 7;
+const ZONE_RECENCY_HALF_LIFE_DAYS: f64 = 7.0;
+const ZONE_VOLUME_WEIGHT_CAP: f64 = 50.0;
+const ZONE_REGIME_SHIFT_THRESHOLD: f64 = 0.20;
+const ZONE_REGIME_MIN_RECENT_ROWS: usize = 3;
+
+fn zone_row_weight(row: &InternalStatsRow, now: OffsetDateTime) -> f64 {
+    let age_days = (now - row.bucket_at).whole_seconds().max(0) as f64 / 86_400.0;
+    let recency = 0.5_f64.powf(age_days / ZONE_RECENCY_HALF_LIFE_DAYS);
+    // Floor at 1 so a zero-volume bucket still contributes a small amount, cap so one
+    // huge-volume day can't dominate the distribution.
+    let volume_weight = row.volume.clamp(0.0, ZONE_VOLUME_WEIGHT_CAP).max(1.0);
+    recency * volume_weight
+}
+
+/// Weighted percentile over (value, weight) pairs. Sorts in place; returns `None` only
+/// when there are no values.
+fn weighted_percentile(pairs: &mut [(f64, f64)], percentile: f64) -> Option<f64> {
+    if pairs.is_empty() {
+        return None;
+    }
+    pairs.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let clamped = percentile.clamp(0.0, 1.0);
+    let total_weight: f64 = pairs.iter().map(|(_, weight)| weight).sum();
+    if total_weight <= 0.0 {
+        let index = ((pairs.len() - 1) as f64 * clamped).round() as usize;
+        return pairs.get(index).map(|(value, _)| *value);
+    }
+    let target = total_weight * clamped;
+    let mut cumulative = 0.0;
+    for (value, weight) in pairs.iter() {
+        cumulative += weight;
+        if cumulative >= target {
+            return Some(*value);
+        }
+    }
+    pairs.last().map(|(value, _)| *value)
+}
+
+fn zone_fair_value(row: &InternalStatsRow) -> Option<f64> {
+    row.median
+        .or(row.wa_price)
+        .or(row.avg_price)
+        .or(row.moving_avg)
+}
+
+/// Coarse unweighted median of the fair value across rows — used only for the
+/// regime-shift comparison.
+fn rows_fair_median(rows: &[&InternalStatsRow]) -> Option<f64> {
+    let mut values: Vec<f64> = rows.iter().filter_map(|row| zone_fair_value(row)).collect();
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|left, right| left.total_cmp(right));
+    Some(values[values.len() / 2])
+}
+
 fn build_historical_zone_anchors(rows: &[InternalStatsRow]) -> Option<HistoricalZoneAnchors> {
     if rows.is_empty() {
         return None;
     }
 
-    let cutoff = now_utc() - TimeDuration::days(30);
-    let recent_rows = rows
+    let now = now_utc();
+    let window_cutoff = now - TimeDuration::days(ZONE_HISTORY_WINDOW_DAYS);
+    let mut windowed: Vec<&InternalStatsRow> = rows
         .iter()
-        .filter(|row| row.bucket_at >= cutoff)
-        .collect::<Vec<_>>();
-    let source_rows = if recent_rows.is_empty() {
-        rows.iter().collect::<Vec<_>>()
+        .filter(|row| row.bucket_at >= window_cutoff)
+        .collect();
+    if windowed.is_empty() {
+        windowed = rows.iter().collect();
+    }
+
+    // Regime guard: when the recent price level has diverged sharply from the wider
+    // window (an event moved the market), trust recent data only.
+    let recent_cutoff = now - TimeDuration::days(ZONE_RECENT_WINDOW_DAYS);
+    let recent: Vec<&InternalStatsRow> = windowed
+        .iter()
+        .filter(|row| row.bucket_at >= recent_cutoff)
+        .copied()
+        .collect();
+    let source_rows: Vec<&InternalStatsRow> = if recent.len() >= ZONE_REGIME_MIN_RECENT_ROWS {
+        match (rows_fair_median(&recent), rows_fair_median(&windowed)) {
+            (Some(recent_median), Some(full_median))
+                if full_median > 0.0
+                    && (recent_median - full_median).abs() / full_median
+                        > ZONE_REGIME_SHIFT_THRESHOLD =>
+            {
+                recent
+            }
+            _ => windowed,
+        }
     } else {
-        recent_rows
+        windowed
     };
 
-    let mut dip_prices = Vec::new();
-    let mut fair_values = Vec::new();
-    let mut ceiling_values = Vec::new();
-
-    for row in source_rows {
-        if let Some(value) = row.min_price.or(row.donch_bot) {
-            dip_prices.push(value);
+    let mut dip_pairs = Vec::new();
+    let mut fair_pairs = Vec::new();
+    let mut ceiling_pairs = Vec::new();
+    for &row in &source_rows {
+        let weight = zone_row_weight(row, now);
+        if weight <= 0.0 {
+            continue;
         }
-        if let Some(value) = row
-            .median
-            .or(row.wa_price)
-            .or(row.avg_price)
-            .or(row.moving_avg)
-        {
-            fair_values.push(value);
+        if let Some(value) = row.min_price.or(row.donch_bot) {
+            dip_pairs.push((value, weight));
+        }
+        if let Some(value) = zone_fair_value(row) {
+            fair_pairs.push((value, weight));
         }
         if let Some(value) = row
             .max_price
@@ -3879,25 +3969,16 @@ fn build_historical_zone_anchors(rows: &[InternalStatsRow]) -> Option<Historical
             .or(row.median)
             .or(row.wa_price)
         {
-            ceiling_values.push(value);
+            ceiling_pairs.push((value, weight));
         }
     }
 
-    dip_prices.sort_by(|left, right| left.total_cmp(right));
-    fair_values.sort_by(|left, right| left.total_cmp(right));
-    ceiling_values.sort_by(|left, right| left.total_cmp(right));
-
     Some(HistoricalZoneAnchors {
-        support_floor: percentile_price(&dip_prices, 0.18).or_else(|| dip_prices.first().copied()),
-        support_recurrence: percentile_price(&dip_prices, 0.38)
-            .or_else(|| percentile_price(&dip_prices, 0.5))
-            .or_else(|| dip_prices.first().copied()),
-        fair_low: percentile_price(&fair_values, 0.35).or_else(|| fair_values.first().copied()),
-        fair_high: percentile_price(&ceiling_values, 0.82)
-            .or_else(|| ceiling_values.last().copied()),
-        fair_center: percentile_price(&fair_values, 0.55)
-            .or_else(|| percentile_price(&fair_values, 0.5))
-            .or_else(|| fair_values.first().copied()),
+        support_floor: weighted_percentile(&mut dip_pairs, 0.18),
+        support_recurrence: weighted_percentile(&mut dip_pairs, 0.38),
+        fair_low: weighted_percentile(&mut fair_pairs, 0.35),
+        fair_high: weighted_percentile(&mut ceiling_pairs, 0.82),
+        fair_center: weighted_percentile(&mut fair_pairs, 0.55),
     })
 }
 
@@ -9191,6 +9272,8 @@ fn load_latest_trade_health_analytics(
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<Option<ItemAnalyticsResponse>> {
+    // Only trust a cache row computed by the current pricing version, for the matching
+    // seller_mode — otherwise trade health would surface stale/old-formula zones.
     let payload_json = connection
         .query_row(
             "SELECT payload_json
@@ -9200,8 +9283,10 @@ fn load_latest_trade_health_analytics(
                AND seller_mode = ?3
                AND domain_key = '48h'
                AND bucket_size_key = '1h'
+               AND cache_version = ?4
+             ORDER BY computed_at DESC
              LIMIT 1",
-            params![item_id, variant_key, seller_mode],
+            params![item_id, variant_key, seller_mode, ANALYTICS_CACHE_VERSION],
             |row| row.get::<_, String>(0),
         )
         .optional()?;

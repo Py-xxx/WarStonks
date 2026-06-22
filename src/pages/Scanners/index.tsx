@@ -289,6 +289,7 @@ function ArbitrageRow({
       <button className="farm-now-row-button scanner-farm-row-button" type="button" onClick={onToggle}>
         <div className="farm-now-row-main scanner-farm-row-main scanner-farm-row-main-arbitrage">
           <div className="farm-now-cell farm-now-cell-name scanner-farm-cell-name">
+            <span className="panel-dot panel-dot-purple" aria-hidden="true" />
             <div className="scanner-result-rank">#{index + 1}</div>
             <span className="farm-now-thumb scanner-farm-thumb">
               {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
@@ -448,6 +449,7 @@ function RelicRoiRow({
       <button className="farm-now-row-button scanner-farm-row-button" type="button" onClick={onToggle}>
         <div className="farm-now-row-main scanner-farm-row-main scanner-farm-row-main-relic">
           <div className="farm-now-cell farm-now-cell-name scanner-farm-cell-name">
+            <span className="panel-dot panel-dot-purple" aria-hidden="true" />
             <div className="scanner-result-rank">#{index + 1}</div>
             <span className="farm-now-thumb scanner-farm-thumb">
               {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
@@ -966,6 +968,7 @@ export function ScannersPage() {
 
             {activeTab === 'arbitrage' && arbitrage ? (
               <div className="scanner-results-list">
+                <div className="panel-section-header">Set Arbitrage</div>
                 <div className="scanner-results-toolbar">
                   <div className="scanner-search-shell" role="search">
                     <span className="scanner-search-icon" aria-hidden="true">⌕</span>
@@ -1014,6 +1017,7 @@ export function ScannersPage() {
             ) : activeTab === 'relic-roi' && arbitrage ? (
               relicResults.length > 0 ? (
                 <div className="scanner-results-list">
+                  <div className="panel-section-header">Relic ROI</div>
                   <div className="scanner-results-toolbar scanner-results-toolbar-split">
                     <div className="scanner-search-shell" role="search">
                       <span className="scanner-search-icon" aria-hidden="true">⌕</span>
