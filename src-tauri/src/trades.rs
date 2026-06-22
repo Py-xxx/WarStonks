@@ -822,14 +822,54 @@ fn clear_trade_credentials(_app: &tauri::AppHandle) -> Result<()> {
     }
 }
 
+fn placeholder_trade_account_summary() -> TradeAccountSummary {
+    TradeAccountSummary {
+        user_id: String::new(),
+        name: String::new(),
+        status: "offline".to_string(),
+        platform: None,
+        reputation: None,
+        avatar_url: None,
+        last_updated_at: String::new(),
+    }
+}
+
 fn load_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
     let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_SESSION_KEY)
         .context("failed to open keychain for WFM session")?;
     match entry.get_password() {
         Ok(json) => {
-            let session = serde_json::from_str::<StoredTradeSession>(&json)
+            // Accept both the new minimal payload (token + deviceId) and the legacy full
+            // payload (which embedded the whole account). The account is re-fetched via
+            // /me on restore, so only the token + device id are persisted now — that keeps
+            // the blob small enough for Windows Credential Manager's ~2560-byte limit.
+            let value = serde_json::from_str::<serde_json::Value>(&json)
                 .context("failed to parse WFM session from keychain")?;
-            Ok(Some(session))
+            let token = value
+                .get("token")
+                .and_then(|entry| entry.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let device_id = value
+                .get("deviceId")
+                .and_then(|entry| entry.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if token.is_empty() || device_id.is_empty() {
+                return Ok(None);
+            }
+            let account = value
+                .get("account")
+                .and_then(|account| {
+                    serde_json::from_value::<TradeAccountSummary>(account.clone()).ok()
+                })
+                .unwrap_or_else(placeholder_trade_account_summary);
+            Ok(Some(StoredTradeSession {
+                warstonks_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                token,
+                device_id,
+                account,
+            }))
         }
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => {
@@ -848,11 +888,16 @@ fn load_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
 fn save_session(_app: &tauri::AppHandle, session: &StoredTradeSession) -> Result<()> {
     let entry = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_SESSION_KEY)
         .context("failed to open keychain for WFM session")?;
-    let mut updated = session.clone();
-    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    let json = serde_json::to_string(&updated).context("failed to serialize WFM session")?;
+    // Persist only the token + device id. The account summary is re-fetched via /me on
+    // restore, and omitting it keeps the blob under Windows Credential Manager's
+    // ~2560-byte (UTF-16) limit, which a full JWT + account object would blow past.
+    let payload = json!({
+        "warstonksVersion": env!("CARGO_PKG_VERSION"),
+        "token": session.token,
+        "deviceId": session.device_id,
+    });
     entry
-        .set_password(&json)
+        .set_password(&payload.to_string())
         .context("failed to save WFM session to the OS keychain")
 }
 
@@ -6945,8 +6990,20 @@ pub async fn sign_in_wfm_trade_account(
         let input = input.clone();
         move || {
             let session = sign_in_inner(&input)?;
-            save_session(&app, &session)?;
+            // Populate the in-memory cache FIRST so the session is usable this run even if
+            // the keychain write fails (e.g. Windows Credential Manager rejecting a blob).
             set_session_in_cache(&session);
+            // Keychain persistence is best-effort — a write failure must never abort a
+            // successful sign-in. Persistence then falls back to credential re-auth.
+            if let Err(error) = save_session(&app, &session) {
+                log_feature_error_best_effort(
+                    &app,
+                    "trades-session",
+                    "save-session-keychain",
+                    "Signed in, but couldn't persist the session token to the OS keychain (it still works this run).",
+                    &error,
+                );
+            }
             Ok::<StoredTradeSession, anyhow::Error>(session)
         }
     })
@@ -6956,25 +7013,33 @@ pub async fn sign_in_wfm_trade_account(
 
     if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
         session.account.status = status;
-        tauri::async_runtime::spawn_blocking({
-            let app = app.clone();
-            let session = session.clone();
-            move || save_session(&app, &session)
+        set_session_in_cache(&session);
+        let app_for_save = app.clone();
+        let session_for_save = session.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            save_session(&app_for_save, &session_for_save)
         })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error: anyhow::Error| error.to_string())?;
+        .await;
     }
 
     if should_persist_credentials {
-        tauri::async_runtime::spawn_blocking({
-            let app = app.clone();
-            let credentials = credentials.clone();
-            move || save_trade_credentials(&app, &credentials)
+        let app_for_creds = app.clone();
+        let credentials_to_save = credentials.clone();
+        let creds_result = tauri::async_runtime::spawn_blocking(move || {
+            save_trade_credentials(&app_for_creds, &credentials_to_save)
         })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error: anyhow::Error| error.to_string())?;
+        .await;
+        if let Ok(Err(error)) = creds_result {
+            // Best-effort: don't fail sign-in if credential persistence fails, but log it
+            // since it means auto re-auth across restarts won't work.
+            log_feature_error_best_effort(
+                &app,
+                "trades-session",
+                "save-credentials-keychain",
+                "Signed in, but couldn't persist credentials to the OS keychain — auto sign-in across restarts may not work.",
+                &anyhow!("{error}"),
+            );
+        }
     }
 
     Ok(TradeSessionState {
