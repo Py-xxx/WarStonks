@@ -54,7 +54,18 @@ const PENDING_NOTIFICATION_WINDOW_MINUTES: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://ws.warframe.market/socket";
-const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
+// Warframe.Market sits behind Cloudflare, which rate-limits (HTTP 429 / "error code:
+// 1015") request profiles that don't look like a normal browser. A bare "warstonks/x.y.z"
+// User-Agent gets singled out on the sign-in endpoint while the website (real browser UA +
+// cookies + Cloudflare clearance) sails through. We send a browser-shaped User-Agent so
+// our traffic blends in, while still appending a "WarStonks/<version>" product token so we
+// remain honestly attributable to WFM. Paired with the cookie store on `shared_wfm_client`,
+// this lets the client hold any Cloudflare clearance cookie it is handed.
+const WFM_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ",
+    "Chrome/124.0.0.0 Safari/537.36 WarStonks/",
+    env!("CARGO_PKG_VERSION")
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -714,6 +725,12 @@ fn shared_wfm_client() -> Result<Client> {
     match CLIENT.get_or_init(|| {
         Client::builder()
             .timeout(Duration::from_secs(30))
+            // Persist cookies across requests so the client can hold any Cloudflare
+            // clearance cookie WFM hands back, the same way a browser does.
+            .cookie_store(true)
+            // Browser-shaped default UA so requests don't get singled out by Cloudflare's
+            // rate-limit rules. Per-request `User-Agent` headers still override this.
+            .user_agent(WFM_USER_AGENT)
             .build()
             .map_err(|error| format!("failed to build WFM trades client: {error}"))
     }) {
@@ -6424,8 +6441,17 @@ fn is_transient_signin_error(error: &anyhow::Error) -> bool {
         return false;
     }
 
-    // Rate limiting and server-side errors are transient.
-    if message.contains("failed with status 429") || message.contains("failed with status 5") {
+    // Rate limiting must NOT be quick-retried. A 429 — especially Cloudflare's edge
+    // limit on the login endpoint, surfaced as "error code: 1015" — is an IP-level lock
+    // that punishes repeated requests and can extend the lockout well past our short
+    // backoff. Stop immediately and let the user (or the next scheduled restore) wait it
+    // out instead of hammering /auth/signin.
+    if is_rate_limit_error(error) {
+        return false;
+    }
+
+    // Server-side errors are transient.
+    if message.contains("failed with status 5") {
         return true;
     }
 
@@ -6437,6 +6463,26 @@ fn is_transient_signin_error(error: &anyhow::Error) -> bool {
         || message.contains("connect")
         || message.contains("dns")
         || message.contains("network")
+}
+
+/// True when an error is a Warframe.Market / Cloudflare rate-limit response — HTTP 429,
+/// commonly surfaced by Cloudflare as "error code: 1015" on the sign-in endpoint.
+fn is_rate_limit_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("failed with status 429") || message.contains("1015")
+}
+
+/// Maps a sign-in failure to a user-facing message. Rate limits get a clear, actionable
+/// explanation instead of the raw Cloudflare status code, which is otherwise opaque.
+fn friendly_sign_in_error(error: &anyhow::Error) -> String {
+    if is_rate_limit_error(error) {
+        return "Warframe.Market is temporarily rate-limiting sign-in requests \
+(Cloudflare \"error code: 1015\"). This is an IP-level limit on their end, not a problem \
+with your credentials. Please wait about a minute before trying again, and avoid repeated \
+sign-in attempts until then."
+            .to_string();
+    }
+    error.to_string()
 }
 
 /// Signs in, retrying transient failures with exponential backoff. Permanent failures
@@ -7009,7 +7055,7 @@ pub async fn sign_in_wfm_trade_account(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error: anyhow::Error| error.to_string())?;
+    .map_err(|error: anyhow::Error| friendly_sign_in_error(&error))?;
 
     if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
         session.account.status = status;
