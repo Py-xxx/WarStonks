@@ -28,7 +28,11 @@ time = { version = "0.3", features = ["formatting"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["time"] }
 uuid = { version = "1", features = ["v4"] }
-keyring = "3"
+# Enable the real OS credential stores. Without these features keyring v3 silently uses
+# an in-memory mock that never persists (macOS Keychain / Windows Credential Manager /
+# Linux Secret Service). Each backend is cfg-gated to its own OS, so enabling all three
+# is safe cross-platform.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 webbrowser = "1"
 tauri-plugin-updater = "2"
 
