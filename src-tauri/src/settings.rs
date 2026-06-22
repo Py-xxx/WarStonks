@@ -538,17 +538,19 @@ fn parse_alecaframe_relic_inventory(payload: &[u8]) -> Result<Vec<AlecaframeReli
         ));
     }
 
+    const RELIC_ENTRY_SIZE: usize = 9;
     let entry_count = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
-    let expected_len = 4usize.saturating_add(entry_count.saturating_mul(9));
-    if payload.len() < expected_len {
-        return Err(anyhow!(
-            "Alecaframe relic inventory payload is incomplete (expected at least {expected_len} bytes)."
-        ));
-    }
+    // AlecaFrame's header count can exceed the number of fixed-size entries actually
+    // present (observed: header says 91 but the payload holds exactly 90 complete
+    // 9-byte entries). Parse the entries the buffer truly contains instead of rejecting
+    // the whole payload on a strict length check; each entry is still validated below, so
+    // a genuinely misaligned/garbage payload will surface as an unknown tier/refinement.
+    let available_entries = payload.len().saturating_sub(4) / RELIC_ENTRY_SIZE;
+    let parse_count = entry_count.min(available_entries);
 
-    let mut entries = Vec::with_capacity(entry_count);
+    let mut entries = Vec::with_capacity(parse_count);
     let mut offset = 4;
-    for _ in 0..entry_count {
+    for _ in 0..parse_count {
         let relic_type = payload[offset];
         let refinement = payload[offset + 1];
         let code_slice = &payload[offset + 2..offset + 5];
@@ -558,7 +560,7 @@ fn parse_alecaframe_relic_inventory(payload: &[u8]) -> Result<Vec<AlecaframeReli
             payload[offset + 7],
             payload[offset + 8],
         ]);
-        offset += 9;
+        offset += RELIC_ENTRY_SIZE;
 
         let code = String::from_utf8_lossy(code_slice)
             .trim_matches('\u{0}')
