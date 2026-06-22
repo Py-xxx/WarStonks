@@ -10279,3 +10279,214 @@ body {
 .market-metric-value.tone-green { color: var(--color-green); }
 .market-metric-value.tone-amber { color: var(--color-amber); }
 .market-metric-value.tone-red   { color: var(--color-red); }
+
+/* ─── Guide ──────────────────────────────────────────────────────────────── */
+.guide-subnav .subnav-left {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.guide-search {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  padding: 6px 10px;
+  min-width: 200px;
+}
+.guide-search:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+.guide-search::placeholder { color: var(--text-muted); }
+
+.guide-page-content {
+  max-width: 880px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.guide-intro {
+  color: var(--text-secondary);
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 4px 0 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 24px;
+}
+
+.guide-section {
+  margin-bottom: 36px;
+  scroll-margin-top: 16px;
+}
+
+.guide-section-header { margin-bottom: 14px; }
+
+.guide-section-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.guide-section-blurb {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
+.guide-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.guide-paragraph {
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 1.65;
+  margin: 0;
+}
+
+.guide-subheading {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  margin: 10px 0 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+.guide-section-body > .guide-subheading:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.guide-steps,
+.guide-list {
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.guide-callout {
+  border-radius: 8px;
+  border-left: 3px solid var(--accent-blue);
+  background: rgba(74, 158, 255, 0.08);
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  font-size: 13.5px;
+  line-height: 1.55;
+  padding: 12px 14px;
+}
+.guide-callout-blue  { border-left-color: var(--accent-blue);  background: rgba(74,158,255,0.08); }
+.guide-callout-green { border-left-color: var(--accent-green); background: rgba(61,214,140,0.08); }
+.guide-callout-amber { border-left-color: var(--accent-amber); background: rgba(240,160,48,0.08); }
+
+.guide-tab-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  padding: 14px 16px;
+}
+
+.guide-tab-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.guide-tab-card-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.guide-tab-card-line {
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 0 0 6px;
+}
+.guide-tab-card-line:last-child { margin-bottom: 0; }
+
+.guide-tab-card-label {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.guide-glossary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.guide-glossary-item {
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 10px;
+}
+
+.guide-glossary-item dt {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  margin-bottom: 3px;
+}
+
+.guide-glossary-item dd {
+  color: var(--text-secondary);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.guide-faq {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.guide-faq-q {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 5px;
+}
+
+.guide-faq-a {
+  color: var(--text-secondary);
+  font-family: 'Inter', sans-serif;
+  font-size: 13.5px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .guide-glossary { grid-template-columns: 1fr; }
+}

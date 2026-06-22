@@ -1946,13 +1946,10 @@ function AnalyticsTab() {
     );
   }
 
-  if (marketVariantsLoading) {
-    return (
-      <div className="page-content">
-        <EmptyAnalyticsState body="Loading item data and computing the current market snapshot." />
-      </div>
-    );
-  }
+  // While item variants are still loading we deliberately fall through to the real
+  // analytics layout below. Every panel (and the chart) is null-safe and shows its
+  // own loading overlay while `revealedPanels` is still false, so the surface looks
+  // exactly like the loaded version with content pending — no separate skeleton.
 
   if (marketVariantsError && marketVariants.length === 0 && !selectedMarketVariantKey) {
     return (
@@ -2021,7 +2018,7 @@ function AnalyticsTab() {
       <StaticAnalyticsChart
         itemName={selectedItem.name}
         analytics={analytics}
-        loading={loading}
+        loading={loading || marketVariantsLoading}
         revealed={revealedPanels.chart}
         errorMessage={analyticsPanelError}
         domain={chartDomain}
@@ -2446,13 +2443,9 @@ function AnalysisTab() {
     );
   }
 
-  if (marketVariantsLoading) {
-    return (
-      <div className="page-content">
-        <EmptyAnalyticsState body="Loading market variants before building the analysis model." />
-      </div>
-    );
-  }
+  // While variants load we fall through to the real analysis layout below; it is
+  // null-safe and every panel shows its own loading overlay until revealed, so the
+  // loading view matches the loaded view exactly (panels present, content pending).
 
   if (marketVariantsError && marketVariants.length === 0 && !selectedMarketVariantKey) {
     return (
@@ -2478,13 +2471,8 @@ function AnalysisTab() {
     );
   }
 
-  if (analysisLoading && !analysis) {
-    return (
-      <div className="page-content">
-        <EmptyAnalyticsState body="Building the market analysis from live orders, analytics snapshots, and local item data." />
-      </div>
-    );
-  }
+  // No early-return while the analysis is being built — the layout below renders with
+  // pending content and per-panel loading overlays so it matches the loaded version.
 
   const effectiveItemDetails = itemDetails ?? analysis?.itemDetails ?? null;
   const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath);
@@ -2520,7 +2508,7 @@ function AnalysisTab() {
           }}
         />
       ) : null}
-      {analysis ? (
+      {analysis || analysisLoading || marketVariantsLoading ? (
         <>
       {analysisDegradedMessage ? (
         <MarketInlineNotice tone="warning" message={analysisDegradedMessage} />
