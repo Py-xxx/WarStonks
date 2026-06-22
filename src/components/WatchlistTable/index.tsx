@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ItemName } from '../ItemName';
 import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
@@ -53,7 +54,12 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
     }
     setCopyError(null);
     void copyWhisperMessage(
-      { username: item.currentSeller, platinum: item.currentPrice },
+      {
+        username: item.currentSeller,
+        platinum: item.currentPrice,
+        rank: item.currentRank,
+        maxRank: item.maxRank,
+      },
       item.displayName,
     )
       .then(() => {
@@ -151,7 +157,12 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                             )}
                           </span>
                         ) : null}
-                        <span>{item.displayName}</span>
+                        <ItemName
+                          name={item.displayName}
+                          slug={item.slug}
+                          itemId={item.itemId}
+                          imagePath={item.imagePath}
+                        />
                         {variant === 'compact' ? (
                           <span className="td-muted">Refreshed {formatElapsedTime(item.lastUpdatedAt)}</span>
                         ) : null}

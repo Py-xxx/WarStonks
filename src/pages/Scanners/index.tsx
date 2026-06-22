@@ -6,6 +6,7 @@ import {
   stopArbitrageScanner,
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
+import { ItemName } from '../../components/ItemName';
 import {
   formatScannerErrorMessage,
   type ScannerErrorContext,
@@ -220,7 +221,13 @@ function ArbitrageComponentRow({
         <div className="scanner-component-copy">
           <div className="scanner-component-name-row">
             <span className="scanner-component-name">
-              {component.quantityInSet}x {component.name}
+              {component.quantityInSet}x{' '}
+              <ItemName
+                name={component.name}
+                slug={component.slug}
+                itemId={component.itemId ?? undefined}
+                imagePath={component.imagePath}
+              />
             </span>
             <span className={`market-panel-badge tone-${confidenceTone(component.confidenceSummary.level)}`}>
               {component.confidenceSummary.label}
@@ -295,7 +302,14 @@ function ArbitrageRow({
               {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
             </span>
             <div className="farm-now-copy scanner-farm-copy">
-              <strong>{entry.name}</strong>
+              <strong>
+                <ItemName
+                  name={entry.name}
+                  slug={entry.slug}
+                  itemId={entry.setItemId}
+                  imagePath={entry.imagePath}
+                />
+              </strong>
               <div className="scanner-farm-badge-row">
                 <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
                   {entry.confidenceSummary.label}
@@ -455,7 +469,14 @@ function RelicRoiRow({
               {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
             </span>
             <div className="farm-now-copy scanner-farm-copy">
-              <strong>{entry.name}</strong>
+              <strong>
+                <ItemName
+                  name={entry.name}
+                  slug={entry.slug}
+                  itemId={entry.relicItemId}
+                  imagePath={entry.imagePath}
+                />
+              </strong>
               <div className="scanner-farm-badge-row">
                 {entry.isUnvaulted ? (
                   <span className="market-panel-badge tone-green">Unvaulted</span>

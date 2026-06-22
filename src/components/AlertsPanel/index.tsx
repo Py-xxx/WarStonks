@@ -271,7 +271,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       type="button"
                       onClick={() =>
                         void copyWhisperMessage(
-                          { username: alert.username, platinum: alert.price },
+                          { username: alert.username, platinum: alert.price, rank: alert.rank },
                           alert.itemName,
                         )
                           .then(() => {

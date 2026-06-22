@@ -21,6 +21,7 @@ import {
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { ItemName } from '../../components/ItemName';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import {
   clearWatchlistAddFeedbackTimeouts,
@@ -544,7 +545,14 @@ function SetPlannerRow({
                     </span>
                     <div className="planner-component-copy">
                       <div className="planner-component-name-row">
-                        <strong>{component.name}</strong>
+                        <strong>
+                          <ItemName
+                            name={component.name}
+                            slug={component.slug}
+                            itemId={component.itemId ?? undefined}
+                            imagePath={component.imagePath}
+                          />
+                        </strong>
                         <span
                           className={`market-panel-badge ${componentState.isOwned ? 'tone-green' : 'tone-red'}`}
                         >

@@ -1,6 +1,22 @@
 interface WhisperTarget {
   username: string;
   platinum: number;
+  rank?: number | null;
+  maxRank?: number | null;
+}
+
+/** Renders the " (Rank x/y)" suffix for ranked items, or "" for unranked ones. */
+export function formatWhisperRankSuffix(
+  rank: number | null | undefined,
+  maxRank: number | null | undefined,
+): string {
+  if (rank === null || rank === undefined) {
+    return '';
+  }
+  if (maxRank !== null && maxRank !== undefined && maxRank > 0) {
+    return ` (Rank ${rank}/${maxRank})`;
+  }
+  return ` (Rank ${rank})`;
 }
 
 export function formatWhisperItemName(itemName: string): string {
@@ -23,7 +39,8 @@ export function formatWhisperItemName(itemName: string): string {
 }
 
 export function formatWhisperMessage(target: WhisperTarget, itemName: string): string {
-  return `/w ${target.username} Hey there! I would like to buy ${formatWhisperItemName(itemName)} for ${target.platinum} :platinum: please (WarStonks - by py)`;
+  const rankSuffix = formatWhisperRankSuffix(target.rank, target.maxRank);
+  return `/w ${target.username} Hey there! I would like to buy ${formatWhisperItemName(itemName)}${rankSuffix} for ${target.platinum} :platinum: please (WarStonks - by py)`;
 }
 
 export async function copyWhisperMessage(

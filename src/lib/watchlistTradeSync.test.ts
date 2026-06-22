@@ -48,6 +48,7 @@ function createWatchlistItem(input: Pick<WatchlistItem, 'id' | 'slug' | 'variant
     currentOrderId: null,
     currentQuantity: null,
     currentRank: null,
+    maxRank: null,
     entryPrice: null,
     exitPrice: null,
     volume: 0,

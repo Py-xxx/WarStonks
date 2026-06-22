@@ -47,7 +47,7 @@ const ARBITRAGE_SCANNER_HEARTBEAT_SECONDS: u64 = 3;
 // Bump whenever the entry/exit zone or pricing math changes so cached analytics
 // recompute instead of serving values from the old formula. v6: recency/volume-weighted
 // zone anchors + regime guard.
-const ANALYTICS_CACHE_VERSION: i64 = 6;
+const ANALYTICS_CACHE_VERSION: i64 = 7;
 const ARBITRAGE_SCANNER_KEY: &str = "arbitrage";
 const ARBITRAGE_SCANNER_PROGRESS_EVENT: &str = "arbitrage-scanner-progress";
 const RELIC_REFINEMENT_INTACT: &str = "intact";
@@ -2768,45 +2768,33 @@ fn load_snapshot_chart_points(
                 .iter()
                 .filter_map(|(lowest_sell, _, _)| *lowest_sell)
                 .collect::<Vec<_>>();
-            let median_values = bucket_rows
-                .iter()
-                .filter_map(|(_, median_sell, _)| *median_sell)
-                .collect::<Vec<_>>();
             let highest_buy = bucket_rows
                 .iter()
                 .filter_map(|(_, _, highest_buy)| *highest_buy)
                 .reduce(f64::max);
             let low_price = lowest_values.iter().copied().reduce(f64::min);
-            let high_price = median_values
-                .iter()
-                .copied()
-                .chain(lowest_values.iter().copied())
-                .reduce(f64::max);
-            let open_price = lowest_values.first().copied();
-            let closed_price = lowest_values.last().copied();
 
+            // Snapshots are LIVE open listings, not confirmed closed trades. Only the
+            // live floor (lowest_sell) and the live highest buy are genuine live signals
+            // we want to surface. The closed-trade fields (median/average/OHLC candle)
+            // must come exclusively from `statistics_cache` (closed sales) — emitting an
+            // open-order median here is what spiked the latest bucket, since unsold
+            // overpriced asks dominate the open book. Leave those None so the closed
+            // chart line never absorbs open-order prices.
             AnalyticsChartPoint {
                 bucket_at: format_timestamp(
                     OffsetDateTime::from_unix_timestamp(bucket_start).unwrap_or_else(|_| now_utc()),
                 )
                 .unwrap_or_default(),
-                open_price,
-                closed_price,
-                low_price,
-                high_price,
+                open_price: None,
+                closed_price: None,
+                low_price: None,
+                high_price: None,
                 lowest_sell: low_price,
-                median_sell: if median_values.is_empty() {
-                    None
-                } else {
-                    Some(median_values.iter().sum::<f64>() / median_values.len() as f64)
-                },
+                median_sell: None,
                 moving_avg: None,
                 weighted_avg: None,
-                average_price: if median_values.is_empty() {
-                    None
-                } else {
-                    Some(median_values.iter().sum::<f64>() / median_values.len() as f64)
-                },
+                average_price: None,
                 highest_buy,
                 fair_value_low: None,
                 fair_value_high: None,
@@ -2867,49 +2855,15 @@ fn merge_snapshot_chart_points(
 
     if let Some(latest_snapshot_point) = latest_snapshot_point {
         if let Some(entry) = point_by_bucket.get_mut(&latest_snapshot_point.bucket_at) {
-            entry.open_price = latest_snapshot_point.open_price.or(entry.open_price);
-            entry.closed_price = latest_snapshot_point.closed_price.or(entry.closed_price);
-            entry.low_price = latest_snapshot_point.low_price.or(entry.low_price);
-            entry.high_price = latest_snapshot_point.high_price.or(entry.high_price);
+            // Only refresh the genuinely-live fields from the most recent snapshot.
+            // The closed-trade fields (median/average/OHLC) are owned by the closed
+            // statistics line and must not be overwritten with open-order values.
             entry.lowest_sell = latest_snapshot_point.lowest_sell.or(entry.lowest_sell);
-            entry.median_sell = latest_snapshot_point.median_sell.or(entry.median_sell);
             entry.highest_buy = latest_snapshot_point.highest_buy.or(entry.highest_buy);
         }
     }
 
     point_by_bucket.into_values().collect()
-}
-
-fn realistic_live_median_price(
-    snapshot: &MarketSnapshot,
-    sell_orders: &[WfmDetailedOrder],
-) -> Option<f64> {
-    let live_snapshot_median = snapshot.median_sell;
-    let liquidity_score = liquidity_score_percent(snapshot);
-    let live_percentile = choose_live_exit_percentile(snapshot, liquidity_score);
-    let ladder_target = weighted_sell_percentile_price(sell_orders, live_percentile);
-
-    match (live_snapshot_median, ladder_target) {
-        (Some(snapshot_median), Some(ladder_price)) => Some(snapshot_median.min(ladder_price)),
-        (Some(snapshot_median), None) => Some(snapshot_median),
-        (None, Some(ladder_price)) => Some(ladder_price),
-        (None, None) => None,
-    }
-}
-
-fn apply_realistic_live_median_to_latest_bucket(
-    chart_points: &mut [AnalyticsChartPoint],
-    snapshot: &MarketSnapshot,
-    sell_orders: &[WfmDetailedOrder],
-) {
-    let Some(realistic_median) = realistic_live_median_price(snapshot, sell_orders) else {
-        return;
-    };
-    let Some(last_point) = chart_points.last_mut() else {
-        return;
-    };
-
-    last_point.median_sell = Some(realistic_median);
 }
 
 fn filter_supported_order(order: &WfmOrderRecord, variant_key: &str, seller_mode: &str) -> bool {
@@ -9531,7 +9485,6 @@ fn build_item_analytics_inner(
             analytics_bucket_size_key,
         )?,
     );
-    apply_realistic_live_median_to_latest_bucket(&mut chart_points, &snapshot, &live_sell_orders);
     if let Some(zone_bands) = historical_zone_bands.as_ref() {
         for point in &mut chart_points {
             point.entry_zone = Some(zone_bands.entry_target);
@@ -11512,7 +11465,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_snapshot_chart_points_overwrites_latest_bucket_with_live_snapshot_values() {
+    fn merge_snapshot_chart_points_preserves_closed_fields_and_refreshes_live_fields() {
         let stats_points = vec![AnalyticsChartPoint {
             bucket_at: "2026-03-11T00:00:00Z".to_string(),
             open_price: Some(20.0),
@@ -11531,17 +11484,19 @@ mod tests {
             exit_zone: Some(24.0),
             volume: 10.0,
         }];
+        // Live snapshot points only carry the live floor and highest-buy; closed-trade
+        // fields are None (mirrors load_snapshot_chart_points).
         let snapshot_points = vec![AnalyticsChartPoint {
             bucket_at: "2026-03-11T00:00:00Z".to_string(),
-            open_price: Some(20.0),
-            closed_price: Some(20.0),
-            low_price: Some(20.0),
-            high_price: Some(22.0),
+            open_price: None,
+            closed_price: None,
+            low_price: None,
+            high_price: None,
             lowest_sell: Some(20.0),
-            median_sell: Some(21.0),
+            median_sell: None,
             moving_avg: None,
             weighted_avg: None,
-            average_price: Some(21.0),
+            average_price: None,
             highest_buy: Some(19.0),
             fair_value_low: None,
             fair_value_high: None,
@@ -11553,202 +11508,17 @@ mod tests {
         let merged = super::merge_snapshot_chart_points(stats_points, snapshot_points);
 
         assert_eq!(merged.len(), 1);
+        // Closed-trade fields stay sourced from the closed statistics line.
         assert_eq!(merged[0].open_price, Some(20.0));
-        assert_eq!(merged[0].closed_price, Some(20.0));
+        assert_eq!(merged[0].closed_price, Some(21.0));
         assert_eq!(merged[0].low_price, Some(20.0));
-        assert_eq!(merged[0].high_price, Some(22.0));
-        assert_eq!(merged[0].median_sell, Some(21.0));
+        assert_eq!(merged[0].high_price, Some(28.0));
+        assert_eq!(merged[0].median_sell, Some(28.0));
+        assert_eq!(merged[0].average_price, Some(24.0));
+        // Live fields refreshed from the snapshot.
         assert_eq!(merged[0].lowest_sell, Some(20.0));
         assert_eq!(merged[0].highest_buy, Some(19.0));
         assert_eq!(merged[0].fair_value_high, Some(25.0));
-    }
-
-    #[test]
-    fn apply_realistic_live_median_caps_latest_bucket_against_live_ladder() {
-        let snapshot = MarketSnapshot {
-            captured_at: "2026-03-11T00:00:00Z".to_string(),
-            lowest_sell: Some(18.0),
-            median_sell: Some(24.0),
-            highest_buy: Some(17.0),
-            spread: Some(1.0),
-            spread_pct: Some(5.0),
-            sell_order_count: 8,
-            sell_quantity: 8,
-            buy_order_count: 4,
-            buy_quantity: 4,
-            near_floor_seller_count: 2,
-            near_floor_quantity: 2,
-            unique_sell_users: 8,
-            unique_buy_users: 4,
-            pressure_ratio: Some(1.0),
-            entry_depth: 4.0,
-            exit_depth: 6.0,
-            depth_levels: Vec::new(),
-        };
-        let sell_orders = vec![
-            WfmDetailedOrder {
-                order_id: "1".to_string(),
-                order_type: "sell".to_string(),
-                platinum: 18.0,
-                quantity: 1,
-                per_trade: 1,
-                rank: None,
-                username: "a".to_string(),
-                user_slug: Some("a".to_string()),
-                status: Some("ingame".to_string()),
-                updated_at: None,
-            },
-            WfmDetailedOrder {
-                order_id: "2".to_string(),
-                order_type: "sell".to_string(),
-                platinum: 19.0,
-                quantity: 1,
-                per_trade: 1,
-                rank: None,
-                username: "b".to_string(),
-                user_slug: Some("b".to_string()),
-                status: Some("ingame".to_string()),
-                updated_at: None,
-            },
-            WfmDetailedOrder {
-                order_id: "3".to_string(),
-                order_type: "sell".to_string(),
-                platinum: 20.0,
-                quantity: 1,
-                per_trade: 1,
-                rank: None,
-                username: "c".to_string(),
-                user_slug: Some("c".to_string()),
-                status: Some("ingame".to_string()),
-                updated_at: None,
-            },
-            WfmDetailedOrder {
-                order_id: "4".to_string(),
-                order_type: "sell".to_string(),
-                platinum: 21.0,
-                quantity: 1,
-                per_trade: 1,
-                rank: None,
-                username: "d".to_string(),
-                user_slug: Some("d".to_string()),
-                status: Some("ingame".to_string()),
-                updated_at: None,
-            },
-        ];
-        let mut chart_points = vec![AnalyticsChartPoint {
-            bucket_at: "2026-03-11T00:00:00Z".to_string(),
-            open_price: Some(18.0),
-            closed_price: Some(18.0),
-            low_price: Some(18.0),
-            high_price: Some(24.0),
-            lowest_sell: Some(18.0),
-            median_sell: Some(24.0),
-            moving_avg: Some(20.0),
-            weighted_avg: Some(20.0),
-            average_price: Some(20.0),
-            highest_buy: Some(17.0),
-            fair_value_low: Some(18.0),
-            fair_value_high: Some(22.0),
-            entry_zone: Some(19.0),
-            exit_zone: Some(21.0),
-            volume: 10.0,
-        }];
-
-        super::apply_realistic_live_median_to_latest_bucket(
-            &mut chart_points,
-            &snapshot,
-            &sell_orders,
-        );
-
-        assert_eq!(chart_points[0].median_sell, Some(19.0));
-    }
-
-    #[test]
-    fn apply_realistic_live_median_keeps_sane_snapshot_median() {
-        let snapshot = MarketSnapshot {
-            captured_at: "2026-03-11T00:00:00Z".to_string(),
-            lowest_sell: Some(18.0),
-            median_sell: Some(19.0),
-            highest_buy: Some(17.0),
-            spread: Some(1.0),
-            spread_pct: Some(5.0),
-            sell_order_count: 8,
-            sell_quantity: 8,
-            buy_order_count: 4,
-            buy_quantity: 4,
-            near_floor_seller_count: 2,
-            near_floor_quantity: 2,
-            unique_sell_users: 8,
-            unique_buy_users: 4,
-            pressure_ratio: Some(1.0),
-            entry_depth: 4.0,
-            exit_depth: 6.0,
-            depth_levels: Vec::new(),
-        };
-        let sell_orders = vec![
-            WfmDetailedOrder {
-                order_id: "1".to_string(),
-                order_type: "sell".to_string(),
-                platinum: 18.0,
-                quantity: 1,
-                per_trade: 1,
-                rank: None,
-                username: "a".to_string(),
-                user_slug: Some("a".to_string()),
-                status: Some("ingame".to_string()),
-                updated_at: None,
-            },
-            WfmDetailedOrder {
-                order_id: "2".to_string(),
-                order_type: "sell".to_string(),
-                platinum: 20.0,
-                quantity: 1,
-                per_trade: 1,
-                rank: None,
-                username: "b".to_string(),
-                user_slug: Some("b".to_string()),
-                status: Some("ingame".to_string()),
-                updated_at: None,
-            },
-            WfmDetailedOrder {
-                order_id: "3".to_string(),
-                order_type: "sell".to_string(),
-                platinum: 21.0,
-                quantity: 1,
-                per_trade: 1,
-                rank: None,
-                username: "c".to_string(),
-                user_slug: Some("c".to_string()),
-                status: Some("ingame".to_string()),
-                updated_at: None,
-            },
-        ];
-        let mut chart_points = vec![AnalyticsChartPoint {
-            bucket_at: "2026-03-11T00:00:00Z".to_string(),
-            open_price: Some(18.0),
-            closed_price: Some(18.0),
-            low_price: Some(18.0),
-            high_price: Some(21.0),
-            lowest_sell: Some(18.0),
-            median_sell: Some(19.0),
-            moving_avg: Some(19.0),
-            weighted_avg: Some(19.0),
-            average_price: Some(19.0),
-            highest_buy: Some(17.0),
-            fair_value_low: Some(18.0),
-            fair_value_high: Some(20.0),
-            entry_zone: Some(18.0),
-            exit_zone: Some(20.0),
-            volume: 10.0,
-        }];
-
-        super::apply_realistic_live_median_to_latest_bucket(
-            &mut chart_points,
-            &snapshot,
-            &sell_orders,
-        );
-
-        assert_eq!(chart_points[0].median_sell, Some(19.0));
     }
 
     #[test]
