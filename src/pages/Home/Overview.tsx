@@ -138,7 +138,7 @@ function WatchlistCard() {
   const watchlistCount = useAppStore((state) => state.watchlist.length);
 
   return (
-    <div className="card">
+    <div className="card accent-green">
       <div className="card-header">
         <span className="card-label">Watchlist</span>
         <span className="badge badge-blue">{watchlistCount} items</span>
@@ -182,7 +182,7 @@ function EventsCard() {
   };
 
   return (
-    <div className="card">
+    <div className="card accent-amber">
       <div className="card-header">
         <span className="card-label">Events</span>
         <span
@@ -367,7 +367,7 @@ function QuickViewCard() {
   };
 
   return (
-    <div className="card">
+    <div className="card accent-blue">
       <div className="card-header">
         <span className="card-label">Quick View</span>
         <span className="qv-title">{selectedItem?.itemFamily ?? 'WFM item'}</span>
@@ -537,7 +537,7 @@ function AnalysisCard() {
   const previewLabel = buildAnalysisPreviewLabel(analysis);
 
   return (
-    <div className="card">
+    <div className="card accent-blue">
       <div className="card-header">
         <span className="card-label">Analysis Preview</span>
         {analysis ? <span className={`badge badge-${previewTone}`}>{previewLabel}</span> : null}

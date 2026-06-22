@@ -10,7 +10,7 @@ export function AlertsTab() {
         <span className="panel-title-eyebrow">Alerts</span>
       </div>
 
-      <div className="card">
+      <div className="card accent-amber">
         <div className="card-header">
           <span className="card-label">Active Alerts</span>
           <span className={`badge ${alerts.length > 0 ? 'badge-blue' : 'badge-muted'}`}>

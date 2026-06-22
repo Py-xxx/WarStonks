@@ -14,6 +14,10 @@
   --accent-amber: #F0A030;
   --accent-blue: #4A9EFF;
   --accent-purple: #8B6FFF;
+  --bg-panel: #171B24;
+  --border-strong: #2E3344;
+  --text-panel-title: #C5CAD6;
+  --panel-shadow: 0 6px 20px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .opportunities-placeholder {
@@ -23,6 +27,81 @@
   height: 200px;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+/* Domain-coded panel title dots. A card gets a colored dot before its title only when
+   it carries an accent-* class, so non-panel card labels (modals etc.) stay plain. */
+.card.accent-blue   { --panel-accent: var(--accent-blue);   --panel-accent-glow: rgba(74, 158, 255, 0.45); }
+.card.accent-green  { --panel-accent: var(--accent-green);  --panel-accent-glow: rgba(61, 214, 140, 0.45); }
+.card.accent-amber  { --panel-accent: var(--accent-amber);  --panel-accent-glow: rgba(240, 160, 48, 0.45); }
+.card.accent-purple { --panel-accent: var(--accent-purple); --panel-accent-glow: rgba(139, 111, 255, 0.45); }
+
+.card.accent-blue .card-label::before,
+.card.accent-green .card-label::before,
+.card.accent-amber .card-label::before,
+.card.accent-purple .card-label::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 9px;
+  border-radius: 50%;
+  background: var(--panel-accent);
+  box-shadow: 0 0 8px var(--panel-accent-glow);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* Section header with a trailing rule, for grouping panels on busy pages. */
+.panel-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 2px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.panel-section-header::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Standalone market panels (Scanners / Opportunities) don't carry the .card class, so
+   they never got the Pass-A elevation and rendered transparent. Give them the same
+   elevated panel surface, with padding since their inner content has no edge spacing. */
+.market-panel:not(.card) {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--panel-shadow);
+  padding: 16px 18px;
+}
+
+/* Reusable domain dot for panels/rows that don't use the .card + .card-label pattern. */
+.panel-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent-blue);
+  box-shadow: 0 0 8px rgba(74, 158, 255, 0.45);
+  vertical-align: middle;
+}
+.panel-dot-purple { background: var(--accent-purple); box-shadow: 0 0 8px rgba(139, 111, 255, 0.45); }
+.panel-dot-green  { background: var(--accent-green);  box-shadow: 0 0 8px rgba(61, 214, 140, 0.45); }
+.panel-dot-amber  { background: var(--accent-amber);  box-shadow: 0 0 8px rgba(240, 160, 48, 0.45); }
+.panel-dot-blue   { background: var(--accent-blue);   box-shadow: 0 0 8px rgba(74, 158, 255, 0.45); }
+
+/* A touch more separation for scanner/relic result rows. */
+.farm-now-row {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
 }
 
 .set-planner-layout {
@@ -3589,20 +3668,21 @@ body {
 
 /* ── DASHBOARD ── */
 .dashboard {
-  padding: 16px 20px 20px;
+  padding: 18px 20px 22px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   flex: 1;
   overflow-y: auto;
 }
 
 /* ── CARD BASE ── */
 .card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
   overflow: hidden;
+  box-shadow: var(--panel-shadow);
   animation: fadeIn 0.2s ease both;
 }
 .card-header {
@@ -3615,10 +3695,10 @@ body {
 }
 .card-label {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  color: var(--text-panel-title);
   text-transform: uppercase;
 }
 .card-body { padding: 14px; }
@@ -4276,7 +4356,7 @@ body {
 .metrics-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: 14px;
 }
 .metric-card { padding: 8px 12px; }
 .metric-value {
@@ -4299,7 +4379,7 @@ body {
 .content-row {
   display: grid;
   grid-template-columns: 3fr 2fr;
-  gap: 12px;
+  gap: 16px;
   align-items: stretch;
 }
 .content-row > .card {
@@ -4312,7 +4392,7 @@ body {
 .watchlist-row-shell {
   display: grid;
   grid-template-columns: 2fr 1fr;
-  gap: 12px;
+  gap: 16px;
 }
 
 /* ── QUICK VIEW ── */
@@ -5768,7 +5848,7 @@ body {
   vertical-align: middle;
   font-size: 12px;
 }
-.listing-table tr:hover td { background: var(--bg-elevated); }
+.listing-table tr:hover td { background: rgba(255, 255, 255, 0.035); }
 .listing-table tr:last-child td { border-bottom: none; }
 
 /* Hidden orders are dimmed so on/off visibility is obvious at a glance. */
@@ -9520,7 +9600,7 @@ body {
 .market-analytics-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
   position: relative;
   z-index: 1;
 }
