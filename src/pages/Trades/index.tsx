@@ -836,7 +836,9 @@ function SignInPanel() {
   const signInTradeAccount = useAppStore((s) => s.signInTradeAccount);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [stayLoggedIn, setStayLoggedIn] = useState(false);
+  // Default on so the session persists across restarts (saves credentials for automatic
+  // re-auth once the session token expires). Users can opt out by toggling it off.
+  const [stayLoggedIn, setStayLoggedIn] = useState(true);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
