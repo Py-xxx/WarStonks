@@ -77,6 +77,9 @@ import { formatHomeErrorMessage } from '../lib/homeErrorHandling';
 import { formatMarketErrorMessage } from '../lib/marketErrorHandling';
 import { formatSettingsErrorMessage } from '../lib/settingsErrorHandling';
 import type {
+  AppToast,
+  ItemQuickViewTarget,
+  NavigationSnapshot,
   HomeSubTab,
   PageId,
   QuickViewSelection,
@@ -179,6 +182,7 @@ interface PersistedWatchlistState {
     imagePath: string | null;
     itemFamily: string | null;
     targetPrice: number;
+    maxRank: number | null;
     ignoredUserKeys: string[];
     linkedBuyOrderId: string | null;
   }>;
@@ -255,6 +259,7 @@ function writePersistedWatchlistState(
       imagePath: item.imagePath,
       itemFamily: item.itemFamily,
       targetPrice: item.targetPrice,
+      maxRank: item.maxRank,
       ignoredUserKeys: item.ignoredUserKeys,
       linkedBuyOrderId: item.linkedBuyOrderId,
     })),
@@ -265,6 +270,30 @@ function writePersistedWatchlistState(
     window.localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(nextState));
   } catch (error) {
     console.error('[watchlist] failed to persist state', error);
+  }
+}
+
+const RECENT_ITEMS_STORAGE_KEY = 'warstonks.recentItems.v1';
+const RECENT_ITEMS_LIMIT = 8;
+
+function readPersistedRecentItems(): WfmAutocompleteItem[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_ITEMS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as WfmAutocompleteItem[]).slice(0, RECENT_ITEMS_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePersistedRecentItems(items: WfmAutocompleteItem[]): void {
+  try {
+    window.localStorage.setItem(RECENT_ITEMS_STORAGE_KEY, JSON.stringify(items.slice(0, RECENT_ITEMS_LIMIT)));
+  } catch (error) {
+    console.error('[recents] failed to persist recent items', error);
   }
 }
 
@@ -776,6 +805,7 @@ function createWatchlistItem(
     currentOrderId: currentOrder?.orderId ?? null,
     currentQuantity: currentOrder?.quantity ?? null,
     currentRank: currentOrder?.rank ?? null,
+    maxRank: item.maxRank ?? null,
     entryPrice: currentOrder?.platinum ?? null,
     exitPrice: null,
     volume: 0,
@@ -799,7 +829,7 @@ function restorePersistedWatchlistItems(entries: PersistedWatchlistState['watchl
         wfmId: null,
         name: entry.name,
         slug: entry.slug,
-        maxRank: deriveVariantRankFromKey(entry.variantKey),
+        maxRank: entry.maxRank ?? deriveVariantRankFromKey(entry.variantKey),
         itemFamily: entry.itemFamily,
         imagePath: entry.imagePath,
       },
@@ -1156,6 +1186,17 @@ interface AppStore {
   homeSubTab: HomeSubTab;
   setHomeSubTab: (tab: HomeSubTab) => void;
 
+  // Quality-of-life: clickable item names, back navigation, toasts, recents, ⌘K.
+  openItemInQuickView: (item: ItemQuickViewTarget) => Promise<void>;
+  navigationBack: NavigationSnapshot | null;
+  goBack: () => void;
+  recentItems: WfmAutocompleteItem[];
+  toasts: AppToast[];
+  pushToast: (message: string, tone?: AppToast['tone']) => void;
+  dismissToast: (id: string) => void;
+  searchFocusNonce: number;
+  requestSearchFocus: () => void;
+
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
@@ -1327,10 +1368,96 @@ interface AppStore {
 
 export const useAppStore = create<AppStore>((set, get) => ({
   activePage: 'home',
-  setActivePage: (page) => set({ activePage: page }),
+  // Manual navigation clears the "back" target (openItemInQuickView sets activePage
+  // directly, bypassing this, so its back target survives the redirect).
+  setActivePage: (page) => set({ activePage: page, navigationBack: null }),
 
   homeSubTab: 'overview',
   setHomeSubTab: (tab) => set({ homeSubTab: tab }),
+
+  navigationBack: null,
+  recentItems: readPersistedRecentItems(),
+  toasts: [],
+  searchFocusNonce: 0,
+  requestSearchFocus: () => set((state) => ({ searchFocusNonce: state.searchFocusNonce + 1 })),
+  pushToast: (message, tone = 'info') => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    set((state) => ({ toasts: [...state.toasts, { id, tone, message }] }));
+    window.setTimeout(() => {
+      set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
+    }, 3600);
+  },
+  dismissToast: (id) =>
+    set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) })),
+  goBack: () => {
+    const target = get().navigationBack;
+    if (!target) {
+      return;
+    }
+    set({
+      activePage: target.activePage,
+      homeSubTab: target.homeSubTab,
+      marketSubTab: target.marketSubTab,
+      navigationBack: null,
+    });
+  },
+  openItemInQuickView: async (target) => {
+    const state = get();
+
+    // Resolve to a full autocomplete item. Most call sites already carry the itemId +
+    // slug; if only a name/slug is available we look it up in the local catalog.
+    let resolved: WfmAutocompleteItem | null = null;
+    if (target.itemId != null && target.slug) {
+      resolved = {
+        itemId: target.itemId,
+        wfmId: target.wfmId ?? null,
+        name: target.name,
+        slug: target.slug,
+        maxRank: target.maxRank ?? null,
+        itemFamily: target.itemFamily ?? null,
+        imagePath: target.imagePath ?? null,
+      };
+    } else {
+      try {
+        const catalog = await getWfmAutocompleteItems();
+        const needleSlug = target.slug?.trim().toLowerCase();
+        const needleName = target.name.trim().toLowerCase();
+        resolved =
+          (needleSlug ? catalog.find((entry) => entry.slug.toLowerCase() === needleSlug) : undefined) ??
+          catalog.find((entry) => entry.name.toLowerCase() === needleName) ??
+          null;
+      } catch (error) {
+        console.error('[quick-view] failed to resolve item from catalog', error);
+      }
+    }
+
+    if (!resolved) {
+      get().pushToast(`Couldn't open "${target.name}".`, 'error');
+      return;
+    }
+
+    // Capture where we came from so the user can go back (don't stack onto an existing
+    // back target while already viewing items).
+    set({
+      navigationBack: {
+        activePage: state.activePage,
+        homeSubTab: state.homeSubTab,
+        marketSubTab: state.marketSubTab,
+      } satisfies NavigationSnapshot,
+      activePage: 'home',
+      homeSubTab: 'overview',
+    });
+
+    // Record in recents (most-recent first, deduped by slug).
+    set((current) => {
+      const withoutDuplicate = current.recentItems.filter((entry) => entry.slug !== resolved!.slug);
+      const nextRecents = [resolved!, ...withoutDuplicate].slice(0, RECENT_ITEMS_LIMIT);
+      writePersistedRecentItems(nextRecents);
+      return { recentItems: nextRecents };
+    });
+
+    await get().loadQuickViewItem(resolved);
+  },
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

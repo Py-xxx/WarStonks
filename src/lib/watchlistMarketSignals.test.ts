@@ -23,6 +23,7 @@ function makeItem(overrides: Partial<WatchlistItem>): WatchlistItem {
     currentOrderId: overrides.currentOrderId ?? null,
     currentQuantity: overrides.currentQuantity ?? null,
     currentRank: overrides.currentRank ?? null,
+    maxRank: overrides.maxRank ?? null,
     entryPrice: overrides.entryPrice ?? 35,
     exitPrice: overrides.exitPrice ?? 55,
     volume: overrides.volume ?? 12,

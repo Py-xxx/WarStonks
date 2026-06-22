@@ -351,7 +351,10 @@ function QuickViewCard() {
     }
 
     try {
-      await copyWhisperMessage(order, selectedItem.name);
+      await copyWhisperMessage(
+        { username: order.username, platinum: order.platinum, rank: order.rank, maxRank: selectedItem.maxRank },
+        selectedItem.name,
+      );
       setCopiedOrderId(order.orderId);
       setCopyFeedback(null);
       window.setTimeout(

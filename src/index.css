@@ -83,6 +83,111 @@
   padding: 16px 18px;
 }
 
+/* Clickable item/set names (ItemName component). */
+.item-name-link {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 100ms ease;
+}
+.item-name-link:hover {
+  color: var(--accent-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.item-name-link:focus-visible {
+  outline: 2px solid rgba(74, 158, 255, 0.5);
+  outline-offset: 1px;
+}
+
+/* Right-click context menu for item names. */
+.item-context-menu {
+  position: fixed;
+  z-index: 400;
+  min-width: 190px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: rgba(12, 16, 22, 0.99);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.item-context-menu-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.item-context-menu-option:hover:not(:disabled) {
+  background: rgba(74, 158, 255, 0.12);
+}
+.item-context-menu-option:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* Toast notifications. */
+.toast-host {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 340px;
+}
+.toast {
+  text-align: left;
+  padding: 11px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: rgba(16, 20, 28, 0.98);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  animation: fadeIn 0.18s ease both;
+}
+.toast-success { border-color: rgba(61, 214, 140, 0.4); }
+.toast-error { border-color: rgba(240, 79, 88, 0.4); }
+.toast-info { border-color: rgba(74, 158, 255, 0.4); }
+
+/* Top-bar back button (after redirecting via an item name). */
+.topbar-back-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.topbar-back-btn:hover {
+  color: var(--text-primary);
+  border-color: rgba(74, 158, 255, 0.4);
+}
+
+/* "Recent" section label in the search dropdown. */
+.search-section-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 8px 12px 4px;
+}
+
 /* Reusable domain dot for panels/rows that don't use the .card + .card-label pattern. */
 .panel-dot {
   display: inline-block;

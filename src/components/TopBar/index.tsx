@@ -91,6 +91,12 @@ export function TopBar() {
   const walletSnapshot = useAppStore((s) => s.walletSnapshot);
   const walletLoading = useAppStore((s) => s.walletLoading);
   const openSettingsSidebar = useAppStore((s) => s.openSettingsSidebar);
+  const openItemInQuickView = useAppStore((s) => s.openItemInQuickView);
+  const navigationBack = useAppStore((s) => s.navigationBack);
+  const goBack = useAppStore((s) => s.goBack);
+  const recentItems = useAppStore((s) => s.recentItems);
+  const searchFocusNonce = useAppStore((s) => s.searchFocusNonce);
+  const requestSearchFocus = useAppStore((s) => s.requestSearchFocus);
 
   const [searchValue, setSearchValue] = useState('');
   const [autocompleteItems, setAutocompleteItems] = useState<WfmAutocompleteItem[]>([]);
@@ -188,8 +194,32 @@ export function TopBar() {
   const selectItem = (item: WfmAutocompleteItem) => {
     setSearchValue(item.name);
     setDropdownOpen(false);
-    void loadQuickViewItem(item);
+    // Route through the shared open action so the item lands in Quick View, is recorded in
+    // recents, and a back target is captured.
+    void openItemInQuickView(item);
   };
+
+  useEffect(() => {
+    const handleHotkey = (event: WindowEventMap['keydown']) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        requestSearchFocus();
+      }
+    };
+    window.addEventListener('keydown', handleHotkey);
+    return () => window.removeEventListener('keydown', handleHotkey);
+  }, [requestSearchFocus]);
+
+  useEffect(() => {
+    if (searchFocusNonce === 0) {
+      return;
+    }
+    const input = searchRef.current?.querySelector<HTMLInputElement>('input');
+    input?.focus();
+    input?.select();
+    setDropdownOpen(suggestions.length > 0 || recentItems.length > 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchFocusNonce]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
@@ -259,6 +289,12 @@ export function TopBar() {
     <header className="topbar">
       <div className="logo">WarStonks</div>
 
+      {navigationBack ? (
+        <button className="topbar-back-btn" type="button" onClick={goBack} title="Go back">
+          ← Back
+        </button>
+      ) : null}
+
       <div className="topbar-search-group">
         <div
           ref={searchRef}
@@ -272,7 +308,7 @@ export function TopBar() {
             type="text"
             value={searchValue}
             placeholder="Search WFM items, sets, relics…"
-            onFocus={() => setDropdownOpen(suggestions.length > 0)}
+            onFocus={() => setDropdownOpen(suggestions.length > 0 || recentItems.length > 0)}
             onChange={(event) => {
               setSearchValue(event.target.value);
               setDropdownOpen(event.target.value.trim().length > 0);
@@ -286,21 +322,51 @@ export function TopBar() {
 
           {dropdownOpen ? (
             <div className="search-dropdown" id="global-search-results" role="listbox">
-              {autocompleteState === 'loading' ? (
+              {searchValue.trim() === '' && recentItems.length > 0 ? (
+                <>
+                  <div className="search-section-label">Recent</div>
+                  {recentItems.map((item) => (
+                    <button
+                      key={`recent-${item.slug}`}
+                      className="search-suggestion"
+                      type="button"
+                      role="option"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectItem(item)}
+                    >
+                      <span className="search-suggestion-main">
+                        <span className="search-suggestion-thumb">
+                          {resolveWfmAssetUrl(item.imagePath) ? (
+                            <img src={resolveWfmAssetUrl(item.imagePath) ?? undefined} alt="" loading="lazy" />
+                          ) : (
+                            <span>{item.name.slice(0, 1)}</span>
+                          )}
+                        </span>
+                        <span className="search-suggestion-copy">
+                          <span className="search-suggestion-name">{item.name}</span>
+                          <span className="search-suggestion-meta">{item.itemFamily ?? 'item'}</span>
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </>
+              ) : null}
+
+              {searchValue.trim() !== '' && autocompleteState === 'loading' ? (
                 <div className="search-state">Loading local item catalog…</div>
               ) : null}
 
-              {autocompleteState === 'error' ? (
+              {searchValue.trim() !== '' && autocompleteState === 'error' ? (
                 <div className="search-state error">
                   {autocompleteError ?? 'Failed to load the local item catalog.'}
                 </div>
               ) : null}
 
-              {autocompleteState === 'ready' && suggestions.length === 0 ? (
+              {searchValue.trim() !== '' && autocompleteState === 'ready' && suggestions.length === 0 ? (
                 <div className="search-state">No WFM items match that search.</div>
               ) : null}
 
-              {autocompleteState === 'ready'
+              {searchValue.trim() !== '' && autocompleteState === 'ready'
                 ? suggestions.map((item, index) => (
                     <button
                       key={item.slug}

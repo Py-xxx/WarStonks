@@ -18,6 +18,7 @@ import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue, formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { ItemName } from '../../components/ItemName';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   ItemAnalysisResponse,
@@ -1066,7 +1067,13 @@ function HealthTab() {
                 <div className="trade-health-copy">
                   <div className="trade-health-copy-top">
                     <div>
-                      <div className="item-name trade-health-item-name">{order.name}</div>
+                      <ItemName
+                        className="item-name trade-health-item-name"
+                        name={order.name}
+                        slug={order.slug}
+                        itemId={order.itemId}
+                        imagePath={order.imagePath}
+                      />
                       <div className="trade-health-item-meta">
                         {health ? `Updated ${formatShortLocalDateTime(health.refreshedAt)}` : 'Refreshing live health…'}
                       </div>
@@ -1685,7 +1692,13 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                         )}
                       </span>
                       <div>
-                        <div className="item-name">{order.name}</div>
+                        <ItemName
+                          className="item-name"
+                          name={order.name}
+                          slug={order.slug}
+                          itemId={order.itemId}
+                          imagePath={order.imagePath}
+                        />
                         <div className="trade-cell-age">
                           {marketLowTimestamps[order.orderId]
                             ? formatMarketLowAge(marketLowTimestamps[order.orderId])

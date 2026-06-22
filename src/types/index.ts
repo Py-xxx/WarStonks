@@ -46,6 +46,7 @@ export interface WatchlistItem {
   currentOrderId: string | null;
   currentQuantity: number | null;
   currentRank: number | null;
+  maxRank: number | null;
   entryPrice: number | null;
   exitPrice: number | null;
   volume: number;
@@ -1244,6 +1245,30 @@ export interface PersistedWorldStateCacheEntry {
   payload: unknown;
   fetchedAt: string;
   nextRefreshAt: string | null;
+}
+
+export interface ItemQuickViewTarget {
+  itemId?: number | null;
+  wfmId?: string | null;
+  name: string;
+  slug?: string | null;
+  maxRank?: number | null;
+  itemFamily?: string | null;
+  imagePath?: string | null;
+}
+
+export interface NavigationSnapshot {
+  activePage: PageId;
+  homeSubTab: HomeSubTab;
+  marketSubTab: 'analysis' | 'analytics' | 'calibration';
+}
+
+export type AppToastTone = 'success' | 'error' | 'info';
+
+export interface AppToast {
+  id: string;
+  tone: AppToastTone;
+  message: string;
 }
 
 export interface BacktestBucketStats {
