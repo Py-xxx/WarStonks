@@ -394,6 +394,22 @@ export async function updateWfmBuyOrder(
   return invoke<TradeOverview>('update_wfm_buy_order', { input, sellerMode });
 }
 
+/**
+ * Bulk-toggles visibility of all the user's orders (optionally a single type).
+ * Backs the "hide/show all my listings" control. Returns the refreshed overview.
+ */
+export async function setWfmOrdersVisibility(
+  visible: boolean,
+  orderType: 'sell' | 'buy' | null,
+  sellerMode: SellerMode,
+): Promise<TradeOverview> {
+  return invoke<TradeOverview>('set_wfm_orders_visibility', {
+    visible,
+    orderType,
+    sellerMode,
+  });
+}
+
 export async function closeWfmSellOrder(
   orderId: string,
   quantity: number,
@@ -697,6 +713,51 @@ export async function listenToWfmPresenceChange(
   const { listen } = await import('@tauri-apps/api/event');
   return listen<string>('wfm-presence-changed', (event) => {
     onPresence(event.payload);
+  });
+}
+
+export interface WatchlistTargetSync {
+  watchlistId: string;
+  slug: string;
+  targetPrice: number;
+  rank: number | null;
+}
+
+/**
+ * Syncs the current watchlist to the backend so the realtime newOrders subscription can
+ * match against it. The backend resolves each slug to its WFM item id and (un)subscribes.
+ */
+export async function setWatchlistTargets(
+  targets: WatchlistTargetSync[],
+  sellerMode: string,
+): Promise<void> {
+  return invoke<void>('set_watchlist_targets', { targets, sellerMode });
+}
+
+/** Payload pushed by the backend when a tracked item gets a matching sell ≤ target. */
+export interface RealtimeWatchlistOrder {
+  watchlistId: string;
+  itemId: string;
+  slug: string;
+  orderId: string;
+  username: string;
+  userSlug: string | null;
+  platinum: number;
+  quantity: number;
+  rank: number | null;
+  createdAt: string | null;
+}
+
+export async function listenToWatchlistOrders(
+  onOrder: (order: RealtimeWatchlistOrder) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<RealtimeWatchlistOrder>('wfm-watchlist-order', (event) => {
+    onOrder(event.payload);
   });
 }
 

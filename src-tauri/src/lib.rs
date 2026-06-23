@@ -16,10 +16,10 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             wfm_queue_log::initialize_wfm_queue_log_best_effort(&app.handle());
-            // Hold the user's Warframe.Market presence over a persistent connection so it
-            // survives session re-auth and doesn't lapse to offline. Idles until a presence
-            // is chosen / restored from disk.
-            trades::start_presence_keeper(app.handle().clone());
+            // Start the single persistent Warframe.Market websocket: it holds presence when
+            // signed in (surviving re-auth) and the newOrders subscription when there are
+            // tracked items. Idles with no connection until either is true.
+            trades::start_ws_manager(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -55,6 +55,8 @@ pub fn run() {
             trades::try_auto_sign_in_wfm_trade_account,
             trades::sign_out_wfm_trade_account,
             trades::set_wfm_trade_status,
+            trades::set_watchlist_targets,
+            trades::set_wfm_orders_visibility,
             trades::get_wfm_trade_overview,
             trades::get_cached_wfm_profile_trade_log,
             trades::get_wfm_profile_trade_log,

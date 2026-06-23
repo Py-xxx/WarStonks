@@ -10280,6 +10280,16 @@ body {
 .market-metric-value.tone-amber { color: var(--color-amber); }
 .market-metric-value.tone-red   { color: var(--color-red); }
 
+/* Images that exhausted load retries (useImageErrorRecovery): show a neutral placeholder
+   instead of the browser's broken-image icon. */
+img[data-asset-failed='true'] {
+  /* Hide the broken alt/icon glyph and present a subtle surface in its place. */
+  color: transparent;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  object-fit: cover;
+}
+
 /* ─── Guide ──────────────────────────────────────────────────────────────── */
 .guide-subnav .subnav-left {
   flex-wrap: wrap;

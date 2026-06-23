@@ -6,11 +6,20 @@ import {
 import { getTradeDetectionRequestPriority } from '../lib/tradeDetectionPriority';
 import { useAppStore } from '../stores/useAppStore';
 
-const WFM_TRADE_POLL_INTERVAL_MS = 5_000;
+// Adaptive WFM trade-detection cadence: poll fast right after a detected trade, then back
+// off while idle so we don't hammer /orders/my at a fixed 5s forever (per WFM's
+// "avoid tight polling loops" rule). Any detection resets to the fast interval.
+const WFM_TRADE_POLL_MIN_MS = 5_000;
+const WFM_TRADE_POLL_MAX_MS = 30_000;
+const WFM_TRADE_IDLE_STREAK_CAP = 3; // 5s → 10s → 20s → 30s
 const ALECAFRAME_TRADE_POLL_INTERVAL_MS = 10_000;
 const WFM_INITIAL_DELAY_MS = 1_000;
 const ALECAFRAME_INITIAL_DELAY_MS = 2_500;
 const MIN_TRADE_REFRESH_GAP_MS = 3_000;
+
+function wfmPollIntervalForStreak(idleStreak: number): number {
+  return Math.min(WFM_TRADE_POLL_MIN_MS * 2 ** idleStreak, WFM_TRADE_POLL_MAX_MS);
+}
 
 function computeNextRefreshDelay(
   preferredAt: number,
@@ -49,6 +58,7 @@ export function useTradeDetection() {
     let alecaframeTimer: ReturnType<typeof setTimeout> | null = null;
     let lastWfmStartedAt = 0;
     let lastAlecaframeStartedAt = 0;
+    let wfmIdleStreak = 0;
 
     const scheduleWfm = (preferredAt: number) => {
       if (cancelled) {
@@ -90,15 +100,21 @@ export function useTradeDetection() {
       lastWfmStartedAt = startedAt;
       wfmInFlight = true;
       try {
-        await refreshWfmTradeDetection(tradeAccountName, {
+        const result = await refreshWfmTradeDetection(tradeAccountName, {
           sessionStartedAt,
           requestPriority,
         });
+        // Reset to the fast cadence on activity; otherwise back off while idle.
+        if (result.detectedBuys && result.detectedBuys.length > 0) {
+          wfmIdleStreak = 0;
+        } else {
+          wfmIdleStreak = Math.min(wfmIdleStreak + 1, WFM_TRADE_IDLE_STREAK_CAP);
+        }
       } catch (error) {
         console.error('[trades] failed to refresh WFM trade detection', error);
       } finally {
         wfmInFlight = false;
-        scheduleWfm(startedAt + WFM_TRADE_POLL_INTERVAL_MS);
+        scheduleWfm(startedAt + wfmPollIntervalForStreak(wfmIdleStreak));
       }
     };
 

@@ -26,8 +26,10 @@ const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_CROSSPLAY_HEADER: &str = "true";
-// Honest, identifying User-Agent — no browser emulation (matches the reference WFM client).
-const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
+// Descriptive, identifying User-Agent required by Warframe.Market's API rules (name/version/
+// website, never browser-disguised). Format: `ProjectName/version (+url)`.
+const WFM_USER_AGENT: &str =
+    concat!("WarStonks/", env!("CARGO_PKG_VERSION"), " (+https://pyth.co.za)");
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;

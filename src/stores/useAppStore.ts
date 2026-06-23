@@ -25,6 +25,7 @@ import {
   signOutWfmTradeAccount,
   stopMarketTracking,
   tryAutoSignInWfmTradeAccount,
+  type RealtimeWatchlistOrder,
 } from '../lib/tauriClient';
 import {
   fetchWorldStateAlertsSnapshot,
@@ -1323,6 +1324,12 @@ interface AppStore {
   retryWorldStateSystemAlert: (sourceKeys: WorldStateEndpointKey[]) => Promise<void>;
   syncScannerStaleAlert: (scanFinishedAt: string | null) => void;
   refreshWatchlistItem: (id: string) => Promise<WatchlistRefreshResult>;
+  /**
+   * Ingests a realtime newOrder match pushed from the backend subscription. Raises/updates
+   * the per-item alert (deduped) and reflects the live cheapest price. Returns true when a
+   * new alert was triggered (so the caller can play the sound).
+   */
+  ingestRealtimeWatchlistOrder: (order: RealtimeWatchlistOrder) => boolean;
 
   quickView: QuickViewSelection;
   marketVariants: MarketVariant[];
@@ -3065,6 +3072,77 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
       return { alertTriggered: false };
     }
+  },
+
+  ingestRealtimeWatchlistOrder: (order) => {
+    const item = get().watchlist.find((entry) => entry.id === order.watchlistId);
+    if (!item) {
+      return false;
+    }
+
+    const realtimeOrder: WfmTopSellOrder = {
+      orderId: order.orderId,
+      platinum: order.platinum,
+      quantity: order.quantity,
+      perTrade: 1,
+      rank: order.rank,
+      username: order.username,
+      userSlug: order.userSlug,
+      status: null,
+    };
+
+    // The backend already filtered to a visible sell ≤ target from an acceptable seller.
+    // Dedupe against the per-item alert: only raise/replace when there's no current alert
+    // or this order is genuinely cheaper, so a flurry of pricier posts can't spam alerts.
+    const existingAlert = get().alerts.find((alert) => alert.watchlistId === item.id);
+    if (existingAlert && existingAlert.price <= order.platinum) {
+      return false;
+    }
+
+    const nextAlert = buildWatchlistAlert(item, realtimeOrder);
+    const isNewAlert = !existingAlert || existingAlert.orderId !== nextAlert.orderId;
+
+    set((state) => {
+      const target = state.watchlist.find((entry) => entry.id === item.id);
+      if (!target) {
+        return state;
+      }
+      // Reflect the live cheapest on the item only when it actually beats what we show.
+      const shouldUpdateItem =
+        target.currentPrice === null || order.platinum < target.currentPrice;
+      const updatedItem = shouldUpdateItem
+        ? applyWatchlistOrder(target, realtimeOrder, target.nextScanAt)
+        : target;
+
+      return {
+        watchlist: state.watchlist.map((entry) =>
+          entry.id === item.id ? updatedItem : entry,
+        ),
+        alerts: [
+          nextAlert,
+          ...state.alerts.filter((alert) => alert.watchlistId !== item.id),
+        ],
+      };
+    });
+
+    if (isNewAlert) {
+      void sendWatchlistFoundDiscordNotification({
+        itemName: nextAlert.itemName,
+        itemSlug: nextAlert.itemSlug,
+        itemImagePath: nextAlert.itemImagePath,
+        targetPrice: item.targetPrice,
+        currentPrice: nextAlert.price,
+        username: nextAlert.username,
+        quantity: nextAlert.quantity,
+        rank: nextAlert.rank,
+        orderId: nextAlert.orderId,
+        createdAt: nextAlert.createdAt,
+      }).catch((error) => {
+        console.error('[discord] failed to send realtime watchlist notification', error);
+      });
+    }
+
+    return isNewAlert;
   },
 
   quickView: {

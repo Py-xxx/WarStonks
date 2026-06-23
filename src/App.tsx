@@ -18,6 +18,8 @@ import { ToastHost } from './components/ToastHost';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
+import { useWatchlistSubscription } from './hooks/useWatchlistSubscription';
+import { useImageErrorRecovery } from './hooks/useImageErrorRecovery';
 import { useWorldStateEvents } from './hooks/useWorldStateEvents';
 import { useWorldStateFissures } from './hooks/useWorldStateFissures';
 import { useWorldStateMarketNews } from './hooks/useWorldStateMarketNews';
@@ -47,6 +49,8 @@ function PageRouter() {
 
 function AppShell() {
   useWatchlistScanner();
+  useWatchlistSubscription();
+  useImageErrorRecovery();
   useMarketTracking();
   useTradeDetection();
   useTradePresence();
