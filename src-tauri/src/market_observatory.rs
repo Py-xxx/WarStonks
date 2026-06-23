@@ -26,14 +26,8 @@ const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_CROSSPLAY_HEADER: &str = "true";
-// Browser-shaped User-Agent so WFM's Cloudflare rate-limiter (HTTP 429 / "error code:
-// 1015") doesn't single out our market-data traffic. Mirrors the UA used in `trades.rs`;
-// keeps a "WarStonks/<version>" product token for honest attribution.
-const WFM_USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ",
-    "Chrome/124.0.0.0 Safari/537.36 WarStonks/",
-    env!("CARGO_PKG_VERSION")
-);
+// Honest, identifying User-Agent — no browser emulation (matches the reference WFM client).
+const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
@@ -1624,12 +1618,12 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
 fn shared_wfm_client() -> Result<Client> {
     static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
     match CLIENT.get_or_init(|| {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("language", reqwest::header::HeaderValue::from_static("en"));
+        headers.insert("platform", reqwest::header::HeaderValue::from_static("pc"));
         Client::builder()
             .timeout(Duration::from_secs(30))
-            // Hold any Cloudflare clearance cookie and present a browser-shaped UA so our
-            // WFM market-data traffic blends in instead of being rate-limited.
-            .cookie_store(true)
-            .user_agent(WFM_USER_AGENT)
+            .default_headers(headers)
             .build()
             .map_err(|error| format!("failed to build WFM client: {error}"))
     }) {

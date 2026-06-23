@@ -21,14 +21,8 @@ const WFSTAT_API_BASE_URL: &str = "https://api.warframestat.us";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_CROSSPLAY_HEADER: &str = "true";
-// Browser-shaped User-Agent so WFM's Cloudflare rate-limiter (HTTP 429 / "error code:
-// 1015") doesn't single out our traffic. Mirrors the UA in `trades.rs` / `market_observatory.rs`,
-// keeping a "WarStonks/<version>" token for honest attribution.
-const WFM_USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ",
-    "Chrome/124.0.0.0 Safari/537.36 WarStonks/",
-    env!("CARGO_PKG_VERSION")
-);
+// Honest, identifying User-Agent — no browser emulation (matches the reference WFM client).
+const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const WFSTAT_LANGUAGE_QUERY: &str = "en";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,12 +243,12 @@ fn shared_wfstat_client() -> Result<Client, String> {
 fn shared_wfm_client() -> Result<Client, String> {
     static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
     match CLIENT.get_or_init(|| {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("language", reqwest::header::HeaderValue::from_static("en"));
+        headers.insert("platform", reqwest::header::HeaderValue::from_static("pc"));
         Client::builder()
             .timeout(Duration::from_secs(30))
-            // Hold any Cloudflare clearance cookie and present a browser-shaped UA so our
-            // WFM traffic blends in instead of being rate-limited.
-            .cookie_store(true)
-            .user_agent(WFM_USER_AGENT)
+            .default_headers(headers)
             .build()
             .map_err(|error| error.to_string())
     }) {
