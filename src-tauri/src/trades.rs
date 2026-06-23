@@ -1,4 +1,4 @@
-use crate::error_log::log_feature_error_best_effort;
+use crate::error_log::{log_feature_error_best_effort, log_feature_event_best_effort};
 use crate::market_observatory::{
     apply_owned_set_component_deltas, load_cached_trade_health_context,
     load_set_completion_screenshot_import_cutoff, replace_owned_set_component_deltas,
@@ -38,9 +38,18 @@ const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
 const TRADES_CREDENTIALS_FILE_NAME: &str = "wfm-credentials.json";
+const TRADES_SIGNIN_COOLDOWN_FILE_NAME: &str = "wfm-signin-cooldown.json";
+// Hard floor / ceiling for how long we refuse to touch /auth/signin after a rate-limit.
+const SIGNIN_COOLDOWN_MIN_SECONDS: u64 = 30;
+const SIGNIN_COOLDOWN_MAX_SECONDS: u64 = 600;
+const TRADES_AUTO_SIGNIN_STATE_FILE_NAME: &str = "wfm-auto-signin.json";
+// Automatic (non-user-initiated) sign-in stops after this many consecutive failures; the
+// user must then sign in manually. Keeps a transient problem from becoming an endless loop.
+const MAX_AUTO_SIGNIN_ATTEMPTS: u32 = 3;
 const KEYCHAIN_SERVICE: &str = "warstonks";
 const KEYCHAIN_WFM_SESSION_KEY: &str = "wfm-session";
 const KEYCHAIN_WFM_CREDENTIALS_KEY: &str = "wfm-credentials";
+const KEYCHAIN_WFM_DEVICE_ID_KEY: &str = "wfm-device-id";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
 const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
@@ -54,18 +63,11 @@ const PENDING_NOTIFICATION_WINDOW_MINUTES: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://ws.warframe.market/socket";
-// Warframe.Market sits behind Cloudflare, which rate-limits (HTTP 429 / "error code:
-// 1015") request profiles that don't look like a normal browser. A bare "warstonks/x.y.z"
-// User-Agent gets singled out on the sign-in endpoint while the website (real browser UA +
-// cookies + Cloudflare clearance) sails through. We send a browser-shaped User-Agent so
-// our traffic blends in, while still appending a "WarStonks/<version>" product token so we
-// remain honestly attributable to WFM. Paired with the cookie store on `shared_wfm_client`,
-// this lets the client hold any Cloudflare clearance cookie it is handed.
-const WFM_USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ",
-    "Chrome/124.0.0.0 Safari/537.36 WarStonks/",
-    env!("CARGO_PKG_VERSION")
-);
+// Honest, identifying User-Agent — no browser emulation. The reference WFM client (see
+// Resources/references/Interactions Rust Library) needs no special User-Agent at all; the
+// 1015 rate-limits we saw came from request *spam* (a re-login loop), not the UA. We keep a
+// simple product token for attribution.
+const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,13 +148,25 @@ pub struct TradeOverview {
     pub buy_orders: Vec<TradeSellOrder>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeSignInInput {
     pub email: String,
     pub password: String,
     #[serde(default)]
     pub stay_logged_in: bool,
+}
+
+// Manual Debug so a stray `{:?}` (e.g. in an error chain that reaches the on-disk log)
+// can never leak the password.
+impl std::fmt::Debug for TradeSignInInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TradeSignInInput")
+            .field("email", &self.email)
+            .field("password", &"<redacted>")
+            .field("stay_logged_in", &self.stay_logged_in)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -422,7 +436,7 @@ pub struct DetectedTradeBuy {
     pub platinum: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredTradeSession {
     #[serde(default)]
@@ -432,7 +446,19 @@ struct StoredTradeSession {
     account: TradeAccountSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Manual Debug: never expose the session JWT.
+impl std::fmt::Debug for StoredTradeSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredTradeSession")
+            .field("warstonks_version", &self.warstonks_version)
+            .field("token", &"<redacted>")
+            .field("device_id", &self.device_id)
+            .field("account", &self.account)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredTradeCredentials {
     #[serde(default)]
@@ -440,6 +466,18 @@ struct StoredTradeCredentials {
     email: String,
     password: String,
     saved_at: String,
+}
+
+// Manual Debug: never expose the stored password.
+impl std::fmt::Debug for StoredTradeCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredTradeCredentials")
+            .field("warstonks_version", &self.warstonks_version)
+            .field("email", &self.email)
+            .field("password", &"<redacted>")
+            .field("saved_at", &self.saved_at)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -723,14 +761,14 @@ fn normalize_status_label(value: &str) -> String {
 fn shared_wfm_client() -> Result<Client> {
     static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
     match CLIENT.get_or_init(|| {
+        // Mirror the reference WFM client's defaults: language + platform headers, no
+        // browser emulation and no cookie store.
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("language", reqwest::header::HeaderValue::from_static("en"));
+        headers.insert("platform", reqwest::header::HeaderValue::from_static("pc"));
         Client::builder()
             .timeout(Duration::from_secs(30))
-            // Persist cookies across requests so the client can hold any Cloudflare
-            // clearance cookie WFM hands back, the same way a browser does.
-            .cookie_store(true)
-            // Browser-shaped default UA so requests don't get singled out by Cloudflare's
-            // rate-limit rules. Per-request `User-Agent` headers still override this.
-            .user_agent(WFM_USER_AGENT)
+            .default_headers(headers)
             .build()
             .map_err(|error| format!("failed to build WFM trades client: {error}"))
     }) {
@@ -759,6 +797,206 @@ fn clear_session_cache() {
     if let Ok(mut guard) = session_cache().lock() {
         *guard = None;
     }
+}
+
+// ── Sign-in rate-limit cooldown ────────────────────────────────────────────────
+//
+// Warframe.Market's login endpoint is Cloudflare rate-limited (HTTP 429 / "error code:
+// 1015"). When we get rate-limited we must STOP calling /auth/signin until the cooldown
+// lapses — otherwise every retry resets Cloudflare's window and the block becomes
+// effectively permanent (the exact failure mode we hit: a background loop re-signing-in
+// kept an account throttled for 24h+). The cooldown is held in memory and mirrored to disk
+// so it also survives an app restart.
+
+struct SigninCooldown {
+    until: OffsetDateTime,
+    consecutive: u32,
+}
+
+fn signin_cooldown() -> &'static Mutex<Option<SigninCooldown>> {
+    static COOLDOWN: OnceLock<Mutex<Option<SigninCooldown>>> = OnceLock::new();
+    COOLDOWN.get_or_init(|| Mutex::new(None))
+}
+
+fn signin_cooldown_file_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    Some(
+        app.path()
+            .app_data_dir()
+            .ok()?
+            .join(TRADES_DIR_NAME)
+            .join(TRADES_SIGNIN_COOLDOWN_FILE_NAME),
+    )
+}
+
+/// Remaining sign-in cooldown, if any. Checks the in-memory value first, then falls back to
+/// the persisted file (covers a fresh process that just launched into an active cooldown).
+fn signin_cooldown_remaining(app: &tauri::AppHandle) -> Option<Duration> {
+    let now = now_utc();
+
+    if let Ok(guard) = signin_cooldown().lock() {
+        if let Some(state) = guard.as_ref() {
+            if state.until > now {
+                return (state.until - now).try_into().ok();
+            }
+        }
+    }
+
+    // Fall back to the persisted cooldown (e.g. right after a restart, before any in-memory
+    // state exists).
+    let path = signin_cooldown_file_path(app)?;
+    let text = fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<Value>(&text).ok()?;
+    let until = parse_timestamp(value.get("until")?.as_str()?)?;
+    if until > now {
+        (until - now).try_into().ok()
+    } else {
+        None
+    }
+}
+
+/// Records a sign-in rate-limit. The wait escalates on consecutive hits (the server's
+/// `retry_after`, doubled each time) within sane bounds, and is persisted so a restart
+/// doesn't immediately re-hit the login endpoint.
+fn note_signin_rate_limited(app: &tauri::AppHandle, server_retry_after: Option<Duration>) {
+    let base = server_retry_after
+        .map(|d| d.as_secs())
+        .unwrap_or(SIGNIN_COOLDOWN_MIN_SECONDS)
+        .max(SIGNIN_COOLDOWN_MIN_SECONDS);
+
+    let consecutive = {
+        let mut guard = match signin_cooldown().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let next = guard.as_ref().map(|s| s.consecutive + 1).unwrap_or(1);
+        let wait = base
+            .saturating_mul(1u64 << (next - 1).min(5))
+            .min(SIGNIN_COOLDOWN_MAX_SECONDS);
+        let until = now_utc() + Duration::from_secs(wait);
+        *guard = Some(SigninCooldown { until, consecutive: next });
+        next
+    };
+
+    // Mirror to disk (best-effort).
+    if let Some(path) = signin_cooldown_file_path(app) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(guard) = signin_cooldown().lock() {
+            if let Some(state) = guard.as_ref() {
+                if let Ok(until) = format_timestamp(state.until) {
+                    let _ = fs::write(
+                        &path,
+                        json!({ "until": until, "consecutive": consecutive }).to_string(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Clears the cooldown after a successful sign-in.
+fn clear_signin_cooldown(app: &tauri::AppHandle) {
+    if let Ok(mut guard) = signin_cooldown().lock() {
+        *guard = None;
+    }
+    if let Some(path) = signin_cooldown_file_path(app) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+// ── Automatic sign-in governor ─────────────────────────────────────────────────
+//
+// The app keeps a persistent presence connection that holds the session alive, so we no
+// longer need an aggressive auto-reauth. Automatic (non-user-initiated) sign-in is now
+// fail-stop: after MAX_AUTO_SIGNIN_ATTEMPTS consecutive failures it suspends itself and the
+// user must sign in manually. A successful manual sign-in resets it. The state is persisted
+// so a restart can't bypass the suspension and resume hammering the login endpoint.
+
+#[derive(Clone, Default)]
+struct AutoSigninState {
+    failures: u32,
+    suspended: bool,
+}
+
+fn auto_signin_state() -> &'static Mutex<Option<AutoSigninState>> {
+    static STATE: OnceLock<Mutex<Option<AutoSigninState>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn auto_signin_state_file_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    Some(
+        app.path()
+            .app_data_dir()
+            .ok()?
+            .join(TRADES_DIR_NAME)
+            .join(TRADES_AUTO_SIGNIN_STATE_FILE_NAME),
+    )
+}
+
+fn load_auto_signin_state_from_file(app: &tauri::AppHandle) -> AutoSigninState {
+    let Some(path) = auto_signin_state_file_path(app) else {
+        return AutoSigninState::default();
+    };
+    let Ok(text) = fs::read_to_string(path) else {
+        return AutoSigninState::default();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return AutoSigninState::default();
+    };
+    AutoSigninState {
+        failures: value.get("failures").and_then(Value::as_u64).unwrap_or(0) as u32,
+        suspended: value.get("suspended").and_then(Value::as_bool).unwrap_or(false),
+    }
+}
+
+/// Reads the current governor state (memory cache, loading from disk on first access).
+fn read_auto_signin_state(app: &tauri::AppHandle) -> AutoSigninState {
+    let mut guard = match auto_signin_state().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.is_none() {
+        *guard = Some(load_auto_signin_state_from_file(app));
+    }
+    guard.clone().unwrap_or_default()
+}
+
+fn write_auto_signin_state(app: &tauri::AppHandle, state: AutoSigninState) {
+    if let Ok(mut guard) = auto_signin_state().lock() {
+        *guard = Some(state.clone());
+    }
+    if let Some(path) = auto_signin_state_file_path(app) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(
+            &path,
+            json!({ "failures": state.failures, "suspended": state.suspended }).to_string(),
+        );
+    }
+}
+
+fn is_auto_signin_suspended(app: &tauri::AppHandle) -> bool {
+    read_auto_signin_state(app).suspended
+}
+
+/// Records an automatic sign-in failure. Returns the new consecutive-failure count; sets the
+/// suspended flag once it reaches the cap.
+fn record_auto_signin_failure(app: &tauri::AppHandle) -> u32 {
+    let mut state = read_auto_signin_state(app);
+    state.failures = state.failures.saturating_add(1);
+    if state.failures >= MAX_AUTO_SIGNIN_ATTEMPTS {
+        state.suspended = true;
+    }
+    let failures = state.failures;
+    write_auto_signin_state(app, state);
+    failures
+}
+
+/// Resets the governor — called after any successful sign-in (manual or automatic).
+fn reset_auto_signin_state(app: &tauri::AppHandle) {
+    write_auto_signin_state(app, AutoSigninState::default());
 }
 
 fn build_item_catalog_path(app: &tauri::AppHandle) -> Result<PathBuf> {
@@ -1173,6 +1411,36 @@ fn generate_device_id() -> String {
     );
     let digest = sha2::Sha256::digest(seed.as_bytes());
     hex::encode(&digest[..16])
+}
+
+/// Returns a stable per-install device id, persisted in the OS keychain and cached for the
+/// process lifetime.
+///
+/// WFM associates a `device_id` with each login. Previously a fresh id was minted on every
+/// sign-in, so each automatic re-auth looked like a brand-new device — which can trip
+/// security heuristics and rate limits. We now generate the id once, persist it, and reuse
+/// it for all subsequent sign-ins. If the keychain is unavailable we fall back to a
+/// process-stable id (still better than regenerating per request).
+fn get_or_create_device_id() -> String {
+    static DEVICE_ID: OnceLock<String> = OnceLock::new();
+    DEVICE_ID
+        .get_or_init(|| {
+            if let Ok(entry) = KeychainEntry::new(KEYCHAIN_SERVICE, KEYCHAIN_WFM_DEVICE_ID_KEY) {
+                if let Ok(existing) = entry.get_password() {
+                    let trimmed = existing.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
+                let fresh = generate_device_id();
+                // Best-effort persistence: a write failure just means we mint a new id next
+                // launch, which is no worse than the old behaviour.
+                let _ = entry.set_password(&fresh);
+                return fresh;
+            }
+            generate_device_id()
+        })
+        .clone()
 }
 
 fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
@@ -6184,11 +6452,32 @@ async fn resolve_presence_session(app: &tauri::AppHandle) -> Option<StoredTradeS
     if let Some(session) = get_session_from_cache() {
         return Some(session);
     }
+    // CRITICAL: the presence keeper must NEVER trigger a credential sign-in. It only adopts
+    // an already-established session — the in-memory cache, or a persisted session token
+    // (no network). Previously this called ensure_authenticated_session(), which falls
+    // through to a full /auth/signin when signed out; running on the keeper's ~30s loop that
+    // silently hammered WFM's login endpoint and got the account Cloudflare-rate-limited
+    // (HTTP 429 / error 1015) indefinitely. A session appears here only after a
+    // user-initiated sign-in (which populates the cache).
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_authenticated_session(&app).ok())
-        .await
-        .ok()
-        .flatten()
+    tauri::async_runtime::spawn_blocking(move || match load_session(&app) {
+        Ok(session) => session,
+        Err(error) => {
+            // Don't fail silently — surface why the keeper couldn't load a persisted session.
+            log_feature_error_best_effort(
+                &app,
+                "trades-presence",
+                "resolve-session",
+                "Presence keeper couldn't load the persisted session token.",
+                &error,
+            );
+            None
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+    .inspect(|session| set_session_in_cache(session))
 }
 
 async fn run_presence_keeper(app: tauri::AppHandle) {
@@ -6206,9 +6495,10 @@ async fn run_presence_keeper(app: tauri::AppHandle) {
         // session alive (like a browser tab) regardless of whether they're shown online
         // or invisible. If no session can be resolved, the user is signed out.
         let Some(session) = resolve_presence_session(&app).await else {
-            // Signed out (or a sign-in attempt failed). Idle a fixed interval rather than
-            // escalating, so a fresh sign-in is picked up promptly without hammering login.
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            // Signed out: no session to hold. resolve_presence_session never signs in, so
+            // this is a cheap local check — idle, then re-check to pick up a fresh
+            // user-initiated sign-in promptly without ever touching the login endpoint.
+            tokio::time::sleep(Duration::from_secs(30)).await;
             backoff = reset_backoff;
             continue;
         };
@@ -6354,7 +6644,7 @@ fn record_observed_presence(app: &tauri::AppHandle, status: &str) {
     let _ = app.emit(PRESENCE_CHANGED_EVENT, status.to_string());
 }
 
-fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
+fn sign_in_inner(app: &tauri::AppHandle, input: &TradeSignInInput) -> Result<StoredTradeSession> {
     let client = shared_wfm_client()?;
     let trimmed_email = input.email.trim();
     let trimmed_password = input.password.trim();
@@ -6364,8 +6654,18 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
         ));
     }
 
-    let device_id = generate_device_id();
-    let response = execute_wfm_request_with_priority(
+    // Honour an active rate-limit cooldown WITHOUT touching the network. Re-hitting
+    // /auth/signin while Cloudflare is rate-limiting us just resets its window and keeps the
+    // account blocked, so we refuse locally until the cooldown lapses.
+    if let Some(remaining) = signin_cooldown_remaining(app) {
+        return Err(anyhow!(
+            "Warframe.Market is rate-limiting sign-in (Cloudflare 1015). Wait about {}s before trying again.",
+            remaining.as_secs().max(1)
+        ));
+    }
+
+    let device_id = get_or_create_device_id();
+    let response = execute_wfm_bytes_request(
         client
             .post(format!("{WFM_API_BASE_URL_V1}/auth/signin"))
             .header("User-Agent", WFM_USER_AGENT)
@@ -6377,9 +6677,21 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
                 "password": trimmed_password,
                 "device_id": device_id,
             })),
-        "request WFM sign-in",
         RequestPriority::Instant,
+        "request WFM sign-in",
+        None,
     )?;
+
+    // Rate-limited: record a cooldown (using the server's retry_after when present) so no
+    // path re-attempts sign-in until it lapses, then surface the error.
+    if response.status == 429 || response_body_is_rate_limited(&response.body) {
+        note_signin_rate_limited(app, response.retry_after);
+        return Err(extract_wfm_bytes_error("request WFM sign-in", &response));
+    }
+
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_bytes_error("request WFM sign-in", &response));
+    }
 
     let auth_header = response
         .headers
@@ -6400,6 +6712,9 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
 
     let account = fetch_me_with_token(&client, &jwt)?;
 
+    // A clean sign-in clears any prior rate-limit cooldown.
+    clear_signin_cooldown(app);
+
     Ok(StoredTradeSession {
         warstonks_version: None,
         token: jwt,
@@ -6408,61 +6723,37 @@ fn sign_in_inner(input: &TradeSignInInput) -> Result<StoredTradeSession> {
     })
 }
 
-fn should_attempt_trade_session_reauth(error: &anyhow::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
-    message.contains("401")
-        || message.contains("403")
-        || message.contains("expired")
-        || message.contains("auth")
-        || message.contains("token")
+/// True when a response body is a Cloudflare 1015 rate-limit payload (defensive: some edge
+/// responses arrive with a non-429 status but the 1015 body).
+fn response_body_is_rate_limited(body: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(body);
+    text.contains("1015") || text.to_ascii_lowercase().contains("rate limited")
 }
 
-// Automatic re-authentication retry policy. Kept short because the re-auth happens on
-// the user-facing restore path (Trades tab open / overview load) — a few seconds of
-// total backoff buys resilience against transient WFM hiccups without stalling the UI.
-const TRADE_REAUTH_MAX_ATTEMPTS: u32 = 3;
-const TRADE_REAUTH_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
-const TRADE_REAUTH_MAX_BACKOFF: Duration = Duration::from_secs(4);
-
-/// Classifies a sign-in failure as transient (worth retrying) vs permanent.
+/// Decides whether an error means the WFM session has genuinely expired and we should
+/// re-authenticate.
 ///
-/// Permanent failures — a wrong/changed password (HTTP 400/401/403) — must NOT be
-/// retried: retrying can't fix bad credentials and would hammer WFM's login endpoint,
-/// risking a rate-limit lockout. Transient failures — network blips, timeouts, rate
-/// limiting (429), and server errors (5xx) — are safe to retry with backoff.
-fn is_transient_signin_error(error: &anyhow::Error) -> bool {
+/// Scoped deliberately tight. A real JWT expiry is an HTTP **401**. We do NOT treat the
+/// following as expiry, because doing so destroys a still-valid session and can trigger a
+/// re-login storm (which is exactly how the sign-in endpoint gets Cloudflare-rate-limited):
+/// - **403 Forbidden** — typically a Cloudflare block / "error code: 1015" / permission
+///   issue, not an expired token. Clearing the session won't help and re-login makes it
+///   worse.
+/// - Bare substrings like "auth" or "token" — far too broad (they match unrelated error
+///   text and request labels), causing spurious re-auths.
+fn should_attempt_trade_session_reauth(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
 
-    // Credential/authorization rejections are permanent.
-    if message.contains("failed with status 400")
-        || message.contains("failed with status 401")
-        || message.contains("failed with status 403")
-    {
-        return false;
-    }
-
-    // Rate limiting must NOT be quick-retried. A 429 — especially Cloudflare's edge
-    // limit on the login endpoint, surfaced as "error code: 1015" — is an IP-level lock
-    // that punishes repeated requests and can extend the lockout well past our short
-    // backoff. Stop immediately and let the user (or the next scheduled restore) wait it
-    // out instead of hammering /auth/signin.
+    // A rate-limit / Cloudflare block is never an expiry — never re-auth on it.
     if is_rate_limit_error(error) {
         return false;
     }
 
-    // Server-side errors are transient.
-    if message.contains("failed with status 5") {
-        return true;
-    }
-
-    // Network-layer failures that never reached an HTTP status are transient.
-    message.contains("failed to request")
-        || message.contains("timed out")
-        || message.contains("timeout")
-        || message.contains("connection")
-        || message.contains("connect")
-        || message.contains("dns")
-        || message.contains("network")
+    message.contains("failed with status 401")
+        || message.contains("session expired")
+        || message.contains("token expired")
+        || message.contains("invalid token")
+        || message.contains("unauthorized")
 }
 
 /// True when an error is a Warframe.Market / Cloudflare rate-limit response — HTTP 429,
@@ -6475,41 +6766,75 @@ fn is_rate_limit_error(error: &anyhow::Error) -> bool {
 /// Maps a sign-in failure to a user-facing message. Rate limits get a clear, actionable
 /// explanation instead of the raw Cloudflare status code, which is otherwise opaque.
 fn friendly_sign_in_error(error: &anyhow::Error) -> String {
+    let message = error.to_string();
+
+    // Our own cooldown/suspension messages are already user-friendly (and carry a precise
+    // wait time) — pass them through unchanged rather than flattening to the generic text.
+    if message.contains("Wait about")
+        || message.contains("automatic retry is paused")
+        || message.contains("Automatic sign-in is paused")
+    {
+        return message;
+    }
+
     if is_rate_limit_error(error) {
         return "Warframe.Market is temporarily rate-limiting sign-in requests \
-(Cloudflare \"error code: 1015\"). This is an IP-level limit on their end, not a problem \
-with your credentials. Please wait about a minute before trying again, and avoid repeated \
-sign-in attempts until then."
+(Cloudflare \"error code: 1015\"). This is a limit on their end, not a problem with your \
+credentials. Please wait a minute or two before trying again, and avoid repeated sign-in \
+attempts until then."
             .to_string();
     }
-    error.to_string()
+    message
 }
 
-/// Signs in, retrying transient failures with exponential backoff. Permanent failures
-/// (bad credentials) return immediately so the user is told to sign in again rather than
-/// the app silently spinning.
-fn sign_in_with_backoff(input: &TradeSignInInput) -> Result<StoredTradeSession> {
-    let mut backoff = TRADE_REAUTH_INITIAL_BACKOFF;
-    let mut attempt = 1;
-    loop {
-        match sign_in_inner(input) {
-            Ok(session) => return Ok(session),
-            Err(error) => {
-                if attempt >= TRADE_REAUTH_MAX_ATTEMPTS || !is_transient_signin_error(&error) {
-                    return Err(error);
-                }
-                std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(TRADE_REAUTH_MAX_BACKOFF);
-                attempt += 1;
-            }
-        }
-    }
-}
-
+/// Automatic (non-user-initiated) credential sign-in, governed and fully logged.
+///
+/// Fail-stop policy: each call makes at most ONE sign-in attempt. After
+/// [`MAX_AUTO_SIGNIN_ATTEMPTS`] consecutive failures the governor suspends automatic
+/// sign-in entirely — the user must then sign in manually (which resets the governor). This
+/// replaces the old exponential-backoff retry that, combined with background callers, could
+/// hammer WFM's login endpoint indefinitely. Rate-limit cooldowns are honoured WITHOUT
+/// consuming an attempt. Every branch leaves a log breadcrumb so the flow is never silent.
 fn restore_saved_trade_session(app: &tauri::AppHandle) -> Result<Option<StoredTradeSession>> {
     let Some(creds) = load_trade_credentials(app)? else {
+        log_feature_event_best_effort(
+            app,
+            "trades-session",
+            "auto-signin",
+            "No saved credentials; automatic sign-in skipped (user must sign in).",
+        );
         return Ok(None);
     };
+
+    // Suspended after repeated failures — never auto-attempt again until a manual sign-in.
+    if is_auto_signin_suspended(app) {
+        log_feature_event_best_effort(
+            app,
+            "trades-session",
+            "auto-signin",
+            "Automatic sign-in is suspended after repeated failures; manual sign-in required.",
+        );
+        return Err(anyhow!(
+            "Automatic sign-in is paused after repeated failures. Please sign in to Warframe Market again."
+        ));
+    }
+
+    // Respect an active rate-limit cooldown without consuming an attempt.
+    if let Some(remaining) = signin_cooldown_remaining(app) {
+        log_feature_event_best_effort(
+            app,
+            "trades-session",
+            "auto-signin",
+            &format!(
+                "Automatic sign-in skipped; rate-limit cooldown active ({}s remaining).",
+                remaining.as_secs()
+            ),
+        );
+        return Err(anyhow!(
+            "Warframe.Market sign-in is rate-limited; automatic retry is paused for {}s.",
+            remaining.as_secs()
+        ));
+    }
 
     let input = TradeSignInInput {
         email: creds.email.trim().to_string(),
@@ -6517,12 +6842,77 @@ fn restore_saved_trade_session(app: &tauri::AppHandle) -> Result<Option<StoredTr
         stay_logged_in: true,
     };
 
-    // Retry transient sign-in failures so a brief WFM/network hiccup doesn't force a
-    // manual sign-in; a genuine credential rejection still surfaces immediately.
-    let session = sign_in_with_backoff(&input)?;
-    save_session(app, &session)?;
-    set_session_in_cache(&session);
-    Ok(Some(session))
+    let attempt_so_far = read_auto_signin_state(app).failures + 1;
+    log_feature_event_best_effort(
+        app,
+        "trades-session",
+        "auto-signin",
+        &format!(
+            "Attempting automatic sign-in from saved credentials (attempt {attempt_so_far}/{MAX_AUTO_SIGNIN_ATTEMPTS})."
+        ),
+    );
+
+    match sign_in_inner(app, &input) {
+        Ok(session) => {
+            reset_auto_signin_state(app);
+            // Persistence is best-effort: a keychain write failure must not break the live
+            // session, but we log it loudly because it forces a re-auth next launch.
+            if let Err(error) = save_session(app, &session) {
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "auto-signin-save",
+                    "Automatic sign-in succeeded but persisting the session token failed — a re-auth will be needed next launch.",
+                    &error,
+                );
+            }
+            set_session_in_cache(&session);
+            log_feature_event_best_effort(
+                app,
+                "trades-session",
+                "auto-signin",
+                "Automatic sign-in succeeded.",
+            );
+            Ok(Some(session))
+        }
+        Err(error) => {
+            // A rate-limit isn't a credential failure — don't burn an attempt on it.
+            if is_rate_limit_error(&error) {
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "auto-signin",
+                    "Automatic sign-in was rate-limited (no attempt consumed; cooldown applied).",
+                    &error,
+                );
+                return Err(error);
+            }
+
+            let failures = record_auto_signin_failure(app);
+            if failures >= MAX_AUTO_SIGNIN_ATTEMPTS {
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "auto-signin",
+                    &format!(
+                        "Automatic sign-in failed ({failures}/{MAX_AUTO_SIGNIN_ATTEMPTS}) — suspending automatic sign-in; manual sign-in now required."
+                    ),
+                    &error,
+                );
+            } else {
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "auto-signin",
+                    &format!(
+                        "Automatic sign-in failed (attempt {failures}/{MAX_AUTO_SIGNIN_ATTEMPTS})."
+                    ),
+                    &error,
+                );
+            }
+            Err(error)
+        }
+    }
 }
 
 fn ensure_authenticated_session(app: &tauri::AppHandle) -> Result<StoredTradeSession> {
@@ -6548,9 +6938,28 @@ fn ensure_authenticated_session(app: &tauri::AppHandle) -> Result<StoredTradeSes
     Err(anyhow!("Sign in to Warframe Market first."))
 }
 
+fn reauth_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 /// Clears the in-memory and persisted session, then re-authenticates from saved
-/// credentials. Called when a real WFM API call returns a 401/auth error.
-fn reauth_session(app: &tauri::AppHandle) -> Result<StoredTradeSession> {
+/// credentials. Called when a real WFM API call returns a 401.
+///
+/// Single-flighted: when several in-flight requests get a 401 at once, only the first
+/// actually signs in; the others wait on the lock and then reuse the freshly cached
+/// session (detected by the token differing from the `stale_token` they failed with).
+/// This prevents a burst of concurrent sign-ins from tripping WFM's login rate limit.
+fn reauth_session(app: &tauri::AppHandle, stale_token: &str) -> Result<StoredTradeSession> {
+    let _guard = reauth_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // Another thread may have already re-authenticated while we waited for the lock.
+    if let Some(session) = get_session_from_cache() {
+        if session.token != stale_token {
+            return Ok(session);
+        }
+    }
+
     clear_session_cache();
     let _ = clear_session(app);
     if let Some(session) = restore_saved_trade_session(app)? {
@@ -6769,7 +7178,7 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
                 "WFM orders fetch returned an auth error — re-authenticating automatically.",
                 error,
             );
-            session = reauth_session(app)?;
+            session = reauth_session(app, &session.token)?;
             fetch_my_orders(&client, &session.token)?
         }
         Err(error) => return Err(error),
@@ -6878,8 +7287,23 @@ fn create_order_inner(
         if should_attempt_trade_session_reauth(error) {
             // Clear the stale cached token so the next call re-authenticates automatically.
             // Don't silently retry mutations — let the caller surface the error.
+            log_feature_error_best_effort(
+                app,
+                "trades-session",
+                "order-auth-error",
+                "An order request hit an auth error (401) — clearing the cached session so the next call re-authenticates.",
+                error,
+            );
             clear_session_cache();
-            let _ = clear_session(app);
+            if let Err(clear_error) = clear_session(app) {
+                log_feature_error_best_effort(
+                    app,
+                    "trades-session",
+                    "order-auth-error",
+                    "Failed to clear the persisted session after an order auth error.",
+                    &clear_error,
+                );
+            }
         }
     }
     result?;
@@ -7035,7 +7459,7 @@ pub async fn sign_in_wfm_trade_account(
         let app = app.clone();
         let input = input.clone();
         move || {
-            let session = sign_in_inner(&input)?;
+            let session = sign_in_inner(&app, &input)?;
             // Populate the in-memory cache FIRST so the session is usable this run even if
             // the keychain write fails (e.g. Windows Credential Manager rejecting a blob).
             set_session_in_cache(&session);
@@ -7056,6 +7480,17 @@ pub async fn sign_in_wfm_trade_account(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error: anyhow::Error| friendly_sign_in_error(&error))?;
+
+    // A successful manual sign-in is the escape hatch: re-enable automatic sign-in and clear
+    // any rate-limit cooldown so the app resumes normal session keeping.
+    reset_auto_signin_state(&app);
+    clear_signin_cooldown(&app);
+    log_feature_event_best_effort(
+        &app,
+        "trades-session",
+        "manual-signin",
+        "Manual sign-in succeeded; automatic sign-in re-enabled and cooldown cleared.",
+    );
 
     if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
         session.account.status = status;

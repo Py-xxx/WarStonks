@@ -35,6 +35,26 @@ pub fn log_feature_error_best_effort(
     }
 }
 
+/// Records an INFO breadcrumb (not an error) to the same rotating log. Use this to leave a
+/// trail through important state machines — e.g. every automatic sign-in attempt, success,
+/// failure, suspension — so silent loops can never hide again.
+pub fn log_feature_event(app: &AppHandle, feature: &str, stage: &str, detail: &str) -> Result<()> {
+    let log_dir = resolve_error_log_dir(app)?;
+    let entry = format!(
+        "[{timestamp}] [feature:{feature}] [stage:{stage}] [info]\nDetail: {detail}\n\n",
+        timestamp = now_rfc3339(),
+    );
+    append_rotating_error_entry(&log_dir, &entry, MAX_ERROR_LOG_BYTES)
+}
+
+pub fn log_feature_event_best_effort(app: &AppHandle, feature: &str, stage: &str, detail: &str) {
+    if let Err(log_error) = log_feature_event(app, feature, stage, detail) {
+        eprintln!(
+            "[error-log] failed to write event log for feature={feature} stage={stage}: {log_error}"
+        );
+    }
+}
+
 fn resolve_error_log_dir(app: &AppHandle) -> Result<PathBuf> {
     let app_data_dir = app
         .path()
