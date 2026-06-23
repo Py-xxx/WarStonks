@@ -19,12 +19,19 @@ const MANUAL_ALIAS_SEED_JSON: &str = include_str!("../sql/manual_aliases.json");
 
 const STARTUP_PROGRESS_EVENT: &str = "startup-progress";
 const WFM_ITEMS_URL: &str = "https://api.warframe.market/v2/items";
+const WFM_VERSIONS_URL: &str = "https://api.warframe.market/v2/versions";
 const WFSTAT_ITEMS_URL: &str = "https://api.warframestat.us/items/";
+// Identifying User-Agent required by Warframe.Market's API rules (no browser disguise).
+const WFM_USER_AGENT: &str =
+    concat!("WarStonks/", env!("CARGO_PKG_VERSION"), " (+https://pyth.co.za)");
 
 const WFM_SOURCE_NAME: &str = "wfm_v2_items";
 const WFSTAT_SOURCE_NAME: &str = "wfstat_items";
 const SCHEMA_SOURCE_NAME: &str = "item_catalog_schema";
 const MANUAL_ALIAS_SOURCE_NAME: &str = "item_manual_alias_seed";
+// Stores the `collections.items` hash from /v2/versions so we only re-download the full
+// item catalog when WFM actually changes it, instead of every launch.
+const WFM_COLLECTION_SOURCE_NAME: &str = "wfm_v2_items_collection";
 const CURRENT_SCHEMA_VERSION: &str = "2026-03-10.item-catalog.v1";
 
 const WFM_DATA_FILE: &str = "WFM-items.json";
@@ -393,12 +400,97 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
     )?;
     let alias_seed_checksum = sha256_hex(MANUAL_ALIAS_SEED_JSON.as_bytes());
 
+    // Open the DB and apply the schema FIRST, so we can judge freshness without downloading
+    // the full catalog.
+    let mut connection = startup_step(
+        &app,
+        "database-open",
+        "Opening local catalog",
+        "Ensuring the local item database schema is available.",
+        0.07,
+        || open_database(&paths.db_path).context("failed to open the local item catalog database"),
+    )?;
+    startup_step(
+        &app,
+        "database-schema",
+        "Preparing catalog schema",
+        "Applying the catalog database schema and migrations.",
+        0.09,
+        || {
+            apply_reference_schema(&connection, schema.sql)
+                .context("failed to apply the item catalog schema")
+        },
+    )?;
+
+    // Tiny version probe: the full /v2/items catalog is multi-MB, so we only download it when
+    // WFM's `collections.items` hash actually changed. Best-effort — if the probe fails we
+    // fall through to the download path. (Per WFM's "be careful with requests" rule.)
+    let collection_version = startup_step(
+        &app,
+        "wfm-versions",
+        "Checking warframe.market",
+        "Checking whether the item catalog changed since last launch.",
+        0.11,
+        || Ok::<Option<String>, anyhow::Error>(fetch_items_collection_version().ok()),
+    )?;
+
+    if !version_mismatch {
+        if let Some(collection_hash) = collection_version.as_deref() {
+            let already_current = catalog_is_current_for_collection(
+                &connection,
+                collection_hash,
+                &schema.checksum,
+                &alias_seed_checksum,
+            )
+            .context("failed to compare the catalog collection version")?;
+            if already_current {
+                emit_progress(
+                    &app,
+                    "startup-complete",
+                    "Catalog ready",
+                    "The local item catalog is already current (no download needed).",
+                    1.0,
+                );
+                if let Err(error) = write_installed_version(&app, current_version) {
+                    startup_warning(
+                        &app,
+                        "startup-version-write",
+                        "Startup completed, but the installed app version could not be recorded.",
+                        &error,
+                    );
+                }
+                return Ok(StartupSummary {
+                    ready: true,
+                    refreshed: false,
+                    database_path: paths.db_path.display().to_string(),
+                    data_dir: paths.data_dir.display().to_string(),
+                    wfm_source_file: paths.wfm_file_path.display().to_string(),
+                    wfstat_source_file: Some(paths.wfstat_file_path.display().to_string()),
+                    stats: match load_existing_stats(&connection) {
+                        Ok(stats) => stats,
+                        Err(error) => {
+                            startup_warning(
+                                &app,
+                                "startup-stats",
+                                "Startup completed, but the cached import statistics could not be loaded.",
+                                &error,
+                            );
+                            ImportStats::default()
+                        }
+                    },
+                    current_wfm_api_version: stored_wfm_api_version(&connection),
+                });
+            }
+        }
+    }
+
+    // Catalog changed (or the version probe was unavailable) → download the full catalog.
     let wfm_bytes = startup_step(
         &app,
         "wfm-fetch",
         "Checking warframe.market",
         "Downloading the latest item catalog from warframe.market.",
-        0.08,
+        0.14,
         || {
             fetch_wfm_to_file(
                 WFM_ITEMS_URL,
@@ -415,7 +507,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         "wfm-parse",
         "Reading warframe.market data",
         "Checking the downloaded warframe.market catalog data.",
-        0.11,
+        0.17,
         || serde_json::from_slice(&wfm_bytes).context("failed to parse WFM item response JSON"),
     )?;
     let wfm_meta = startup_step(
@@ -423,28 +515,8 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         "wfm-meta",
         "Preparing WFM metadata",
         "Inspecting the downloaded warframe.market catalog snapshot.",
-        0.12,
+        0.19,
         || build_wfm_meta(&wfm_json, &paths.wfm_file_path, &now, &wfm_bytes),
-    )?;
-
-    let mut connection = startup_step(
-        &app,
-        "database-open",
-        "Opening local catalog",
-        "Ensuring the local item database schema is available.",
-        0.14,
-        || open_database(&paths.db_path).context("failed to open the local item catalog database"),
-    )?;
-    startup_step(
-        &app,
-        "database-schema",
-        "Preparing catalog schema",
-        "Applying the catalog database schema and migrations.",
-        0.17,
-        || {
-            apply_reference_schema(&connection, schema.sql)
-                .context("failed to apply the item catalog schema")
-        },
     )?;
 
     let should_refresh = version_mismatch
@@ -466,6 +538,18 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         )?;
 
     if !should_refresh {
+        // Record the collection hash so the next launch can fast-skip the download.
+        if let Some(collection_hash) = collection_version.as_deref() {
+            if let Err(error) = store_items_collection_version(&mut connection, collection_hash, &now)
+            {
+                startup_warning(
+                    &app,
+                    "startup-collection-version",
+                    "Catalog current, but the collection version could not be recorded.",
+                    &error,
+                );
+            }
+        }
         emit_progress(
             &app,
             "startup-complete",
@@ -582,6 +666,19 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             .context("failed to write the refreshed catalog into SQLite")
         },
     )?;
+
+    // Record the collection hash we imported against so future launches can fast-skip the
+    // download until WFM changes the items collection again.
+    if let Some(collection_hash) = collection_version.as_deref() {
+        if let Err(error) = store_items_collection_version(&mut connection, collection_hash, &now) {
+            startup_warning(
+                &app,
+                "startup-collection-version",
+                "Catalog imported, but the collection version could not be recorded.",
+                &error,
+            );
+        }
+    }
 
     emit_progress(
         &app,
@@ -3017,9 +3114,10 @@ fn fetch_http_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn fetch_wfm_to_file(
+/// Performs a rate-limited WFM GET and returns the response body. Sends our identifying
+/// User-Agent (per WFM's API rules) and goes through the shared 3 req/s scheduler.
+fn fetch_wfm_bytes(
     url: &str,
-    output_path: &Path,
     priority: RequestPriority,
     action_label: &str,
     coalesce_key: Option<String>,
@@ -3038,6 +3136,9 @@ fn fetch_wfm_to_file(
         move || {
             let response = client
                 .get(&url_owned)
+                .header("User-Agent", WFM_USER_AGENT)
+                .header("language", "en")
+                .header("platform", "pc")
                 .send()
                 .with_context(|| format!("failed to {}", action_label_owned))?;
             let status = response.status();
@@ -3078,9 +3179,95 @@ fn fetch_wfm_to_file(
         }));
     }
 
-    fs::write(output_path, &response.body)
-        .with_context(|| format!("failed to write {}", output_path.display()))?;
     Ok(response.body)
+}
+
+fn fetch_wfm_to_file(
+    url: &str,
+    output_path: &Path,
+    priority: RequestPriority,
+    action_label: &str,
+    coalesce_key: Option<String>,
+) -> Result<Vec<u8>> {
+    let body = fetch_wfm_bytes(url, priority, action_label, coalesce_key)?;
+    fs::write(output_path, &body)
+        .with_context(|| format!("failed to write {}", output_path.display()))?;
+    Ok(body)
+}
+
+/// Fetches the `collections.items` hash from `/v2/versions`. This tiny request tells us
+/// whether the item catalog changed, so we can skip the multi-MB `/v2/items` download when
+/// our cached catalog is already current.
+fn fetch_items_collection_version() -> Result<String> {
+    let bytes = fetch_wfm_bytes(
+        WFM_VERSIONS_URL,
+        RequestPriority::High,
+        "request WFM versions",
+        Some("catalog:wfm-versions".to_string()),
+    )?;
+    let json: Value =
+        serde_json::from_slice(&bytes).context("failed to parse WFM versions response")?;
+    json.get("data")
+        .and_then(|data| data.get("collections"))
+        .and_then(|collections| collections.get("items"))
+        .and_then(Value::as_str)
+        .map(|value| value.to_string())
+        .ok_or_else(|| anyhow!("WFM versions response is missing collections.items"))
+}
+
+/// Freshness check that uses the items-collection hash (from /v2/versions) instead of the
+/// full download — lets us skip the catalog download entirely when nothing changed.
+fn catalog_is_current_for_collection(
+    connection: &Connection,
+    collection_hash: &str,
+    schema_checksum: &str,
+    alias_seed_checksum: &str,
+) -> Result<bool> {
+    let has_items =
+        connection.query_row("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)", [], |row| {
+            row.get::<_, i64>(0)
+        })? == 1;
+    let previous_collection = load_version_row(connection, WFM_COLLECTION_SOURCE_NAME)?;
+    let previous_schema = load_version_row(connection, SCHEMA_SOURCE_NAME)?;
+    let previous_alias_seed = load_version_row(connection, MANUAL_ALIAS_SOURCE_NAME)?;
+
+    let collection_matches =
+        previous_collection.content_sha256.as_deref() == Some(collection_hash);
+    let schema_matches = previous_schema.api_version.as_deref() == Some(CURRENT_SCHEMA_VERSION)
+        && previous_schema.content_sha256.as_deref() == Some(schema_checksum);
+    let alias_matches = previous_alias_seed.content_sha256.as_deref() == Some(alias_seed_checksum);
+
+    Ok(has_items && collection_matches && schema_matches && alias_matches)
+}
+
+/// Persists the items-collection hash so later launches can compare against it.
+fn store_items_collection_version(
+    connection: &mut Connection,
+    collection_hash: &str,
+    fetched_at: &str,
+) -> Result<()> {
+    let tx = connection.transaction()?;
+    upsert_source_version(
+        &tx,
+        &SourceMeta {
+            source_name: WFM_COLLECTION_SOURCE_NAME.to_string(),
+            api_version: None,
+            content_sha256: collection_hash.to_string(),
+            item_count: 0,
+            fetched_at: fetched_at.to_string(),
+            source_file: String::new(),
+            notes: Some("collections.items hash from GET /v2/versions".to_string()),
+        },
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Reads the WFM source api_version recorded at the last successful import.
+fn stored_wfm_api_version(connection: &Connection) -> Option<String> {
+    load_version_row(connection, WFM_SOURCE_NAME)
+        .ok()
+        .and_then(|row| row.api_version)
 }
 
 fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths> {

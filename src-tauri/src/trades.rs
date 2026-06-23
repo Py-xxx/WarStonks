@@ -63,11 +63,11 @@ const PENDING_NOTIFICATION_WINDOW_MINUTES: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_WS_URL: &str = "wss://ws.warframe.market/socket";
-// Honest, identifying User-Agent — no browser emulation. The reference WFM client (see
-// Resources/references/Interactions Rust Library) needs no special User-Agent at all; the
-// 1015 rate-limits we saw came from request *spam* (a re-login loop), not the UA. We keep a
-// simple product token for attribution.
-const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
+// Descriptive, identifying User-Agent as required by Warframe.Market's API rules: a client
+// MUST identify itself (project name, version, website/contact) and MUST NOT disguise itself
+// as a browser. Format follows their example: `ProjectName/version (+url)`.
+const WFM_USER_AGENT: &str =
+    concat!("WarStonks/", env!("CARGO_PKG_VERSION"), " (+https://pyth.co.za)");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -6141,12 +6141,13 @@ fn parse_status_from_payload(payload: &Value) -> Option<String> {
         .map(normalize_status_label)
 }
 
-async fn connect_wfm_websocket(
-    token: &str,
-    device_id: &str,
-) -> Result<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-> {
+type WfmWsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Opens the single WFM websocket connection. Connecting requires no authentication — auth
+/// (and the newOrders subscription) are applied as separate messages by the connection
+/// manager, so the subscription can run logged-out and auth piggybacks when signed in.
+async fn connect_wfm_websocket() -> Result<WfmWsStream> {
     let mut request = WFM_WS_URL
         .into_client_request()
         .context("failed to build WFM websocket request")?;
@@ -6154,84 +6155,51 @@ async fn connect_wfm_websocket(
     headers.append("Sec-WebSocket-Protocol", "wfm".parse().unwrap());
     headers.append("User-Agent", WFM_USER_AGENT.parse().unwrap());
 
-    let (mut ws_stream, _) = timeout(Duration::from_secs(10), connect_async(request))
+    let (ws_stream, _) = timeout(Duration::from_secs(10), connect_async(request))
         .await
         .context("timed out while connecting to WFM websocket")?
         .context("failed to connect to WFM websocket")?;
 
-    let auth_request_id = uuid::Uuid::new_v4().to_string();
-    let auth_message = WfmWsMessage {
-        route: "@wfm|cmd/auth/signIn".to_string(),
-        payload: Some(json!({
-            "token": token,
-            "deviceId": device_id,
-        })),
-        id: Some(auth_request_id),
-        ref_id: None,
-    };
-
-    ws_stream
-        .send(Message::Text(
-            serde_json::to_string(&auth_message)
-                .context("failed to serialize websocket auth message")?
-                .into(),
-        ))
-        .await
-        .context("failed to send websocket auth message")?;
-
     Ok(ws_stream)
 }
 
-async fn fetch_current_trade_status_ws(token: &str, device_id: &str) -> Result<String> {
-    let mut ws_stream = connect_wfm_websocket(token, device_id).await?;
-    let mut authenticated = false;
-
-    timeout(Duration::from_secs(10), async {
-        while let Some(message) = ws_stream.next().await {
-            let message = message.context("failed to read WFM websocket message")?;
-            let Message::Text(text) = message else {
-                continue;
-            };
-
-            let payload = serde_json::from_str::<WfmWsMessage>(&text)
-                .context("failed to parse WFM websocket payload")?;
-            let route = payload
-                .route
-                .split('|')
-                .nth(1)
-                .unwrap_or(payload.route.as_str())
-                .to_string();
-
-            if !authenticated {
-                if route == "cmd/auth/signIn:ok" {
-                    authenticated = true;
-                    continue;
-                }
-
-                if route == "cmd/auth/signIn:error" {
-                    let reason = payload
-                        .payload
-                        .as_ref()
-                        .and_then(|value| value.get("reason"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("websocket authentication failed");
-                    return Err(anyhow!(reason.to_string()));
-                }
-
-                continue;
-            }
-
-            if route == "event/status/set" {
-                if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload) {
-                    return Ok(status);
-                }
-            }
-        }
-
-        Err(anyhow!("presence status was not emitted by WFM"))
-    })
+/// Serializes and sends one envelope on the websocket.
+async fn ws_send_message(ws: &mut WfmWsStream, route: &str, payload: Value) -> Result<()> {
+    let message = WfmWsMessage {
+        route: route.to_string(),
+        payload: Some(payload),
+        id: Some(uuid::Uuid::new_v4().to_string()),
+        ref_id: None,
+    };
+    ws.send(Message::Text(
+        serde_json::to_string(&message)
+            .with_context(|| format!("failed to serialize websocket message {route}"))?
+            .into(),
+    ))
     .await
-    .context("timed out while waiting for WFM presence state")?
+    .with_context(|| format!("failed to send websocket message {route}"))
+}
+
+async fn ws_send_auth(ws: &mut WfmWsStream, token: &str, device_id: &str) -> Result<()> {
+    ws_send_message(
+        ws,
+        "@wfm|cmd/auth/signIn",
+        json!({ "token": token, "deviceId": device_id }),
+    )
+    .await
+}
+
+async fn ws_send_status_set(ws: &mut WfmWsStream, status: &str) -> Result<()> {
+    let normalized = normalize_status_set_request(status).unwrap_or("invisible");
+    ws_send_message(ws, "@wfm|cmd/status/set", json!({ "status": normalized })).await
+}
+
+async fn ws_send_subscribe_new_orders(ws: &mut WfmWsStream) -> Result<()> {
+    ws_send_message(ws, "@wfm|cmd/subscribe/newOrders", json!({ "platform": "pc" })).await
+}
+
+async fn ws_send_unsubscribe_new_orders(ws: &mut WfmWsStream) -> Result<()> {
+    ws_send_message(ws, "@wfm|cmd/unsubscribe/newOrders", json!({ "platform": "pc" })).await
 }
 
 fn normalize_status_set_request(status: &str) -> Result<&'static str> {
@@ -6241,104 +6209,6 @@ fn normalize_status_set_request(status: &str) -> Result<&'static str> {
         "invisible" | "offline" => Ok("invisible"),
         _ => Err(anyhow!("Unsupported presence state.")),
     }
-}
-
-async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str) -> Result<String> {
-    let requested_status = normalize_status_set_request(status)?;
-    let mut ws_stream = connect_wfm_websocket(token, device_id).await?;
-    let mut authenticated = false;
-    let mut status_sent = false;
-    let mut latest_emitted_status: Option<String> = None;
-
-    timeout(Duration::from_secs(10), async {
-        while let Some(message) = ws_stream.next().await {
-            let message = message.context("failed to read WFM websocket message")?;
-            let Message::Text(text) = message else {
-                continue;
-            };
-
-            let payload = serde_json::from_str::<WfmWsMessage>(&text)
-                .context("failed to parse WFM websocket payload")?;
-            let route = payload
-                .route
-                .split('|')
-                .nth(1)
-                .unwrap_or(payload.route.as_str())
-                .to_string();
-
-            if !authenticated {
-                if route == "cmd/auth/signIn:ok" {
-                    authenticated = true;
-                } else if route == "cmd/auth/signIn:error" {
-                    let reason = payload
-                        .payload
-                        .as_ref()
-                        .and_then(|value| value.get("reason"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("websocket authentication failed");
-                    return Err(anyhow!(reason.to_string()));
-                } else {
-                    continue;
-                }
-            }
-
-            if authenticated && !status_sent {
-                status_sent = true;
-                let status_message = WfmWsMessage {
-                    route: "@wfm|cmd/status/set".to_string(),
-                    payload: Some(json!({
-                        "status": requested_status,
-                    })),
-                    id: Some(uuid::Uuid::new_v4().to_string()),
-                    ref_id: None,
-                };
-
-                ws_stream
-                    .send(Message::Text(
-                        serde_json::to_string(&status_message)
-                            .context("failed to serialize websocket status message")?
-                            .into(),
-                    ))
-                    .await
-                    .context("failed to send websocket status message")?;
-                continue;
-            }
-
-            if route == "cmd/status/set:error" {
-                let reason = payload
-                    .payload
-                    .as_ref()
-                    .and_then(|value| value.get("reason"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("failed to update presence");
-                return Err(anyhow!(reason.to_string()));
-            }
-
-            if route == "event/status/set" {
-                latest_emitted_status =
-                    payload.payload.as_ref().and_then(parse_status_from_payload);
-                continue;
-            }
-
-            if route == "cmd/status/set:ok" {
-                if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload) {
-                    return Ok(status);
-                }
-
-                if let Some(status) = latest_emitted_status.clone() {
-                    return Ok(status);
-                }
-
-                return Ok(normalize_status_label(requested_status));
-            }
-        }
-
-        Err(anyhow!(
-            "presence update confirmation was not emitted by WFM"
-        ))
-    })
-    .await
-    .context("timed out while waiting for WFM presence update")?
 }
 
 // ─── Persistent presence keeper ───────────────────────────────────────────────
@@ -6353,8 +6223,91 @@ async fn set_current_trade_status_ws(token: &str, device_id: &str, status: &str)
 
 const TRADES_PRESENCE_FILE_NAME: &str = "wfm-presence.json";
 const PRESENCE_CHANGED_EVENT: &str = "wfm-presence-changed";
+/// Emitted to the frontend when a tracked watchlist item gets a matching sell ≤ target via
+/// the realtime newOrders feed.
+const WATCHLIST_ORDER_EVENT: &str = "wfm-watchlist-order";
 const PRESENCE_KEEPALIVE_SECONDS: u64 = 20;
 const PRESENCE_STARTUP_DELAY_SECONDS: u64 = 8;
+
+// ─── Single persistent websocket: commands + tracked-item registry ─────────────
+//
+// One long-lived connection serves both purposes: the `newOrders` subscription (which
+// works logged-out and only runs when we have items to match) and, when signed in,
+// presence/status. Other parts of the app talk to that connection through this command
+// channel instead of opening their own sockets.
+
+/// Commands sent to the persistent websocket task.
+#[derive(Debug, Clone)]
+enum WsCommand {
+    /// Desired presence changed — apply it on the live connection.
+    SetStatus,
+    /// A session token became available (sign-in) — reconnect to authenticate.
+    SignedIn,
+    /// User signed out — drop presence/auth.
+    SignedOut,
+    /// Tracked-item set changed — (un)subscribe to newOrders as needed.
+    RefreshSubscription,
+}
+
+fn ws_command_sender() -> &'static Mutex<Option<tokio::sync::mpsc::UnboundedSender<WsCommand>>> {
+    static TX: OnceLock<Mutex<Option<tokio::sync::mpsc::UnboundedSender<WsCommand>>>> =
+        OnceLock::new();
+    TX.get_or_init(|| Mutex::new(None))
+}
+
+/// Sends a command to the persistent websocket task, if it is running. Best-effort: if the
+/// task isn't up yet, the command is dropped (the task reconciles from shared state on its
+/// next loop anyway).
+fn send_ws_command(command: WsCommand) {
+    if let Ok(guard) = ws_command_sender().lock() {
+        if let Some(tx) = guard.as_ref() {
+            let _ = tx.send(command);
+        }
+    }
+}
+
+/// A watchlist target the realtime feed matches incoming orders against.
+#[derive(Debug, Clone)]
+struct WatchlistTarget {
+    watchlist_id: String,
+    slug: String,
+    target_price: f64,
+    rank: Option<i64>,
+}
+
+/// Items the user is actively tracking, keyed by their Warframe.Market item id (the `itemId`
+/// carried on each newOrder event). The newOrders subscription only runs while this is
+/// non-empty, so we never pull the global firehose with nothing to match against. Synced
+/// from the frontend watchlist via `set_watchlist_targets`.
+fn watchlist_targets() -> &'static Mutex<std::collections::HashMap<String, WatchlistTarget>> {
+    static TARGETS: OnceLock<Mutex<std::collections::HashMap<String, WatchlistTarget>>> =
+        OnceLock::new();
+    TARGETS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Seller-mode filter applied to realtime matches (`ingame` or `ingame-online`).
+fn watchlist_seller_mode() -> &'static Mutex<String> {
+    static MODE: OnceLock<Mutex<String>> = OnceLock::new();
+    MODE.get_or_init(|| Mutex::new("ingame".to_string()))
+}
+
+fn has_tracked_items() -> bool {
+    watchlist_targets()
+        .lock()
+        .map(|guard| !guard.is_empty())
+        .unwrap_or(false)
+}
+
+/// Whether an order from a user with `status` is acceptable under the current seller mode.
+/// The newOrders feed already excludes offline users; `ingame` mode further restricts to
+/// players actually in-game.
+fn seller_status_allowed(status: Option<&str>, seller_mode: &str) -> bool {
+    match seller_mode {
+        "ingame" => matches!(status, Some("ingame")),
+        // "ingame-online" / anything else: any non-offline status the feed delivers.
+        _ => matches!(status, Some("ingame") | Some("online")),
+    }
+}
 
 fn presence_desired_status() -> &'static Mutex<Option<String>> {
     static DESIRED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
@@ -6426,18 +6379,18 @@ fn save_persisted_desired_presence(app: &tauri::AppHandle, status: Option<&str>)
 fn apply_desired_presence(app: &tauri::AppHandle, status: Option<&str>) {
     set_desired_presence(status.map(|value| value.to_string()));
     save_persisted_desired_presence(app, status);
-    start_presence_keeper(app.clone());
+    start_ws_manager(app.clone());
 }
 
-fn presence_keeper_started() -> &'static AtomicBool {
+fn ws_manager_started() -> &'static AtomicBool {
     static STARTED: AtomicBool = AtomicBool::new(false);
     &STARTED
 }
 
-/// Spawns the presence keeper exactly once. Loads any persisted desired status so the
-/// user's presence is restored automatically after an app restart.
-pub fn start_presence_keeper(app: tauri::AppHandle) {
-    if presence_keeper_started().swap(true, Ordering::SeqCst) {
+/// Spawns the single persistent websocket manager exactly once, wiring up its command
+/// channel. Loads any persisted desired presence so it is restored after a restart.
+pub fn start_ws_manager(app: tauri::AppHandle) {
+    if ws_manager_started().swap(true, Ordering::SeqCst) {
         return;
     }
     if get_desired_presence().is_none() {
@@ -6445,86 +6398,72 @@ pub fn start_presence_keeper(app: tauri::AppHandle) {
             set_desired_presence(Some(persisted));
         }
     }
-    tauri::async_runtime::spawn(run_presence_keeper(app));
-}
-
-async fn resolve_presence_session(app: &tauri::AppHandle) -> Option<StoredTradeSession> {
-    if let Some(session) = get_session_from_cache() {
-        return Some(session);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<WsCommand>();
+    if let Ok(mut guard) = ws_command_sender().lock() {
+        *guard = Some(tx);
     }
-    // CRITICAL: the presence keeper must NEVER trigger a credential sign-in. It only adopts
-    // an already-established session — the in-memory cache, or a persisted session token
-    // (no network). Previously this called ensure_authenticated_session(), which falls
-    // through to a full /auth/signin when signed out; running on the keeper's ~30s loop that
-    // silently hammered WFM's login endpoint and got the account Cloudflare-rate-limited
-    // (HTTP 429 / error 1015) indefinitely. A session appears here only after a
-    // user-initiated sign-in (which populates the cache).
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || match load_session(&app) {
-        Ok(session) => session,
-        Err(error) => {
-            // Don't fail silently — surface why the keeper couldn't load a persisted session.
-            log_feature_error_best_effort(
-                &app,
-                "trades-presence",
-                "resolve-session",
-                "Presence keeper couldn't load the persisted session token.",
-                &error,
-            );
-            None
-        }
-    })
-    .await
-    .ok()
-    .flatten()
-    .inspect(|session| set_session_in_cache(session))
+    tauri::async_runtime::spawn(run_ws_manager(app, rx));
 }
 
-async fn run_presence_keeper(app: tauri::AppHandle) {
-    // Let startup auto-sign-in settle so the keeper doesn't race it into a duplicate re-auth.
+/// The persistent websocket manager. Holds at most one connection, opened whenever we are
+/// signed in (for presence) or have tracked items (for the newOrders subscription), and
+/// reconnects with capped backoff. It never performs an HTTP credential sign-in — WS auth
+/// uses the cached JWT — so it can never hammer the login endpoint.
+async fn run_ws_manager(
+    app: tauri::AppHandle,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<WsCommand>,
+) {
     tokio::time::sleep(Duration::from_secs(PRESENCE_STARTUP_DELAY_SECONDS)).await;
 
-    // Escalating backoff bounds how often we retry when something is persistently wrong
-    // (e.g. credentials no longer valid), so the keeper can never hammer WFM's login.
     let reset_backoff = Duration::from_secs(2);
     let max_backoff = Duration::from_secs(60);
     let mut backoff = reset_backoff;
 
     loop {
-        // We hold a connection whenever the user is signed in — this keeps the WFM
-        // session alive (like a browser tab) regardless of whether they're shown online
-        // or invisible. If no session can be resolved, the user is signed out.
-        let Some(session) = resolve_presence_session(&app).await else {
-            // Signed out: no session to hold. resolve_presence_session never signs in, so
-            // this is a cheap local check — idle, then re-check to pick up a fresh
-            // user-initiated sign-in promptly without ever touching the login endpoint.
-            tokio::time::sleep(Duration::from_secs(30)).await;
+        let session = get_session_from_cache();
+        let want_connection = session.is_some() || has_tracked_items();
+
+        if !want_connection {
+            // Nothing to hold open. Wait for a command (sign-in / new tracked item) or
+            // re-check periodically. No network, no login — purely idle.
+            tokio::select! {
+                _ = rx.recv() => {}
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+            }
             backoff = reset_backoff;
             continue;
-        };
+        }
 
-        let status = effective_presence_status();
+        // A connection that ends almost immediately is "flapping" — apply backoff even on a
+        // clean close so a socket WFM keeps closing can never become a tight reconnect loop
+        // (the WS handshake bypasses the HTTP rate limiter, so this guard is essential).
+        const MIN_HEALTHY_CONNECTION: Duration = Duration::from_secs(10);
+        let connected_at = std::time::Instant::now();
 
-        match hold_presence_connection(&app, &session, status).await {
-            Ok(()) => {
-                // Graceful exit (desired changed / connection closed). Brief pause avoids a
-                // tight reconnect loop if WFM closes the socket immediately.
+        match run_ws_connection(&app, &mut rx, session).await {
+            // A deliberate command (status change / sign-in / sign-out) — reconnect promptly.
+            Ok(WsOutcome::CommandReconnect) => {
                 backoff = reset_backoff;
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            // Socket closed: reset only if it held for a while; otherwise treat as flapping.
+            Ok(WsOutcome::Closed) => {
+                if connected_at.elapsed() >= MIN_HEALTHY_CONNECTION {
+                    backoff = reset_backoff;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                } else {
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                }
             }
             Err(error) => {
                 log_feature_error_best_effort(
                     &app,
-                    "trades-presence",
-                    "hold-connection",
-                    "Presence websocket dropped; backing off and reconnecting (auth session left intact).",
+                    "trades-ws",
+                    "connection",
+                    "WFM websocket dropped; backing off and reconnecting (auth session left intact).",
                     &error,
                 );
-                // CRITICAL: never clear or re-auth the trade session from the presence
-                // path. A websocket hiccup must not sign the user out. The HTTP path
-                // refreshes the token on its own 401s, and this keeper picks up the new
-                // token on its next resolve. (Previously this called reauth_session, which
-                // wiped the in-memory + keychain session and bounced the user to sign-in.)
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(max_backoff);
             }
@@ -6532,105 +6471,270 @@ async fn run_presence_keeper(app: tauri::AppHandle) {
     }
 }
 
-/// Holds a single authenticated presence connection: applies `desired`, answers pings,
-/// emits observed status changes, and returns `Ok(())` when the desired status changes
-/// or the socket closes (so the caller reconnects), or `Err` on a connection failure.
-async fn hold_presence_connection(
-    app: &tauri::AppHandle,
-    session: &StoredTradeSession,
-    desired: &str,
-) -> Result<()> {
-    let requested_status = normalize_status_set_request(desired)?;
-    let mut ws_stream = connect_wfm_websocket(&session.token, &session.device_id).await?;
+/// Opens and services one websocket connection until it should be torn down (so the
+/// manager can reconnect). Subscribes first (works logged-out), then authenticates if a
+/// session token is available, then multiplexes inbound events and outbound commands.
+/// Why a websocket connection ended — lets the manager reconnect promptly on a deliberate
+/// command but back off on a socket close, so it can never tight-loop reconnects.
+enum WsOutcome {
+    /// A SetStatus/SignedIn/SignedOut/subscription command asked us to reconnect.
+    CommandReconnect,
+    /// The socket closed (clean close, EOF, or channel gone).
+    Closed,
+}
 
+async fn run_ws_connection(
+    app: &tauri::AppHandle,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<WsCommand>,
+    session: Option<StoredTradeSession>,
+) -> Result<WsOutcome> {
+    let mut ws = connect_wfm_websocket().await?;
     let mut authenticated = false;
-    let mut status_sent = false;
+    let mut subscribed = false;
+
+    if has_tracked_items() {
+        ws_send_subscribe_new_orders(&mut ws).await?;
+        subscribed = true;
+        log_feature_event_best_effort(
+            app,
+            "trades-ws",
+            "subscribe",
+            "Subscribed to newOrders feed for tracked items.",
+        );
+    }
+
+    if let Some(session) = session.as_ref() {
+        ws_send_auth(&mut ws, &session.token, &session.device_id).await?;
+    }
 
     loop {
-        // Release the connection when the session cache is cleared (sign-out, or a 401
-        // elsewhere) so the keeper re-resolves — on sign-out this drops us offline.
-        if get_session_from_cache().is_none() {
-            return Ok(());
-        }
-        // React to the user changing their presence: when the effective status changes,
-        // return so the keeper reconnects and applies the new one.
-        if effective_presence_status() != desired {
-            return Ok(());
+        // Tear down when there's nothing left to hold the connection for.
+        if get_session_from_cache().is_none() && !has_tracked_items() {
+            return Ok(WsOutcome::CommandReconnect);
         }
 
-        let next = timeout(Duration::from_secs(PRESENCE_KEEPALIVE_SECONDS), ws_stream.next()).await;
-        let message = match next {
-            // No traffic within the window: send a ping to keep the socket alive and to
-            // detect a dead connection on the next read.
-            Err(_) => {
-                ws_stream
-                    .send(Message::Ping(Vec::new().into()))
-                    .await
-                    .context("failed to send presence keepalive ping")?;
-                continue;
-            }
-            Ok(None) => return Ok(()), // closed cleanly — reconnect
-            Ok(Some(message)) => message.context("failed to read presence websocket message")?,
-        };
-
-        match message {
-            Message::Ping(payload) => {
-                ws_stream
-                    .send(Message::Pong(payload))
-                    .await
-                    .context("failed to answer presence websocket ping")?;
-            }
-            Message::Close(_) => return Ok(()),
-            Message::Text(text) => {
-                let Ok(payload) = serde_json::from_str::<WfmWsMessage>(&text) else {
-                    continue;
-                };
-                let route = payload
-                    .route
-                    .split('|')
-                    .nth(1)
-                    .unwrap_or(payload.route.as_str())
-                    .to_string();
-
-                if !authenticated {
-                    if route == "cmd/auth/signIn:ok" {
-                        authenticated = true;
-                    } else if route == "cmd/auth/signIn:error" {
-                        return Err(anyhow!("presence websocket authentication failed (401)"));
-                    } else {
-                        continue;
+        tokio::select! {
+            command = rx.recv() => {
+                match command {
+                    None => return Ok(WsOutcome::Closed),
+                    Some(WsCommand::SetStatus) => {
+                        if authenticated {
+                            ws_send_status_set(&mut ws, effective_presence_status()).await?;
+                        }
                     }
-                }
-
-                if authenticated && !status_sent {
-                    status_sent = true;
-                    let status_message = WfmWsMessage {
-                        route: "@wfm|cmd/status/set".to_string(),
-                        payload: Some(json!({ "status": requested_status })),
-                        id: Some(uuid::Uuid::new_v4().to_string()),
-                        ref_id: None,
-                    };
-                    ws_stream
-                        .send(Message::Text(
-                            serde_json::to_string(&status_message)
-                                .context("failed to serialize presence status message")?
-                                .into(),
-                        ))
-                        .await
-                        .context("failed to send presence status message")?;
-                    continue;
-                }
-
-                if route == "event/status/set" || route == "cmd/status/set:ok" {
-                    if let Some(status) = payload.payload.as_ref().and_then(parse_status_from_payload)
-                    {
-                        record_observed_presence(app, &status);
+                    // Reconnect to (re)authenticate or drop auth cleanly.
+                    Some(WsCommand::SignedIn) | Some(WsCommand::SignedOut) => {
+                        return Ok(WsOutcome::CommandReconnect)
+                    }
+                    Some(WsCommand::RefreshSubscription) => {
+                        let want = has_tracked_items();
+                        if want && !subscribed {
+                            ws_send_subscribe_new_orders(&mut ws).await?;
+                            subscribed = true;
+                        } else if !want && subscribed {
+                            ws_send_unsubscribe_new_orders(&mut ws).await?;
+                            subscribed = false;
+                        }
                     }
                 }
             }
-            _ => {}
+            next = timeout(Duration::from_secs(PRESENCE_KEEPALIVE_SECONDS), ws.next()) => {
+                match next {
+                    // Idle window elapsed: keepalive ping (also detects a dead socket).
+                    Err(_) => {
+                        ws.send(Message::Ping(Vec::new().into()))
+                            .await
+                            .context("failed to send websocket keepalive ping")?;
+                    }
+                    Ok(None) => return Ok(WsOutcome::Closed),
+                    Ok(Some(message)) => {
+                        match message.context("failed to read websocket message")? {
+                            Message::Ping(payload) => {
+                                ws.send(Message::Pong(payload))
+                                    .await
+                                    .context("failed to answer websocket ping")?;
+                            }
+                            Message::Close(_) => return Ok(WsOutcome::Closed),
+                            Message::Text(text) => {
+                                handle_ws_text(app, &mut ws, &text, &mut authenticated).await?;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+/// Routes one inbound text frame. Unexpected/error paths are logged so the connection never
+/// fails silently.
+async fn handle_ws_text(
+    app: &tauri::AppHandle,
+    ws: &mut WfmWsStream,
+    text: &str,
+    authenticated: &mut bool,
+) -> Result<()> {
+    let Ok(message) = serde_json::from_str::<WfmWsMessage>(text) else {
+        return Ok(());
+    };
+    let route = message
+        .route
+        .split('|')
+        .nth(1)
+        .unwrap_or(message.route.as_str());
+
+    match route {
+        "cmd/auth/signIn:ok" => {
+            *authenticated = true;
+            log_feature_event_best_effort(
+                app,
+                "trades-ws",
+                "auth",
+                "Websocket authenticated; applying presence.",
+            );
+            ws_send_status_set(ws, effective_presence_status()).await?;
+        }
+        "cmd/auth/signIn:error" => {
+            log_feature_error_best_effort(
+                app,
+                "trades-ws",
+                "auth",
+                "Websocket authentication failed (presence unavailable; subscription continues).",
+                &anyhow!("{}", message.payload.clone().unwrap_or(Value::Null)),
+            );
+        }
+        "cmd/subscribe/newOrders:error" => {
+            log_feature_error_best_effort(
+                app,
+                "trades-ws",
+                "subscribe",
+                "newOrders subscription was rejected by the server.",
+                &anyhow!("{}", message.payload.clone().unwrap_or(Value::Null)),
+            );
+        }
+        "event/subscriptions/newOrder" => {
+            if let Some(order) = message.payload.as_ref() {
+                handle_new_order_event(app, order);
+            }
+        }
+        "event/status/set" | "cmd/status/set:ok" => {
+            if let Some(status) = message.payload.as_ref().and_then(parse_status_from_payload) {
+                record_observed_presence(app, &status);
+            }
+        }
+        "cmd/status/set:error" => {
+            log_feature_error_best_effort(
+                app,
+                "trades-ws",
+                "status",
+                "Failed to set presence status over the websocket.",
+                &anyhow!("{}", message.payload.clone().unwrap_or(Value::Null)),
+            );
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Minimal newOrder event payload (an `Order` shape) — only the fields we match on.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NewOrderEventUser {
+    #[serde(default)]
+    ingame_name: Option<String>,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NewOrderEvent {
+    id: String,
+    #[serde(rename = "type")]
+    order_type: String,
+    platinum: f64,
+    #[serde(default)]
+    quantity: Option<i64>,
+    #[serde(default)]
+    rank: Option<i64>,
+    #[serde(default)]
+    visible: Option<bool>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    item_id: Option<String>,
+    #[serde(default)]
+    user: Option<NewOrderEventUser>,
+}
+
+/// Handles a pushed newOrder event. Only acts on items the user tracks (the global firehose
+/// is otherwise discarded). For a tracked item, a matching **sell ≤ target** from an
+/// acceptable seller emits a realtime watchlist alert to the frontend. (Order-flow activity
+/// recording is added in the next step.)
+fn handle_new_order_event(app: &tauri::AppHandle, payload: &Value) {
+    let Ok(order) = serde_json::from_value::<NewOrderEvent>(payload.clone()) else {
+        return;
+    };
+    let Some(item_id) = order.item_id.as_deref() else {
+        return;
+    };
+
+    // Look up the tracked target; discard untracked items immediately.
+    let Some(target) = watchlist_targets()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(item_id).cloned())
+    else {
+        return;
+    };
+
+    // Watchlist alerts are buying opportunities: a new visible SELL at or below target.
+    if order.order_type != "sell" || order.visible == Some(false) {
+        return;
+    }
+    if order.rank != target.rank {
+        return;
+    }
+    if order.platinum > target.target_price {
+        return;
+    }
+
+    let seller_mode = watchlist_seller_mode()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| "ingame".to_string());
+    let status = order.user.as_ref().and_then(|user| user.status.as_deref());
+    if !seller_status_allowed(status, &seller_mode) {
+        return;
+    }
+
+    let Some(username) = order
+        .user
+        .as_ref()
+        .and_then(|user| user.ingame_name.clone())
+    else {
+        // Can't whisper a seller we can't name.
+        return;
+    };
+
+    let _ = app.emit(
+        WATCHLIST_ORDER_EVENT,
+        json!({
+            "watchlistId": target.watchlist_id,
+            "itemId": item_id,
+            "slug": target.slug,
+            "orderId": order.id,
+            "username": username,
+            "userSlug": order.user.as_ref().and_then(|user| user.slug.clone()),
+            "platinum": order.platinum,
+            "quantity": order.quantity.unwrap_or(1),
+            "rank": order.rank,
+            "createdAt": order.created_at,
+        }),
+    );
 }
 
 /// Updates the cached session's status and notifies the frontend so the UI reflects the
@@ -6968,37 +7072,19 @@ fn reauth_session(app: &tauri::AppHandle, stale_token: &str) -> Result<StoredTra
     Err(anyhow!("Warframe Market session expired. Please sign in again."))
 }
 
-fn refresh_trade_session_status_if_possible(
-    app: &tauri::AppHandle,
-    session: &mut StoredTradeSession,
-) -> Result<()> {
-    match tauri::async_runtime::block_on(fetch_current_trade_status_ws(
-        &session.token,
-        &session.device_id,
-    )) {
-        Ok(status) => {
-            session.account.status = status;
-            save_session(app, session)?;
-            Ok(())
-        }
-        Err(error) => {
-            log_feature_error_best_effort(
-                app,
-                "trades-session",
-                "refresh-ws-status",
-                "Failed to refresh the current Warframe Market websocket status.",
-                &error,
-            );
-            Ok(())
-        }
-    }
+fn ensure_presence_connection(app: &tauri::AppHandle) {
+    // Make sure the persistent websocket is running and authenticated. The live status is
+    // delivered asynchronously via PRESENCE_CHANGED_EVENT — we no longer open a transient
+    // socket here just to read it (that was wasteful and is what the manager exists for).
+    start_ws_manager(app.clone());
+    send_ws_command(WsCommand::SignedIn);
 }
 
 fn build_connected_trade_session_state(
     app: &tauri::AppHandle,
-    mut session: StoredTradeSession,
+    session: StoredTradeSession,
 ) -> Result<TradeSessionState> {
-    refresh_trade_session_status_if_possible(app, &mut session)?;
+    ensure_presence_connection(app);
     Ok(TradeSessionState {
         connected: true,
         account: Some(session.account),
@@ -7359,6 +7445,49 @@ fn update_order_inner(
     build_trade_overview_inner(app, seller_mode)
 }
 
+/// Bulk-toggles the visibility of all the user's orders (the `all` virtual group), optionally
+/// restricted to one order type. Backs the "hide/show all my listings" control.
+fn set_orders_group_visibility_inner(
+    app: &tauri::AppHandle,
+    visible: bool,
+    order_type: Option<&str>,
+    seller_mode: &str,
+) -> Result<TradeOverview> {
+    let session = ensure_authenticated_session(app)?;
+    let client = shared_wfm_client()?;
+    if let Some(order_type) = order_type {
+        if !matches!(order_type, "sell" | "buy") {
+            return Err(anyhow!("Unsupported order type."));
+        }
+    }
+
+    let mut payload = json!({ "visible": visible });
+    if let Some(order_type) = order_type {
+        payload["type"] = json!(order_type);
+    }
+
+    let result = execute_wfm_request_with_priority(
+        send_wfm_request(
+            &client,
+            Method::PATCH,
+            format!("{WFM_API_BASE_URL_V2}/orders/group/all"),
+            Some(&session.token),
+        )
+        .json(&payload),
+        "update orders group visibility",
+        RequestPriority::Instant,
+    );
+    if let Err(ref error) = result {
+        if should_attempt_trade_session_reauth(error) {
+            clear_session_cache();
+            let _ = clear_session(app);
+        }
+    }
+    result?;
+
+    build_trade_overview_inner(app, seller_mode)
+}
+
 fn close_order_inner(
     app: &tauri::AppHandle,
     order_id: &str,
@@ -7455,7 +7584,7 @@ pub async fn sign_in_wfm_trade_account(
         password: input.password.trim().to_string(),
         saved_at: format_timestamp(now_utc()).map_err(|error| error.to_string())?,
     };
-    let mut session = tauri::async_runtime::spawn_blocking({
+    let session = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         let input = input.clone();
         move || {
@@ -7492,16 +7621,11 @@ pub async fn sign_in_wfm_trade_account(
         "Manual sign-in succeeded; automatic sign-in re-enabled and cooldown cleared.",
     );
 
-    if let Ok(status) = fetch_current_trade_status_ws(&session.token, &session.device_id).await {
-        session.account.status = status;
-        set_session_in_cache(&session);
-        let app_for_save = app.clone();
-        let session_for_save = session.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || {
-            save_session(&app_for_save, &session_for_save)
-        })
-        .await;
-    }
+    // Make sure the persistent websocket is running and signal that a session is now
+    // available so it (re)connects and authenticates. The server-confirmed presence then
+    // arrives via the manager's PRESENCE_CHANGED_EVENT — no transient status socket.
+    start_ws_manager(app.clone());
+    send_ws_command(WsCommand::SignedIn);
 
     if should_persist_credentials {
         let app_for_creds = app.clone();
@@ -7536,6 +7660,8 @@ pub async fn sign_out_wfm_trade_account(app: tauri::AppHandle) -> Result<(), Str
     set_desired_presence(None);
     save_persisted_desired_presence(&app, None);
     clear_session_cache();
+    // Tell the persistent websocket to drop presence/auth promptly.
+    send_ws_command(WsCommand::SignedOut);
     tauri::async_runtime::spawn_blocking(move || {
         clear_session_cache();
         clear_session(&app)?;
@@ -7567,6 +7693,8 @@ pub async fn set_wfm_trade_status(
     app: tauri::AppHandle,
     status: String,
 ) -> Result<TradeSessionState, String> {
+    let desired = normalize_status_set_request(&status).map_err(|error| error.to_string())?;
+
     let mut session = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         move || ensure_authenticated_session(&app)
@@ -7575,11 +7703,14 @@ pub async fn set_wfm_trade_status(
     .map_err(|error| error.to_string())?
     .map_err(|error: anyhow::Error| error.to_string())?;
 
-    let next_status = set_current_trade_status_ws(&session.token, &session.device_id, &status)
-        .await
-        .map_err(|error| error.to_string())?;
-    session.account.status = next_status.clone();
+    // Record the desired presence (persisted, restored across restarts) and signal the
+    // persistent websocket to apply it on the live connection — no transient socket.
+    apply_desired_presence(&app, Some(desired));
+    send_ws_command(WsCommand::SetStatus);
 
+    // Optimistically reflect the requested status; the server-confirmed value arrives
+    // shortly via the PRESENCE_CHANGED_EVENT the manager emits on `event/status/set`.
+    session.account.status = desired.to_string();
     tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         let session = session.clone();
@@ -7592,15 +7723,76 @@ pub async fn set_wfm_trade_status(
     .map_err(|error| error.to_string())?
     .map_err(|error: anyhow::Error| error.to_string())?;
 
-    // Record the chosen presence and (re)start the keeper so a persistent connection
-    // holds it — otherwise WFM marks the user offline once the transient set above
-    // disconnects, and the status is lost on the next session re-auth.
-    apply_desired_presence(&app, Some(normalize_status_label(&next_status).as_str()));
-
     Ok(TradeSessionState {
         connected: true,
         account: Some(session.account),
     })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchlistTargetInput {
+    pub watchlist_id: String,
+    pub slug: String,
+    pub target_price: f64,
+    #[serde(default)]
+    pub rank: Option<i64>,
+}
+
+/// Syncs the frontend watchlist to the backend so the realtime newOrders feed can match
+/// against it. Resolves each slug to its Warframe.Market item id (the key carried on order
+/// events), replaces the tracked set, and signals the websocket to (un)subscribe as needed.
+#[tauri::command]
+pub async fn set_watchlist_targets(
+    app: tauri::AppHandle,
+    targets: Vec<WatchlistTargetInput>,
+    seller_mode: String,
+) -> Result<(), String> {
+    let resolved = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || -> Result<std::collections::HashMap<String, WatchlistTarget>> {
+            let connection = open_catalog_database(&app)?;
+            let mut map = std::collections::HashMap::new();
+            for target in targets {
+                // Resolve slug -> WFM item id; skip items the catalog doesn't know.
+                let wfm_id: Option<String> = connection
+                    .query_row(
+                        "SELECT wfm_id FROM wfm_items WHERE slug = ?1 LIMIT 1",
+                        params![target.slug],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .context("failed to resolve watchlist slug")?;
+                if let Some(wfm_id) = wfm_id {
+                    map.insert(
+                        wfm_id,
+                        WatchlistTarget {
+                            watchlist_id: target.watchlist_id,
+                            slug: target.slug,
+                            target_price: target.target_price,
+                            rank: target.rank,
+                        },
+                    );
+                }
+            }
+            Ok(map)
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error: anyhow::Error| error.to_string())?;
+
+    if let Ok(mut guard) = watchlist_targets().lock() {
+        *guard = resolved;
+    }
+    if let Ok(mut guard) = watchlist_seller_mode().lock() {
+        *guard = seller_mode;
+    }
+
+    // Make sure the websocket is running, then have it (un)subscribe to match the new set.
+    start_ws_manager(app.clone());
+    send_ws_command(WsCommand::RefreshSubscription);
+    Ok(())
 }
 
 #[tauri::command]
@@ -7783,6 +7975,21 @@ pub async fn create_wfm_buy_order(
 }
 
 #[tauri::command]
+pub async fn set_wfm_orders_visibility(
+    app: tauri::AppHandle,
+    visible: bool,
+    order_type: Option<String>,
+    seller_mode: String,
+) -> Result<TradeOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        set_orders_group_visibility_inner(&app, visible, order_type.as_deref(), seller_mode.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn update_wfm_sell_order(
     app: tauri::AppHandle,
     input: TradeUpdateListingInput,
@@ -7879,7 +8086,8 @@ mod tests {
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         map_trade_set_components_from_file, merge_wfm_trade_log_entries,
         normalize_alecaframe_trade_payload, normalize_avatar_url, normalize_status_set_request,
-        parse_status_from_payload, replace_trade_log_rows_inner, save_trade_log_rows_inner,
+        parse_status_from_payload, prune_stale_trade_log_overrides_inner,
+        replace_trade_log_rows_inner, save_trade_log_rows_inner,
         should_attempt_trade_session_reauth, trade_record_is_before_cutoff,
         AlecaframeRawTradeRecord, AlecaframeTradeItemRecord, AlecaframeTradeResponse,
         PortfolioTradeLogEntry, StoredTradeLogRecord, TradeSetComponentRecord,
@@ -8768,6 +8976,12 @@ mod tests {
 
         replace_trade_log_rows_inner(&mut connection, username, &refreshed_entries)
             .expect("replace trade log rows");
+        // The real force-resync path runs reconcile after replace, which prunes overrides
+        // for orders no longer in the cache. `replace_trade_log_rows_inner` intentionally
+        // defers that pruning (so collapsed Set-entry overrides aren't dropped), so mirror
+        // the reconcile step here.
+        prune_stale_trade_log_overrides_inner(&connection, username)
+            .expect("prune stale overrides");
 
         let records = load_stored_trade_log_records_inner(&connection, username)
             .expect("load refreshed trade log");

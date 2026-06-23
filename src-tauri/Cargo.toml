@@ -26,7 +26,7 @@ sha2 = "0.10"
 futures-util = "0.3"
 time = { version = "0.3", features = ["formatting"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 # Enable the real OS credential stores. Without these features keyring v3 silently uses
 # an in-memory mock that never persists (macOS Keychain / Windows Credential Manager /

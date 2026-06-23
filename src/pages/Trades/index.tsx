@@ -11,6 +11,7 @@ import {
   getTradeSellOrderHealth,
   getWfmAutocompleteItems,
   getWfmTradeOverview,
+  setWfmOrdersVisibility,
   updateWfmBuyOrder,
   updateWfmSellOrder,
 } from '../../lib/tauriClient';
@@ -1365,9 +1366,6 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   };
 
   const handleSetAllVisibility = async (visible: boolean) => {
-    // Only touch orders that aren't already in the desired state. Each update returns a
-    // refreshed overview; applying the last one reflects every change. Buy and sell lists
-    // are independent because this only iterates the current tab's `orders`.
     const targets = orders.filter((order) => order.visible !== visible);
     if (targets.length === 0 || visibilityActionPending) {
       return;
@@ -1376,22 +1374,10 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     setVisibilityActionPending(true);
     setOverviewError(null);
     try {
-      let latestOverview: TradeOverview | null = null;
-      for (const order of targets) {
-        latestOverview = await updateOrderFn(
-          {
-            orderId: order.orderId,
-            price: order.yourPrice,
-            quantity: order.quantity,
-            rank: order.rank ?? null,
-            visible,
-          } satisfies TradeUpdateListingInput,
-          sellerMode,
-        );
-      }
-      if (latestOverview) {
-        await applyOverview(latestOverview);
-      }
+      // One bulk call (PATCH /orders/group/all, scoped to this tab's order type) instead of
+      // one request per order — far lighter on WFM and instant for the user.
+      const latestOverview = await setWfmOrdersVisibility(visible, listingType, sellerMode);
+      await applyOverview(latestOverview);
     } catch (error) {
       handleTradeActionFailure(error);
     } finally {

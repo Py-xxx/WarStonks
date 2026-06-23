@@ -21,8 +21,10 @@ const WFSTAT_API_BASE_URL: &str = "https://api.warframestat.us";
 const WFM_LANGUAGE_HEADER: &str = "en";
 const WFM_PLATFORM_HEADER: &str = "pc";
 const WFM_CROSSPLAY_HEADER: &str = "true";
-// Honest, identifying User-Agent — no browser emulation (matches the reference WFM client).
-const WFM_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
+// Descriptive, identifying User-Agent required by Warframe.Market's API rules (name/version/
+// website, never browser-disguised). Format: `ProjectName/version (+url)`.
+const WFM_USER_AGENT: &str =
+    concat!("WarStonks/", env!("CARGO_PKG_VERSION"), " (+https://pyth.co.za)");
 const WFSTAT_LANGUAGE_QUERY: &str = "en";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,12 +99,21 @@ pub struct MarketNewsResponse {
     pub flash_sales: Vec<serde_json::Value>,
 }
 
+/// Response shape for `/v2/orders/item/{slug}/top` — up to 5 sell + 5 buy orders from online
+/// users, server-ranked. We only need the sell side; the `buy` field is ignored by serde.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WfmOrdersApiResponse {
+struct WfmTopOrdersApiResponse {
     api_version: Option<String>,
     #[serde(default)]
-    data: Vec<WfmOrderWithUser>,
+    data: WfmTopOrdersData,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmTopOrdersData {
+    #[serde(default)]
+    sell: Vec<WfmOrderWithUser>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -777,40 +788,56 @@ fn fetch_wfm_top_sell_orders_inner(
         return Err(anyhow::anyhow!("item slug cannot be empty"));
     }
 
+    // Use the lighter `/top` endpoint (≤5 sell + ≤5 buy from online users, server-ranked)
+    // instead of downloading the entire order book on every watchlist poll. The watchlist
+    // only needs the cheapest sells, so this is a large payload reduction on our highest-
+    // frequency request — per WFM's "be careful with requests" rule.
+    let variant_rank = variant_key
+        .as_deref()
+        .and_then(|key| key.trim().strip_prefix("rank:"))
+        .and_then(|value| value.parse::<i64>().ok());
+    let mut url = format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}/top");
+    if let Some(rank) = variant_rank {
+        url.push_str(&format!("?rank={rank}"));
+    }
+
     let client = shared_wfm_client().map_err(anyhow::Error::msg)?;
     let response = execute_wfm_bytes_request(
         client
-            .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}"))
+            .get(&url)
             .header("User-Agent", WFM_USER_AGENT)
             .header("Language", WFM_LANGUAGE_HEADER)
             .header("Platform", WFM_PLATFORM_HEADER)
             .header("Crossplay", WFM_CROSSPLAY_HEADER),
         RequestPriority::Instant,
-        "request WFM item orders",
-        Some(format!("orders:item:{trimmed_slug}")),
+        "request WFM top item orders",
+        Some(format!(
+            "orders:item:top:{trimmed_slug}:{}",
+            variant_rank.map(|rank| rank.to_string()).unwrap_or_default()
+        )),
     )?;
     if response.status < 200 || response.status >= 300 {
         let body = String::from_utf8_lossy(&response.body);
         let trimmed = body.trim();
         return Err(anyhow::anyhow!(if trimmed.is_empty() {
             format!(
-                "WFM item orders request failed with status {}",
+                "WFM top item orders request failed with status {}",
                 response.status
             )
         } else {
             format!(
-                "WFM item orders request failed with status {}: {}",
+                "WFM top item orders request failed with status {}: {}",
                 response.status, trimmed
             )
         }));
     }
-    let payload = serde_json::from_slice::<WfmOrdersApiResponse>(&response.body)
-        .context("failed to parse WFM item orders response JSON")?;
+    let payload = serde_json::from_slice::<WfmTopOrdersApiResponse>(&response.body)
+        .context("failed to parse WFM top item orders response JSON")?;
 
     Ok(normalize_top_sell_orders(
         trimmed_slug,
         payload.api_version,
-        payload.data,
+        payload.data.sell,
         variant_key.as_deref(),
         normalize_seller_mode(seller_mode.as_deref()),
     ))
