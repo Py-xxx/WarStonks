@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { checkForAppUpdate, isAppUpdaterSupported } from '../lib/appUpdater';
+import { fireAlertNotification } from '../lib/notifications';
 import { useAppStore } from '../stores/useAppStore';
 
 export function useAppUpdater() {
@@ -22,6 +23,12 @@ export function useAppUpdater() {
         }
 
         showAppUpdateAvailable(update);
+        fireAlertNotification(
+          useAppStore.getState().notificationSettings,
+          'appUpdate',
+          'WarStonks update available',
+          `Version ${update.version ?? ''} is ready to install.`.trim(),
+        );
       } catch (error) {
         console.warn('[updater] failed to check for app updates', error);
       }

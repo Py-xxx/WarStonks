@@ -25,6 +25,7 @@ import type {
   TradeListingHealth,
   PortfolioPnlSummary,
   SetCompletionInventoryValue,
+  SetCompletionOwnedItemValue,
   TradeOverview,
   PortfolioTradeLogState,
   TradeGroupAllocationInput,
@@ -321,6 +322,10 @@ export async function getPortfolioPnlSummary(
 
 export async function getPortfolioInventoryValue(): Promise<SetCompletionInventoryValue> {
   return invoke<SetCompletionInventoryValue>('get_portfolio_inventory_value');
+}
+
+export async function getSetCompletionOwnedItemPrices(): Promise<SetCompletionOwnedItemValue[]> {
+  return invoke<SetCompletionOwnedItemValue[]>('get_set_completion_owned_item_prices');
 }
 
 export async function setWfmTradeLogKeepItem(

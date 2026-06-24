@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { playAlertSound } from '../lib/alertAudio';
+import { fireAlertNotification } from '../lib/notifications';
 import {
   listenToWatchlistOrders,
   setWatchlistTargets,
@@ -55,7 +55,15 @@ export function useWatchlistSubscription() {
     void listenToWatchlistOrders((order) => {
       const triggered = useAppStore.getState().ingestRealtimeWatchlistOrder(order);
       if (triggered) {
-        void playAlertSound().catch(() => undefined);
+        const state = useAppStore.getState();
+        const latest = state.alerts.find((alert) => alert.orderId === order.orderId);
+        const itemLabel = latest?.itemName ?? order.slug;
+        fireAlertNotification(
+          state.notificationSettings,
+          'watchlistAlert',
+          'Watchlist target hit',
+          `${itemLabel} — ${order.platinum} pt from ${order.username}`,
+        );
       }
     })
       .then((dispose) => {

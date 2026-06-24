@@ -99,21 +99,15 @@ pub struct MarketNewsResponse {
     pub flash_sales: Vec<serde_json::Value>,
 }
 
-/// Response shape for `/v2/orders/item/{slug}/top` — up to 5 sell + 5 buy orders from online
-/// users, server-ranked. We only need the sell side; the `buy` field is ignored by serde.
+/// Response shape for `/v2/orders/item/{slug}` — the full order book snapshot (every
+/// buy + sell listing). We filter to the sell side ourselves so the quick view can show
+/// the cheapest few and the "View All" popup can list every online/in-game seller.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WfmTopOrdersApiResponse {
+struct WfmOrdersApiResponse {
     api_version: Option<String>,
     #[serde(default)]
-    data: WfmTopOrdersData,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WfmTopOrdersData {
-    #[serde(default)]
-    sell: Vec<WfmOrderWithUser>,
+    data: Vec<WfmOrderWithUser>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -769,7 +763,6 @@ fn normalize_top_sell_orders(
         .collect::<Vec<_>>();
 
     normalized.sort_by(compare_sell_orders);
-    normalized.truncate(5);
 
     WfmTopSellOrdersResponse {
         api_version,
@@ -788,56 +781,43 @@ fn fetch_wfm_top_sell_orders_inner(
         return Err(anyhow::anyhow!("item slug cannot be empty"));
     }
 
-    // Use the lighter `/top` endpoint (≤5 sell + ≤5 buy from online users, server-ranked)
-    // instead of downloading the entire order book on every watchlist poll. The watchlist
-    // only needs the cheapest sells, so this is a large payload reduction on our highest-
-    // frequency request — per WFM's "be careful with requests" rule.
-    let variant_rank = variant_key
-        .as_deref()
-        .and_then(|key| key.trim().strip_prefix("rank:"))
-        .and_then(|value| value.parse::<i64>().ok());
-    let mut url = format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}/top");
-    if let Some(rank) = variant_rank {
-        url.push_str(&format!("?rank={rank}"));
-    }
-
+    // Fetch the full order book snapshot for the item and filter it locally. This returns
+    // every sell listing (not just the top 5) so the quick view can show the cheapest few
+    // and the "View All" popup can list every online/in-game seller, sorted by price.
     let client = shared_wfm_client().map_err(anyhow::Error::msg)?;
     let response = execute_wfm_bytes_request(
         client
-            .get(&url)
+            .get(format!("{WFM_API_BASE_URL}/orders/item/{trimmed_slug}"))
             .header("User-Agent", WFM_USER_AGENT)
             .header("Language", WFM_LANGUAGE_HEADER)
             .header("Platform", WFM_PLATFORM_HEADER)
             .header("Crossplay", WFM_CROSSPLAY_HEADER),
         RequestPriority::Instant,
-        "request WFM top item orders",
-        Some(format!(
-            "orders:item:top:{trimmed_slug}:{}",
-            variant_rank.map(|rank| rank.to_string()).unwrap_or_default()
-        )),
+        "request WFM item orders",
+        Some(format!("orders:item:{trimmed_slug}")),
     )?;
     if response.status < 200 || response.status >= 300 {
         let body = String::from_utf8_lossy(&response.body);
         let trimmed = body.trim();
         return Err(anyhow::anyhow!(if trimmed.is_empty() {
             format!(
-                "WFM top item orders request failed with status {}",
+                "WFM item orders request failed with status {}",
                 response.status
             )
         } else {
             format!(
-                "WFM top item orders request failed with status {}: {}",
+                "WFM item orders request failed with status {}: {}",
                 response.status, trimmed
             )
         }));
     }
-    let payload = serde_json::from_slice::<WfmTopOrdersApiResponse>(&response.body)
-        .context("failed to parse WFM top item orders response JSON")?;
+    let payload = serde_json::from_slice::<WfmOrdersApiResponse>(&response.body)
+        .context("failed to parse WFM item orders response JSON")?;
 
     Ok(normalize_top_sell_orders(
         trimmed_slug,
         payload.api_version,
-        payload.data.sell,
+        payload.data,
         variant_key.as_deref(),
         normalize_seller_mode(seller_mode.as_deref()),
     ))
@@ -1021,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_and_truncates_top_sell_orders() {
+    fn normalizes_and_sorts_all_sell_orders() {
         let response = normalize_top_sell_orders(
             "arcane_energize",
             Some("0.22.7".to_string()),
@@ -1130,9 +1110,11 @@ mod tests {
         );
 
         assert_eq!(response.slug, "arcane_energize");
-        assert_eq!(response.sell_orders.len(), 5);
+        // All valid sell orders are returned (the one with a missing ingame name is
+        // dropped), sorted by price — no truncation, so "View All" can show every seller.
+        assert_eq!(response.sell_orders.len(), 6);
         assert_eq!(response.sell_orders[0].username, "alpha");
-        assert_eq!(response.sell_orders[4].username, "echo");
+        assert_eq!(response.sell_orders[5].username, "foxtrot");
     }
 
     #[test]

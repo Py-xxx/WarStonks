@@ -5790,8 +5790,12 @@ fn build_portfolio_pnl_summary_inner(
 
         if record.order_type == "buy" {
             if matches!(derived_entry.status.as_deref(), Some("Open" | "Kept")) {
-                open_exposure += total_platinum;
-                if derived_entry.status.as_deref() == Some("Open") {
+                let is_open = derived_entry.status.as_deref() == Some("Open");
+                // "Open Buys" is capital tied up in buys still awaiting sale. Items the
+                // user has marked "Kept" are deliberately pulled out of trading, so they
+                // must NOT count toward open exposure (or its coverage ratio).
+                if is_open {
+                    open_exposure += total_platinum;
                     open_buys += 1;
                 }
                 if derived_entry.status.as_deref() == Some("Kept") {
@@ -5819,7 +5823,7 @@ fn build_portfolio_pnl_summary_inner(
                     kept_inventory_value += estimated_total;
                 }
 
-                if maybe_estimate.is_some() {
+                if maybe_estimate.is_some() && is_open {
                     current_value_covered_cost += total_platinum;
                 }
 
@@ -7885,6 +7889,19 @@ pub async fn get_portfolio_inventory_value(
 ) -> Result<crate::market_observatory::SetCompletionInventoryValue, String> {
     tauri::async_runtime::spawn_blocking(move || {
         crate::market_observatory::compute_set_completion_inventory_value(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// Per-owned-item recommended exit prices (cache-only) for the Inventory panel.
+#[tauri::command]
+pub async fn get_set_completion_owned_item_prices(
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::market_observatory::SetCompletionOwnedItemValue>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::market_observatory::compute_set_completion_owned_item_prices(&app)
     })
     .await
     .map_err(|error| error.to_string())?

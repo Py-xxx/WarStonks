@@ -14,7 +14,7 @@ export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | '90d' | 'all';
 export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
-export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'import-export';
+export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'notifications' | 'import-export';
 export type WorldStateEndpointKey =
   | 'events'
   | 'alerts'
@@ -292,6 +292,13 @@ export interface SetCompletionInventoryValue {
   pricedCount: number;
   unpricedCount: number;
   lastScanAt: string | null;
+}
+
+export interface SetCompletionOwnedItemValue {
+  slug: string;
+  itemId: number | null;
+  /** Cached recommended exit price (platinum), or null if not yet scanned. */
+  recommendedExitPrice: number | null;
 }
 
 export interface PortfolioPnlSummary {
@@ -659,6 +666,22 @@ export interface DiscordWebhookNotificationSettings {
 export interface AppSettings {
   alecaframe: AlecaframeSettings;
   discordWebhook: DiscordWebhookSettings;
+}
+
+export type RingtoneId = 'chime' | 'ping' | 'coin' | 'arpeggio' | 'alert' | 'bell';
+
+export interface NotificationSettings {
+  /** Native OS desktop notifications when an alert fires. */
+  desktopEnabled: boolean;
+  /** Play an in-app tone when an alert fires. */
+  soundEnabled: boolean;
+  /** Which in-app tone to play. */
+  ringtone: RingtoneId;
+  events: {
+    watchlistAlert: boolean;
+    scannerStale: boolean;
+    appUpdate: boolean;
+  };
 }
 
 export interface AlecaframeSettingsInput {
