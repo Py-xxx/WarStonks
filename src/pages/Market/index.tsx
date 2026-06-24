@@ -87,21 +87,6 @@ interface ChartSeriesOption {
   colorClass: string;
 }
 
-interface LocalTimeOfDayBucket extends TimeOfDayLiquidityBucket {
-  localHour: number;
-  localLabel: string;
-  isCurrentHour: boolean;
-  inStrongestWindow: boolean;
-  inWeakestWindow: boolean;
-}
-
-interface TimeOfDayDisplayModel {
-  buckets: LocalTimeOfDayBucket[];
-  currentHourLabel: string;
-  strongestWindowLabel: string | null;
-  weakestWindowLabel: string | null;
-}
-
 function createRevealState<T extends string>(keys: readonly T[]): Record<T, boolean> {
   return Object.fromEntries(keys.map((key) => [key, false])) as Record<T, boolean>;
 }
@@ -557,6 +542,23 @@ function StaticAnalyticsChart({
   const tickValues = Array.from({ length: 5 }, (_, index) =>
     roundTo(maxValue - (index / 4) * valueRange, 1),
   );
+  // Shared x-axis ticks so the vertical gridlines and the time labels sit on the SAME
+  // positions (previously gridlines were evenly spaced but labels were at sampled data
+  // indices, so they never lined up).
+  const xAxisTickCount = Math.min(Math.max(points.length, 1), 6);
+  const xAxisTicks = Array.from({ length: xAxisTickCount }, (_, index) => {
+    const fraction = xAxisTickCount <= 1 ? 0.5 : index / (xAxisTickCount - 1);
+    const dataIndex = Math.round(fraction * Math.max(0, points.length - 1));
+    return {
+      x: fraction * plotWidth,
+      timestamp: points[dataIndex]?.timestamp ?? '',
+      anchor: (index === 0
+        ? 'start'
+        : index === xAxisTickCount - 1
+          ? 'end'
+          : 'middle') as 'start' | 'middle' | 'end',
+    };
+  });
   const visibleSeries = SERIES_OPTIONS.filter((option) => seriesToggles[option.key]);
   const visibleLineSeries = visibleSeries.filter(
     (series) => series.key !== 'entryZone' && series.key !== 'exitZone',
@@ -726,8 +728,15 @@ function StaticAnalyticsChart({
 
           <div className="market-chart-surface">
             <div className="market-chart-y-axis">
-              {tickValues.map((value) => (
-                <span key={value}>{formatPrice(value)}</span>
+              {tickValues.map((value, index) => (
+                <span
+                  key={value}
+                  style={{
+                    top: `${((index / 4) * pricePlotHeight) / (totalPlotHeight + xAxisHeight) * 100}%`,
+                  }}
+                >
+                  {formatPrice(value)}
+                </span>
               ))}
             </div>
             {errorMessage && !chartLoading ? (
@@ -744,18 +753,25 @@ function StaticAnalyticsChart({
                       <span className="market-chart-hover-label">Hovered Bucket</span>
                       <span className="market-chart-hover-time">{formatChartTimestamp(activePoint.timestamp, domain)}</span>
                     </div>
-                    <div className="market-chart-hover-grid">
-                      <span>Open {formatPrice(activePoint.open)}</span>
-                      <span>High {formatPrice(activePoint.high)}</span>
-                      <span>Low {formatPrice(activePoint.low)}</span>
-                      <span>Close {formatPrice(activePoint.close)}</span>
-                      <span>Median {formatPrice(activePoint.median)}</span>
-                      <span>Lowest {formatPrice(activePoint.lowest)}</span>
-                      <span>Average {formatPrice(activePoint.average)}</span>
-                      <span>SMA {formatPrice(activePoint.movingAverage)}</span>
-                      <span>Entry {formatPrice(activePoint.entryZone)}</span>
-                      <span>Exit {formatPrice(activePoint.exitZone)}</span>
-                      <span>Volume {formatNumber(activePoint.volume, 0)}</span>
+                    <div className="market-chart-hover-section">
+                      <span className="market-chart-hover-section-title">Market</span>
+                      <div className="market-chart-hover-rows">
+                        <span className="market-chart-hover-row"><span>Lowest</span><span>{formatPrice(activePoint.lowest)}</span></span>
+                        <span className="market-chart-hover-row"><span>Highest</span><span>{formatPrice(activePoint.high)}</span></span>
+                        <span className="market-chart-hover-row"><span>Median</span><span>{formatPrice(activePoint.median)}</span></span>
+                        <span className="market-chart-hover-row"><span>Average</span><span>{formatPrice(activePoint.average)}</span></span>
+                        <span className="market-chart-hover-row"><span>Volume</span><span>{formatNumber(activePoint.volume, 0)}</span></span>
+                      </div>
+                    </div>
+                    <div className="market-chart-hover-section">
+                      <span className="market-chart-hover-section-title">Levels</span>
+                      <div className="market-chart-hover-rows">
+                        <span className="market-chart-hover-row"><span>Open</span><span>{formatPrice(activePoint.open)}</span></span>
+                        <span className="market-chart-hover-row"><span>Close</span><span>{formatPrice(activePoint.close)}</span></span>
+                        <span className="market-chart-hover-row"><span>SMA</span><span>{formatPrice(activePoint.movingAverage)}</span></span>
+                        <span className="market-chart-hover-row"><span>Entry</span><span>{formatPrice(activePoint.entryZone)}</span></span>
+                        <span className="market-chart-hover-row"><span>Exit</span><span>{formatPrice(activePoint.exitZone)}</span></span>
+                      </div>
                     </div>
                   </div>
                 ) : null}
@@ -780,19 +796,16 @@ function StaticAnalyticsChart({
                       />
                     );
                   })}
-                  {Array.from({ length: Math.min(points.length, 6) }, (_, index) => {
-                    const x = points.length <= 1 ? plotWidth / 2 : (index / Math.max(1, Math.min(points.length, 6) - 1)) * plotWidth;
-                    return (
-                      <line
-                        key={`v-${index}`}
-                        className="market-chart-gridline market-chart-gridline-vertical"
-                        x1={x}
-                        y1="0"
-                        x2={x}
-                        y2={totalPlotHeight}
-                      />
-                    );
-                  })}
+                  {xAxisTicks.map((tick, index) => (
+                    <line
+                      key={`v-${index}`}
+                      className="market-chart-gridline market-chart-gridline-vertical"
+                      x1={tick.x}
+                      y1="0"
+                      x2={tick.x}
+                      y2={totalPlotHeight}
+                    />
+                  ))}
                   <line
                     className="market-chart-gridline market-chart-divider"
                     x1="0"
@@ -948,26 +961,19 @@ function StaticAnalyticsChart({
                     );
                   })}
 
-                  {points
-                    .filter((_, index) => index % Math.max(1, Math.ceil(points.length / 6)) === 0 || index === points.length - 1)
-                    .map((point, labelIndex, source) => {
-                      const dataIndex = points.findIndex((entry) => entry.timestamp === point.timestamp);
-                      const x = points.length === 1 ? plotWidth / 2 : (dataIndex / (points.length - 1)) * plotWidth;
-                      const anchor =
-                        labelIndex === 0 ? 'start' : labelIndex === source.length - 1 ? 'end' : 'middle';
-
-                      return (
-                        <text
-                          key={`x-${point.timestamp}`}
-                          className="market-chart-axis-label"
-                          x={x}
-                          y={totalPlotHeight + 18}
-                          textAnchor={anchor}
-                        >
-                          {formatChartTimestamp(point.timestamp, domain)}
-                        </text>
-                      );
-                    })}
+                  {xAxisTicks.map((tick, index) =>
+                    tick.timestamp ? (
+                      <text
+                        key={`x-${index}-${tick.timestamp}`}
+                        className="market-chart-axis-label"
+                        x={tick.x}
+                        y={totalPlotHeight + 18}
+                        textAnchor={tick.anchor}
+                      >
+                        {formatChartTimestamp(tick.timestamp, domain)}
+                      </text>
+                    ) : null,
+                  )}
                 </svg>
               </div>
             )}
@@ -1033,124 +1039,81 @@ function formatDropChancePercent(value: number | null | undefined): string {
   return `${formatNumber(percentValue, digits)}%`;
 }
 
-function formatHourLabel(hour: number): string {
-  return `${hour.toString().padStart(2, '0')}:00`;
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function formatTwoHourBlockLabel(bucketIndex: number): string {
+  const start = (bucketIndex * 2) % 24;
+  const end = (start + 2) % 24;
+  return `${start.toString().padStart(2, '0')}–${end.toString().padStart(2, '0')}`;
 }
 
-function toLocalHourFromUtcHour(utcHour: number): number {
-  const now = new Date();
-  const localDate = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-      utcHour,
-      0,
-      0,
-      0,
-    ),
-  );
-
-  return localDate.getHours();
-}
-
-function buildWindowLabel(startHour: number, windowSize: number): string {
-  const endHour = (startHour + windowSize - 1) % 24;
-  return `${formatHourLabel(startHour)} - ${formatHourLabel(endHour)}`;
-}
-
-function findBestTimeWindow(
-  buckets: LocalTimeOfDayBucket[],
-  windowSize: number,
-  direction: 'max' | 'min',
-): { startHour: number; label: string } | null {
-  if (buckets.length === 0) {
-    return null;
-  }
-
-  let selectedStart = 0;
-  let selectedScore = direction === 'max' ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
-
-  for (let start = 0; start < buckets.length; start += 1) {
-    const windowBuckets = Array.from({ length: windowSize }, (_, offset) => buckets[(start + offset) % buckets.length]);
-    const windowScore =
-      windowBuckets.reduce((total, bucket) => total + bucket.heatScore, 0) / windowBuckets.length;
-
-    if (
-      (direction === 'max' && windowScore > selectedScore) ||
-      (direction === 'min' && windowScore < selectedScore)
-    ) {
-      selectedScore = windowScore;
-      selectedStart = start;
-    }
-  }
-
+function emptyTimeOfDayCell(weekday: number, bucketIndex: number): TimeOfDayLiquidityBucket {
   return {
-    startHour: buckets[selectedStart]?.localHour ?? 0,
-    label: buildWindowLabel(buckets[selectedStart]?.localHour ?? 0, windowSize),
+    weekday,
+    bucketIndex,
+    hour: bucketIndex * 2,
+    label: formatTwoHourBlockLabel(bucketIndex),
+    avgVisibleQuantity: 0,
+    avgSellOrders: 0,
+    avgSpreadPct: null,
+    avgLiquidityScore: 0,
+    avgHourlyVolume: 0,
+    sampleCount: 0,
+    normalizedLiquidity: 0,
+    normalizedVolume: 0,
+    heatScore: 0,
   };
 }
 
+interface TimeOfDayDisplayRow {
+  weekday: number;
+  label: string;
+  isToday: boolean;
+  cells: TimeOfDayLiquidityBucket[];
+}
+
+interface TimeOfDayDisplayModel {
+  rows: TimeOfDayDisplayRow[];
+  columnLabels: string[];
+  todayWeekday: number;
+  todayBestLabels: string[];
+  strongestWindowLabel: string | null;
+  weakestWindowLabel: string | null;
+  currentHourLabel: string;
+}
+
+// Builds the 7 (Mon–Sun) × 12 (two-hour blocks) heatmap grid straight from the backend
+// buckets. Times are UTC, matching how the backend aggregates the observatory tape.
 function buildTimeOfDayDisplayModel(
   summary: ItemAnalysisResponse['timeOfDayLiquidity'] | null | undefined,
 ): TimeOfDayDisplayModel {
-  const rawBuckets = summary?.buckets ?? [];
-  const localHourMap = new Map<number, TimeOfDayLiquidityBucket>();
-
-  rawBuckets.forEach((bucket) => {
-    localHourMap.set(toLocalHourFromUtcHour(bucket.hour), bucket);
-  });
-
-  const currentLocalHour = new Date().getHours();
-  const buckets = Array.from({ length: 24 }, (_, localHour) => {
-    const bucket = localHourMap.get(localHour);
-    return {
-      hour: bucket?.hour ?? localHour,
-      label: bucket?.label ?? formatHourLabel(localHour),
-      avgVisibleQuantity: bucket?.avgVisibleQuantity ?? 0,
-      avgSellOrders: bucket?.avgSellOrders ?? 0,
-      avgSpreadPct: bucket?.avgSpreadPct ?? null,
-      avgLiquidityScore: bucket?.avgLiquidityScore ?? 0,
-      avgHourlyVolume: bucket?.avgHourlyVolume ?? 0,
-      sampleCount: bucket?.sampleCount ?? 0,
-      normalizedLiquidity: bucket?.normalizedLiquidity ?? 0,
-      normalizedVolume: bucket?.normalizedVolume ?? 0,
-      heatScore: bucket?.heatScore ?? 0,
-      localHour,
-      localLabel: formatHourLabel(localHour),
-      isCurrentHour: localHour === currentLocalHour,
-      inStrongestWindow: false,
-      inWeakestWindow: false,
-    };
-  });
-
-  const hasAnyData = buckets.some((bucket) => bucket.sampleCount > 0 || bucket.avgHourlyVolume > 0);
-  const strongestWindow = hasAnyData ? findBestTimeWindow(buckets, 3, 'max') : null;
-  const weakestWindow = hasAnyData ? findBestTimeWindow(buckets, 3, 'min') : null;
-
-  if (strongestWindow) {
-    for (let offset = 0; offset < 3; offset += 1) {
-      const index = (strongestWindow.startHour + offset) % 24;
-      if (buckets[index]) {
-        buckets[index].inStrongestWindow = true;
-      }
-    }
+  const byKey = new Map<string, TimeOfDayLiquidityBucket>();
+  for (const bucket of summary?.buckets ?? []) {
+    byKey.set(`${bucket.weekday}:${bucket.bucketIndex}`, bucket);
   }
 
-  if (weakestWindow) {
-    for (let offset = 0; offset < 3; offset += 1) {
-      const index = (weakestWindow.startHour + offset) % 24;
-      if (buckets[index]) {
-        buckets[index].inWeakestWindow = true;
-      }
-    }
-  }
+  const todayWeekday = summary?.todayWeekday ?? -1;
+  const rows = Array.from({ length: 7 }, (_, weekday): TimeOfDayDisplayRow => ({
+    weekday,
+    label: WEEKDAY_LABELS[weekday],
+    isToday: weekday === todayWeekday,
+    cells: Array.from(
+      { length: 12 },
+      (_unused, bucketIndex) =>
+        byKey.get(`${weekday}:${bucketIndex}`) ?? emptyTimeOfDayCell(weekday, bucketIndex),
+    ),
+  }));
 
   return {
-    buckets,
-    currentHourLabel: formatHourLabel(currentLocalHour),
-    strongestWindowLabel: strongestWindow?.label ?? null,
-    weakestWindowLabel: weakestWindow?.label ?? null,
+    rows,
+    columnLabels: Array.from({ length: 12 }, (_unused, bucketIndex) =>
+      formatTwoHourBlockLabel(bucketIndex),
+    ),
+    todayWeekday,
+    todayBestLabels: summary?.todayBestLabels ?? [],
+    strongestWindowLabel: summary?.strongestWindowLabel ?? null,
+    weakestWindowLabel: summary?.weakestWindowLabel ?? null,
+    currentHourLabel: summary?.currentHourLabel ?? '—',
   };
 }
 
@@ -3143,7 +3106,7 @@ function AnalysisTab() {
           <AnalyticsPanel
             title="Time of Day Liquidity"
             eyebrow="Observatory Tape"
-            info="Hourly liquidity profile showing when this market is historically strongest or weakest throughout the day."
+            info="When this market is historically most active, by day of week and 2-hour block (UTC). Brighter cells = stronger liquidity + volume. Use it to time buys and sells."
             loading={!revealedPanels.timeOfDay && !analysisError}
             errorMessage={!revealedPanels.timeOfDay ? analysisError : null}
             loadingLabel="Aggregating observatory tape"
@@ -3151,7 +3114,7 @@ function AnalysisTab() {
               headerAside={
                 <div className="market-badge-stack">
                   <span className="market-panel-badge tone-blue">
-                    {timeOfDayDisplay.strongestWindowLabel ?? 'Building'}
+                    {timeOfDayDisplay.todayBestLabels[0] ?? 'Building'}
                   </span>
                   <ConfidenceBadge confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
                 </div>
@@ -3159,40 +3122,55 @@ function AnalysisTab() {
             >
             <div className="market-pressure-row">
               <div>
-                <span className="market-copy-title">Current Hour</span>
-                <span>{timeOfDayDisplay.currentHourLabel}</span>
+                <span className="market-copy-title">Best Windows Today</span>
+                <span>
+                  {timeOfDayDisplay.todayBestLabels.length > 0
+                    ? timeOfDayDisplay.todayBestLabels.join(' · ')
+                    : '—'}
+                </span>
               </div>
               <div>
-                <span className="market-copy-title">Strongest Window</span>
+                <span className="market-copy-title">Strongest (all days)</span>
                 <span>{timeOfDayDisplay.strongestWindowLabel ?? '—'}</span>
               </div>
               <div>
-                <span className="market-copy-title">Weakest Window</span>
+                <span className="market-copy-title">Weakest (all days)</span>
                 <span>{timeOfDayDisplay.weakestWindowLabel ?? '—'}</span>
               </div>
             </div>
-            <div className="market-time-heat-grid">
-              {timeOfDayDisplay.buckets.map((bucket) => (
+            <div className="market-tod-heatmap">
+              <div className="market-tod-colheader">
+                <span className="market-tod-corner" aria-hidden="true" />
+                {timeOfDayDisplay.columnLabels.map((label, index) => (
+                  <span key={label} className="market-tod-coltick">
+                    {index % 2 === 0 ? label.slice(0, 2) : ''}
+                  </span>
+                ))}
+              </div>
+              {timeOfDayDisplay.rows.map((row) => (
                 <div
-                  key={bucket.localHour}
-                  className={`market-time-card market-time-card-heat${bucket.isCurrentHour ? ' is-current' : ''}${bucket.inStrongestWindow ? ' is-strongest' : ''}${bucket.inWeakestWindow ? ' is-weakest' : ''}`}
-                  style={{ '--heat-strength': `${Math.round((bucket.heatScore ?? 0) * 100)}%` } as CSSProperties}
-                  title={[
-                    bucket.localLabel,
-                    `Heat ${formatPercent((bucket.heatScore ?? 0) * 100)}`,
-                    `Liquidity ${formatPercent(bucket.avgLiquidityScore)}`,
-                    `Volume ${formatNumber(bucket.avgHourlyVolume, 0)}`,
-                    `Visible Qty ${formatNumber(bucket.avgVisibleQuantity, 0)}`,
-                  ].join('\n')}
+                  key={row.weekday}
+                  className={`market-tod-row${row.isToday ? ' is-today' : ''}`}
                 >
+                  <span className="market-tod-row-label">{row.label}</span>
+                  <div className="market-tod-row-cells">
+                    {row.cells.map((cell) => (
+                      <div
+                        key={cell.bucketIndex}
+                        className={`market-tod-cell${cell.sampleCount > 0 ? '' : ' is-empty'}`}
+                        style={{ '--heat-strength': `${Math.round((cell.heatScore ?? 0) * 100)}%` } as CSSProperties}
+                        title={[
+                          `${row.label} ${cell.label} (UTC)`,
+                          `Heat ${formatPercent((cell.heatScore ?? 0) * 100)}`,
+                          `Liquidity ${formatPercent(cell.avgLiquidityScore)}`,
+                          `Volume ${formatNumber(cell.avgHourlyVolume, 0)}`,
+                          cell.sampleCount > 0 ? `Samples ${cell.sampleCount}` : 'No data yet',
+                        ].join('\n')}
+                      />
+                    ))}
+                  </div>
                 </div>
               ))}
-            </div>
-            <div className="market-time-axis" aria-hidden="true">
-              <span>00:00</span>
-              <span>06:00</span>
-              <span>12:00</span>
-              <span>18:00</span>
             </div>
             <ConfidenceNote confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
           </AnalyticsPanel>
@@ -3425,7 +3403,11 @@ export function MarketPage() {
       <div className="subnav market-page-subnav">
         <div className="subnav-left">
           <span className="page-title">Market</span>
-          {(['analysis', 'analytics', 'calibration'] as const).map((tab) => (
+          {([
+            ['analysis', 'Summary'],
+            ['analytics', 'Charts'],
+            ['calibration', 'Calibration'],
+          ] as const).map(([tab, label]) => (
             <span
               key={tab}
               className={`subtab${marketSubTab === tab ? ' active' : ''}`}
@@ -3434,7 +3416,7 @@ export function MarketPage() {
               aria-selected={marketSubTab === tab}
               tabIndex={0}
             >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {label}
             </span>
           ))}
         </div>

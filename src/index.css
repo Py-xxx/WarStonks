@@ -14,6 +14,12 @@
   --accent-amber: #F0A030;
   --accent-blue: #4A9EFF;
   --accent-purple: #8B6FFF;
+  /* Aliases used across the stylesheet (charts, calibration, market metrics). */
+  --color-green: var(--accent-green);
+  --color-red: var(--accent-red);
+  --color-amber: var(--accent-amber);
+  --color-blue: var(--accent-blue);
+  --color-purple: var(--accent-purple);
   --bg-panel: #171B24;
   --border-strong: #2E3344;
   --text-panel-title: #C5CAD6;
@@ -193,6 +199,7 @@
   display: inline-block;
   width: 7px;
   height: 7px;
+  margin-right: 7px;
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--accent-blue);
@@ -219,6 +226,346 @@
 
 .set-planner-layout.drawer-open {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* The Set Completion Planner no longer carries the owned-parts drawer, so it
+   renders as a single full-width column. */
+.set-planner-layout.inventory-detached {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ---------- Inventory subtab ---------- */
+.inventory-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.inventory-manager-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.inventory-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Floating "Import Screenshot" action, pinned to the bottom-right of the viewport. */
+.inventory-import-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(74, 158, 255, 0.12);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.inventory-import-fab:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: rgba(74, 158, 255, 0.5);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(74, 158, 255, 0.28);
+}
+
+.inventory-import-fab:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.inventory-import-fab svg {
+  color: var(--accent-blue);
+}
+
+.inventory-import-fab-pill {
+  margin-left: 2px;
+}
+
+.inventory-search-icon {
+  position: absolute;
+  left: 16px;
+  font-size: 18px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.inventory-search-input {
+  width: 100%;
+  padding: 14px 44px 14px 44px;
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.inventory-search-input:focus {
+  outline: none;
+  border-color: rgba(74, 158, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.14);
+}
+
+.inventory-search-clear {
+  position: absolute;
+  right: 12px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.inventory-search-clear:hover {
+  background: var(--accent-red);
+  color: #fff;
+}
+
+.inventory-manager-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.inventory-catalog-panel,
+.inventory-owned-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: calc(100vh - 220px);
+}
+
+.inventory-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inventory-panel-header h3 {
+  margin: 4px 0 0;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.inventory-clear-button {
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 7px 12px;
+}
+
+.inventory-clear-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: 1px solid rgba(240, 79, 88, 0.4);
+  border-radius: 10px;
+  background: rgba(240, 79, 88, 0.08);
+}
+
+.inventory-clear-confirm-msg {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.inventory-clear-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.inventory-clear-confirm-delete {
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent-red);
+  border: 1px solid var(--accent-red);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.inventory-clear-confirm-delete:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.inventory-clear-confirm-delete:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.inventory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  padding-right: 4px;
+  min-height: 0;
+}
+
+.inventory-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-base);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.inventory-row:hover {
+  border-color: rgba(108, 174, 255, 0.28);
+  background: var(--bg-elevated);
+}
+
+.inventory-row.is-owned {
+  border-color: rgba(139, 111, 255, 0.32);
+  background: rgba(139, 111, 255, 0.06);
+}
+
+.inventory-thumb {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.inventory-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.inventory-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inventory-add-button {
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  background: rgba(74, 158, 255, 0.12);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.inventory-add-button:hover:not(:disabled) {
+  background: var(--accent-blue);
+  color: #fff;
+}
+
+.inventory-add-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.inventory-stepper {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.inventory-qty-button {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.inventory-qty-button:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.inventory-qty-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.inventory-qty-value {
+  min-width: 28px;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inventory-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+@media (max-width: 900px) {
+  .inventory-manager-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .set-planner-main-panel {
@@ -6713,6 +7060,12 @@ body {
 .info-card-val.neutral { color: var(--text-primary); }
 .info-card-val.off     { color: var(--text-secondary); }
 .info-card-val.negative { color: #f37f87; }
+.info-card-subnote {
+  margin-top: 3px;
+  color: var(--color-amber);
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+}
 .info-card-note {
   margin-top: 6px;
   color: var(--text-secondary);
@@ -6876,7 +7229,7 @@ body {
 }
 .portfolio-insight-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -6886,6 +7239,51 @@ body {
 }
 .portfolio-notes-card {
   overflow: visible;
+}
+.portfolio-confidence-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  margin: 10px 0;
+}
+.portfolio-confidence-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.portfolio-confidence-stat-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Progressive loading: each loadable panel/section is a positioning context for its overlay. */
+.portfolio-summary-loadable {
+  position: relative;
+}
+.portfolio-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: rgba(8, 13, 22, 0.55);
+  backdrop-filter: blur(2px);
+}
+.portfolio-loading-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 3px solid rgba(121, 184, 255, 0.18);
+  border-top-color: #79b8ff;
+  animation: market-panel-spin 0.85s linear infinite;
+}
+.portfolio-loading-copy {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
 }
 .portfolio-panel-header {
   display: flex;
@@ -8883,8 +9281,40 @@ body {
 
 .market-chart-hover-label,
 .market-chart-hover-time,
-.market-chart-hover-grid {
+.market-chart-hover-grid,
+.market-chart-hover-section {
   font-family: 'JetBrains Mono', monospace;
+}
+
+/* Sectioned hover card — grouped, two-column rows so each value is readable. */
+.market-chart-hover-section {
+  display: grid;
+  gap: 4px;
+}
+.market-chart-hover-section-title {
+  color: var(--accent-blue);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.market-chart-hover-rows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+}
+.market-chart-hover-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.market-chart-hover-row > span:first-child {
+  color: var(--text-muted);
+}
+.market-chart-hover-row > span:last-child {
+  color: var(--text-primary);
 }
 
 .market-chart-hover-label {
@@ -8910,13 +9340,19 @@ body {
 }
 
 .market-chart-y-axis {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  position: relative;
   color: var(--text-muted);
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
-  padding: 4px 0;
+}
+
+/* Each tick is absolutely positioned at the exact fraction of its matching SVG gridline so
+   the labels line up with the lines regardless of how the chart stretches. */
+.market-chart-y-axis span {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  white-space: nowrap;
 }
 
 .market-chart-svg,
@@ -9469,6 +9905,61 @@ body {
 
 .market-time-card-heat.is-weakest {
   border-color: rgba(255, 166, 107, 0.34);
+}
+
+/* Time-of-day weekday heatmap: 7 rows (Mon–Sun) × 12 two-hour blocks. The column header
+   and every row share one grid template so ticks line up with cells; the cell wrapper uses
+   display:contents so its 12 cells become direct grid items of the row. */
+.market-tod-heatmap {
+  display: grid;
+  gap: 3px;
+  margin-top: 4px;
+}
+.market-tod-colheader,
+.market-tod-row {
+  display: grid;
+  grid-template-columns: 34px repeat(12, minmax(0, 1fr));
+  gap: 3px;
+  align-items: center;
+}
+.market-tod-row-cells {
+  display: contents;
+}
+.market-tod-coltick {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  text-align: center;
+}
+.market-tod-row-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+}
+.market-tod-row.is-today .market-tod-row-label {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+.market-tod-cell {
+  min-height: 16px;
+  border-radius: 4px;
+  transition: transform 120ms ease;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(72, 200, 255, calc(var(--heat-strength, 0%) / 200)),
+      rgba(116, 237, 177, calc(var(--heat-strength, 0%) / 150))
+    ),
+    rgba(9, 14, 24, 0.9);
+}
+.market-tod-cell.is-empty {
+  background: rgba(255, 255, 255, 0.03);
+}
+.market-tod-cell:hover {
+  transform: scale(1.08);
+}
+.market-tod-row.is-today .market-tod-cell {
+  box-shadow: inset 0 -2px 0 rgba(116, 237, 177, 0.25);
 }
 
 .market-time-axis {

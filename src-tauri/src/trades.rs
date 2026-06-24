@@ -7876,6 +7876,21 @@ pub async fn get_portfolio_pnl_summary(
     .map_err(|error| error.to_string())
 }
 
+/// Values the owned Set Completion inventory. Separate from the P&L summary because the
+/// per-part valuation is slower — the UI loads it independently so the rest of the page
+/// isn't blocked.
+#[tauri::command]
+pub async fn get_portfolio_inventory_value(
+    app: tauri::AppHandle,
+) -> Result<crate::market_observatory::SetCompletionInventoryValue, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::market_observatory::compute_set_completion_inventory_value(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn set_wfm_trade_log_keep_item(
     app: tauri::AppHandle,

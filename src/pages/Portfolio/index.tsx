@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   forceWfmTradeLogResync,
   getCachedWfmProfileTradeLog,
+  getPortfolioInventoryValue,
   getPortfolioPnlSummary,
   getWfmProfileTradeLog,
   migrateAlecaframeTradeLog,
@@ -12,7 +13,11 @@ import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import type { PortfolioPnlSummary, PortfolioTradeLogEntry } from '../../types';
+import type {
+  PortfolioPnlSummary,
+  PortfolioTradeLogEntry,
+  SetCompletionInventoryValue,
+} from '../../types';
 
 const RefreshIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -107,16 +112,6 @@ function portfolioCoverageTone(value: number): 'green' | 'blue' | 'amber' {
     return 'blue';
   }
   return 'amber';
-}
-
-function portfolioCoverageLabel(value: number): string {
-  if (value >= 95) {
-    return 'Strong';
-  }
-  if (value >= 75) {
-    return 'Partial';
-  }
-  return 'Limited';
 }
 
 function formatAxisPlatinumValue(value: number): string {
@@ -1431,6 +1426,57 @@ function TradeLogTab({ username }: { username: string | null }) {
   );
 }
 
+// A zeroed summary so the full page layout can render immediately (under a loading overlay)
+// before the real summary arrives — the structure shows, then populates.
+const PLACEHOLDER_PNL_SUMMARY: PortfolioPnlSummary = {
+  period: '7d',
+  lastUpdatedAt: null,
+  realizedProfit: 0,
+  unrealizedValue: 0,
+  unrealizedPnl: 0,
+  totalPnl: 0,
+  openExposure: 0,
+  turnoverBought: 0,
+  turnoverSold: 0,
+  totalTrades: 0,
+  closedTrades: 0,
+  openBuys: 0,
+  keptItems: 0,
+  costBasisCoveragePct: 0,
+  currentValueCoveragePct: 0,
+  winRate: 0,
+  averageMargin: null,
+  averageProfitPerTrade: 0,
+  averageHoldHours: null,
+  soldAsSetProfit: 0,
+  flipProfit: 0,
+  unmatchedSellRevenue: 0,
+  partialCostBasisRevenue: 0,
+  keptInventoryValue: 0,
+  partialSetProfit: 0,
+  bestTradeItem: null,
+  bestTradeProfit: null,
+  worstTradeItem: null,
+  worstTradeProfit: null,
+  inventoryRows: [],
+  auditRows: [],
+  categoryBreakdown: [],
+  sourceBreakdown: [],
+  cumulativeProfitPoints: [],
+  profitPerTradePoints: [],
+  notes: [],
+};
+
+/** Absolute-fill loading overlay placed over a panel/section that's still loading. */
+function PortfolioLoadingOverlay({ label }: { label?: string }) {
+  return (
+    <div className="portfolio-loading-overlay">
+      <span className="portfolio-loading-spinner" aria-hidden="true" />
+      {label ? <span className="portfolio-loading-copy">{label}</span> : null}
+    </div>
+  );
+}
+
 function PnlSummaryTab({
   username,
   period,
@@ -1445,6 +1491,10 @@ function PnlSummaryTab({
   const [loading, setLoading] = useState(false);
   const [refreshingTrades, setRefreshingTrades] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Inventory value is computed separately because per-part valuation is slower — it loads
+  // independently so it never blocks the rest of the page.
+  const [inventory, setInventory] = useState<SetCompletionInventoryValue | null>(null);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
 
   useEffect(() => {
     if (!username) {
@@ -1482,6 +1532,36 @@ function PnlSummaryTab({
     };
   }, [period, username]);
 
+  // Owned-inventory value: period-independent, loaded in parallel with (and after) the
+  // summary so the page populates progressively.
+  useEffect(() => {
+    if (!username) {
+      setInventory(null);
+      return;
+    }
+
+    let cancelled = false;
+    setInventoryLoading(true);
+    void getPortfolioInventoryValue()
+      .then((value) => {
+        if (!cancelled) {
+          setInventory(value);
+        }
+      })
+      .catch((error) => {
+        console.error('[portfolio] failed to load inventory value', error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setInventoryLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [username]);
+
   const handleRefresh = async () => {
     if (!username) {
       return;
@@ -1494,12 +1574,22 @@ function PnlSummaryTab({
       await onRefreshTrades();
       const nextSummary = await getPortfolioPnlSummary(username, period);
       setSummary(nextSummary);
+      // Re-value inventory too (separate, slower) without blocking the summary refresh.
+      setInventoryLoading(true);
+      void getPortfolioInventoryValue()
+        .then((value) => setInventory(value))
+        .catch((error) => console.error('[portfolio] failed to refresh inventory value', error))
+        .finally(() => setInventoryLoading(false));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setRefreshingTrades(false);
     }
   };
+
+  // The full layout renders immediately using a zeroed placeholder while the real summary
+  // loads (under an overlay), then populates in place.
+  const bodySummary = summary ?? PLACEHOLDER_PNL_SUMMARY;
 
   return (
     <>
@@ -1541,146 +1631,89 @@ function PnlSummaryTab({
             P&amp;L Summary uses your permanent local trade ledger and cached market history.
           </span>
         </div>
-      ) : loading && !summary ? (
-        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">Loading portfolio summary…</span>
-          <span className="empty-sub">
-            Calculating realized profit, open exposure, and valuation from your local trade ledger.
-          </span>
-        </div>
-      ) : summary ? (
-        <div className="portfolio-summary-body">
-          <div className="portfolio-quality-strip">
-            <div className="chart-card portfolio-quality-card">
-              <div className="portfolio-quality-card-top">
-                <span className="info-card-label">
-                  Profit Coverage
-                  <InfoHint text="How much of sell revenue has a matched local buy cost basis behind it." />
-                </span>
-                <span className={`market-panel-badge tone-${portfolioCoverageTone(summary.costBasisCoveragePct)}`}>
-                  {portfolioCoverageLabel(summary.costBasisCoveragePct)}
-                </span>
-              </div>
-              <strong className="portfolio-quality-card-value">
-                {formatPercentValue(summary.costBasisCoveragePct)}
-              </strong>
-            </div>
-            <div className="chart-card portfolio-quality-card">
-              <div className="portfolio-quality-card-top">
-                <span className="info-card-label">
-                  Value Coverage
-                  <InfoHint text="How much of open inventory has cached market statistics behind its current valuation." />
-                </span>
-                <span className={`market-panel-badge tone-${portfolioCoverageTone(summary.currentValueCoveragePct)}`}>
-                  {portfolioCoverageLabel(summary.currentValueCoveragePct)}
-                </span>
-              </div>
-              <strong className="portfolio-quality-card-value">
-                {formatPercentValue(summary.currentValueCoveragePct)}
-              </strong>
-            </div>
-            <div className="chart-card portfolio-quality-card">
-              <div className="portfolio-quality-card-top">
-                <span className="info-card-label">
-                  Unmatched Sell Revenue
-                  <InfoHint text="Sell revenue that still has no matched local buy cost basis. This is the least reliable part of realized profit." />
-                </span>
-              </div>
-              <strong className="portfolio-quality-card-value">
-                {formatPlatinumValue(summary.unmatchedSellRevenue)}
-              </strong>
-            </div>
-            <div className="chart-card portfolio-quality-card">
-              <div className="portfolio-quality-card-top">
-                <span className="info-card-label">
-                  Partial Basis Revenue
-                  <InfoHint text="Sell revenue where only part of the cost basis could be matched locally." />
-                </span>
-              </div>
-              <strong className="portfolio-quality-card-value">
-                {formatPlatinumValue(summary.partialCostBasisRevenue)}
-              </strong>
-            </div>
-          </div>
+      ) : (
+        <div className="portfolio-summary-body portfolio-summary-loadable">
+          {!summary ? <PortfolioLoadingOverlay label="Loading portfolio summary…" /> : null}
 
           <div className="plat-grid portfolio-summary-grid">
             <div className="info-card">
               <div className="info-card-label">
                 Realized Profit
                 <InfoHint
-                  text="Profit from closed sell trades in the selected period, using the local matched cost basis when available."
+                  text="Profit you've actually locked in this period: what your closed sells earned, minus the cost of the buys behind them."
                   placement="bottom"
                 />
               </div>
-              <div className={`info-card-val${summary.realizedProfit >= 0 ? '' : ' negative'}`}>
-                {formatSignedPlatinumValue(summary.realizedProfit)}
+              <div className={`info-card-val${bodySummary.realizedProfit >= 0 ? '' : ' negative'}`}>
+                {formatSignedPlatinumValue(bodySummary.realizedProfit)}
               </div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">
-                Estimated Inventory Value
-                <InfoHint
-                  text="Estimated current value of open and kept inventory, using the latest local market estimate when available."
-                  placement="bottom"
-                />
-              </div>
-              <div className="info-card-val neutral">{formatPlatinumValue(summary.unrealizedValue)}</div>
             </div>
             <div className="info-card">
               <div className="info-card-label">
                 Estimated Total P&amp;L
                 <InfoHint
-                  text="Realized profit plus unrealized P&L. This is the broadest portfolio view across closed and open positions."
+                  text="Realized profit plus the estimated gain/loss on inventory you still hold. 'Estimated' because unsold items are valued at cached market prices, not actual sales."
                   placement="bottom"
                 />
               </div>
-              <div className={`info-card-val${summary.totalPnl >= 0 ? '' : ' negative'}`}>
-                {formatSignedPlatinumValue(summary.totalPnl)}
+              <div className={`info-card-val${bodySummary.totalPnl >= 0 ? '' : ' negative'}`}>
+                {formatSignedPlatinumValue(bodySummary.totalPnl)}
               </div>
+            </div>
+            <div className="info-card portfolio-summary-loadable">
+              {inventoryLoading || !inventory ? <PortfolioLoadingOverlay /> : null}
+              <div className="info-card-label">
+                Inventory Value
+                <InfoHint
+                  text="What your owned prime parts are worth — taken from your Set Completion Planner inventory (last scan), valued at each part's recommended exit price. When you own a complete set, it's valued at the higher of the full-set price or the sum of its parts. Unrelated to trade history."
+                  placement="bottom"
+                />
+              </div>
+              <div className="info-card-val neutral">{formatPlatinumValue(inventory?.totalValue ?? 0)}</div>
+              {inventory && inventory.unpricedCount > 0 ? (
+                <div className="info-card-subnote">
+                  {inventory.unpricedCount} part{inventory.unpricedCount === 1 ? '' : 's'} not yet priced
+                </div>
+              ) : null}
             </div>
             <div className="info-card">
               <div className="info-card-label">
-                Open Exposure
-                <InfoHint text="Total platinum still tied up in open buys and kept inventory." />
+                Open Buys
+                <InfoHint
+                  text="Platinum you've spent on buys you haven't sold yet — your capital still tied up in inventory."
+                  placement="bottom"
+                />
               </div>
-              <div className="info-card-val neutral">{formatPlatinumValue(summary.openExposure)}</div>
+              <div className="info-card-val neutral">{formatPlatinumValue(bodySummary.openExposure)}</div>
             </div>
           </div>
 
           <div className="perf-grid portfolio-perf-grid">
             <div className="perf-card">
-              <div className="perf-label">Closed Trades <InfoHint text="Completed sell trades inside the selected period." /></div>
-              <div className="perf-val">{summary.closedTrades}</div>
+              <div className="perf-label">Closed Trades <InfoHint text="Number of sells you completed in this period." /></div>
+              <div className="perf-val">{bodySummary.closedTrades}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Win Rate <InfoHint text="Percentage of closed sells with positive realized profit." /></div>
-              <div className="perf-val blue">{formatPercentValue(summary.winRate)}</div>
+              <div className="perf-label">Win Rate <InfoHint text="Share of your closed sells that made a profit." /></div>
+              <div className="perf-val blue">{formatPercentValue(bodySummary.winRate)}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Avg Margin <InfoHint text="Average sell-margin percentage across closed sells with local cost basis." /></div>
-              <div className="perf-val blue">{formatPercentValue(summary.averageMargin)}</div>
+              <div className="perf-label">Avg Margin <InfoHint text="Average profit as a percentage of cost, across sells where the buy cost is known." /></div>
+              <div className="perf-val blue">{formatPercentValue(bodySummary.averageMargin)}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Avg Hold <InfoHint text="Average time between matched buy and sell rows." /></div>
-              <div className="perf-val">{formatHoursValue(summary.averageHoldHours)}</div>
+              <div className="perf-label">Avg Hold <InfoHint text="Average time you held an item between buying it and selling it." /></div>
+              <div className="perf-val">{formatHoursValue(bodySummary.averageHoldHours)}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Avg Profit / Trade <InfoHint text="Average realized profit across closed sell rows." /></div>
-              <div className="perf-val green">{formatPlatinumValue(Math.round(summary.averageProfitPerTrade))}</div>
-            </div>
-            <div className="perf-card">
-              <div className="perf-label">Flip Profit <InfoHint text="Profit from sells matched directly against prior buys of the same item." /></div>
-              <div className="perf-val green">{formatPlatinumValue(summary.flipProfit)}</div>
-            </div>
-            <div className="perf-card">
-              <div className="perf-label">Set Profit <InfoHint text="Profit from set sells using matched component buys as the cost basis." /></div>
-              <div className="perf-val green">{formatPlatinumValue(summary.soldAsSetProfit)}</div>
+              <div className="perf-label">Avg Profit / Trade <InfoHint text="Average realized profit per closed sell." /></div>
+              <div className="perf-val green">{formatPlatinumValue(Math.round(bodySummary.averageProfitPerTrade))}</div>
             </div>
           </div>
 
           <div className="chart-grid portfolio-chart-grid">
-            <CumulativeProfitChart summary={summary} />
-            <ProfitPerTradeChart summary={summary} />
+            <CumulativeProfitChart summary={bodySummary} />
+            <ProfitPerTradeChart summary={bodySummary} />
           </div>
 
           <div className="portfolio-breakdown-grid">
@@ -1690,10 +1723,10 @@ function PnlSummaryTab({
                 info="Breakdown of realized profit by trade closure style: direct flip, sold as set, or unmatched sell."
               />
               <div className="portfolio-breakdown-list">
-                {summary.sourceBreakdown.length === 0 ? (
+                {bodySummary.sourceBreakdown.length === 0 ? (
                   <div className="portfolio-breakdown-empty">No closed sell trades in this period yet.</div>
                 ) : (
-                  summary.sourceBreakdown.map((row) => (
+                  bodySummary.sourceBreakdown.map((row) => (
                     <div key={row.label} className="portfolio-breakdown-row">
                       <div className="portfolio-breakdown-copy">
                         <span className="portfolio-breakdown-name">{row.label}</span>
@@ -1712,10 +1745,10 @@ function PnlSummaryTab({
                 infoPlacement="left"
               />
               <div className="portfolio-breakdown-list">
-                {summary.categoryBreakdown.length === 0 ? (
+                {bodySummary.categoryBreakdown.length === 0 ? (
                   <div className="portfolio-breakdown-empty">No category profit data is available yet.</div>
                 ) : (
-                  summary.categoryBreakdown.map((row) => (
+                  bodySummary.categoryBreakdown.map((row) => (
                     <div key={row.label} className="portfolio-breakdown-row">
                       <div className="portfolio-breakdown-copy">
                         <span className="portfolio-breakdown-name">{row.label}</span>
@@ -1731,53 +1764,51 @@ function PnlSummaryTab({
 
           <div className="portfolio-insight-grid">
             <div className="info-card">
-              <div className="info-card-label">Open Buys <InfoHint text="Current buy rows that are still available to be matched to future sells." /></div>
-              <div className="info-card-val neutral">{summary.openBuys}</div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">Kept Items <InfoHint text="Buys explicitly marked Keep Item. These are excluded from flip and set matching." /></div>
-              <div className="info-card-val neutral">{summary.keptItems}</div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">Kept Inventory Value <InfoHint text="Estimated value of inventory marked Keep Item." /></div>
-              <div className="info-card-val neutral">{formatPlatinumValue(summary.keptInventoryValue)}</div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">Partial Set Profit <InfoHint text="Profit from set sells where only part of the component basket had a matched local cost basis." /></div>
-              <div className="info-card-val neutral">{formatPlatinumValue(summary.partialSetProfit)}</div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">Best Trade <InfoHint text="Highest-profit closed sell row in the selected period." /></div>
+              <div className="info-card-label">Best Trade <InfoHint text="Your most profitable single sell in this period." /></div>
               <div className="info-card-val neutral portfolio-inline-stat">
-                {summary.bestTradeItem ? `${summary.bestTradeItem} · ${formatPlatinumValue(summary.bestTradeProfit ?? 0)}` : '—'}
+                {bodySummary.bestTradeItem ? `${bodySummary.bestTradeItem} · ${formatSignedPlatinumValue(bodySummary.bestTradeProfit ?? 0)}` : '—'}
               </div>
             </div>
             <div className="info-card">
-              <div className="info-card-label">Worst Trade <InfoHint text="Lowest-profit closed sell row in the selected period." /></div>
+              <div className="info-card-label">Worst Trade <InfoHint text="Your least profitable single sell in this period (your biggest loss, if any)." /></div>
               <div className="info-card-val neutral portfolio-inline-stat">
-                {summary.worstTradeItem ? `${summary.worstTradeItem} · ${formatPlatinumValue(summary.worstTradeProfit ?? 0)}` : '—'}
+                {bodySummary.worstTradeItem ? `${bodySummary.worstTradeItem} · ${formatSignedPlatinumValue(bodySummary.worstTradeProfit ?? 0)}` : '—'}
               </div>
             </div>
           </div>
 
-          {summary.notes.length > 0 ? (
-            <div className="chart-card portfolio-notes-card">
-              <PortfolioPanelHeader
-                title="Integrity Notes"
-                info="Summary notes explaining where the local trade ledger or market valuation still has limited coverage."
-                infoPlacement="left"
-              />
+          <div className="chart-card portfolio-notes-card">
+            <PortfolioPanelHeader
+              title="Data Confidence"
+              info="How complete the data behind these numbers is. Profit basis = the share of your sell revenue that has a matched local buy cost behind it (the rest is estimated). Inventory value = the share of held items that have a cached market price. Lower percentages mean the figures above are rougher estimates."
+              infoPlacement="left"
+            />
+            <div className="portfolio-confidence-row">
+              <span className="portfolio-confidence-stat">
+                <span className="portfolio-confidence-stat-label">Profit basis</span>
+                <span className={`market-panel-badge tone-${portfolioCoverageTone(bodySummary.costBasisCoveragePct)}`}>
+                  {formatPercentValue(bodySummary.costBasisCoveragePct)}
+                </span>
+              </span>
+              <span className="portfolio-confidence-stat">
+                <span className="portfolio-confidence-stat-label">Inventory value</span>
+                <span className={`market-panel-badge tone-${portfolioCoverageTone(bodySummary.currentValueCoveragePct)}`}>
+                  {formatPercentValue(bodySummary.currentValueCoveragePct)}
+                </span>
+              </span>
+            </div>
+            {bodySummary.notes.length > 0 ? (
               <div className="portfolio-notes-list">
-                {summary.notes.map((note) => (
+                {bodySummary.notes.map((note) => (
                   <span key={note} className="portfolio-note-pill">
                     {note}
                   </span>
                 ))}
               </div>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </div>
-      ) : null}
+      )}
     </>
   );
 }

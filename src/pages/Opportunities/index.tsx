@@ -43,7 +43,7 @@ import type {
   WfmAutocompleteItem,
 } from '../../types';
 
-type OppTab = 'opportunities' | 'farm-now' | 'set-planner' | 'owned-relics';
+type OppTab = 'opportunities' | 'farm-now' | 'set-planner' | 'owned-relics' | 'inventory';
 type FarmNowTab = 'part-profit' | 'set-completion';
 
 const RELIC_REFINEMENT_COLUMNS = [
@@ -964,8 +964,14 @@ function SetCompletionScreenshotImportWarningModal({
   );
 }
 
-export function OpportunitiesPage() {
-  const [activeTab, setActiveTab] = useState<OppTab>('set-planner');
+export function OpportunitiesPage({
+  mode = 'opportunities',
+}: {
+  mode?: 'opportunities' | 'inventory';
+} = {}) {
+  const [activeTab, setActiveTab] = useState<OppTab>(
+    mode === 'inventory' ? 'set-planner' : 'opportunities',
+  );
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
   const [farmNowScan, setFarmNowScan] = useState<ArbitrageScannerResponse | null>(null);
   const [farmNowScanState, setFarmNowScanState] = useState<ArbitrageScannerState | null>(null);
@@ -984,7 +990,6 @@ export function OpportunitiesPage() {
   const [expandedRelicKey, setExpandedRelicKey] = useState<string | null>(null);
   const [ownedRelicsLoaded, setOwnedRelicsLoaded] = useState(false);
   const [ownedRelicsUpdatedAt, setOwnedRelicsUpdatedAt] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [expandedSetSlug, setExpandedSetSlug] = useState<string | null>(null);
   const [componentQuery, setComponentQuery] = useState('');
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
@@ -1019,15 +1024,20 @@ export function OpportunitiesPage() {
   const setActivePage = useAppStore((state) => state.setActivePage);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
 
-  const tabs: { id: OppTab; label: string }[] = [
-    { id: 'opportunities', label: 'Opportunities' },
-    { id: 'farm-now', label: 'What To Farm Now' },
-    { id: 'set-planner', label: 'Set Completion Planner' },
-    { id: 'owned-relics', label: 'Owned Relics' },
-  ];
+  const tabs: { id: OppTab; label: string }[] =
+    mode === 'inventory'
+      ? [
+          { id: 'set-planner', label: 'Set Completion Planner' },
+          { id: 'inventory', label: 'Inventory' },
+        ]
+      : [
+          { id: 'opportunities', label: 'Opportunities' },
+          { id: 'farm-now', label: 'What To Farm Now' },
+          { id: 'owned-relics', label: 'Owned Relics' },
+        ];
 
   useEffect(() => {
-    if (activeTab !== 'set-planner') {
+    if (activeTab !== 'set-planner' && activeTab !== 'inventory') {
       return;
     }
 
@@ -1118,7 +1128,7 @@ export function OpportunitiesPage() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== 'set-planner') {
+    if (activeTab !== 'set-planner' && activeTab !== 'inventory') {
       return;
     }
 
@@ -1640,16 +1650,27 @@ export function OpportunitiesPage() {
   );
   const farmNowLastScan = farmNowScanState?.progress.lastCompletedAt ?? farmNowScan?.computedAt ?? null;
 
-  const filteredSuggestions = useMemo(() => {
+  // Left panel: every known prime component, filtered by the shared search bar.
+  const filteredCatalog = useMemo(() => {
     const normalizedQuery = componentQuery.trim().toLowerCase();
     if (!normalizedQuery) {
-      return plannerCatalog.slice(0, 8);
+      return plannerCatalog;
     }
-
-    return plannerCatalog
-      .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
-      .slice(0, 8);
+    return plannerCatalog.filter((item) =>
+      item.name.toLowerCase().includes(normalizedQuery),
+    );
   }, [componentQuery, plannerCatalog]);
+
+  // Right panel: only the parts the user owns, filtered by the same search bar.
+  const filteredOwnedItems = useMemo(() => {
+    const normalizedQuery = componentQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return ownedItems;
+    }
+    return ownedItems.filter((item) =>
+      item.name.toLowerCase().includes(normalizedQuery),
+    );
+  }, [componentQuery, ownedItems]);
 
   useEffect(() => {
     if (!screenshotImportScreenshots.length) {
@@ -1683,11 +1704,6 @@ export function OpportunitiesPage() {
     }
   };
 
-  const addOwnedComponent = async (item: PlannerCatalogItem) => {
-    const currentQuantity = ownedMap.get(item.slug) ?? 0;
-    await upsertOwnedItem(item, currentQuantity + 1);
-  };
-
   const updateOwnedQuantityByDelta = async (item: SetCompletionOwnedItem, delta: number) => {
     await upsertOwnedItem(
       {
@@ -1698,6 +1714,46 @@ export function OpportunitiesPage() {
       },
       Math.max(item.quantity + delta, 0),
     );
+  };
+
+  const [clearingInventory, setClearingInventory] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+
+  // Cancel a pending clear-confirmation whenever the search filter changes, so the
+  // confirmation can't apply to a different set of items than the user saw.
+  useEffect(() => {
+    setConfirmingClear(false);
+  }, [componentQuery]);
+
+  // Removes every owned part currently visible on the right panel (i.e. matching the
+  // active search filter). With an empty search this clears the whole inventory.
+  const clearFilteredOwnedItems = async () => {
+    const targets = filteredOwnedItems;
+    if (targets.length === 0) {
+      return;
+    }
+    setClearingInventory(true);
+    setConfirmingClear(false);
+    setErrorMessage(null);
+    try {
+      let latest: SetCompletionOwnedItem[] | null = null;
+      for (const item of targets) {
+        latest = await setSetCompletionOwnedItemQuantity({
+          itemId: item.itemId,
+          slug: item.slug,
+          name: item.name,
+          imagePath: item.imagePath,
+          quantity: 0,
+        });
+      }
+      if (latest) {
+        setOwnedItems(latest);
+      }
+    } catch (error) {
+      setErrorMessage(toErrorMessage(error));
+    } finally {
+      setClearingInventory(false);
+    }
   };
 
   const resetScreenshotImportSession = () => {
@@ -1952,7 +2008,7 @@ export function OpportunitiesPage() {
     <>
       <div className="subnav">
         <div className="subnav-left">
-          <span className="page-title">Opportunities</span>
+          <span className="page-title">{mode === 'inventory' ? 'Inventory' : 'Opportunities'}</span>
           {tabs.map((tab) => (
             <span
               key={tab.id}
@@ -1969,7 +2025,7 @@ export function OpportunitiesPage() {
 
       <div className="page-content">
         {activeTab === 'set-planner' ? (
-          <div className={`set-planner-layout${drawerOpen ? ' drawer-open' : ''}`}>
+          <div className="set-planner-layout inventory-detached">
             <section className="market-panel set-planner-main-panel">
               <div className="set-planner-header">
                 <div>
@@ -2066,157 +2122,210 @@ export function OpportunitiesPage() {
                 </div>
               )}
             </section>
-
-            <aside className={`market-panel set-planner-drawer${drawerOpen ? ' is-open' : ''}`}>
-              <div className="set-planner-drawer-header">
-                <div>
-                  <span className="panel-title-eyebrow">Owned Inventory</span>
-                  {!drawerOpen && ownedItems.length > 0 && (
-                    <span className="set-planner-drawer-count">{ownedItems.length} {ownedItems.length === 1 ? 'part' : 'parts'}</span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className="btn-icon set-planner-drawer-icon"
-                  onClick={() => setDrawerOpen((current) => !current)}
-                  aria-label={drawerOpen ? 'Collapse owned parts drawer' : 'Expand owned parts drawer'}
-                >
-                  {drawerOpen ? '✕' : '☰'}
-                </button>
+          </div>
+        ) : activeTab === 'inventory' ? (
+          <div className="inventory-manager">
+            <div className="inventory-manager-searchbar">
+              <div className="inventory-search-field">
+                <span className="inventory-search-icon" aria-hidden="true">⌕</span>
+                <input
+                  className="inventory-search-input"
+                  type="text"
+                  placeholder={plannerCatalog.length ? 'Search prime parts — filters both panels…' : 'Loading component catalog…'}
+                  value={componentQuery}
+                  onChange={(event) => setComponentQuery(event.target.value)}
+                  disabled={!plannerCatalog.length}
+                />
+                {componentQuery ? (
+                  <button
+                    type="button"
+                    className="inventory-search-clear"
+                    onClick={() => setComponentQuery('')}
+                    aria-label="Clear search"
+                  >
+                    ✕
+                  </button>
+                ) : null}
               </div>
+            </div>
 
-              {!drawerOpen ? (
-                <div className="set-planner-mini-grid">
-                  {ownedItems.length === 0 ? (
-                    <span className="set-planner-mini-empty">No parts added yet</span>
-                  ) : (
-                    ownedItems.map((item) => {
+            {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
+
+            <div className="inventory-manager-grid">
+              <section className="market-panel inventory-catalog-panel">
+                <div className="inventory-panel-header">
+                  <div>
+                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-blue" aria-hidden="true" />Prime Parts</span>
+                    <h3>Add to Inventory</h3>
+                  </div>
+                </div>
+
+                {!plannerCatalog.length ? (
+                  <div className="inventory-empty">Component catalog is still loading.</div>
+                ) : filteredCatalog.length === 0 ? (
+                  <div className="inventory-empty">No prime parts match “{componentQuery.trim()}”.</div>
+                ) : (
+                  <div className="inventory-list">
+                    {filteredCatalog.map((item) => {
                       const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                      const ownedQty = ownedMap.get(item.slug) ?? 0;
                       return (
-                        <div key={item.slug} className="set-planner-mini-item">
-                          <span className="set-planner-mini-thumb">
+                        <div key={item.slug} className={`inventory-row${ownedQty > 0 ? ' is-owned' : ''}`}>
+                          <span className="inventory-thumb">
                             {imageUrl ? (
                               <img src={imageUrl} alt="" loading="lazy" />
                             ) : (
                               <span>{item.name.slice(0, 1)}</span>
                             )}
                           </span>
-                          <span className="set-planner-mini-name" title={item.name}>{item.name}</span>
-                          <span className="set-planner-mini-qty">×{item.quantity}</span>
+                          <span className="inventory-row-name" title={item.name}>{item.name}</span>
+                          {ownedQty > 0 ? (
+                            <div className="inventory-stepper">
+                              <button
+                                type="button"
+                                className="inventory-qty-button"
+                                disabled={savingSlug === item.slug}
+                                onClick={() => { void upsertOwnedItem(item, Math.max(ownedQty - 1, 0)); }}
+                                aria-label={`Remove one ${item.name}`}
+                              >
+                                −
+                              </button>
+                              <span className="inventory-qty-value">{ownedQty}</span>
+                              <button
+                                type="button"
+                                className="inventory-qty-button"
+                                disabled={savingSlug === item.slug}
+                                onClick={() => { void upsertOwnedItem(item, ownedQty + 1); }}
+                                aria-label={`Add one ${item.name}`}
+                              >
+                                +
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="inventory-add-button"
+                              disabled={savingSlug === item.slug}
+                              onClick={() => { void upsertOwnedItem(item, 1); }}
+                            >
+                              Add
+                            </button>
+                          )}
                         </div>
                       );
-                    })
-                  )}
-                </div>
-              ) : (
-                <div className="set-planner-drawer-body">
-                  <div className="set-planner-drawer-search-col">
-                    <label className="watchlist-add-label" htmlFor="planner-component-search">
-                      Add owned component
-                    </label>
-                  <button
-                      type="button"
-                      className="settings-secondary-btn screenshot-import-launch"
-                      onClick={() => setScreenshotImportGuidanceOpen(true)}
-                      disabled={!plannerCatalog.length}
-                    >
-                      <span>Import Screenshot</span>{' '}
-                      <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">Experimental</span>
-                    </button>
-                    <div className="set-planner-search-wrap">
-                      <input
-                        id="planner-component-search"
-                        className="set-planner-search-input"
-                        type="text"
-                        placeholder={plannerCatalog.length ? 'Search set components…' : 'Loading component catalog…'}
-                        value={componentQuery}
-                        onChange={(event) => setComponentQuery(event.target.value)}
-                        disabled={!plannerCatalog.length}
-                      />
-                      {componentQuery ? (
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="market-panel inventory-owned-panel">
+                <div className="inventory-panel-header">
+                  <div>
+                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />Owned Inventory</span>
+                    <h3>
+                      {ownedItems.length} {ownedItems.length === 1 ? 'part' : 'parts'}
+                      {componentQuery.trim() ? ` · ${filteredOwnedItems.length} shown` : ''}
+                    </h3>
+                  </div>
+                  {confirmingClear ? (
+                    <div className="inventory-clear-confirm" role="alertdialog">
+                      <span className="inventory-clear-confirm-msg">
+                        Delete {filteredOwnedItems.length}{' '}
+                        {componentQuery.trim() ? 'visible ' : ''}
+                        {filteredOwnedItems.length === 1 ? 'item' : 'items'}? This cannot be undone.
+                      </span>
+                      <div className="inventory-clear-confirm-actions">
                         <button
                           type="button"
-                          className="set-planner-search-clear"
-                          onClick={() => setComponentQuery('')}
-                          aria-label="Clear search"
+                          className="btn-secondary"
+                          onClick={() => setConfirmingClear(false)}
                         >
-                          ✕
+                          Cancel
                         </button>
-                      ) : null}
+                        <button
+                          type="button"
+                          className="inventory-clear-confirm-delete"
+                          disabled={clearingInventory}
+                          onClick={() => { void clearFilteredOwnedItems(); }}
+                        >
+                          {clearingInventory ? 'Deleting…' : 'Delete'}
+                        </button>
+                      </div>
                     </div>
-                    {plannerCatalog.length ? (
-                      <div className="set-planner-suggestions">
-                        {filteredSuggestions.map((item) => (
-                          <button
-                            key={item.slug}
-                            type="button"
-                            className="set-planner-suggestion"
-                            onClick={() => { void addOwnedComponent(item); }}
-                          >
-                            <span className="set-planner-suggestion-name">{item.name}</span>
-                            <span className="set-planner-suggestion-action">Add</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="watchlist-form-note">Component catalog is still loading.</div>
-                    )}
-                  </div>
-
-                  <div className="set-planner-drawer-divider" aria-hidden="true" />
-
-                  <div className="set-planner-drawer-owned-col">
-                    <span className="watchlist-add-label">
-                      {ownedItems.length} {ownedItems.length === 1 ? 'part' : 'parts'} owned
-                    </span>
-                    {ownedItems.length === 0 ? (
-                      <div className="watchlist-form-note">No owned prime parts added yet.</div>
-                    ) : (
-                      <div className="set-planner-owned-grid">
-                        {ownedItems.map((item) => {
-                          const imageUrl = resolveWfmAssetUrl(item.imagePath);
-                          return (
-                            <div key={item.slug} className="set-planner-owned-card">
-                              <div className="set-planner-owned-card-main">
-                                <span className="set-planner-owned-thumb">
-                                  {imageUrl ? (
-                                    <img src={imageUrl} alt="" loading="lazy" />
-                                  ) : (
-                                    <span>{item.name.slice(0, 1)}</span>
-                                  )}
-                                </span>
-                                <span className="set-planner-owned-card-name" title={item.name}>
-                                  {item.name}
-                                </span>
-                              </div>
-                              <div className="set-planner-owned-actions">
-                                <button
-                                  type="button"
-                                  className="set-planner-qty-button"
-                                  disabled={savingSlug === item.slug}
-                                  onClick={() => { void updateOwnedQuantityByDelta(item, -1); }}
-                                >
-                                  −
-                                </button>
-                                <span className="set-planner-qty-value">{item.quantity}</span>
-                                <button
-                                  type="button"
-                                  className="set-planner-qty-button"
-                                  disabled={savingSlug === item.slug}
-                                  onClick={() => { void updateOwnedQuantityByDelta(item, 1); }}
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-secondary inventory-clear-button"
+                      disabled={clearingInventory || filteredOwnedItems.length === 0}
+                      onClick={() => setConfirmingClear(true)}
+                    >
+                      Clear Filtered Items
+                    </button>
+                  )}
                 </div>
-              )}
-            </aside>
+
+                {ownedItems.length === 0 ? (
+                  <div className="inventory-empty">No owned prime parts yet. Add parts from the left panel.</div>
+                ) : filteredOwnedItems.length === 0 ? (
+                  <div className="inventory-empty">No owned parts match “{componentQuery.trim()}”.</div>
+                ) : (
+                  <div className="inventory-list">
+                    {filteredOwnedItems.map((item) => {
+                      const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                      return (
+                        <div key={item.slug} className="inventory-row is-owned">
+                          <span className="inventory-thumb">
+                            {imageUrl ? (
+                              <img src={imageUrl} alt="" loading="lazy" />
+                            ) : (
+                              <span>{item.name.slice(0, 1)}</span>
+                            )}
+                          </span>
+                          <span className="inventory-row-name" title={item.name}>{item.name}</span>
+                          <div className="inventory-stepper">
+                            <button
+                              type="button"
+                              className="inventory-qty-button"
+                              disabled={savingSlug === item.slug}
+                              onClick={() => { void updateOwnedQuantityByDelta(item, -1); }}
+                              aria-label={`Remove one ${item.name}`}
+                            >
+                              −
+                            </button>
+                            <span className="inventory-qty-value">{item.quantity}</span>
+                            <button
+                              type="button"
+                              className="inventory-qty-button"
+                              disabled={savingSlug === item.slug}
+                              onClick={() => { void updateOwnedQuantityByDelta(item, 1); }}
+                              aria-label={`Add one ${item.name}`}
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            <button
+              type="button"
+              className="inventory-import-fab"
+              onClick={() => setScreenshotImportGuidanceOpen(true)}
+              disabled={!plannerCatalog.length}
+              title="Import your inventory from a screenshot"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <path d="m21 15-5-5L5 21" />
+              </svg>
+              <span>Import Screenshot</span>
+              <span className="scanner-run-pill scanner-run-pill-warning inventory-import-fab-pill">Beta</span>
+            </button>
           </div>
         ) : activeTab === 'owned-relics' ? (
           <div className="owned-relics-layout">
@@ -2540,7 +2649,7 @@ export function OpportunitiesPage() {
                     <button
                       type="button"
                       className="btn-secondary"
-                      onClick={() => setActiveTab('set-planner')}
+                      onClick={() => setActivePage('inventory')}
                     >
                       Open Set Completion Planner
                     </button>

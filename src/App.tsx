@@ -38,7 +38,8 @@ function PageRouter() {
     case 'market':        return <MarketPage />;
     case 'events':        return <EventsPage />;
     case 'scanners':      return <ScannersPage />;
-    case 'opportunities': return <OpportunitiesPage />;
+    case 'opportunities': return <OpportunitiesPage key="opportunities" />;
+    case 'inventory':     return <OpportunitiesPage key="inventory" mode="inventory" />;
     case 'trades':        return <TradesPage />;
     case 'portfolio':     return <PortfolioPage />;
     case 'strategy':      return <StrategyPage />;

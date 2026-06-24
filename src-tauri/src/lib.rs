@@ -59,6 +59,7 @@ pub fn run() {
             trades::set_wfm_orders_visibility,
             trades::get_wfm_trade_overview,
             trades::get_cached_wfm_profile_trade_log,
+            trades::get_portfolio_inventory_value,
             trades::get_wfm_profile_trade_log,
             trades::refresh_wfm_trade_detection,
             trades::refresh_alecaframe_trade_detection,

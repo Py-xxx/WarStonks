@@ -494,6 +494,11 @@ pub struct ManipulationRiskSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeOfDayLiquidityBucket {
+    /// Day of week, 0 = Monday … 6 = Sunday.
+    pub weekday: i64,
+    /// Two-hour block index, 0 = 00:00–02:00 … 11 = 22:00–00:00.
+    pub bucket_index: i64,
+    /// Start hour of the 2-hour block (0, 2, 4 … 22).
     pub hour: i64,
     pub label: String,
     pub avg_visible_quantity: f64,
@@ -513,6 +518,10 @@ pub struct TimeOfDayLiquiditySummary {
     pub current_hour_label: String,
     pub strongest_window_label: Option<String>,
     pub weakest_window_label: Option<String>,
+    /// Current day of week, 0 = Monday … 6 = Sunday.
+    pub today_weekday: i64,
+    /// The best 2-hour windows for today's weekday (highest heat first).
+    pub today_best_labels: Vec<String>,
     pub buckets: Vec<TimeOfDayLiquidityBucket>,
     pub confidence_summary: MarketConfidenceSummary,
 }
@@ -5824,13 +5833,16 @@ fn build_time_of_day_liquidity(
         sample_count: usize,
     }
 
-    let mut per_hour = BTreeMap::<i64, TimeOfDayAccumulator>::new();
+    // Key by (weekday, 2-hour block) → a 7×12 grid. weekday: 0 = Monday … 6 = Sunday.
+    let mut per_cell = BTreeMap::<(i64, i64), TimeOfDayAccumulator>::new();
     for row in rows {
         let snapshot = row?;
         let Some(timestamp) = parse_timestamp(&snapshot.captured_at) else {
             continue;
         };
-        let entry = per_hour.entry(timestamp.hour() as i64).or_default();
+        let weekday = timestamp.weekday().number_days_from_monday() as i64;
+        let bucket_index = timestamp.hour() as i64 / 2;
+        let entry = per_cell.entry((weekday, bucket_index)).or_default();
         entry.sample_count += 1;
         entry.liquidity_sum += liquidity_score_percent(&snapshot);
         entry.visible_quantity_sum += (snapshot.sell_quantity + snapshot.buy_quantity) as f64;
@@ -5844,24 +5856,26 @@ fn build_time_of_day_liquidity(
     let (closed_rows, _, _) =
         load_statistics_rows_for_domain(connection, item_id, variant_key, "48hours")?;
     for row in closed_rows {
-        let hour = row.bucket_at.hour() as i64;
-        let entry = per_hour.entry(hour).or_default();
+        let weekday = row.bucket_at.weekday().number_days_from_monday() as i64;
+        let bucket_index = row.bucket_at.hour() as i64 / 2;
+        let entry = per_cell.entry((weekday, bucket_index)).or_default();
         entry.volume_sum += row.volume.max(0.0);
         entry.volume_sample_count += 1;
     }
 
-    let total_sample_count = per_hour
+    let total_sample_count = per_cell
         .values()
         .map(|entry| entry.sample_count)
         .sum::<usize>();
-    let populated_bucket_count = per_hour
+    let populated_bucket_count = per_cell
         .values()
         .filter(|entry| entry.sample_count > 0 || entry.volume_sample_count > 0)
         .count();
 
-    let mut raw_buckets = (0_i64..24_i64)
-        .map(|hour| {
-            let entry = per_hour.remove(&hour).unwrap_or_default();
+    let mut raw_buckets = Vec::with_capacity(84);
+    for weekday in 0_i64..7 {
+        for bucket_index in 0_i64..12 {
+            let entry = per_cell.remove(&(weekday, bucket_index)).unwrap_or_default();
             let avg_liquidity_score = if entry.sample_count > 0 {
                 entry.liquidity_sum / entry.sample_count as f64
             } else {
@@ -5882,10 +5896,14 @@ fn build_time_of_day_liquidity(
             } else {
                 0.0
             };
+            let start_hour = bucket_index * 2;
+            let end_hour = (start_hour + 2) % 24;
 
-            TimeOfDayLiquidityBucket {
-                hour,
-                label: format!("{hour:02}:00"),
+            raw_buckets.push(TimeOfDayLiquidityBucket {
+                weekday,
+                bucket_index,
+                hour: start_hour,
+                label: format!("{start_hour:02}–{end_hour:02}"),
                 avg_visible_quantity,
                 avg_sell_orders,
                 avg_spread_pct: if entry.spread_count > 0 {
@@ -5899,9 +5917,9 @@ fn build_time_of_day_liquidity(
                 normalized_liquidity: 0.0,
                 normalized_volume: 0.0,
                 heat_score: 0.0,
-            }
-        })
-        .collect::<Vec<_>>();
+            });
+        }
+    }
 
     let max_liquidity = raw_buckets
         .iter()
@@ -5949,6 +5967,20 @@ fn build_time_of_day_liquidity(
         .iter()
         .min_by(|left, right| left.heat_score.total_cmp(&right.heat_score))
         .map(|bucket| bucket.label.clone());
+
+    // Best 2-hour windows for today's weekday (highest heat first), used by the summary.
+    let today_weekday = now_utc().weekday().number_days_from_monday() as i64;
+    let mut today_cells = raw_buckets
+        .iter()
+        .filter(|bucket| bucket.weekday == today_weekday && bucket.heat_score > 0.0)
+        .collect::<Vec<_>>();
+    today_cells.sort_by(|left, right| right.heat_score.total_cmp(&left.heat_score));
+    let today_best_labels = today_cells
+        .iter()
+        .take(3)
+        .map(|bucket| bucket.label.clone())
+        .collect::<Vec<_>>();
+
     let current_hour_label = format!("{:02}:00", now_utc().hour());
     let confidence_summary =
         build_time_of_day_confidence(populated_bucket_count, total_sample_count);
@@ -5957,6 +5989,8 @@ fn build_time_of_day_liquidity(
         current_hour_label,
         strongest_window_label,
         weakest_window_label,
+        today_weekday,
+        today_best_labels,
         buckets: raw_buckets,
         confidence_summary,
     })
@@ -7140,6 +7174,150 @@ fn load_set_completion_owned_items(connection: &Connection) -> Result<Vec<SetCom
 
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to load owned set components")
+}
+
+/// Valuation of the user's Set Completion Planner inventory (owned prime parts).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCompletionInventoryValue {
+    pub total_value: i64,
+    /// Distinct owned line items that had a recommended exit price.
+    pub priced_count: i64,
+    /// Distinct owned line items with no cached price yet (value understated).
+    pub unpriced_count: i64,
+    pub last_scan_at: Option<String>,
+}
+
+/// Cache-only recommended exit price for an item (no network), memoized per call.
+fn cached_recommended_exit_price(
+    observatory: &Connection,
+    cache: &mut HashMap<i64, Option<f64>>,
+    item_id: i64,
+) -> Option<f64> {
+    if let Some(value) = cache.get(&item_id) {
+        return *value;
+    }
+    let value = build_statistics_price_model(observatory, item_id, "base")
+        .ok()
+        .flatten()
+        .and_then(|model| model.recommended_exit_price);
+    cache.insert(item_id, value);
+    value
+}
+
+/// Values the owned prime-part inventory (from the most recent Set Completion scan) at
+/// recommended exit prices, using cached statistics only. When a complete set is owned it is
+/// valued at the higher of the full-set exit price vs. the sum of its parts (the arbitrage
+/// comparison); leftover loose parts are valued individually. Items with no cached price are
+/// skipped from the total and reported via `unpriced_count`.
+pub fn compute_set_completion_inventory_value(
+    app: &tauri::AppHandle,
+) -> Result<SetCompletionInventoryValue> {
+    let observatory = open_market_observatory_database(app)?;
+    let owned = load_set_completion_owned_items(&observatory)?;
+    if owned.is_empty() {
+        return Ok(SetCompletionInventoryValue {
+            total_value: 0,
+            priced_count: 0,
+            unpriced_count: 0,
+            last_scan_at: None,
+        });
+    }
+
+    let last_scan_at = owned.iter().map(|item| item.updated_at.clone()).max();
+
+    let mut exit_cache: HashMap<i64, Option<f64>> = HashMap::new();
+
+    // Distinct-item priced/unpriced counts (honesty note for the UI).
+    let mut priced_count = 0_i64;
+    let mut unpriced_count = 0_i64;
+    for item in &owned {
+        let priced = item
+            .item_id
+            .map(|id| cached_recommended_exit_price(&observatory, &mut exit_cache, id).is_some())
+            .unwrap_or(false);
+        if priced {
+            priced_count += 1;
+        } else {
+            unpriced_count += 1;
+        }
+    }
+
+    // Remaining owned quantity per item id (consumed as complete sets are valued).
+    let mut remaining: HashMap<i64, i64> = HashMap::new();
+    for item in &owned {
+        if let Some(id) = item.item_id {
+            *remaining.entry(id).or_insert(0) += item.quantity.max(0);
+        }
+    }
+
+    let mut total = 0.0_f64;
+
+    // Set-vs-parts for every complete set the user fully owns.
+    if let Ok(catalog) = open_catalog_database(app) {
+        if let Ok(sets) = load_scanner_sets_from_map(app, &catalog) {
+            for (set_root, components) in &sets {
+                let comp: Vec<(i64, i64)> = components
+                    .iter()
+                    .filter_map(|c| c.component_item_id.map(|id| (id, c.quantity_in_set.max(1))))
+                    .collect();
+                // Only evaluate sets we can fully resolve.
+                if comp.is_empty() || comp.len() != components.len() {
+                    continue;
+                }
+                let complete_sets = comp
+                    .iter()
+                    .map(|(id, req)| remaining.get(id).copied().unwrap_or(0) / req)
+                    .min()
+                    .unwrap_or(0);
+                if complete_sets <= 0 {
+                    continue;
+                }
+
+                let set_exit =
+                    cached_recommended_exit_price(&observatory, &mut exit_cache, set_root.item_id);
+                let parts_exit: Option<f64> = comp
+                    .iter()
+                    .map(|(id, req)| {
+                        cached_recommended_exit_price(&observatory, &mut exit_cache, *id)
+                            .map(|price| price * *req as f64)
+                    })
+                    .sum();
+                let per_set = match (set_exit, parts_exit) {
+                    (Some(set), Some(parts)) => Some(set.max(parts)),
+                    (Some(set), None) => Some(set),
+                    (None, Some(parts)) => Some(parts),
+                    (None, None) => None,
+                };
+                if let Some(per_set) = per_set {
+                    total += per_set * complete_sets as f64;
+                }
+
+                for (id, req) in &comp {
+                    if let Some(qty) = remaining.get_mut(id) {
+                        *qty = (*qty - req * complete_sets).max(0);
+                    }
+                }
+            }
+        }
+    }
+
+    // Leftover loose parts (not absorbed into a complete set), valued individually.
+    for (item_id, qty) in &remaining {
+        if *qty <= 0 {
+            continue;
+        }
+        if let Some(price) = cached_recommended_exit_price(&observatory, &mut exit_cache, *item_id) {
+            total += price * *qty as f64;
+        }
+    }
+
+    Ok(SetCompletionInventoryValue {
+        total_value: total.round() as i64,
+        priced_count,
+        unpriced_count,
+        last_scan_at,
+    })
 }
 
 fn upsert_set_completion_owned_item(
@@ -11788,7 +11966,7 @@ mod tests {
     }
 
     #[test]
-    fn time_of_day_liquidity_builds_all_24_hours_with_normalized_heat_scores() {
+    fn time_of_day_liquidity_builds_weekday_grid_with_normalized_heat_scores() {
         let connection = Connection::open_in_memory().expect("in-memory sqlite");
         initialize_market_observatory_schema(&connection).expect("schema");
 
@@ -11865,15 +12043,32 @@ mod tests {
         let summary = build_time_of_day_liquidity(&connection, item_id, variant_key, seller_mode)
             .expect("time of day summary");
 
-        assert_eq!(summary.buckets.len(), 24);
+        // 7 weekdays × 12 two-hour blocks.
+        assert_eq!(summary.buckets.len(), 84);
         assert!(summary
             .buckets
             .iter()
             .all(|bucket| (0.0..=1.0).contains(&bucket.heat_score)));
-        assert_eq!(summary.buckets[0].sample_count, 1);
-        assert_eq!(summary.buckets[12].sample_count, 1);
-        assert!(summary.buckets[12].avg_hourly_volume > summary.buckets[0].avg_hourly_volume);
-        assert!(summary.buckets[12].heat_score >= summary.buckets[0].heat_score);
+
+        // Both snapshots are on the same weekday: 00:15 → block 0, 12:30 → block 6.
+        let weekday = super::parse_timestamp("2026-03-10T00:15:00Z")
+            .expect("timestamp")
+            .weekday()
+            .number_days_from_monday() as i64;
+        let early = summary
+            .buckets
+            .iter()
+            .find(|bucket| bucket.weekday == weekday && bucket.bucket_index == 0)
+            .expect("early block");
+        let midday = summary
+            .buckets
+            .iter()
+            .find(|bucket| bucket.weekday == weekday && bucket.bucket_index == 6)
+            .expect("midday block");
+        assert_eq!(early.sample_count, 1);
+        assert_eq!(midday.sample_count, 1);
+        assert!(midday.avg_hourly_volume > early.avg_hourly_volume);
+        assert!(midday.heat_score >= early.heat_score);
     }
 
     #[test]
