@@ -1,7 +1,7 @@
 {
   "name": "warstonks",
   "private": true,
-  "version": "3.0.8",
+  "version": "3.0.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,9 @@
     "tauri": "node ./scripts/tauri-wrapper.mjs",
     "version:sync": "node ./scripts/sync-version.mjs",
     "release:manifest": "node ./scripts/create-windows-updater-manifest.mjs",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+    "test:rust": "cd src-tauri && cargo test",
+    "test:all": "npm run test && npm run test:rust",
     "test:wfm-presence": "node ./scripts/test-wfm-presence.mjs"
   },
   "dependencies": {

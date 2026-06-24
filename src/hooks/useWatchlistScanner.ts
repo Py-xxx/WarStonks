@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { playAlertSound, primeAlertAudio } from '../lib/alertAudio';
+import { primeAlertAudio } from '../lib/alertAudio';
+import { fireAlertNotification } from '../lib/notifications';
 import {
   getNextWatchlistScanDelayMs,
   selectNextWatchlistItemToScan,
@@ -75,7 +76,12 @@ export function useWatchlistScanner() {
         .refreshWatchlistItem(nextItem.id)
         .then((result) => {
           if (result.alertTriggered) {
-            void playAlertSound().catch(() => undefined);
+            fireAlertNotification(
+              useAppStore.getState().notificationSettings,
+              'watchlistAlert',
+              'Watchlist target hit',
+              `${nextItem.displayName || nextItem.name} reached your target price.`,
+            );
           }
         })
         .finally(() => {

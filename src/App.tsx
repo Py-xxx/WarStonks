@@ -14,6 +14,7 @@ import { StartupScreen } from './components/StartupScreen';
 import { SettingsSidebar } from './components/SettingsSidebar';
 import { AlecaframeModal } from './components/AlecaframeModal';
 import { DiscordWebhookModal } from './components/DiscordWebhookModal';
+import { NotificationsModal } from './components/NotificationsModal';
 import { ToastHost } from './components/ToastHost';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
@@ -75,6 +76,7 @@ function AppShell() {
       <SettingsSidebar />
       <AlecaframeModal />
       <DiscordWebhookModal />
+      <NotificationsModal />
       <ToastHost />
     </>
   );

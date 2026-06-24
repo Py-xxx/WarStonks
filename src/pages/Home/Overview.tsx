@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { WatchlistTable } from '../../components/WatchlistTable';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
@@ -304,10 +305,16 @@ function QuickViewCard() {
   const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
   const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [viewAllOpen, setViewAllOpen] = useState(false);
 
   const selectedItem = quickView.selectedItem;
   const mainOrder = quickView.sellOrders[0] ?? null;
   const compactOrders = quickView.sellOrders.slice(1, 5);
+  // Full snapshot, cheapest first, for the "View All" popup.
+  const allOrders = useMemo(
+    () => [...quickView.sellOrders].sort((a, b) => a.platinum - b.platinum),
+    [quickView.sellOrders],
+  );
   const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath);
   const sparklinePath = buildSparklinePath(quickView.sparklinePoints);
   const spreadLabel = formatSpreadLabel(quickView.sellOrders);
@@ -343,6 +350,7 @@ function QuickViewCard() {
   useEffect(() => {
     setCopiedOrderId(null);
     setCopyFeedback(null);
+    setViewAllOpen(false);
   }, [selectedItem?.slug]);
 
   const handleCopy = async (order: WfmTopSellOrder) => {
@@ -390,7 +398,7 @@ function QuickViewCard() {
         {selectedItem && quickView.loading ? (
           <div className="empty-state">
             <span className="empty-primary">Loading top sell orders…</span>
-            <span className="empty-sub">Fetching the 5 cheapest online sell orders for {selectedItem.name}.</span>
+            <span className="empty-sub">Fetching the live sell orders for {selectedItem.name}.</span>
           </div>
         ) : null}
 
@@ -495,6 +503,16 @@ function QuickViewCard() {
               <div className="qv-order-hint">{QUICK_VIEW_ORDER_HINT}</div>
             ) : null}
 
+            {allOrders.length > 1 ? (
+              <button
+                type="button"
+                className="btn-secondary qv-view-all-btn"
+                onClick={() => setViewAllOpen(true)}
+              >
+                View All ({allOrders.length})
+              </button>
+            ) : null}
+
             {copyFeedback ? <div className="qv-copy-feedback">{copyFeedback}</div> : null}
 
             <div className="qv-spread-row">
@@ -508,6 +526,65 @@ function QuickViewCard() {
           label={`Loading quick view for ${selectedItem?.name ?? 'item'}`}
         />
       </div>
+
+      {viewAllOpen && selectedItem ? createPortal(
+        <div className="qv-viewall-root" role="dialog" aria-modal="true" aria-label="All sell orders">
+          <button
+            type="button"
+            className="modal-backdrop"
+            aria-label="Close all sell orders"
+            onClick={() => setViewAllOpen(false)}
+          />
+          <div className="qv-viewall-modal">
+            <div className="qv-viewall-header">
+              <div>
+                <span className="card-label">All Sell Orders</span>
+                <h3>{selectedItem.name}</h3>
+                <span className="qv-viewall-count">
+                  {allOrders.length} {allOrders.length === 1 ? 'listing' : 'listings'} · cheapest first
+                </span>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Close"
+                onClick={() => setViewAllOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="qv-viewall-list">
+              <div className="qv-viewall-row qv-viewall-row-head">
+                <span>Price</span>
+                <span>Qty</span>
+                <span>Seller</span>
+                <span />
+              </div>
+              {allOrders.map((order) => (
+                <div key={order.orderId} className="qv-viewall-row">
+                  <span className="qv-viewall-price">{order.platinum} pt</span>
+                  <span className="qv-viewall-qty">{order.quantity}</span>
+                  <span className="qv-viewall-user" title={order.username}>
+                    {order.username}
+                    {order.status ? <span className="qv-viewall-status">{order.status}</span> : null}
+                  </span>
+                  <button
+                    type="button"
+                    className={`btn-sm qv-viewall-copy${copiedOrderId === order.orderId ? ' copied' : ''}`}
+                    onClick={() => void handleCopy(order)}
+                  >
+                    {copiedOrderId === order.orderId ? 'Copied' : 'Copy Message'}
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {copyFeedback ? <div className="qv-copy-feedback">{copyFeedback}</div> : null}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
     </div>
   );
 }

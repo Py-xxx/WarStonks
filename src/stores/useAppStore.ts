@@ -115,7 +115,13 @@ import type {
   WalletSnapshot,
   WfmAutocompleteItem,
   WfmTopSellOrder,
+  NotificationSettings,
 } from '../types';
+import {
+  fireAlertNotification,
+  loadNotificationSettings,
+  saveNotificationSettings,
+} from '../lib/notifications';
 
 let quickViewRequestSequence = 0;
 let marketAnalysisRequestSequence = 0;
@@ -699,8 +705,22 @@ function upsertScannerStaleSystemAlert(
     return filteredAlerts;
   }
 
+  // Fire a desktop/sound notification once per distinct stale scan (not on every
+  // reconciliation tick).
+  if (lastScannerStaleNotifiedAt !== scanFinishedAt) {
+    lastScannerStaleNotifiedAt = scanFinishedAt;
+    fireAlertNotification(
+      useAppStore.getState().notificationSettings,
+      'scannerStale',
+      'Scanner data is stale',
+      'The latest scanner run is over 48 hours old. A rescan is recommended.',
+    );
+  }
+
   return [buildScannerStaleSystemAlert(scanFinishedAt), ...filteredAlerts];
 }
+
+let lastScannerStaleNotifiedAt: string | null = null;
 
 function upsertAppUpdateSystemAlert(
   alerts: SystemAlert[],
@@ -1182,6 +1202,8 @@ interface AppStore {
   settingsSection: SettingsSection;
   alecaframeModalOpen: boolean;
   discordWebhookModalOpen: boolean;
+  notificationsModalOpen: boolean;
+  notificationSettings: NotificationSettings;
   appSettings: AppSettings;
   walletSnapshot: WalletSnapshot;
   settingsLoading: boolean;
@@ -1245,6 +1267,9 @@ interface AppStore {
   closeAlecaframeModal: () => void;
   openDiscordWebhookModal: () => void;
   closeDiscordWebhookModal: () => void;
+  openNotificationsModal: () => void;
+  closeNotificationsModal: () => void;
+  setNotificationSettings: (settings: NotificationSettings) => void;
   clearSettingsError: () => void;
   loadAppSettings: () => Promise<void>;
   refreshWalletSnapshot: () => Promise<void>;
@@ -1450,6 +1475,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   settingsSection: 'alecaframe',
   alecaframeModalOpen: false,
   discordWebhookModalOpen: false,
+  notificationsModalOpen: false,
+  notificationSettings: loadNotificationSettings(),
   appSettings: defaultAppSettings,
   walletSnapshot: defaultWalletSnapshot,
   settingsLoading: false,
@@ -1541,6 +1568,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }),
   closeDiscordWebhookModal: () =>
     set({ discordWebhookModalOpen: false, settingsError: null }),
+  openNotificationsModal: () =>
+    set({
+      settingsSidebarOpen: true,
+      alecaframeModalOpen: false,
+      discordWebhookModalOpen: false,
+      notificationsModalOpen: true,
+      settingsError: null,
+    }),
+  closeNotificationsModal: () => set({ notificationsModalOpen: false }),
+  setNotificationSettings: (settings) => {
+    saveNotificationSettings(settings);
+    set({ notificationSettings: settings });
+  },
   clearSettingsError: () => set({ settingsError: null }),
   loadAppSettings: async () => {
     set({ settingsLoading: true, settingsError: null });

@@ -675,7 +675,13 @@ function TradeLogTab({ username }: { username: string | null }) {
   const appSettings = useAppStore((state) => state.appSettings);
   const [entries, setEntries] = useState<PortfolioTradeLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+  // Optimistic "Keep item" toggle state. `keepOverrides` is what the UI shows
+  // immediately; `keepDesiredRef` holds the value we still need to persist and
+  // `keepInFlightRef` serialises writes per order so rapid spam-clicking collapses
+  // into the latest value without races or data loss.
+  const [keepOverrides, setKeepOverrides] = useState<Record<string, boolean>>({});
+  const keepDesiredRef = useRef<Map<string, boolean>>(new Map());
+  const keepInFlightRef = useRef<Set<string>>(new Set());
   const [migrating, setMigrating] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   const [savingAllocations, setSavingAllocations] = useState(false);
@@ -775,22 +781,61 @@ function TradeLogTab({ username }: { username: string | null }) {
     }
   };
 
-  const handleToggleKeepItem = async (entry: PortfolioTradeLogEntry) => {
+  // Persists the latest desired keep value for an order, serialised so concurrent
+  // spam-clicks on the same order never race. Each write returns the fully reconciled
+  // trade-log state; we apply it but keep any still-pending optimistic overrides.
+  const flushKeepWrites = async (orderId: string) => {
+    if (!username || keepInFlightRef.current.has(orderId)) {
+      return;
+    }
+    keepInFlightRef.current.add(orderId);
+    try {
+      while (keepDesiredRef.current.has(orderId)) {
+        const desired = keepDesiredRef.current.get(orderId) as boolean;
+        let nextState: { entries: PortfolioTradeLogEntry[]; lastUpdatedAt: string | null };
+        try {
+          nextState = await setWfmTradeLogKeepItem(username, orderId, desired);
+        } catch (error) {
+          // Roll back this order's optimistic state and surface the error.
+          keepDesiredRef.current.delete(orderId);
+          setKeepOverrides((prev) => {
+            const next = { ...prev };
+            delete next[orderId];
+            return next;
+          });
+          setErrorMessage(error instanceof Error ? error.message : String(error));
+          break;
+        }
+        // Only accept the server state if the user hasn't clicked again mid-flight.
+        if (keepDesiredRef.current.get(orderId) === desired) {
+          keepDesiredRef.current.delete(orderId);
+          setEntries(nextState.entries);
+          setLastUpdatedAt(nextState.lastUpdatedAt);
+          setKeepOverrides((prev) => {
+            const next = { ...prev };
+            delete next[orderId];
+            return next;
+          });
+        }
+        // Otherwise loop and re-send the newest desired value.
+      }
+    } finally {
+      keepInFlightRef.current.delete(orderId);
+    }
+  };
+
+  const handleToggleKeepItem = (entry: PortfolioTradeLogEntry) => {
     if (!username || entry.orderType !== 'buy') {
       return;
     }
-
-    setUpdatingOrderId(entry.id);
+    const orderId = entry.id;
+    const current = keepOverrides[orderId] ?? entry.keepItem;
+    const next = !current;
+    // Instant optimistic flip; the backend write happens in the background.
+    setKeepOverrides((prev) => ({ ...prev, [orderId]: next }));
+    keepDesiredRef.current.set(orderId, next);
     setErrorMessage(null);
-
-    try {
-      const nextState = await setWfmTradeLogKeepItem(username, entry.id, !entry.keepItem);
-      applyTradeLogState(nextState);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setUpdatingOrderId(null);
-    }
+    void flushKeepWrites(orderId);
   };
 
   const handleToggleGroupExpanded = (groupId: string) => {
@@ -1099,6 +1144,7 @@ function TradeLogTab({ username }: { username: string | null }) {
               title="Trade Log Ledger"
               info="Permanent local trade ledger built from warframe.market history, Alecaframe imports, and local reconciliation rules."
             />
+            <div className="portfolio-log-scroll">
             <div className="portfolio-log-header">
               <span>Item</span>
               <span>Type</span>
@@ -1154,15 +1200,14 @@ function TradeLogTab({ username }: { username: string | null }) {
                           {row.entry.orderType === 'buy' ? (
                             <label className="portfolio-keep-toggle-wrap">
                               <button
-                                className={`toggle portfolio-keep-toggle${row.entry.keepItem ? ' on' : ''}`}
+                                className={`toggle portfolio-keep-toggle${(keepOverrides[row.entry.id] ?? row.entry.keepItem) ? ' on' : ''}`}
                                 type="button"
                                 role="switch"
-                                aria-checked={row.entry.keepItem}
+                                aria-checked={keepOverrides[row.entry.id] ?? row.entry.keepItem}
                                 aria-label={`Keep ${row.entry.itemName}`}
-                                onClick={() => void handleToggleKeepItem(row.entry)}
-                                disabled={updatingOrderId === row.entry.id}
+                                onClick={() => handleToggleKeepItem(row.entry)}
                               />
-                              <span>{updatingOrderId === row.entry.id ? 'Saving…' : 'Keep Item'}</span>
+                              <span>Keep Item</span>
                             </label>
                           ) : (
                             <span className="portfolio-log-value">—</span>
@@ -1254,15 +1299,14 @@ function TradeLogTab({ username }: { username: string | null }) {
                                   {child.orderType === 'buy' ? (
                                     <label className="portfolio-keep-toggle-wrap">
                                       <button
-                                        className={`toggle portfolio-keep-toggle${child.keepItem ? ' on' : ''}`}
+                                        className={`toggle portfolio-keep-toggle${(keepOverrides[child.id] ?? child.keepItem) ? ' on' : ''}`}
                                         type="button"
                                         role="switch"
-                                        aria-checked={child.keepItem}
+                                        aria-checked={keepOverrides[child.id] ?? child.keepItem}
                                         aria-label={`Keep ${child.itemName}`}
-                                        onClick={() => void handleToggleKeepItem(child)}
-                                        disabled={updatingOrderId === child.id}
+                                        onClick={() => handleToggleKeepItem(child)}
                                       />
-                                      <span>{updatingOrderId === child.id ? 'Saving…' : 'Keep Item'}</span>
+                                      <span>Keep Item</span>
                                     </label>
                                   ) : (
                                     <span className="portfolio-log-value">—</span>
@@ -1276,6 +1320,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                   ),
                 )
               )}
+            </div>
             </div>
           </div>
         </div>

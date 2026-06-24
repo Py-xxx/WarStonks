@@ -296,6 +296,21 @@
   margin-left: 2px;
 }
 
+/* Notifications settings: ringtone selector + preview */
+.notif-ringtone-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.notif-ringtone-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.notif-ringtone-test {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .inventory-search-icon {
   position: absolute;
   left: 16px;
@@ -482,6 +497,63 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.inventory-row-value {
+  flex: 0 0 auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-green);
+  white-space: nowrap;
+}
+
+.inventory-row-value.unpriced {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.inventory-owned-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 2px 10px;
+}
+
+.inventory-sort-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.inventory-sort-group {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.inventory-sort-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.inventory-sort-btn.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.inventory-sort-btn:hover:not(.active) {
+  color: var(--text-primary);
 }
 
 .inventory-add-button {
@@ -5067,6 +5139,124 @@ body {
   text-transform: uppercase;
   color: var(--accent-red);
 }
+.qv-view-all-btn {
+  width: 100%;
+  justify-content: center;
+  font-size: 12px;
+}
+
+/* ---------- Quick View: All Sell Orders popup ---------- */
+.qv-viewall-root {
+  position: fixed;
+  inset: 0;
+  z-index: 360;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Keep the backdrop behind the panel (its shared class sets a high z-index that
+   would otherwise cover the modal and block interaction). */
+.qv-viewall-root .modal-backdrop {
+  z-index: 0;
+}
+
+.qv-viewall-modal {
+  position: relative;
+  z-index: 1;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+
+.qv-viewall-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.qv-viewall-header h3 {
+  margin: 4px 0 2px;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.qv-viewall-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.qv-viewall-list {
+  overflow-y: auto;
+  padding: 8px 12px 14px;
+}
+
+.qv-viewall-row {
+  display: grid;
+  grid-template-columns: 72px 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+.qv-viewall-row:nth-child(even) {
+  background: var(--bg-base);
+}
+
+.qv-viewall-row-head {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: transparent;
+  position: sticky;
+  top: 0;
+}
+
+.qv-viewall-price {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--accent-green);
+}
+
+.qv-viewall-qty {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-secondary);
+}
+
+.qv-viewall-user {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qv-viewall-status {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.qv-viewall-copy.copied {
+  color: var(--accent-green);
+  border-color: rgba(61, 214, 140, 0.4);
+}
+
 .qv-spread-row {
   display: flex;
   align-items: center;
@@ -7465,12 +7655,18 @@ body {
   filter: invert(0.76) brightness(0.92);
   cursor: pointer;
 }
+/* Horizontal scroll so the full row (including the Keep Item toggle) stays
+   reachable on narrow windows instead of being clipped by the card. */
+.portfolio-log-scroll {
+  overflow-x: auto;
+}
 .portfolio-log-header,
 .portfolio-log-row {
   display: grid;
-  grid-template-columns: minmax(280px, 1.8fr) 78px 78px 56px 56px 78px 78px 124px 150px 110px;
+  grid-template-columns: minmax(280px, 1.8fr) 78px 78px 56px 56px 78px 78px 124px 150px 124px;
   align-items: center;
   gap: 12px;
+  min-width: 1200px;
 }
 .portfolio-log-header {
   padding: 12px 16px;
@@ -7621,6 +7817,8 @@ body {
   gap: 8px;
   font-size: 11px;
   color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
 }
 .portfolio-keep-toggle {
   flex: 0 0 auto;

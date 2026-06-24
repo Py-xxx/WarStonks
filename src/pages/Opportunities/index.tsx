@@ -6,6 +6,7 @@ import {
   getWfmAutocompleteItems,
   refreshOwnedRelicInventory,
   getSetCompletionOwnedItems,
+  getSetCompletionOwnedItemPrices,
   setSetCompletionOwnedItemQuantity,
 } from '../../lib/tauriClient';
 import {
@@ -981,6 +982,8 @@ export function OpportunitiesPage({
   const [scannerResponse, setScannerResponse] = useState<ArbitrageScannerResponse | null>(null);
   const [plannerFallbackCatalog, setPlannerFallbackCatalog] = useState<PlannerCatalogItem[]>([]);
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
+  const [ownedItemPrices, setOwnedItemPrices] = useState<Record<string, number | null>>({});
+  const [ownedSort, setOwnedSort] = useState<'name' | 'price'>('name');
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [ownedRelics, setOwnedRelics] = useState<OwnedRelicEntry[]>([]);
@@ -1048,10 +1051,11 @@ export function OpportunitiesPage({
       setErrorMessage(null);
 
       try {
-        const [scannerState, owned, autocompleteItems] = await Promise.all([
+        const [scannerState, owned, autocompleteItems, ownedPrices] = await Promise.all([
           getArbitrageScannerState(),
           getSetCompletionOwnedItems(),
           getWfmAutocompleteItems(),
+          getSetCompletionOwnedItemPrices(),
         ]);
         if (cancelled) {
           return;
@@ -1059,6 +1063,9 @@ export function OpportunitiesPage({
 
         setScannerResponse(scannerState.latestScan);
         setOwnedItems(owned);
+        setOwnedItemPrices(
+          Object.fromEntries(ownedPrices.map((entry) => [entry.slug, entry.recommendedExitPrice])),
+        );
         setPlannerFallbackCatalog(mapAutocompleteItemsToPlannerCatalog(autocompleteItems));
       } catch (error) {
         if (cancelled) {
@@ -1661,16 +1668,26 @@ export function OpportunitiesPage({
     );
   }, [componentQuery, plannerCatalog]);
 
-  // Right panel: only the parts the user owns, filtered by the same search bar.
+  // Right panel: only the parts the user owns, filtered by the same search bar and
+  // sorted by the user's chosen order (name A–Z, or value high→low).
   const filteredOwnedItems = useMemo(() => {
     const normalizedQuery = componentQuery.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return ownedItems;
+    const base = normalizedQuery
+      ? ownedItems.filter((item) => item.name.toLowerCase().includes(normalizedQuery))
+      : ownedItems;
+    const sorted = [...base];
+    if (ownedSort === 'price') {
+      sorted.sort((a, b) => {
+        const pa = ownedItemPrices[a.slug] ?? -1;
+        const pb = ownedItemPrices[b.slug] ?? -1;
+        if (pb !== pa) return pb - pa;
+        return a.name.localeCompare(b.name);
+      });
+    } else {
+      sorted.sort((a, b) => a.name.localeCompare(b.name));
     }
-    return ownedItems.filter((item) =>
-      item.name.toLowerCase().includes(normalizedQuery),
-    );
-  }, [componentQuery, ownedItems]);
+    return sorted;
+  }, [componentQuery, ownedItems, ownedSort, ownedItemPrices]);
 
   useEffect(() => {
     if (!screenshotImportScreenshots.length) {
@@ -2264,6 +2281,28 @@ export function OpportunitiesPage({
                   )}
                 </div>
 
+                {ownedItems.length > 0 ? (
+                  <div className="inventory-owned-toolbar">
+                    <span className="inventory-sort-label">Sort by</span>
+                    <div className="inventory-sort-group">
+                      <button
+                        type="button"
+                        className={`inventory-sort-btn${ownedSort === 'name' ? ' active' : ''}`}
+                        onClick={() => setOwnedSort('name')}
+                      >
+                        Name
+                      </button>
+                      <button
+                        type="button"
+                        className={`inventory-sort-btn${ownedSort === 'price' ? ' active' : ''}`}
+                        onClick={() => setOwnedSort('price')}
+                      >
+                        Value
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
                 {ownedItems.length === 0 ? (
                   <div className="inventory-empty">No owned prime parts yet. Add parts from the left panel.</div>
                 ) : filteredOwnedItems.length === 0 ? (
@@ -2282,6 +2321,14 @@ export function OpportunitiesPage({
                             )}
                           </span>
                           <span className="inventory-row-name" title={item.name}>{item.name}</span>
+                          <span
+                            className={`inventory-row-value${ownedItemPrices[item.slug] == null ? ' unpriced' : ''}`}
+                            title="Recommended exit price (per unit)"
+                          >
+                            {ownedItemPrices[item.slug] != null
+                              ? `${ownedItemPrices[item.slug]} pt`
+                              : '—'}
+                          </span>
                           <div className="inventory-stepper">
                             <button
                               type="button"

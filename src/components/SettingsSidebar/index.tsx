@@ -33,6 +33,11 @@ const mainSections: SectionConfig[] = [
     label: 'Discord Webhook',
     description: 'Reserved for outbound alerts and status push workflows.',
   },
+  {
+    id: 'notifications',
+    label: 'Notifications',
+    description: 'Desktop alerts and in-app sound for watchlist hits and more.',
+  },
 ];
 
 const footerSections: SectionConfig[] = [
@@ -49,6 +54,8 @@ export function SettingsSidebar() {
   const setSection = useAppStore((state) => state.setSettingsSection);
   const openAlecaframeModal = useAppStore((state) => state.openAlecaframeModal);
   const openDiscordWebhookModal = useAppStore((state) => state.openDiscordWebhookModal);
+  const openNotificationsModal = useAppStore((state) => state.openNotificationsModal);
+  const notificationSettings = useAppStore((state) => state.notificationSettings);
   const appSettings = useAppStore((state) => state.appSettings);
   const walletSnapshot = useAppStore((state) => state.walletSnapshot);
 
@@ -114,12 +121,18 @@ export function SettingsSidebar() {
 
         <nav className="settings-nav" aria-label="Settings sections">
           {mainSections.map((section) => {
+            const notificationsStatus =
+              notificationSettings.desktopEnabled || notificationSettings.soundEnabled
+                ? 'Enabled'
+                : 'Disabled';
             const statusLabel =
               section.id === 'alecaframe'
                 ? alecaframeStatus
                 : section.id === 'discord-webhook'
                   ? discordStatus
-                  : null;
+                  : section.id === 'notifications'
+                    ? notificationsStatus
+                    : null;
 
             const statusClassName =
               statusLabel === 'Enabled'
@@ -139,6 +152,8 @@ export function SettingsSidebar() {
                     openAlecaframeModal();
                   } else if (section.id === 'discord-webhook') {
                     openDiscordWebhookModal();
+                  } else if (section.id === 'notifications') {
+                    openNotificationsModal();
                   }
                 }}
               >
