@@ -31,6 +31,33 @@ import { useTradeDetection } from './hooks/useTradeDetection';
 import { useTradePresence } from './hooks/useTradePresence';
 import { useAppUpdater } from './hooks/useAppUpdater';
 
+function WfstatStaleBanner() {
+  const wfstatDataStale = useAppStore((s) => s.wfstatDataStale);
+  const setWfstatDataStale = useAppStore((s) => s.setWfstatDataStale);
+
+  if (!wfstatDataStale) {
+    return null;
+  }
+
+  return (
+    <div className="data-stale-banner" role="status">
+      <span className="data-stale-banner-text">
+        Warframestat (WFStat) data may be out of date — warframestat.us was unreachable, so
+        WarStonks is showing its last saved data. This refreshes automatically when the service
+        is back online.
+      </span>
+      <button
+        type="button"
+        className="data-stale-banner-dismiss"
+        onClick={() => setWfstatDataStale(false)}
+        aria-label="Dismiss WFStat status notice"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 function PageRouter() {
   const activePage = useAppStore((s) => s.activePage);
 
@@ -67,6 +94,7 @@ function AppShell() {
   return (
     <>
       <TopBar />
+      <WfstatStaleBanner />
       <div className="app-body">
         <Sidebar />
         <main className="content">

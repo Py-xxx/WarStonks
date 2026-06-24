@@ -109,6 +109,10 @@ export interface StartupSummary {
   wfstatSourceFile: string | null;
   stats: ImportStats;
   currentWfmApiVersion: string | null;
+  /** True when the catalog is serving last-known WFStat data because WFStat could not be
+   * refreshed. The app works, but drop/vault enrichment may be out of date until WFStat
+   * is reachable again. */
+  wfstatStale: boolean;
 }
 
 export interface WfmTopSellOrdersResponse {

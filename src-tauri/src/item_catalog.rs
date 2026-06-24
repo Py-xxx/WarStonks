@@ -32,6 +32,10 @@ const MANUAL_ALIAS_SOURCE_NAME: &str = "item_manual_alias_seed";
 // Stores the `collections.items` hash from /v2/versions so we only re-download the full
 // item catalog when WFM actually changes it, instead of every launch.
 const WFM_COLLECTION_SOURCE_NAME: &str = "wfm_v2_items_collection";
+// Stores the WFStat `/items/` ETag (or Last-Modified) from a cheap HEAD probe so we can tell
+// whether the WFStat catalog changed without downloading the multi-MB payload — and so an app
+// update doesn't force a refetch when WFStat is unchanged.
+const WFSTAT_CATALOG_VERSION_SOURCE_NAME: &str = "wfstat_items_etag";
 const CURRENT_SCHEMA_VERSION: &str = "2026-03-10.item-catalog.v1";
 
 const WFM_DATA_FILE: &str = "WFM-items.json";
@@ -164,6 +168,10 @@ pub struct StartupSummary {
     pub wfstat_source_file: Option<String>,
     pub stats: ImportStats,
     pub current_wfm_api_version: Option<String>,
+    /// True when the catalog is serving last-known WFStat data because the live WFStat
+    /// catalog could not be refreshed (offline / fetch failure). The app still works, but
+    /// drop/vault enrichment may be out of date until WFStat is reachable again.
+    pub wfstat_stale: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -378,16 +386,11 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         .as_deref()
         .map(|value| value != current_version)
         .unwrap_or(false);
-    if version_mismatch {
-        startup_step(
-            &app,
-            "startup-cache-reset",
-            "Refreshing app cache",
-            "A new app version was detected. Resetting cached startup data.",
-            0.05,
-            || purge_app_data_cache(&paths).context("failed to reset cached startup data"),
-        )?;
-    }
+    // A WarStonks version bump no longer purges cached data. We keep the last-good catalog and
+    // worldstate cache so the app can fall back to them when WFM/WFStat are unreachable. A
+    // genuine source change is still detected below (WFM collection hash, WFStat ETag, schema /
+    // alias checksums) and forces a rebuild — so an update only refetches when something
+    // actually changed.
     let now = iso_timestamp_now();
     let schema = reference_sql();
     let alias_seed = startup_step(
@@ -434,58 +437,97 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         || Ok::<Option<String>, anyhow::Error>(fetch_items_collection_version().ok()),
     )?;
 
-    if !version_mismatch {
-        if let Some(collection_hash) = collection_version.as_deref() {
-            let already_current = catalog_is_current_for_collection(
-                &connection,
-                collection_hash,
-                &schema.checksum,
-                &alias_seed_checksum,
-            )
-            .context("failed to compare the catalog collection version")?;
-            if already_current {
-                emit_progress(
-                    &app,
-                    "startup-complete",
-                    "Catalog ready",
-                    "The local item catalog is already current (no download needed).",
-                    1.0,
-                );
-                if let Err(error) = write_installed_version(&app, current_version) {
+    // Cheap HEAD probe for the WFStat catalog version (ETag / Last-Modified). Best-effort: if
+    // WFStat is unreachable this is None, which we treat as "unchanged" so an outage never
+    // forces a rebuild we cannot complete.
+    let wfstat_version = startup_step(
+        &app,
+        "wfstat-versions",
+        "Checking warframestat.us",
+        "Checking whether the WFStat catalog changed since last launch.",
+        0.12,
+        || Ok::<Option<String>, anyhow::Error>(fetch_wfstat_catalog_version().ok().flatten()),
+    )?;
+    let stored_wfstat_version = stored_wfstat_catalog_version(&connection);
+    let wfstat_changed = match wfstat_version.as_deref() {
+        Some(latest) => stored_wfstat_version.as_deref() != Some(latest),
+        None => false,
+    };
+
+    // Fast-skip: when the WFM collection hash, WFStat ETag, schema, and alias seed are all
+    // unchanged, reuse the cached catalog with no download — even across an app update.
+    if let Some(collection_hash) = collection_version.as_deref() {
+        let already_current = catalog_is_current_for_collection(
+            &connection,
+            collection_hash,
+            &schema.checksum,
+            &alias_seed_checksum,
+        )
+        .context("failed to compare the catalog collection version")?;
+        if already_current && !wfstat_changed {
+            if let Some(latest) = wfstat_version.as_deref() {
+                if let Err(error) = store_wfstat_catalog_version(&mut connection, latest, &now) {
                     startup_warning(
                         &app,
-                        "startup-version-write",
-                        "Startup completed, but the installed app version could not be recorded.",
+                        "startup-wfstat-version",
+                        "Catalog current, but the WFStat catalog version could not be recorded.",
                         &error,
                     );
                 }
-                return Ok(StartupSummary {
-                    ready: true,
-                    refreshed: false,
-                    database_path: paths.db_path.display().to_string(),
-                    data_dir: paths.data_dir.display().to_string(),
-                    wfm_source_file: paths.wfm_file_path.display().to_string(),
-                    wfstat_source_file: Some(paths.wfstat_file_path.display().to_string()),
-                    stats: match load_existing_stats(&connection) {
-                        Ok(stats) => stats,
-                        Err(error) => {
-                            startup_warning(
-                                &app,
-                                "startup-stats",
-                                "Startup completed, but the cached import statistics could not be loaded.",
-                                &error,
-                            );
-                            ImportStats::default()
-                        }
-                    },
-                    current_wfm_api_version: stored_wfm_api_version(&connection),
-                });
             }
+            emit_progress(
+                &app,
+                "startup-complete",
+                "Catalog ready",
+                if version_mismatch {
+                    "WarStonks was updated, but the item sources are unchanged — reusing the cached catalog (no download needed)."
+                } else {
+                    "The local item catalog is already current (no download needed)."
+                },
+                1.0,
+            );
+            if let Err(error) = write_installed_version(&app, current_version) {
+                startup_warning(
+                    &app,
+                    "startup-version-write",
+                    "Startup completed, but the installed app version could not be recorded.",
+                    &error,
+                );
+            }
+            return Ok(StartupSummary {
+                ready: true,
+                refreshed: false,
+                database_path: paths.db_path.display().to_string(),
+                data_dir: paths.data_dir.display().to_string(),
+                wfm_source_file: paths.wfm_file_path.display().to_string(),
+                wfstat_source_file: Some(paths.wfstat_file_path.display().to_string()),
+                stats: match load_existing_stats(&connection) {
+                    Ok(stats) => stats,
+                    Err(error) => {
+                        startup_warning(
+                            &app,
+                            "startup-stats",
+                            "Startup completed, but the cached import statistics could not be loaded.",
+                            &error,
+                        );
+                        ImportStats::default()
+                    }
+                },
+                current_wfm_api_version: stored_wfm_api_version(&connection),
+                wfstat_stale: false,
+            });
         }
     }
 
+    // Whether we already have a usable catalog to fall back on. Determines whether a source
+    // outage is recoverable (reuse saved data) or fatal (true first run).
+    let has_existing_catalog = catalog_has_items(&connection);
+
     // Catalog changed (or the version probe was unavailable) → download the full catalog.
-    let wfm_bytes = startup_step(
+    // Tolerant: a transient WFM failure reuses the existing catalog rather than bricking a
+    // returning user. Only a genuine first run with WFM offline is fatal — WarStonks cannot
+    // function without Warframe.Market.
+    let wfm_bytes = match startup_step(
         &app,
         "wfm-fetch",
         "Checking warframe.market",
@@ -501,7 +543,30 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             )
             .context("failed to download the WFM item catalog")
         },
-    )?;
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            if has_existing_catalog {
+                startup_warning(
+                    &app,
+                    "wfm-fetch-fallback",
+                    "Could not reach Warframe.Market — continuing with the existing item catalog.",
+                    &error,
+                );
+                return reuse_existing_catalog_summary(
+                    &app,
+                    &mut connection,
+                    &paths,
+                    false,
+                    &current_version,
+                );
+            }
+            return Err(error.context(
+                "WFM_OFFLINE: Warframe.Market is unreachable and WarStonks has no saved catalog yet. \
+                 WarStonks cannot function without Warframe.Market — please try again once it is back online.",
+            ));
+        }
+    };
     let wfm_json: Value = startup_step(
         &app,
         "wfm-parse",
@@ -519,7 +584,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         || build_wfm_meta(&wfm_json, &paths.wfm_file_path, &now, &wfm_bytes),
     )?;
 
-    let should_refresh = version_mismatch
+    let should_refresh = wfstat_changed
         || startup_step(
             &app,
             "refresh-check",
@@ -546,6 +611,16 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
                     &app,
                     "startup-collection-version",
                     "Catalog current, but the collection version could not be recorded.",
+                    &error,
+                );
+            }
+        }
+        if let Some(latest) = wfstat_version.as_deref() {
+            if let Err(error) = store_wfstat_catalog_version(&mut connection, latest, &now) {
+                startup_warning(
+                    &app,
+                    "startup-wfstat-version",
+                    "Catalog current, but the WFStat catalog version could not be recorded.",
                     &error,
                 );
             }
@@ -586,10 +661,15 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
                 }
             },
             current_wfm_api_version: wfm_meta.api_version.clone(),
+            wfstat_stale: false,
         });
     }
 
-    let wfstat_bytes = startup_step(
+    // WFStat download — tolerant. Prefer a fresh copy; on failure fall back to the last saved
+    // WFStat catalog on disk so WFM data still refreshes with last-known drop/vault enrichment.
+    // A true first run with WFStat offline (no saved copy, no built catalog) is the only fatal
+    // case here.
+    let (wfstat_json, wfstat_bytes, wfstat_stale): (Value, Vec<u8>, bool) = match startup_step(
         &app,
         "wfstat-fetch",
         "Refreshing WFStat",
@@ -599,23 +679,68 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             fetch_http_to_file(WFSTAT_ITEMS_URL, &paths.wfstat_file_path)
                 .context("failed to download the WFStat item catalog")
         },
-    )?;
-    let wfstat_json: Value = startup_step(
-        &app,
-        "wfstat-parse",
-        "Reading WFStat data",
-        "Checking the downloaded WFStat catalog data.",
-        0.27,
-        || {
-            serde_json::from_slice(&wfstat_bytes)
-                .context("failed to parse WFStat item response JSON")
-        },
-    )?;
+    ) {
+        Ok(bytes) => {
+            let json = startup_step(
+                &app,
+                "wfstat-parse",
+                "Reading WFStat data",
+                "Checking the downloaded WFStat catalog data.",
+                0.27,
+                || {
+                    serde_json::from_slice::<Value>(&bytes)
+                        .context("failed to parse WFStat item response JSON")
+                },
+            )?;
+            (json, bytes, false)
+        }
+        Err(error) => {
+            if paths.wfstat_file_path.exists() {
+                startup_warning(
+                    &app,
+                    "wfstat-fetch-fallback",
+                    "Could not reach warframestat.us — rebuilding with the last saved WFStat \
+                     catalog. Drop/vault data may be out of date until WFStat is back online.",
+                    &error,
+                );
+                let cached = fs::read(&paths.wfstat_file_path).with_context(|| {
+                    format!(
+                        "failed to read the cached WFStat catalog {}",
+                        paths.wfstat_file_path.display()
+                    )
+                })?;
+                let json: Value = serde_json::from_slice(&cached)
+                    .context("failed to parse the cached WFStat item response JSON")?;
+                (json, cached, true)
+            } else if has_existing_catalog {
+                startup_warning(
+                    &app,
+                    "wfstat-fetch-fallback",
+                    "Could not reach warframestat.us — continuing with the existing item catalog. \
+                     Drop/vault data may be out of date until WFStat is back online.",
+                    &error,
+                );
+                return reuse_existing_catalog_summary(
+                    &app,
+                    &mut connection,
+                    &paths,
+                    true,
+                    &current_version,
+                );
+            } else {
+                return Err(error.context(
+                    "WFSTAT_FIRST_RUN_OFFLINE: Initial startup could not be completed because \
+                     warframestat.us (WFStat) is offline. Please try again later — this resolves \
+                     itself once WFStat is reachable.",
+                ));
+            }
+        }
+    };
     let wfstat_meta = startup_step(
         &app,
         "wfstat-meta",
         "Preparing WFStat metadata",
-        "Inspecting the downloaded WFStat catalog snapshot.",
+        "Inspecting the WFStat catalog snapshot.",
         0.3,
         || build_wfstat_meta(&wfstat_json, &paths.wfstat_file_path, &now, &wfstat_bytes),
     )?;
@@ -645,7 +770,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         );
     }
 
-    let summary = startup_step(
+    let mut summary = startup_step(
         &app,
         "database-import",
         "Writing SQLite catalog",
@@ -666,6 +791,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             .context("failed to write the refreshed catalog into SQLite")
         },
     )?;
+    summary.wfstat_stale = wfstat_stale;
 
     // Record the collection hash we imported against so future launches can fast-skip the
     // download until WFM changes the items collection again.
@@ -677,6 +803,21 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
                 "Catalog imported, but the collection version could not be recorded.",
                 &error,
             );
+        }
+    }
+    // Only record the WFStat version when we imported a fresh copy. If we rebuilt from the
+    // cached WFStat catalog (offline), leave the stored version untouched so a later launch
+    // still sees WFStat as "changed" and refreshes once the API is reachable again.
+    if !wfstat_stale {
+        if let Some(latest) = wfstat_version.as_deref() {
+            if let Err(error) = store_wfstat_catalog_version(&mut connection, latest, &now) {
+                startup_warning(
+                    &app,
+                    "startup-wfstat-version",
+                    "Catalog imported, but the WFStat catalog version could not be recorded.",
+                    &error,
+                );
+            }
         }
     }
 
@@ -821,6 +962,8 @@ fn import_into_database(
         wfstat_source_file: Some(paths.wfstat_file_path.display().to_string()),
         stats: import_context.stats,
         current_wfm_api_version: wfm_meta.api_version.clone(),
+        // Overwritten by the caller once it knows whether WFStat was served live or from cache.
+        wfstat_stale: false,
     })
 }
 
@@ -3215,6 +3358,28 @@ fn fetch_items_collection_version() -> Result<String> {
         .ok_or_else(|| anyhow!("WFM versions response is missing collections.items"))
 }
 
+/// Cheap HEAD probe of the WFStat `/items/` catalog. Returns the `ETag` (preferred) or
+/// `Last-Modified` header so we can tell whether the WFStat catalog changed without
+/// downloading the multi-MB payload. `Ok(None)` means WFStat responded but exposed neither
+/// header; `Err` means WFStat is unreachable.
+fn fetch_wfstat_catalog_version() -> Result<Option<String>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let response = client
+        .head(WFSTAT_ITEMS_URL)
+        .send()?
+        .error_for_status()?;
+    let headers = response.headers();
+    let tag = headers
+        .get("etag")
+        .or_else(|| headers.get("last-modified"))
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    Ok(tag)
+}
+
 /// Freshness check that uses the items-collection hash (from /v2/versions) instead of the
 /// full download — lets us skip the catalog download entirely when nothing changed.
 fn catalog_is_current_for_collection(
@@ -3270,6 +3435,90 @@ fn stored_wfm_api_version(connection: &Connection) -> Option<String> {
         .and_then(|row| row.api_version)
 }
 
+/// Persists the WFStat catalog version tag (ETag/Last-Modified) so later launches can detect
+/// whether the WFStat catalog changed without downloading it.
+fn store_wfstat_catalog_version(
+    connection: &mut Connection,
+    version_tag: &str,
+    fetched_at: &str,
+) -> Result<()> {
+    let tx = connection.transaction()?;
+    upsert_source_version(
+        &tx,
+        &SourceMeta {
+            source_name: WFSTAT_CATALOG_VERSION_SOURCE_NAME.to_string(),
+            api_version: Some(version_tag.to_string()),
+            content_sha256: version_tag.to_string(),
+            item_count: 0,
+            fetched_at: fetched_at.to_string(),
+            source_file: String::new(),
+            notes: Some("ETag/Last-Modified from HEAD https://api.warframestat.us/items/".to_string()),
+        },
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Reads the WFStat catalog version tag recorded at the last successful WFStat import.
+fn stored_wfstat_catalog_version(connection: &Connection) -> Option<String> {
+    load_version_row(connection, WFSTAT_CATALOG_VERSION_SOURCE_NAME)
+        .ok()
+        .and_then(|row| row.content_sha256)
+}
+
+/// True when a usable catalog already exists locally — used to decide whether a source outage
+/// is recoverable (reuse saved data) or fatal (true first run).
+fn catalog_has_items(connection: &Connection) -> bool {
+    connection
+        .query_row("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map(|exists| exists == 1)
+        .unwrap_or(false)
+}
+
+/// Returns a "ready" summary backed by the catalog already in SQLite, without downloading or
+/// rebuilding. Used when a live source (WFM or WFStat) is unreachable but we have last-good
+/// data to fall back on. `wfstat_stale` flags whether WFStat enrichment may be out of date.
+fn reuse_existing_catalog_summary(
+    app: &AppHandle,
+    connection: &mut Connection,
+    paths: &AppPaths,
+    wfstat_stale: bool,
+    current_version: &str,
+) -> Result<StartupSummary> {
+    emit_progress(
+        app,
+        "startup-complete",
+        "Catalog ready",
+        if wfstat_stale {
+            "Catalog ready. A live source was unreachable, so WarStonks is using its last saved data."
+        } else {
+            "The local item catalog is ready."
+        },
+        1.0,
+    );
+    if let Err(error) = write_installed_version(app, current_version.to_string()) {
+        startup_warning(
+            app,
+            "startup-version-write",
+            "Startup completed, but the installed app version could not be recorded.",
+            &error,
+        );
+    }
+    Ok(StartupSummary {
+        ready: true,
+        refreshed: false,
+        database_path: paths.db_path.display().to_string(),
+        data_dir: paths.data_dir.display().to_string(),
+        wfm_source_file: paths.wfm_file_path.display().to_string(),
+        wfstat_source_file: Some(paths.wfstat_file_path.display().to_string()),
+        stats: load_existing_stats(connection).unwrap_or_default(),
+        current_wfm_api_version: stored_wfm_api_version(connection),
+        wfstat_stale,
+    })
+}
+
 fn resolve_app_paths(app: &AppHandle) -> Result<AppPaths> {
     let app_data_dir = app
         .path()
@@ -3320,6 +3569,9 @@ fn write_installed_version(app: &AppHandle, version: String) -> Result<()> {
         .with_context(|| format!("failed to write {}", target.display()))
 }
 
+// Retained for a potential explicit "reset cached data" action. No longer called during normal
+// startup — an app update keeps the last-good catalog/worldstate cache as an offline fallback.
+#[allow(dead_code)]
 fn purge_app_data_cache(paths: &AppPaths) -> Result<()> {
     if paths.data_dir.exists() {
         for entry in fs::read_dir(&paths.data_dir)

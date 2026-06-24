@@ -976,6 +976,7 @@ mod tests {
             wfstat_source_file: Some("/tmp/WFStat-items.json".to_string()),
             stats: ImportStats::default(),
             current_wfm_api_version: Some("v2".to_string()),
+            wfstat_stale: false,
         }
     }
 

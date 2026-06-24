@@ -84,6 +84,7 @@ export function useStartupInitialization(): StartupState {
   const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
   const loadTradeAccount = useAppStore((state) => state.loadTradeAccount);
   const syncScannerStaleAlert = useAppStore((state) => state.syncScannerStaleAlert);
+  const setWfstatDataStale = useAppStore((state) => state.setWfstatDataStale);
 
   useEffect(() => {
     activeAttemptRef.current += 1;
@@ -364,6 +365,11 @@ export function useStartupInitialization(): StartupState {
             worldStateVoidTrader === null &&
             worldStateVoidTraderLastUpdatedAt === null);
 
+        // Flag WFStat as stale if the catalog fell back to cached WFStat data, or if live
+        // worldstate feeds failed with no cache to fall back on. Drives a dismissible banner;
+        // resolves itself once WFStat is reachable again.
+        setWfstatDataStale(Boolean(nextSummary.wfstatStale || worldStateFailed));
+
         setProgress((current) => ({
           ...current,
           stageKey: 'startup-complete',
@@ -406,6 +412,7 @@ export function useStartupInitialization(): StartupState {
     refreshWorldStateSyndicateMissions,
     refreshWorldStateVoidTrader,
     loadTradeAccount,
+    setWfstatDataStale,
   ]);
 
   return {
