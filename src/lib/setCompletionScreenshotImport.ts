@@ -1,4 +1,5 @@
 import ssQtyAssetUrl from '../assets/set-completion/ss-qty.png';
+import { detectSetCompletionGridV2 } from './setCompletionScreenshotDetectionV2';
 
 export interface SetCompletionImportCrop {
   left: number;
@@ -199,6 +200,20 @@ export function getSetCompletionImportStrictColors(): string[] {
 }
 
 export async function analyzeSetCompletionInventoryScreenshot(
+  file: File,
+  crop: SetCompletionImportCrop,
+  _traceSettings: SetCompletionTraceSettings,
+  onProgress?: (progress: SetCompletionScreenshotProgress) => void,
+): Promise<SetCompletionScreenshotDetectionPreview> {
+  // V2 detector: theme- and grid-agnostic. The legacy colour-mask + fixed-7x3
+  // front-end has been replaced; the OCR + catalog-matching backend below is reused.
+  return detectSetCompletionGridV2(file, crop, onProgress);
+}
+
+// Retained as a fallback while the V2 detector is tuned against real
+// screenshots; not wired into the UI. Exported so its (theme/grid-specific)
+// helpers remain referenced. Safe to delete once V2 is validated.
+export async function legacyAnalyzeSetCompletionInventoryScreenshot(
   file: File,
   crop: SetCompletionImportCrop,
   traceSettings: SetCompletionTraceSettings,
