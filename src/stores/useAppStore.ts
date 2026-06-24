@@ -1203,6 +1203,10 @@ interface AppStore {
   alecaframeModalOpen: boolean;
   discordWebhookModalOpen: boolean;
   notificationsModalOpen: boolean;
+  /** True when WFStat data (item catalog enrichment and/or live worldstate) is being served
+   * from cache because warframestat.us was unreachable at startup. Drives a dismissible banner;
+   * resolves itself once WFStat is back online. */
+  wfstatDataStale: boolean;
   notificationSettings: NotificationSettings;
   appSettings: AppSettings;
   walletSnapshot: WalletSnapshot;
@@ -1269,6 +1273,7 @@ interface AppStore {
   closeDiscordWebhookModal: () => void;
   openNotificationsModal: () => void;
   closeNotificationsModal: () => void;
+  setWfstatDataStale: (stale: boolean) => void;
   setNotificationSettings: (settings: NotificationSettings) => void;
   clearSettingsError: () => void;
   loadAppSettings: () => Promise<void>;
@@ -1476,6 +1481,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   alecaframeModalOpen: false,
   discordWebhookModalOpen: false,
   notificationsModalOpen: false,
+  wfstatDataStale: false,
   notificationSettings: loadNotificationSettings(),
   appSettings: defaultAppSettings,
   walletSnapshot: defaultWalletSnapshot,
@@ -1577,6 +1583,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       settingsError: null,
     }),
   closeNotificationsModal: () => set({ notificationsModalOpen: false }),
+  setWfstatDataStale: (stale) => set({ wfstatDataStale: stale }),
   setNotificationSettings: (settings) => {
     saveNotificationSettings(settings);
     set({ notificationSettings: settings });

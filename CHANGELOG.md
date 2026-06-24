@@ -4,6 +4,47 @@ All notable changes since the `3.0.6` release (`72a83d9`).
 
 ## Unreleased
 
+### Live watchlist & order book
+
+- **Real-time watchlist updates.** The watchlist now subscribes to Warframe.Market's live
+  `newOrders` stream over WebSocket. When a seller posts a new listing for an item you're
+  watching, it shows up immediately — no waiting for the next scan. Your active watchlist is
+  synced to the backend, which resolves each item and (un)subscribes automatically as the list
+  changes.
+- **See every seller ("View All").** Quick View now reads the full sell order book — every
+  online / in-game seller, sorted by price — instead of only the cheapest few. The quick view
+  still surfaces the top listings; the new **All Sell Orders** popup lists the rest.
+- **Hide / show my listings.** A new control bulk-toggles the visibility of all your WFM orders
+  (optionally just your sells or just your buys), so you can pull your listings off the market
+  and restore them in one click.
+
+### Inventory & portfolio
+
+- **Dedicated Inventory subtab.** Owned-parts tracking moved out of the Set Completion Planner
+  into its own Inventory manager — with search, sortable rows, quantity steppers, an add-item
+  flow, and a clear-all (with confirm). The **Import Screenshot** action is now a floating
+  button pinned to the corner of the view.
+- **Inventory valuation in Portfolio.** Your owned prime parts are now priced and totalled, so
+  the Portfolio reflects the live platinum value of what you're holding.
+
+### Notifications
+
+- **Desktop & sound alerts.** A new Notifications settings panel adds native desktop
+  notifications and in-app alert sounds, with a ringtone selector and preview. Per-event
+  toggles let you choose what fires: watchlist alerts, a stale-scanner reminder, and
+  app-update notices.
+
+### Reliability
+
+- **Resilient startup when live services are down.** A WarStonks update no longer wipes cached
+  data or refuses to launch when warframestat.us (WFStat) is briefly offline. If WFStat can't
+  be reached, the app falls back to its last saved item catalog and shows a dismissible "data
+  may be out of date" banner that clears itself once the service returns. Startup only blocks in
+  the genuinely unrecoverable cases — Warframe.Market offline with no saved catalog, or a
+  first-ever launch while WFStat is down — each with a clear, specific message.
+- **Self-healing item thumbnails.** Broken item images now recover automatically instead of
+  leaving a permanent broken-image placeholder.
+
 ### New: in-app Guide
 
 - **Guide tab is now live.** The previously "coming soon" Guide is a full, searchable

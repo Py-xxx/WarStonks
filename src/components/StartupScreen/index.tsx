@@ -32,6 +32,16 @@ function formatStartupErrorMessage(errorMessage: string): string {
     return 'WarStonks could not finish starting up. Please try again.';
   }
 
+  // Source-outage codes emitted by the Rust startup (item_catalog.rs). Matched first because
+  // the underlying messages also contain words like "download"/"unreachable" that would
+  // otherwise fall into the generic network branch below.
+  if (/WFM_OFFLINE/.test(normalized)) {
+    return 'Warframe.Market appears to be offline. WarStonks cannot start without it — check your connection and try again once Warframe.Market is back online.';
+  }
+  if (/WFSTAT_FIRST_RUN_OFFLINE/.test(normalized)) {
+    return 'WarStonks could not complete its first-time setup because warframestat.us (WFStat) is offline. Please try again later — this resolves itself once WFStat is reachable.';
+  }
+
   if (/session expired/i.test(normalized)) {
     return 'WarStonks could not restore your Warframe Market session. Please retry, then sign in again if needed.';
   }

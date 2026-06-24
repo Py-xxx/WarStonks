@@ -4755,7 +4755,7 @@ dependencies = [
 
 [[package]]
 name = "warstonks"
-version = "3.0.8"
+version = "3.0.10"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

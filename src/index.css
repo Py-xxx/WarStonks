@@ -3940,6 +3940,40 @@ body {
   overflow: hidden;
 }
 
+/* ── WFSTAT STALE-DATA BANNER ── */
+.data-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--color-amber) 14%, var(--bg-surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--color-amber) 45%, transparent);
+  color: var(--color-amber);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.data-stale-banner-text {
+  flex: 1;
+}
+
+.data-stale-banner-dismiss {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-amber) 55%, transparent);
+  border-radius: 6px;
+  color: var(--color-amber);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.data-stale-banner-dismiss:hover {
+  background: color-mix(in srgb, var(--color-amber) 18%, transparent);
+}
+
 /* ── LEFT SIDEBAR ── */
 .sidebar {
   width: 200px;
