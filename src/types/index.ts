@@ -4,6 +4,7 @@ export type PageId =
   | 'events'
   | 'scanners'
   | 'opportunities'
+  | 'inventory'
   | 'trades'
   | 'portfolio'
   | 'strategy'
@@ -283,6 +284,14 @@ export interface PortfolioAuditRow {
   closedAt: string;
   label: string;
   detail: string;
+}
+
+export interface SetCompletionInventoryValue {
+  /** Value of owned prime parts (Set Completion Planner inventory) at recommended exit. */
+  totalValue: number;
+  pricedCount: number;
+  unpricedCount: number;
+  lastScanAt: string | null;
 }
 
 export interface PortfolioPnlSummary {
@@ -932,6 +941,10 @@ export interface ManipulationRiskSummary {
 }
 
 export interface TimeOfDayLiquidityBucket {
+  /** 0 = Monday … 6 = Sunday. */
+  weekday: number;
+  /** 0 = 00:00–02:00 … 11 = 22:00–00:00. */
+  bucketIndex: number;
   hour: number;
   label: string;
   avgVisibleQuantity: number;
@@ -949,6 +962,10 @@ export interface TimeOfDayLiquiditySummary {
   currentHourLabel: string;
   strongestWindowLabel: string | null;
   weakestWindowLabel: string | null;
+  /** 0 = Monday … 6 = Sunday. */
+  todayWeekday: number;
+  /** Best 2-hour windows for today's weekday, highest heat first. */
+  todayBestLabels: string[];
   buckets: TimeOfDayLiquidityBucket[];
   confidenceSummary: MarketConfidenceSummary;
 }

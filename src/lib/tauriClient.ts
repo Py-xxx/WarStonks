@@ -24,6 +24,7 @@ import type {
   TradeCreateListingInput,
   TradeListingHealth,
   PortfolioPnlSummary,
+  SetCompletionInventoryValue,
   TradeOverview,
   PortfolioTradeLogState,
   TradeGroupAllocationInput,
@@ -316,6 +317,10 @@ export async function getPortfolioPnlSummary(
   period: '7d' | '30d' | '90d' | 'all',
 ): Promise<PortfolioPnlSummary> {
   return invoke<PortfolioPnlSummary>('get_portfolio_pnl_summary', { username, period });
+}
+
+export async function getPortfolioInventoryValue(): Promise<SetCompletionInventoryValue> {
+  return invoke<SetCompletionInventoryValue>('get_portfolio_inventory_value');
 }
 
 export async function setWfmTradeLogKeepItem(

@@ -65,7 +65,6 @@ import {
 } from '../lib/watchlist';
 import {
   buildTradeBuyOrderVariantKey,
-  findMissingWatchlistBuyOrderIds,
   indexTradeBuyOrdersByVariant,
 } from '../lib/watchlistTradeSync';
 import {
@@ -939,46 +938,24 @@ function buildAutocompleteItemFromWatchlistEntry(item: WatchlistItem): WfmAutoco
   };
 }
 
-async function reconcileWatchlistWithTradeBuyOrders(input: {
+/**
+ * Reconciles the watchlist against the user's live buy orders. This ONLY links/unlinks
+ * existing orders — it never creates them. Auto buy orders are created exclusively when an
+ * item is first added to the watchlist (in `addWatchlistItem`, when "Auto Buy Order" is on),
+ * so manually deleting/hiding a linked buy order has zero effect and is never re-created.
+ */
+function reconcileWatchlistWithTradeBuyOrders(input: {
   watchlist: WatchlistItem[];
   selectedWatchlistId: string | null;
   buyOrders: TradeOverview['buyOrders'];
-  sellerMode: SellerMode;
-  syncMissingWatchlistOrders: boolean;
-}): Promise<{
+}): {
   watchlist: WatchlistItem[];
   selectedWatchlistId: string | null;
-  createdMissingBuyOrders: boolean;
-}> {
-  let nextWatchlist = mergeWatchlistWithTradeBuyOrders(input.watchlist, input.buyOrders);
-  let createdMissingBuyOrders = false;
-
-  if (input.syncMissingWatchlistOrders) {
-    for (const watchlistId of findMissingWatchlistBuyOrderIds(nextWatchlist, input.buyOrders)) {
-      const missingItem = nextWatchlist.find((entry) => entry.id === watchlistId);
-      if (!missingItem) {
-        continue;
-      }
-
-      const linkedBuyOrderId = await syncWatchlistBuyOrder(
-        buildAutocompleteItemFromWatchlistEntry(missingItem),
-        missingItem.variantKey,
-        missingItem.targetPrice,
-        input.sellerMode,
-        null,
-      );
-
-      nextWatchlist = nextWatchlist.map((entry) =>
-        entry.id === watchlistId ? { ...entry, linkedBuyOrderId } : entry,
-      );
-      createdMissingBuyOrders = true;
-    }
-  }
-
+} {
+  const nextWatchlist = mergeWatchlistWithTradeBuyOrders(input.watchlist, input.buyOrders);
   return {
     watchlist: nextWatchlist,
     selectedWatchlistId: restoreSelectedWatchlistId(nextWatchlist, input.selectedWatchlistId),
-    createdMissingBuyOrders,
   };
 }
 
@@ -3543,33 +3520,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tradeAccountError: null,
   syncWatchlistTradeOverview: async (overview) => {
     const currentState = get();
-    const shouldSyncMissingWatchlistOrders = Boolean(
-      currentState.tradeAccount && currentState.autoWatchlistBuyOrdersEnabled,
-    );
-    const reconciled = await reconcileWatchlistWithTradeBuyOrders({
+    const reconciled = reconcileWatchlistWithTradeBuyOrders({
       watchlist: currentState.watchlist,
       selectedWatchlistId: currentState.selectedWatchlistId,
       buyOrders: overview.buyOrders,
-      sellerMode: currentState.sellerMode,
-      syncMissingWatchlistOrders: shouldSyncMissingWatchlistOrders,
     });
 
-    let finalWatchlist = reconciled.watchlist;
-    let finalSelectedWatchlistId = reconciled.selectedWatchlistId;
-    let finalOverview = overview;
-
-    if (reconciled.createdMissingBuyOrders) {
-      finalOverview = await getWfmTradeOverview(currentState.sellerMode);
-      const refreshed = await reconcileWatchlistWithTradeBuyOrders({
-        watchlist: reconciled.watchlist,
-        selectedWatchlistId: reconciled.selectedWatchlistId,
-        buyOrders: finalOverview.buyOrders,
-        sellerMode: currentState.sellerMode,
-        syncMissingWatchlistOrders: false,
-      });
-      finalWatchlist = refreshed.watchlist;
-      finalSelectedWatchlistId = refreshed.selectedWatchlistId;
-    }
+    const finalWatchlist = reconciled.watchlist;
+    const finalSelectedWatchlistId = reconciled.selectedWatchlistId;
+    const finalOverview = overview;
 
     const watchlistChanged =
       !isSameWatchlistSequence(finalWatchlist, currentState.watchlist)
@@ -3601,27 +3560,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (sessionState.account) {
           try {
             const overview = await getWfmTradeOverview(get().sellerMode);
-            const reconciled = await reconcileWatchlistWithTradeBuyOrders({
+            const reconciled = reconcileWatchlistWithTradeBuyOrders({
               watchlist: nextWatchlist,
               selectedWatchlistId: nextSelectedWatchlistId,
               buyOrders: overview.buyOrders,
-              sellerMode: get().sellerMode,
-              syncMissingWatchlistOrders: get().autoWatchlistBuyOrdersEnabled,
             });
             nextWatchlist = reconciled.watchlist;
             nextSelectedWatchlistId = reconciled.selectedWatchlistId;
-            if (reconciled.createdMissingBuyOrders) {
-              const refreshedOverview = await getWfmTradeOverview(get().sellerMode);
-              const refreshed = await reconcileWatchlistWithTradeBuyOrders({
-                watchlist: nextWatchlist,
-                selectedWatchlistId: nextSelectedWatchlistId,
-                buyOrders: refreshedOverview.buyOrders,
-                sellerMode: get().sellerMode,
-                syncMissingWatchlistOrders: false,
-              });
-              nextWatchlist = refreshed.watchlist;
-              nextSelectedWatchlistId = refreshed.selectedWatchlistId;
-            }
             writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
           } catch (error) {
             console.error('[watchlist] failed to hydrate from active buy orders', error);
@@ -3660,27 +3605,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (sessionState.account) {
         try {
           const overview = await getWfmTradeOverview(get().sellerMode);
-          const reconciled = await reconcileWatchlistWithTradeBuyOrders({
+          const reconciled = reconcileWatchlistWithTradeBuyOrders({
             watchlist: nextWatchlist,
             selectedWatchlistId: nextSelectedWatchlistId,
             buyOrders: overview.buyOrders,
-            sellerMode: get().sellerMode,
-            syncMissingWatchlistOrders: get().autoWatchlistBuyOrdersEnabled,
           });
           nextWatchlist = reconciled.watchlist;
           nextSelectedWatchlistId = reconciled.selectedWatchlistId;
-          if (reconciled.createdMissingBuyOrders) {
-            const refreshedOverview = await getWfmTradeOverview(get().sellerMode);
-            const refreshed = await reconcileWatchlistWithTradeBuyOrders({
-              watchlist: nextWatchlist,
-              selectedWatchlistId: nextSelectedWatchlistId,
-              buyOrders: refreshedOverview.buyOrders,
-              sellerMode: get().sellerMode,
-              syncMissingWatchlistOrders: false,
-            });
-            nextWatchlist = refreshed.watchlist;
-            nextSelectedWatchlistId = refreshed.selectedWatchlistId;
-          }
           writePersistedWatchlistState(nextWatchlist, nextSelectedWatchlistId);
         } catch (error) {
           console.error('[watchlist] failed to hydrate from active buy orders', error);
