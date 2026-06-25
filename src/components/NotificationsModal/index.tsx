@@ -5,6 +5,7 @@ import { RINGTONES, playAlertSound } from '../../lib/alertAudio';
 import {
   isDesktopNotificationSupported,
   requestDesktopNotificationPermission,
+  sendTestDesktopNotification,
 } from '../../lib/notifications';
 import type { NotificationSettings, RingtoneId } from '../../types';
 
@@ -59,6 +60,21 @@ export function NotificationsModal() {
   const update = (patch: Partial<NotificationSettings>) => setSettings({ ...settings, ...patch });
   const updateEvent = (key: keyof NotificationSettings['events'], value: boolean) =>
     setSettings({ ...settings, events: { ...settings.events, [key]: value } });
+
+  // Test button: previews the alert sound (if on) and fires a real OS notification (if on).
+  const handleTest = async () => {
+    if (settings.soundEnabled) {
+      void playAlertSound(settings.ringtone).catch(() => undefined);
+    }
+    if (settings.desktopEnabled) {
+      const delivered = await sendTestDesktopNotification();
+      setPermissionNote(
+        delivered
+          ? null
+          : 'Couldn’t send a desktop notification — permission may have been revoked. Re-enable WarStonks notifications in your OS settings.',
+      );
+    }
+  };
 
   const handleToggleDesktop = async () => {
     if (settings.desktopEnabled) {
@@ -162,8 +178,8 @@ export function NotificationsModal() {
                 <button
                   type="button"
                   className="btn-secondary notif-ringtone-test"
-                  disabled={!settings.soundEnabled}
-                  onClick={() => void playAlertSound(settings.ringtone).catch(() => undefined)}
+                  disabled={!settings.soundEnabled && !settings.desktopEnabled}
+                  onClick={() => void handleTest()}
                 >
                   Test
                 </button>

@@ -978,7 +978,7 @@ export function OpportunitiesPage({
   mode?: 'opportunities' | 'inventory';
 } = {}) {
   const [activeTab, setActiveTab] = useState<OppTab>(
-    mode === 'inventory' ? 'set-planner' : 'opportunities',
+    mode === 'inventory' ? 'set-planner' : 'farm-now',
   );
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
   const [farmNowScan, setFarmNowScan] = useState<ArbitrageScannerResponse | null>(null);
@@ -1041,7 +1041,8 @@ export function OpportunitiesPage({
           { id: 'inventory', label: 'Inventory' },
         ]
       : [
-          { id: 'opportunities', label: 'Opportunities' },
+          // The "Opportunities" subtab is temporarily disabled; "What To Farm Now" is the
+          // default. Re-add `{ id: 'opportunities', label: 'Opportunities' }` here to restore it.
           { id: 'farm-now', label: 'What To Farm Now' },
           { id: 'owned-relics', label: 'Owned Relics' },
         ];

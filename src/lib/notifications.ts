@@ -100,27 +100,40 @@ export async function requestDesktopNotificationPermission(): Promise<DesktopNot
   }
 }
 
-async function showDesktopNotification(title: string, body: string): Promise<void> {
+/** Sends a native desktop notification. Returns false if it couldn't be sent (no permission,
+ *  unsupported environment, etc.). */
+async function showDesktopNotification(title: string, body: string): Promise<boolean> {
   if (isTauriRuntime()) {
     try {
       if (await tauriIsPermissionGranted()) {
         tauriSendNotification({ title, body });
+        return true;
       }
     } catch {
       // OS notification center unavailable / permission revoked; ignore.
     }
-    return;
+    return false;
   }
 
   if (!webNotificationSupported() || Notification.permission !== 'granted') {
-    return;
+    return false;
   }
   try {
     // eslint-disable-next-line no-new
     new Notification(title, { body, tag: 'warstonks-alert' });
+    return true;
   } catch {
     // Some webviews throw if the OS notification center is unavailable; ignore.
+    return false;
   }
+}
+
+/**
+ * Fires a one-off desktop notification for the Notifications "Test" button. Returns false if it
+ * couldn't be delivered (e.g. the OS permission was revoked after the toggle was enabled).
+ */
+export async function sendTestDesktopNotification(): Promise<boolean> {
+  return showDesktopNotification('WarStonks', 'Test notification — desktop alerts are working.');
 }
 
 export type NotificationEventKind = 'watchlistAlert' | 'scannerStale' | 'appUpdate';
