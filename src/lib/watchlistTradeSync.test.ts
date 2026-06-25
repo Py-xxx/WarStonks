@@ -19,6 +19,8 @@ function createBuyOrder(input: Partial<TradeSellOrder> & Pick<TradeSellOrder, 'o
     rank: input.rank ?? null,
     maxRank: input.maxRank ?? null,
     quantity: input.quantity ?? 1,
+    perTrade: input.perTrade ?? 1,
+    bulkTradable: input.bulkTradable ?? false,
     yourPrice: input.yourPrice ?? 10,
     marketLow: input.marketLow ?? null,
     priceGap: input.priceGap ?? null,

@@ -437,21 +437,34 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         || Ok::<Option<String>, anyhow::Error>(fetch_items_collection_version().ok()),
     )?;
 
-    // Cheap HEAD probe for the WFStat catalog version (ETag / Last-Modified). Best-effort: if
-    // WFStat is unreachable this is None, which we treat as "unchanged" so an outage never
-    // forces a rebuild we cannot complete.
-    let wfstat_version = startup_step(
+    // Cheap HEAD probe for the WFStat catalog version (ETag / Last-Modified). Three outcomes,
+    // which we must keep distinct:
+    //   • Err → WFStat unreachable: reuse the cached catalog (don't force a refresh we can't
+    //     complete anyway).
+    //   • Ok(None) → reachable but no caching header (e.g. a CDN stripped it): we can't confirm
+    //     the catalog is unchanged, so force a refresh rather than risk serving stale vault /
+    //     drop data forever. warframestat.us normally returns an ETag, so this is a rare
+    //     degraded path — collapsing it with the unreachable case is what made stale data stick.
+    //   • Ok(Some) → a usable version tag to compare against what we last imported.
+    let (wfstat_reachable, wfstat_version) = startup_step(
         &app,
         "wfstat-versions",
         "Checking warframestat.us",
         "Checking whether the WFStat catalog changed since last launch.",
         0.12,
-        || Ok::<Option<String>, anyhow::Error>(fetch_wfstat_catalog_version().ok().flatten()),
+        || {
+            Ok::<(bool, Option<String>), anyhow::Error>(match fetch_wfstat_catalog_version() {
+                Ok(version) => (true, version),
+                Err(_) => (false, None),
+            })
+        },
     )?;
     let stored_wfstat_version = stored_wfstat_catalog_version(&connection);
     let wfstat_changed = match wfstat_version.as_deref() {
         Some(latest) => stored_wfstat_version.as_deref() != Some(latest),
-        None => false,
+        // Reachable but no usable version tag → can't confirm it's unchanged → refresh.
+        // Unreachable → leave unchanged so the cached catalog is reused.
+        None => wfstat_reachable,
     };
 
     // Fast-skip: when the WFM collection hash, WFStat ETag, schema, and alias seed are all
@@ -1670,13 +1683,15 @@ fn insert_wfm_record(
             i18n_en.and_then(|value| get_string(value, "icon")),
             i18n_en.and_then(|value| get_string(value, "thumb")),
             i18n_en.and_then(|value| get_string(value, "subIcon")),
-            get_i64(&record.raw, "baseEndo"),
+            // Lenient (_any) accessors: tolerate WFM sending these numbers as JSON strings
+            // instead of dropping them to NULL on a type change.
+            get_i64_any(&record.raw, "baseEndo"),
             get_bool_as_i64(&record.raw, "bulkTradable"),
-            get_i64(&record.raw, "ducats"),
-            get_f64(&record.raw, "endoMultiplier"),
-            get_i64(&record.raw, "maxAmberStars"),
-            get_i64(&record.raw, "maxCyanStars"),
-            get_i64(&record.raw, "maxRank"),
+            get_i64_any(&record.raw, "ducats"),
+            get_f64_any(&record.raw, "endoMultiplier"),
+            get_i64_any(&record.raw, "maxAmberStars"),
+            get_i64_any(&record.raw, "maxCyanStars"),
+            get_i64_any(&record.raw, "maxRank"),
             get_bool_as_i64(&record.raw, "vaulted"),
             serde_json::to_string(&record.raw)?,
         ],
@@ -3111,7 +3126,11 @@ fn should_refresh_catalog(
     let previous_schema = load_version_row(connection, SCHEMA_SOURCE_NAME)?;
     let previous_alias_seed = load_version_row(connection, MANUAL_ALIAS_SOURCE_NAME)?;
 
-    let wfm_matches = previous_wfm.api_version == wfm_meta.api_version;
+    // Compare the downloaded WFM catalog's content hash, not just its apiVersion. WFM can ship
+    // item changes while leaving apiVersion constant (or omit it entirely); keying on apiVersion
+    // alone would discard a freshly-downloaded catalog and keep serving stale items.
+    let wfm_matches = previous_wfm.api_version == wfm_meta.api_version
+        && previous_wfm.content_sha256.as_deref() == Some(wfm_meta.content_sha256.as_str());
     let schema_matches = previous_schema.api_version.as_deref() == Some(CURRENT_SCHEMA_VERSION)
         && previous_schema.content_sha256.as_deref() == Some(schema_checksum);
     let alias_matches = previous_alias_seed.content_sha256.as_deref() == Some(alias_seed_checksum);
@@ -3235,11 +3254,27 @@ fn open_database(path: &Path) -> Result<Connection> {
 }
 
 fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    headers
+    let raw = headers
         .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
+        .and_then(|value| value.to_str().ok())?
+        .trim();
+    // delta-seconds form (the common case for WFM).
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    // HTTP-date form (IMF-fixdate), e.g. "Wed, 21 Oct 2025 07:28:00 GMT" — best-effort: compute
+    // the delta from now, clamped at 0. Falls back to None if the date can't be parsed.
+    let format = time::format_description::parse(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+    )
+    .ok()?;
+    let parsed = time::PrimitiveDateTime::parse(raw, &format)
+        .ok()?
+        .assume_utc();
+    let seconds = (parsed - time::OffsetDateTime::now_utc())
+        .whole_seconds()
+        .max(0);
+    Some(Duration::from_secs(seconds as u64))
 }
 
 fn fetch_http_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
@@ -3816,7 +3851,10 @@ fn derive_wfm_item_family(value: &Value) -> Option<String> {
             return Some(candidate.to_string());
         }
     }
-    tag_values.first().map(|value| (*value).to_string())
+    // Fall back to the lexicographically smallest tag rather than `tags.first()`: WFM's tag
+    // order isn't guaranteed stable, so `first()` could flip `item_family` between imports for
+    // the same item. `min()` is deterministic.
+    tag_values.iter().copied().min().map(|value| value.to_string())
 }
 
 fn derive_wfstat_item_family(value: &Value) -> Option<String> {
@@ -3850,10 +3888,6 @@ fn get_string_any(value: &Value, key: &str) -> Option<String> {
     get_string(value, key)
 }
 
-fn get_i64(value: &Value, key: &str) -> Option<i64> {
-    value.get(key).and_then(Value::as_i64)
-}
-
 fn get_i64_any(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(|value| match value {
         Value::Number(number) => number
@@ -3866,10 +3900,6 @@ fn get_i64_any(value: &Value, key: &str) -> Option<i64> {
         Value::Bool(boolean) => Some(if *boolean { 1 } else { 0 }),
         _ => None,
     })
-}
-
-fn get_f64(value: &Value, key: &str) -> Option<f64> {
-    value.get(key).and_then(Value::as_f64)
 }
 
 fn get_f64_any(value: &Value, key: &str) -> Option<f64> {
@@ -3900,15 +3930,31 @@ fn get_bool_as_i64(value: &Value, key: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_unmatched_wfm_outcome, normalize_name, parse_variant_info, split_blueprint_name,
-        wfstat_component_source_record_key, WfstatComponentRecord, WFSTAT_ITEMS_COLUMN_COUNT,
-        WFSTAT_ITEMS_INSERT_SQL, MatchOutcome,
+        derive_wfm_item_family, is_unmatched_wfm_outcome, normalize_name, parse_variant_info,
+        split_blueprint_name, wfstat_component_source_record_key, WfstatComponentRecord,
+        WFSTAT_ITEMS_COLUMN_COUNT, WFSTAT_ITEMS_INSERT_SQL, MatchOutcome,
     };
     use serde_json::json;
 
     #[test]
     fn normalizes_whitespace_and_case() {
         assert_eq!(normalize_name("  Zephyr   Prime  "), "zephyr prime");
+    }
+
+    #[test]
+    fn item_family_prefers_known_tag_then_deterministic_fallback() {
+        // A recognised family tag wins regardless of order.
+        assert_eq!(
+            derive_wfm_item_family(&json!({ "tags": ["tradable", "mod", "rare"] })),
+            Some("mod".to_string())
+        );
+        // With no known family tag, fall back to the lexicographically smallest tag — NOT the
+        // first in WFM's (unstable) order — so the same item resolves the same way every import.
+        assert_eq!(
+            derive_wfm_item_family(&json!({ "tags": ["zeta", "alpha", "mu"] })),
+            Some("alpha".to_string())
+        );
+        assert_eq!(derive_wfm_item_family(&json!({ "tags": [] })), None);
     }
 
     #[test]

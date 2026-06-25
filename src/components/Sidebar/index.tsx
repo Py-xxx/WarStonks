@@ -150,7 +150,12 @@ export function Sidebar() {
           tabIndex={0}
           aria-label={item.label}
           aria-current={activePage === item.id ? 'page' : undefined}
-          onKeyDown={(e) => e.key === 'Enter' && setActivePage(item.id)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setActivePage(item.id);
+            }
+          }}
         >
           <span className="nav-icon">{item.icon}</span>
           <span className="nav-label">{item.label}</span>
@@ -166,7 +171,12 @@ export function Sidebar() {
             tabIndex={0}
             aria-label="Guide"
             aria-current={activePage === 'guide' ? 'page' : undefined}
-            onKeyDown={(e) => e.key === 'Enter' && setActivePage('guide')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setActivePage('guide');
+              }
+            }}
           >
             <span className="nav-icon"><BookOpenIcon /></span>
             <span className="nav-label">Guide</span>
@@ -177,7 +187,12 @@ export function Sidebar() {
             role="button"
             tabIndex={0}
             aria-label="Join Discord"
-            onKeyDown={(e) => e.key === 'Enter' && handleOpenDiscord()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleOpenDiscord();
+              }
+            }}
           >
             <span className="nav-icon"><DiscordIcon /></span>
             <span className="nav-label">Join Discord</span>

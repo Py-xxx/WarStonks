@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ItemName } from '../ItemName';
 import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
+import { useModalA11y } from '../../hooks/useModalA11y';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { copyWhisperMessage } from '../../lib/marketMessages';
@@ -38,6 +39,10 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
 
   const purchaseItem = watchlist.find((item) => item.id === purchaseItemId) ?? null;
   const removeTarget = watchlist.find((item) => item.id === removeItemId) ?? null;
+  const removeModalRef = useModalA11y<HTMLDivElement>({
+    onClose: () => setRemoveItemId(null),
+    active: removeTarget !== null,
+  });
 
   // Auto-dismiss the success banner so it doesn't linger forever (#5).
   useEffect(() => {
@@ -144,7 +149,6 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                     className={`watchlist-row watchlist-row-${visualState.tone}${
                       selectedId === item.id ? ' selected' : ''
                     }`}
-                    style={{ cursor: 'pointer' }}
                   >
                     <td>
                       <div className="wl-item-cell">
@@ -173,12 +177,11 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                       <>
                         <td>{item.targetPrice} pt</td>
                         <td
-                          style={{
-                            color:
-                              item.currentPrice !== null && item.currentPrice <= item.targetPrice
-                                ? 'var(--accent-green)'
-                                : 'var(--text-primary)',
-                          }}
+                          className={`wl-price-cell${
+                            item.currentPrice !== null && item.currentPrice <= item.targetPrice
+                              ? ' wl-price-hit'
+                              : ''
+                          }`}
                         >
                           {item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}
                         </td>
@@ -245,7 +248,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             {variant === 'compact' && selectedId ? (
               <span className="selected">
                 Selected:{' '}
-                <span style={{ color: 'var(--text-primary)' }}>
+                <span className="wl-selected-name">
                   {watchlist.find((entry) => entry.id === selectedId)?.displayName}
                 </span>
               </span>
@@ -288,6 +291,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
       {removeTarget ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setRemoveItemId(null)}>
           <div
+            ref={removeModalRef}
             className="settings-modal watchlist-remove-modal"
             role="dialog"
             aria-modal="true"

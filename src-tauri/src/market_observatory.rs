@@ -3485,26 +3485,25 @@ fn capture_tracking_snapshot_with_orders_priority(
 ) -> Result<(Vec<WfmDetailedOrder>, Vec<WfmDetailedOrder>, MarketSnapshot)> {
     let (_, sell_orders, buy_orders, snapshot) =
         fetch_filtered_orders(slug, variant_key, seller_mode, priority)?;
-    persist_snapshot(
-        connection,
-        item_id,
-        slug,
-        variant_key,
-        seller_mode,
-        &snapshot,
-    )?;
-    prune_old_rows(connection)?;
+    // Persist the snapshot, prune old rows, and bump the tracking row as a single transaction.
+    // The network fetch above stays outside it (don't hold a write lock across I/O); the DB
+    // writes are grouped so a failure between them can't leave a snapshot without its depth
+    // levels, or a tracking row whose next_snapshot_at disagrees with what was actually saved.
+    let tx = connection.unchecked_transaction()?;
+    persist_snapshot(&tx, item_id, slug, variant_key, seller_mode, &snapshot)?;
+    prune_old_rows(&tx)?;
     update_tracking_row(
-        connection,
+        &tx,
         item_id,
         slug,
         variant_key,
         seller_mode,
         &derive_variant_label(variant_key),
-        &get_existing_sources(connection, item_id, slug, variant_key)?,
+        &get_existing_sources(&tx, item_id, slug, variant_key)?,
         false,
         Some(snapshot.captured_at.as_str()),
     )?;
+    tx.commit()?;
     Ok((sell_orders, buy_orders, snapshot))
 }
 
@@ -7012,6 +7011,83 @@ fn persist_arbitrage_scanner_progress_with_stop_reset(
     Ok(())
 }
 
+/// Atomically claims the scanner's "running" slot. This is a single conditional upsert that
+/// only transitions the row to `running` when it isn't already running (and resets
+/// `stop_requested`), so two concurrent `start_arbitrage_scanner` calls — e.g. a double-click,
+/// or a manual start racing a programmatic one — can't both spawn a worker against the same
+/// DB row. Returns `true` only for the caller that won the claim. Replaces the previous
+/// read-status-then-write sequence, which had a TOCTOU window between the two steps.
+fn try_claim_arbitrage_scanner_running(
+    connection: &Connection,
+    progress: &ArbitrageScannerProgress,
+) -> Result<bool> {
+    let changed = connection.execute(
+        "INSERT INTO scanner_progress (
+           scanner_key,
+           status,
+           progress_value,
+           stage_label,
+           status_text,
+           updated_at,
+           started_at,
+           last_completed_at,
+           last_error,
+           current_set_name,
+           current_component_name,
+           completed_set_count,
+           total_set_count,
+           completed_component_count,
+           total_component_count,
+           skipped_entry_count,
+           retrying_item_name,
+           retry_attempt,
+           stop_requested
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 0)
+         ON CONFLICT(scanner_key) DO UPDATE SET
+           status = excluded.status,
+           progress_value = excluded.progress_value,
+           stage_label = excluded.stage_label,
+           status_text = excluded.status_text,
+           updated_at = excluded.updated_at,
+           started_at = excluded.started_at,
+           last_completed_at = excluded.last_completed_at,
+           last_error = excluded.last_error,
+           current_set_name = excluded.current_set_name,
+           current_component_name = excluded.current_component_name,
+           completed_set_count = excluded.completed_set_count,
+           total_set_count = excluded.total_set_count,
+           completed_component_count = excluded.completed_component_count,
+           total_component_count = excluded.total_component_count,
+           skipped_entry_count = excluded.skipped_entry_count,
+           retrying_item_name = excluded.retrying_item_name,
+           retry_attempt = excluded.retry_attempt,
+           stop_requested = 0
+         WHERE scanner_progress.status <> 'running'",
+        params![
+            progress.scanner_key,
+            progress.status,
+            progress.progress_value,
+            progress.stage_label,
+            progress.status_text,
+            progress.updated_at,
+            progress.started_at,
+            progress.last_completed_at,
+            progress.last_error,
+            progress.current_set_name,
+            progress.current_component_name,
+            progress.completed_set_count,
+            progress.total_set_count,
+            progress.completed_component_count,
+            progress.total_component_count,
+            progress.skipped_entry_count,
+            progress.retrying_item_name,
+            progress.retry_attempt,
+        ],
+    )?;
+
+    Ok(changed > 0)
+}
+
 fn persist_arbitrage_scanner_progress(
     connection: &Connection,
     progress: &ArbitrageScannerProgress,
@@ -9960,11 +10036,14 @@ fn grade_pending_outcomes_inner(connection: &Connection) -> Result<i64> {
         };
         let entry_deadline = rec_time + TimeDuration::hours(outcome.entry_window_hours);
         let holding_deadline_dt = rec_time + TimeDuration::days(outcome.holding_window_days);
-        let holding_deadline = format_timestamp(holding_deadline_dt)?;
 
-        // Fetch all snapshots in the holding window. Parse timestamps to compare
-        // chronologically — RFC3339 fractional seconds are variable-length, so raw
-        // string comparison is not reliably ordered.
+        // Fetch the snapshots in the holding window. RFC3339 fractional seconds are
+        // variable-length, so raw string comparison isn't reliably ordered near a boundary —
+        // we widen the SQL bounds by a full day on each side (a guaranteed superset, since a
+        // day of margin dwarfs any sub-second ambiguity) and then apply the exact
+        // chronological bounds on the parsed timestamps below.
+        let coarse_lower = format_timestamp(rec_time - TimeDuration::days(1))?;
+        let coarse_upper = format_timestamp(holding_deadline_dt + TimeDuration::days(1))?;
         let mut snap_stmt = connection.prepare(
             "SELECT captured_at, lowest_sell
              FROM orderbook_snapshots
@@ -9978,13 +10057,16 @@ fn grade_pending_outcomes_inner(connection: &Connection) -> Result<i64> {
                     outcome.item_id,
                     outcome.variant_key,
                     outcome.seller_mode,
-                    outcome.recommended_at,
-                    holding_deadline
+                    coarse_lower,
+                    coarse_upper
                 ],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<f64>>(1)?)),
             )?
             .filter_map(|r| r.ok())
             .filter_map(|(ts, floor)| parse_timestamp(&ts).map(|dt| (dt, floor)))
+            // The SQL bounds above are only a coarse superset; enforce the exact holding
+            // window on the parsed datetimes.
+            .filter(|(dt, _)| *dt >= rec_time && *dt <= holding_deadline_dt)
             .collect();
 
         // No usable snapshots in a fully-elapsed window (item untracked or snapshots
@@ -10975,9 +11057,9 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
             &error,
         )
     })?;
-    if current_state.progress.status == "running" {
-        return Ok(false);
-    }
+    // The "already running" guard is enforced atomically by try_claim_arbitrage_scanner_running
+    // below (a single conditional upsert), not by this read — so two concurrent starts can't
+    // both pass. We still load the existing state to carry forward last_completed_at.
 
     let started_at = format_timestamp(now_utc()).map_err(|error| {
         log_scanner_error_and_build_message(
@@ -11008,7 +11090,7 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
         retrying_item_name: None,
         retry_attempt: None,
     };
-    persist_arbitrage_scanner_progress_with_stop_reset(&state_connection, &initial_progress, true)
+    let claimed = try_claim_arbitrage_scanner_running(&state_connection, &initial_progress)
         .map_err(|error| {
             log_scanner_error_and_build_message(
                 &app,
@@ -11018,6 +11100,10 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                 &error,
             )
         })?;
+    if !claimed {
+        // Another start already won the running slot — don't spawn a second worker.
+        return Ok(false);
+    }
     emit_arbitrage_scanner_progress(&app, &initial_progress);
 
     let worker_app = app.clone();
@@ -11091,20 +11177,19 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                         break;
                     }
 
-                    let mut progress = match heartbeat_progress.lock() {
-                        Ok(guard) => guard.clone(),
-                        Err(_) => break,
+                    // Hold the lock across the status re-check AND the persist so a terminal
+                    // status the worker writes (also under this lock) can't be overwritten by a
+                    // stale "running" heartbeat — which would leave the UI stuck on "running".
+                    let Ok(mut guard) = heartbeat_progress.lock() else {
+                        break;
                     };
-                    if progress.status != "running" {
+                    if guard.status != "running" {
                         continue;
                     }
-                    progress.updated_at = format_timestamp(now_utc())
-                        .unwrap_or_else(|_| progress.updated_at.clone());
-                    let _ = persist_arbitrage_scanner_progress(&heartbeat_connection, &progress);
-                    emit_arbitrage_scanner_progress(&heartbeat_app, &progress);
-                    if let Ok(mut guard) = heartbeat_progress.lock() {
-                        *guard = progress;
-                    }
+                    guard.updated_at = format_timestamp(now_utc())
+                        .unwrap_or_else(|_| guard.updated_at.clone());
+                    let _ = persist_arbitrage_scanner_progress(&heartbeat_connection, &guard);
+                    emit_arbitrage_scanner_progress(&heartbeat_app, &guard);
                 }
             })
             .ok();
@@ -11149,12 +11234,14 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                     };
                     if let Ok(mut guard) = live_progress.lock() {
                         *guard = progress.clone();
+                        // Persist under the lock so a concurrent heartbeat tick can't overwrite
+                        // this terminal status with a stale "running" snapshot.
+                        let _ = persist_arbitrage_scanner_progress_with_stop_reset(
+                            &progress_connection,
+                            &progress,
+                            true,
+                        );
                     }
-                    let _ = persist_arbitrage_scanner_progress_with_stop_reset(
-                        &progress_connection,
-                        &progress,
-                        true,
-                    );
                     emit_arbitrage_scanner_progress(&worker_app, &progress);
                     heartbeat_stop.store(true, AtomicOrdering::Relaxed);
                     if let Some(handle) = heartbeat_handle {
@@ -11199,12 +11286,14 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                 };
                 if let Ok(mut guard) = live_progress.lock() {
                     *guard = progress.clone();
+                    // Persist under the lock so a concurrent heartbeat tick can't overwrite this
+                    // terminal status with a stale "running" snapshot.
+                    let _ = persist_arbitrage_scanner_progress_with_stop_reset(
+                        &progress_connection,
+                        &progress,
+                        true,
+                    );
                 }
-                let _ = persist_arbitrage_scanner_progress_with_stop_reset(
-                    &progress_connection,
-                    &progress,
-                    true,
-                );
                 emit_arbitrage_scanner_progress(&worker_app, &progress);
             }
             Err(error) => {
@@ -11239,12 +11328,14 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                 };
                 if let Ok(mut guard) = live_progress.lock() {
                     *guard = progress.clone();
+                    // Persist under the lock so a concurrent heartbeat tick can't overwrite this
+                    // terminal status with a stale "running" snapshot.
+                    let _ = persist_arbitrage_scanner_progress_with_stop_reset(
+                        &progress_connection,
+                        &progress,
+                        true,
+                    );
                 }
-                let _ = persist_arbitrage_scanner_progress_with_stop_reset(
-                    &progress_connection,
-                    &progress,
-                    true,
-                );
                 emit_arbitrage_scanner_progress(&worker_app, &progress);
             }
         }
@@ -11456,6 +11547,46 @@ mod tests {
             .expect("heartbeat progress");
 
         assert!(super::arbitrage_scanner_stop_requested(&connection).expect("stop requested"));
+    }
+
+    #[test]
+    fn scanner_running_claim_admits_a_single_winner() {
+        let connection = Connection::open_in_memory().expect("in-memory connection");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        let progress = ArbitrageScannerProgress {
+            scanner_key: super::ARBITRAGE_SCANNER_KEY.to_string(),
+            status: "running".to_string(),
+            progress_value: 0.0,
+            stage_label: "Queued".to_string(),
+            status_text: "Arbitrage scan queued.".to_string(),
+            updated_at: super::format_timestamp(super::now_utc()).unwrap(),
+            started_at: None,
+            last_completed_at: None,
+            last_error: None,
+            current_set_name: None,
+            current_component_name: None,
+            completed_set_count: 0,
+            total_set_count: 0,
+            completed_component_count: 0,
+            total_component_count: 0,
+            skipped_entry_count: 0,
+            retrying_item_name: None,
+            retry_attempt: None,
+        };
+
+        // First start wins the running slot (no row yet).
+        assert!(super::try_claim_arbitrage_scanner_running(&connection, &progress).unwrap());
+        // A concurrent second start must lose while the scanner is already running.
+        assert!(!super::try_claim_arbitrage_scanner_running(&connection, &progress).unwrap());
+
+        // Once the run reaches a terminal status, a fresh start can claim again.
+        let finished = ArbitrageScannerProgress {
+            status: "success".to_string(),
+            ..progress.clone()
+        };
+        super::persist_arbitrage_scanner_progress(&connection, &finished).unwrap();
+        assert!(super::try_claim_arbitrage_scanner_running(&connection, &progress).unwrap());
     }
 
     fn sample_snapshot(captured_at: &str) -> MarketSnapshot {

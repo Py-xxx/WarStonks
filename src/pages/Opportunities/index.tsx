@@ -30,6 +30,7 @@ import {
   WATCHLIST_ADD_SUCCESS_MESSAGE,
 } from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
+import { useModalA11y } from '../../hooks/useModalA11y';
 import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerResponse,
@@ -227,11 +228,14 @@ type ScreenshotImportResolvedRow = {
 };
 
 function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
+  if (error instanceof Error && error.message.trim()) {
     return error.message;
   }
-
-  return String(error);
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+  // Never surface "[object Object]" from a non-Error throw — fall back to friendly copy.
+  return 'Something went wrong. Please try again. If it keeps happening, report it in Discord.';
 }
 
 function normalizeScreenshotImportMatchValue(value: string): string {
@@ -669,6 +673,8 @@ function SetCompletionScreenshotImportModal({
   onQuantityChange: (rowId: string, value: string) => void;
   onConfirm: () => Promise<void>;
 }) {
+  const modalRef = useModalA11y<HTMLDivElement>({ onClose, active: open });
+
   if (!open) {
     return null;
   }
@@ -682,6 +688,7 @@ function SetCompletionScreenshotImportModal({
         onClick={onClose}
       />
       <div
+        ref={modalRef}
         className="settings-modal screenshot-import-modal"
         role="dialog"
         aria-modal="true"
@@ -1702,35 +1709,51 @@ export function OpportunitiesPage({
     };
   }, [screenshotImportScreenshots]);
 
-  const upsertOwnedItem = async (item: PlannerCatalogItem, quantity: number) => {
-    setSavingSlug(item.slug);
+  // Synchronous running target + in-flight guard per slug. Rapid +/- clicks accumulate against
+  // the ref (updated synchronously) instead of each computing from the same render-time base —
+  // which previously lost increments — and one write per slug runs at a time, coalescing any
+  // clicks that arrived while it was in flight.
+  type OwnedQuantityItem = { itemId: number | null; slug: string; name: string; imagePath: string | null };
+  const ownedTargetRef = useRef(new Map<string, number>());
+  const ownedPersistInFlightRef = useRef(new Set<string>());
+
+  const flushOwnedQuantity = async (item: OwnedQuantityItem) => {
+    const slug = item.slug;
+    if (ownedPersistInFlightRef.current.has(slug)) {
+      return;
+    }
+    ownedPersistInFlightRef.current.add(slug);
+    setSavingSlug(slug);
     setErrorMessage(null);
     try {
-      const nextOwnedItems = await setSetCompletionOwnedItemQuantity({
-        itemId: item.itemId,
-        slug: item.slug,
-        name: item.name,
-        imagePath: item.imagePath,
-        quantity,
-      });
-      setOwnedItems(nextOwnedItems);
+      let persisted: number | null = null;
+      // Keep writing until the persisted value matches the latest target, coalescing clicks
+      // that landed mid-write.
+      while (ownedTargetRef.current.get(slug) !== persisted) {
+        const target = ownedTargetRef.current.get(slug) ?? 0;
+        const nextOwnedItems = await setSetCompletionOwnedItemQuantity({
+          itemId: item.itemId,
+          slug,
+          name: item.name,
+          imagePath: item.imagePath,
+          quantity: target,
+        });
+        persisted = target;
+        setOwnedItems(nextOwnedItems);
+      }
     } catch (error) {
       setErrorMessage(toErrorMessage(error));
     } finally {
-      setSavingSlug(null);
+      ownedPersistInFlightRef.current.delete(slug);
+      ownedTargetRef.current.delete(slug);
+      setSavingSlug((current) => (current === slug ? null : current));
     }
   };
 
-  const updateOwnedQuantityByDelta = async (item: SetCompletionOwnedItem, delta: number) => {
-    await upsertOwnedItem(
-      {
-        itemId: item.itemId,
-        slug: item.slug,
-        name: item.name,
-        imagePath: item.imagePath,
-      },
-      Math.max(item.quantity + delta, 0),
-    );
+  const adjustOwnedQuantity = (item: OwnedQuantityItem, baseQuantity: number, delta: number) => {
+    const base = ownedTargetRef.current.get(item.slug) ?? baseQuantity;
+    ownedTargetRef.current.set(item.slug, Math.max(base + delta, 0));
+    void flushOwnedQuantity(item);
   };
 
   const [clearingInventory, setClearingInventory] = useState(false);
@@ -1773,7 +1796,11 @@ export function OpportunitiesPage({
     }
   };
 
+  // Monotonic id so an in-flight scan whose session was reset/superseded can't write stale rows.
+  const screenshotScanIdRef = useRef(0);
+
   const resetScreenshotImportSession = () => {
+    screenshotScanIdRef.current += 1;
     setScreenshotImportScreenshots((current) => {
       for (const screenshot of current) {
         URL.revokeObjectURL(screenshot.previewUrl);
@@ -1809,6 +1836,7 @@ export function OpportunitiesPage({
     files: File[],
     crop: SetCompletionImportCrop,
   ) => {
+    screenshotScanIdRef.current += 1;
     setScreenshotImportProcessing(true);
     setScreenshotImportScanning(false);
     setScreenshotImportConfirming(false);
@@ -1882,9 +1910,12 @@ export function OpportunitiesPage({
   };
 
   const handleScreenshotScan = async () => {
-    if (!screenshotImportScreenshots.length) {
+    // Ignore a second trigger while a scan is already running; tag this run so a stale OCR
+    // result (from a superseded scan or a reset session) can't overwrite newer rows.
+    if (!screenshotImportScreenshots.length || screenshotImportScanning) {
       return;
     }
+    const scanId = (screenshotScanIdRef.current += 1);
 
     setScreenshotImportScanning(true);
     setScreenshotImportError(null);
@@ -1897,23 +1928,35 @@ export function OpportunitiesPage({
           screenshot.detectionPreview,
           screenshotImportCandidates,
           (progress) => {
+            if (screenshotScanIdRef.current !== scanId) {
+              return;
+            }
             setScreenshotImportProgress({
               ...progress,
               detail: `${progress.detail} (${index + 1}/${screenshotImportScreenshots.length})`,
             });
           },
         );
+        if (screenshotScanIdRef.current !== scanId) {
+          return;
+        }
         results.push(
           ...screenshotResults.map((entry) =>
             buildScreenshotImportRowState(entry, screenshot, index),
           ),
         );
       }
-      setScreenshotImportRows(results);
+      if (screenshotScanIdRef.current === scanId) {
+        setScreenshotImportRows(results);
+      }
     } catch (error) {
-      setScreenshotImportError(toErrorMessage(error));
+      if (screenshotScanIdRef.current === scanId) {
+        setScreenshotImportError(toErrorMessage(error));
+      }
     } finally {
-      setScreenshotImportScanning(false);
+      if (screenshotScanIdRef.current === scanId) {
+        setScreenshotImportScanning(false);
+      }
     }
   };
 
@@ -2008,6 +2051,7 @@ export function OpportunitiesPage({
       maxRank: null,
       itemFamily: 'prime-part',
       imagePath: component.imagePath,
+      bulkTradable: false,
     };
 
     addExplicitItemToWatchlist(watchlistItem, 'base', 'Base Market', targetPrice);
@@ -2026,17 +2070,20 @@ export function OpportunitiesPage({
       <div className="subnav">
         <div className="subnav-left">
           <span className="page-title">{mode === 'inventory' ? 'Inventory' : 'Opportunities'}</span>
-          {tabs.map((tab) => (
-            <span
-              key={tab.id}
-              className={`subtab${activeTab === tab.id ? ' active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-              role="tab"
-              tabIndex={0}
-            >
-              {tab.label}
-            </span>
-          ))}
+          <div className="subnav-tabs" role="tablist" aria-label={mode === 'inventory' ? 'Inventory sections' : 'Opportunities sections'}>
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`subtab${activeTab === tab.id ? ' active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -2202,7 +2249,7 @@ export function OpportunitiesPage({
                                 type="button"
                                 className="inventory-qty-button"
                                 disabled={savingSlug === item.slug}
-                                onClick={() => { void upsertOwnedItem(item, Math.max(ownedQty - 1, 0)); }}
+                                onClick={() => adjustOwnedQuantity(item, ownedQty, -1)}
                                 aria-label={`Remove one ${item.name}`}
                               >
                                 −
@@ -2212,7 +2259,7 @@ export function OpportunitiesPage({
                                 type="button"
                                 className="inventory-qty-button"
                                 disabled={savingSlug === item.slug}
-                                onClick={() => { void upsertOwnedItem(item, ownedQty + 1); }}
+                                onClick={() => adjustOwnedQuantity(item, ownedQty, 1)}
                                 aria-label={`Add one ${item.name}`}
                               >
                                 +
@@ -2223,7 +2270,7 @@ export function OpportunitiesPage({
                               type="button"
                               className="inventory-add-button"
                               disabled={savingSlug === item.slug}
-                              onClick={() => { void upsertOwnedItem(item, 1); }}
+                              onClick={() => adjustOwnedQuantity(item, 0, 1)}
                             >
                               Add
                             </button>
@@ -2326,7 +2373,7 @@ export function OpportunitiesPage({
                             title="Recommended exit price (per unit)"
                           >
                             {ownedItemPrices[item.slug] != null
-                              ? `${ownedItemPrices[item.slug]} pt`
+                              ? `${Math.round(ownedItemPrices[item.slug] as number)} pt`
                               : '—'}
                           </span>
                           <div className="inventory-stepper">
@@ -2334,7 +2381,7 @@ export function OpportunitiesPage({
                               type="button"
                               className="inventory-qty-button"
                               disabled={savingSlug === item.slug}
-                              onClick={() => { void updateOwnedQuantityByDelta(item, -1); }}
+                              onClick={() => adjustOwnedQuantity(item, item.quantity, -1)}
                               aria-label={`Remove one ${item.name}`}
                             >
                               −
@@ -2344,7 +2391,7 @@ export function OpportunitiesPage({
                               type="button"
                               className="inventory-qty-button"
                               disabled={savingSlug === item.slug}
-                              onClick={() => { void updateOwnedQuantityByDelta(item, 1); }}
+                              onClick={() => adjustOwnedQuantity(item, item.quantity, 1)}
                               aria-label={`Add one ${item.name}`}
                             >
                               +

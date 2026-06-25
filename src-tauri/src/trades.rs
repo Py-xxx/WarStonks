@@ -101,6 +101,10 @@ pub struct TradeSellOrder {
     pub rank: Option<i64>,
     pub max_rank: Option<i64>,
     pub quantity: i64,
+    /// Units exchanged per in-game trade. Only meaningful for bulk-tradable items (e.g.
+    /// arcanes); `1` for everything else. WFM requires it on create/update for bulk items.
+    pub per_trade: i64,
+    pub bulk_tradable: bool,
     pub your_price: i64,
     pub market_low: Option<i64>,
     pub price_gap: Option<i64>,
@@ -177,6 +181,10 @@ pub struct TradeCreateListingInput {
     pub quantity: i64,
     pub rank: Option<i64>,
     pub visible: bool,
+    /// Batch size for bulk-tradable items (arcanes). Ignored for non-bulk items; defaults to
+    /// 1 when omitted. Must be 1..=6 and divide `quantity`.
+    #[serde(default)]
+    pub per_trade: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -187,6 +195,12 @@ pub struct TradeUpdateListingInput {
     pub quantity: i64,
     pub rank: Option<i64>,
     pub visible: bool,
+    /// Item id of the order being edited. Needed to tell whether the item is bulk-tradable
+    /// (so `perTrade` is sent only when allowed). Optional for non-bulk callers.
+    #[serde(default)]
+    pub wfm_id: Option<String>,
+    #[serde(default)]
+    pub per_trade: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -514,6 +528,8 @@ struct WfmOwnOrder {
     rank: Option<i64>,
     #[serde(default)]
     visible: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_lenient_optional_i64")]
+    per_trade: Option<i64>,
     #[serde(rename = "itemId")]
     item_id: String,
     #[serde(rename = "updatedAt")]
@@ -556,7 +572,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = f64::deserialize(deserializer)?;
-    Ok(value.round() as i64)
+    lenient_f64_to_i64::<D>(value)
 }
 
 /// Optional variant of [`deserialize_lenient_i64`] — tolerates absent/null and both
@@ -565,8 +581,30 @@ fn deserialize_lenient_optional_i64<'de, D>(deserializer: D) -> Result<Option<i6
 where
     D: serde::Deserializer<'de>,
 {
-    let value = Option::<f64>::deserialize(deserializer)?;
-    Ok(value.map(|number| number.round() as i64))
+    match Option::<f64>::deserialize(deserializer)? {
+        Some(value) => Ok(Some(lenient_f64_to_i64::<D>(value)?)),
+        None => Ok(None),
+    }
+}
+
+/// Rounds a JSON float to i64, but rejects non-finite (`NaN`/`±inf`) or out-of-range values
+/// instead of letting an `as i64` cast silently launder them into garbage (NaN→0,
+/// inf→i64::MAX, huge floats→saturated). A malformed WFM number then surfaces as a parse
+/// error rather than corrupting a platinum/quantity figure that feeds P&L sums.
+fn lenient_f64_to_i64<'de, D>(value: f64) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    if !value.is_finite() {
+        return Err(serde::de::Error::custom(
+            "expected a finite number, got NaN or infinity",
+        ));
+    }
+    let rounded = value.round();
+    if rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+        return Err(serde::de::Error::custom("number is out of the supported range"));
+    }
+    Ok(rounded as i64)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -691,6 +729,7 @@ struct CatalogTradeItemMeta {
     name: String,
     image_path: Option<String>,
     max_rank: Option<i64>,
+    bulk_tradable: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -863,7 +902,10 @@ fn note_signin_rate_limited(app: &tauri::AppHandle, server_retry_after: Option<D
         .unwrap_or(SIGNIN_COOLDOWN_MIN_SECONDS)
         .max(SIGNIN_COOLDOWN_MIN_SECONDS);
 
-    let consecutive = {
+    // Capture both the cooldown deadline and the consecutive count while holding the lock once,
+    // so the values mirrored to disk below are guaranteed to be the pair we just committed —
+    // a second lock read could otherwise observe a different writer's state (TOCTOU).
+    let (until, consecutive) = {
         let mut guard = match signin_cooldown().lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -874,23 +916,19 @@ fn note_signin_rate_limited(app: &tauri::AppHandle, server_retry_after: Option<D
             .min(SIGNIN_COOLDOWN_MAX_SECONDS);
         let until = now_utc() + Duration::from_secs(wait);
         *guard = Some(SigninCooldown { until, consecutive: next });
-        next
+        (until, next)
     };
 
-    // Mirror to disk (best-effort).
+    // Mirror to disk (best-effort) using the values captured above — no second lock read.
     if let Some(path) = signin_cooldown_file_path(app) {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if let Ok(guard) = signin_cooldown().lock() {
-            if let Some(state) = guard.as_ref() {
-                if let Ok(until) = format_timestamp(state.until) {
-                    let _ = fs::write(
-                        &path,
-                        json!({ "until": until, "consecutive": consecutive }).to_string(),
-                    );
-                }
-            }
+        if let Ok(until) = format_timestamp(until) {
+            let _ = fs::write(
+                &path,
+                json!({ "until": until, "consecutive": consecutive }).to_string(),
+            );
         }
     }
 }
@@ -1659,6 +1697,58 @@ fn extract_wfm_bytes_error(action_label: &str, response: &WfmHttpResponse) -> an
     }
 }
 
+/// Pulls the HTTP status code out of an error message produced by [`extract_wfm_bytes_error`]
+/// (which always formats "... failed with status {code} ..."). Returns `None` for errors that
+/// don't carry an HTTP status (network failures, our own validation messages).
+fn extract_wfm_status_code(message: &str) -> Option<u16> {
+    const MARKER: &str = "failed with status ";
+    let start = message.find(MARKER)? + MARKER.len();
+    message[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse::<u16>()
+        .ok()
+}
+
+/// Maps an order-mutation failure (create / update / close / delete / visibility) to a clear,
+/// user-facing message so a raw `"create sell order failed with status 400: {json}"` never
+/// reaches the UI. Mirrors [`friendly_sign_in_error`] for the order paths. Session-expiry text
+/// keeps the literal "session expired" so the frontend's re-sign-in prompt still triggers.
+fn friendly_order_error(error: &anyhow::Error) -> String {
+    if should_attempt_trade_session_reauth(error) {
+        return "Your Warframe.Market session expired. Please sign in again.".to_string();
+    }
+    if is_rate_limit_error(error) {
+        return "Warframe.Market is rate-limiting requests right now. Wait a moment, then try again."
+            .to_string();
+    }
+
+    let message = error.to_string();
+    match extract_wfm_status_code(&message) {
+        Some(400) => "Warframe.Market rejected this order. Double-check the price, quantity, and rank, then try again.".to_string(),
+        Some(403) => "Warframe.Market refused this action. Try signing in again, then retry.".to_string(),
+        Some(404) => "That order no longer exists on Warframe.Market. Refresh your listings and try again.".to_string(),
+        Some(code) if (500..=599).contains(&code) => "Warframe.Market is having trouble right now. Please try again in a moment.".to_string(),
+        Some(_) => "Couldn’t complete that order on Warframe.Market. Please try again.".to_string(),
+        None => {
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("error sending request")
+                || lower.contains("timed out")
+                || lower.contains("timeout")
+                || lower.contains("dns")
+                || lower.contains("connection")
+            {
+                "Couldn’t reach Warframe.Market. Check your connection and try again.".to_string()
+            } else {
+                // No HTTP status and not a network error → an already-friendly validation
+                // message from create_order_inner (e.g. the perTrade / price checks). Pass through.
+                message
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Trade market low helpers
 // ---------------------------------------------------------------------------
@@ -1766,10 +1856,12 @@ fn count_queue_ahead(
         if order.username.trim().to_ascii_lowercase() == normalized_account_name {
             continue;
         }
-        if order.price < target_price {
+        // Platinum prices are whole numbers; use a 0.5 tolerance so float rounding can't make a
+        // genuinely-equal price read as "cheaper". f64::EPSILON (~2.2e-16) was far too tight.
+        if order.price < target_price - 0.5 {
             sellers_ahead += 1;
             quantity_ahead += order.quantity;
-        } else if (order.price - target_price).abs() < f64::EPSILON {
+        } else if (order.price - target_price).abs() < 0.5 {
             tie_count += 1;
         }
     }
@@ -2185,7 +2277,8 @@ fn resolve_catalog_trade_item_by_alias(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank
+              wfm_items.max_rank,
+              wfm_items.bulk_tradable
             FROM item_aliases
             JOIN items ON items.item_id = item_aliases.item_id
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
@@ -2208,7 +2301,8 @@ fn resolve_catalog_trade_item_by_alias(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank
+              wfm_items.max_rank,
+              wfm_items.bulk_tradable
             FROM items
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
             WHERE LOWER(COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, '')) = ?2
@@ -2228,6 +2322,7 @@ fn resolve_catalog_trade_item_by_alias(
                     name: row.get(3)?,
                     image_path: row.get(4)?,
                     max_rank: row.get(5)?,
+                    bulk_tradable: row.get::<_, Option<i64>>(6)?.unwrap_or(0) == 1,
                 })
             })
             .optional()
@@ -2259,7 +2354,8 @@ fn resolve_catalog_trade_item_by_slug(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank
+              wfm_items.max_rank,
+              wfm_items.bulk_tradable
             FROM items
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
             WHERE COALESCE(items.wfm_slug, wfm_items.slug) = ?2
@@ -2274,6 +2370,7 @@ fn resolve_catalog_trade_item_by_slug(
                     name: row.get(3)?,
                     image_path: row.get(4)?,
                     max_rank: row.get(5)?,
+                    bulk_tradable: row.get::<_, Option<i64>>(6)?.unwrap_or(0) == 1,
                 })
             },
         )
@@ -4465,7 +4562,10 @@ fn record_consumed_platinum(record: &StoredTradeLogRecord, quantity: i64) -> i64
             return total;
         }
 
-        return ((total * normalized_quantity) + (record.quantity / 2)) / record.quantity;
+        // i128 intermediate so the rounding multiply can't overflow i64 before the divide.
+        let scaled = ((total as i128 * normalized_quantity as i128) + (record.quantity as i128 / 2))
+            / record.quantity as i128;
+        return scaled.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
     }
 
     record.platinum.saturating_mul(normalized_quantity)
@@ -6156,8 +6256,18 @@ async fn connect_wfm_websocket() -> Result<WfmWsStream> {
         .into_client_request()
         .context("failed to build WFM websocket request")?;
     let headers = request.headers_mut();
-    headers.append("Sec-WebSocket-Protocol", "wfm".parse().unwrap());
-    headers.append("User-Agent", WFM_USER_AGENT.parse().unwrap());
+    // Static, known-valid header values; expect (not a bare unwrap) documents that the only way
+    // these fail is an invalid edit to the constants themselves.
+    headers.append(
+        "Sec-WebSocket-Protocol",
+        "wfm".parse().expect("static WS subprotocol header is valid"),
+    );
+    headers.append(
+        "User-Agent",
+        WFM_USER_AGENT
+            .parse()
+            .expect("static WFM user-agent header is valid"),
+    );
 
     let (ws_stream, _) = timeout(Duration::from_secs(10), connect_async(request))
         .await
@@ -6744,10 +6854,23 @@ fn handle_new_order_event(app: &tauri::AppHandle, payload: &Value) {
 /// Updates the cached session's status and notifies the frontend so the UI reflects the
 /// presence WFM is actually reporting.
 fn record_observed_presence(app: &tauri::AppHandle, status: &str) {
-    if let Ok(mut guard) = session_cache().lock() {
-        if let Some(session) = guard.as_mut() {
-            session.account.status = status.to_string();
-        }
+    // Update the cache and, only when the status actually changed, persist it so the on-disk
+    // session converges to the server-confirmed value — the optimistic write in
+    // set_wfm_trade_status may have stored an unconfirmed/normalized-away status. Guarding on a
+    // real change avoids a keychain write on every (often unchanged) presence event.
+    let updated_session = match session_cache().lock() {
+        Ok(mut guard) => guard.as_mut().and_then(|session| {
+            if session.account.status == status {
+                None
+            } else {
+                session.account.status = status.to_string();
+                Some(session.clone())
+            }
+        }),
+        Err(_) => None,
+    };
+    if let Some(session) = updated_session {
+        let _ = save_session(app, &session);
     }
     let _ = app.emit(PRESENCE_CHANGED_EVENT, status.to_string());
 }
@@ -7212,7 +7335,8 @@ fn resolve_catalog_trade_item_meta(
                 slug,
                 COALESCE(NULLIF(name_en, ''), slug),
                 COALESCE(NULLIF(thumb, ''), NULLIF(icon, '')),
-                max_rank
+                max_rank,
+                bulk_tradable
              FROM wfm_items
              WHERE wfm_id = ?1
              LIMIT 1",
@@ -7225,6 +7349,7 @@ fn resolve_catalog_trade_item_meta(
                     name: row.get(3)?,
                     image_path: row.get(4)?,
                     max_rank: row.get(5)?,
+                    bulk_tradable: row.get::<_, Option<i64>>(6)?.unwrap_or(0) == 1,
                 })
             },
         )
@@ -7295,6 +7420,8 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
             rank: order.rank,
             max_rank: meta.max_rank,
             quantity: order.quantity,
+            per_trade: order.per_trade.unwrap_or(1).max(1),
+            bulk_tradable: meta.bulk_tradable,
             your_price: order.platinum,
             market_low: None,
             price_gap: None,
@@ -7320,7 +7447,7 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
     let active_trade_value = sell_orders
         .iter()
         .filter(|order| order.visible)
-        .map(|order| order.your_price * order.quantity)
+        .map(|order| order.your_price.saturating_mul(order.quantity))
         .sum::<i64>();
 
     Ok(TradeOverview {
@@ -7332,6 +7459,46 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
         sell_orders,
         buy_orders,
     })
+}
+
+/// Looks up whether an item is bulk-tradable (e.g. arcanes) from the local catalog.
+fn catalog_item_is_bulk_tradable(connection: &Connection, wfm_id: &str) -> Result<bool> {
+    let value = connection
+        .query_row(
+            "SELECT bulk_tradable FROM wfm_items WHERE wfm_id = ?1 LIMIT 1",
+            params![wfm_id],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .optional()
+        .context("failed to look up the item's bulk-tradable flag")?
+        .flatten();
+    Ok(value.unwrap_or(0) == 1)
+}
+
+/// Resolves the `perTrade` value to send with an order. WFM requires `perTrade` for
+/// bulk-tradable items and forbids it otherwise, so this returns `None` for non-bulk items
+/// (omit the field) and a validated batch size for bulk items (1..=6 that divides quantity,
+/// defaulting to 1 when the caller doesn't specify one).
+fn resolve_per_trade(
+    bulk_tradable: bool,
+    per_trade: Option<i64>,
+    quantity: i64,
+) -> Result<Option<i64>> {
+    if !bulk_tradable {
+        return Ok(None);
+    }
+    let value = per_trade.unwrap_or(1);
+    if !(1..=6).contains(&value) {
+        return Err(anyhow!(
+            "Per-trade quantity must be between 1 and 6 for bulk-tradable items."
+        ));
+    }
+    if quantity % value != 0 {
+        return Err(anyhow!(
+            "Per-trade quantity ({value}) must divide the listing quantity ({quantity}) evenly."
+        ));
+    }
+    Ok(Some(value))
 }
 
 fn create_order_inner(
@@ -7360,6 +7527,11 @@ fn create_order_inner(
     });
     if let Some(rank) = input.rank {
         payload["rank"] = json!(rank);
+    }
+    // Bulk-tradable items (e.g. arcanes) require `perTrade`; non-bulk items forbid it.
+    let bulk_tradable = catalog_item_is_bulk_tradable(&open_catalog_database(app)?, &input.wfm_id)?;
+    if let Some(per_trade) = resolve_per_trade(bulk_tradable, input.per_trade, input.quantity)? {
+        payload["perTrade"] = json!(per_trade);
     }
 
     let result = execute_wfm_request_with_priority(
@@ -7425,6 +7597,17 @@ fn update_order_inner(
     });
     if let Some(rank) = input.rank {
         payload["rank"] = json!(rank);
+    }
+    // `perTrade` is allowed only for bulk-tradable items. We can only tell when the caller
+    // passes the item id, so non-bulk / id-less updates simply omit it.
+    let bulk_tradable = match input.wfm_id.as_deref() {
+        Some(wfm_id) if !wfm_id.is_empty() => {
+            catalog_item_is_bulk_tradable(&open_catalog_database(app)?, wfm_id)?
+        }
+        _ => false,
+    };
+    if let Some(per_trade) = resolve_per_trade(bulk_tradable, input.per_trade, input.quantity)? {
+        payload["perTrade"] = json!(per_trade);
     }
 
     let result = execute_wfm_request_with_priority(
@@ -7989,7 +8172,7 @@ pub async fn create_wfm_sell_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8003,7 +8186,7 @@ pub async fn create_wfm_buy_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8018,7 +8201,7 @@ pub async fn set_wfm_orders_visibility(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8032,7 +8215,7 @@ pub async fn update_wfm_sell_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8046,7 +8229,7 @@ pub async fn update_wfm_buy_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8061,7 +8244,7 @@ pub async fn close_wfm_sell_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8076,7 +8259,7 @@ pub async fn close_wfm_buy_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8090,7 +8273,7 @@ pub async fn delete_wfm_sell_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[tauri::command]
@@ -8104,7 +8287,7 @@ pub async fn delete_wfm_buy_order(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map_err(|error| friendly_order_error(&error))
 }
 
 #[cfg(test)]
@@ -8118,7 +8301,7 @@ mod tests {
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         map_trade_set_components_from_file, merge_wfm_trade_log_entries,
         normalize_alecaframe_trade_payload, normalize_avatar_url, normalize_status_set_request,
-        parse_status_from_payload, prune_stale_trade_log_overrides_inner,
+        parse_status_from_payload, prune_stale_trade_log_overrides_inner, resolve_per_trade,
         replace_trade_log_rows_inner, save_trade_log_rows_inner,
         should_attempt_trade_session_reauth, trade_record_is_before_cutoff,
         AlecaframeRawTradeRecord, AlecaframeTradeItemRecord, AlecaframeTradeResponse,
@@ -8327,6 +8510,82 @@ mod tests {
         assert_eq!(trades[0].direction, "buy");
         assert_eq!(trades[1].direction, "sell");
         assert_eq!(trades[1].total_plat, Some(69));
+    }
+
+    #[test]
+    fn resolve_per_trade_omits_field_for_non_bulk_items() {
+        // Non-bulk items must never send perTrade (WFM forbids it), even if a value sneaks in.
+        assert_eq!(resolve_per_trade(false, None, 10).unwrap(), None);
+        assert_eq!(resolve_per_trade(false, Some(3), 9).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_per_trade_defaults_bulk_items_to_one() {
+        // Bulk items with no explicit batch size default to 1, which always divides quantity.
+        assert_eq!(resolve_per_trade(true, None, 7).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn resolve_per_trade_accepts_valid_divisor_in_range() {
+        assert_eq!(resolve_per_trade(true, Some(3), 12).unwrap(), Some(3));
+        assert_eq!(resolve_per_trade(true, Some(6), 6).unwrap(), Some(6));
+    }
+
+    #[test]
+    fn resolve_per_trade_rejects_out_of_range_or_non_divisor() {
+        assert!(resolve_per_trade(true, Some(0), 10).is_err());
+        assert!(resolve_per_trade(true, Some(7), 14).is_err());
+        assert!(resolve_per_trade(true, Some(3), 10).is_err());
+    }
+
+    #[test]
+    fn extract_wfm_status_code_reads_the_status() {
+        assert_eq!(
+            super::extract_wfm_status_code("create sell order failed with status 400: {\"x\":1}"),
+            Some(400)
+        );
+        assert_eq!(
+            super::extract_wfm_status_code("load own orders failed with status 503"),
+            Some(503)
+        );
+        assert_eq!(super::extract_wfm_status_code("error sending request"), None);
+    }
+
+    #[test]
+    fn friendly_order_error_hides_raw_wfm_status_bodies() {
+        let raw = anyhow!("create sell order failed with status 400: {{\"error\":{{\"perTrade\":\"required\"}}}}");
+        let friendly = super::friendly_order_error(&raw);
+        assert!(!friendly.contains("status 400"));
+        assert!(!friendly.contains("perTrade"));
+        assert!(friendly.to_lowercase().contains("rejected"));
+
+        // 401 maps to a session-expiry message that keeps the phrase the UI matches on.
+        let unauthorized = anyhow!("create sell order failed with status 401");
+        assert!(super::friendly_order_error(&unauthorized)
+            .to_lowercase()
+            .contains("session expired"));
+
+        // Our own validation messages (no HTTP status) pass through unchanged.
+        let validation = anyhow!("Per-trade quantity must be between 1 and 6 for bulk-tradable items.");
+        assert_eq!(
+            super::friendly_order_error(&validation),
+            "Per-trade quantity must be between 1 and 6 for bulk-tradable items."
+        );
+    }
+
+    #[test]
+    fn lenient_i64_rejects_non_finite_and_out_of_range() {
+        #[derive(serde::Deserialize)]
+        struct Probe {
+            #[serde(deserialize_with = "super::deserialize_lenient_i64")]
+            value: i64,
+        }
+        assert_eq!(
+            serde_json::from_str::<Probe>("{\"value\": 30.0}").unwrap().value,
+            30
+        );
+        // A huge float (valid JSON) would saturate to garbage under `as i64`; reject instead.
+        assert!(serde_json::from_str::<Probe>("{\"value\": 1e30}").is_err());
     }
 
     #[test]

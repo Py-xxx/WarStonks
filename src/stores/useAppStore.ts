@@ -852,6 +852,7 @@ function restorePersistedWatchlistItems(entries: PersistedWatchlistState['watchl
         maxRank: entry.maxRank ?? deriveVariantRankFromKey(entry.variantKey),
         itemFamily: entry.itemFamily,
         imagePath: entry.imagePath,
+        bulkTradable: false,
       },
       entry.variantKey,
       entry.variantLabel,
@@ -883,6 +884,7 @@ function createWatchlistItemFromTradeBuyOrder(
       maxRank: order.maxRank,
       itemFamily: null,
       imagePath: order.imagePath,
+      bulkTradable: false,
     },
     variantKey,
     variantLabel,
@@ -955,6 +957,7 @@ function buildAutocompleteItemFromWatchlistEntry(item: WatchlistItem): WfmAutoco
     maxRank: deriveVariantRankFromKey(item.variantKey),
     itemFamily: item.itemFamily,
     imagePath: item.imagePath,
+    bulkTradable: false,
   };
 }
 
@@ -1430,6 +1433,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         maxRank: target.maxRank ?? null,
         itemFamily: target.itemFamily ?? null,
         imagePath: target.imagePath ?? null,
+        bulkTradable: false,
       };
     } else {
       try {
@@ -2566,9 +2570,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       })
       .catch((error) => {
         console.error('[watchlist] failed to add explicit item', error);
-        set({
-          watchlistFormError: formatHomeErrorMessage('watchlist-add', error),
-        });
+        const message = formatHomeErrorMessage('watchlist-add', error);
+        set({ watchlistFormError: message });
+        // Surface the failure everywhere (Opportunities/Scanners don't render
+        // watchlistFormError), so an add that silently failed isn't mistaken for success.
+        get().pushToast(message, 'error');
       });
   },
   removeWatchlistItem: (id) => {

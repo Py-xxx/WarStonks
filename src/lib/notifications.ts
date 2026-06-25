@@ -1,4 +1,10 @@
+import {
+  isPermissionGranted as tauriIsPermissionGranted,
+  requestPermission as tauriRequestPermission,
+  sendNotification as tauriSendNotification,
+} from '@tauri-apps/plugin-notification';
 import type { NotificationSettings } from '../types';
+import { isTauriRuntime } from './tauriClient';
 import { playAlertSound } from './alertAudio';
 
 const STORAGE_KEY = 'warstonks.notificationSettings';
@@ -46,38 +52,67 @@ export function saveNotificationSettings(settings: NotificationSettings): void {
   }
 }
 
-export function isDesktopNotificationSupported(): boolean {
+export type DesktopNotificationPermission = 'granted' | 'denied' | 'default' | 'unsupported';
+
+function webNotificationSupported(): boolean {
   return typeof window !== 'undefined' && 'Notification' in window;
 }
 
-export function desktopNotificationPermission(): NotificationPermission | 'unsupported' {
-  if (!isDesktopNotificationSupported()) {
-    return 'unsupported';
-  }
-  return Notification.permission;
+export function isDesktopNotificationSupported(): boolean {
+  // In the packaged Tauri app the native notification plugin is always available; in a plain
+  // browser (npm run dev) fall back to the web Notification API.
+  return isTauriRuntime() || webNotificationSupported();
 }
 
-/** Requests OS notification permission. Returns true if granted. */
-export async function requestDesktopNotificationPermission(): Promise<boolean> {
-  if (!isDesktopNotificationSupported()) {
-    return false;
+/**
+ * Requests OS notification permission, triggering the native OS prompt. In the Tauri app this
+ * goes through the notification plugin — the web `Notification` API can't drive the OS prompt
+ * from inside the webview, which is why "Enable" previously did nothing. In a browser it falls
+ * back to the web API. Returns the resulting permission state.
+ */
+export async function requestDesktopNotificationPermission(): Promise<DesktopNotificationPermission> {
+  if (isTauriRuntime()) {
+    try {
+      if (await tauriIsPermissionGranted()) {
+        return 'granted';
+      }
+      const result = await tauriRequestPermission();
+      return result === 'granted' ? 'granted' : result === 'denied' ? 'denied' : 'default';
+    } catch {
+      return 'unsupported';
+    }
+  }
+
+  if (!webNotificationSupported()) {
+    return 'unsupported';
   }
   if (Notification.permission === 'granted') {
-    return true;
+    return 'granted';
   }
   if (Notification.permission === 'denied') {
-    return false;
+    return 'denied';
   }
   try {
     const result = await Notification.requestPermission();
-    return result === 'granted';
+    return result === 'granted' ? 'granted' : result === 'denied' ? 'denied' : 'default';
   } catch {
-    return false;
+    return 'unsupported';
   }
 }
 
-function showDesktopNotification(title: string, body: string): void {
-  if (!isDesktopNotificationSupported() || Notification.permission !== 'granted') {
+async function showDesktopNotification(title: string, body: string): Promise<void> {
+  if (isTauriRuntime()) {
+    try {
+      if (await tauriIsPermissionGranted()) {
+        tauriSendNotification({ title, body });
+      }
+    } catch {
+      // OS notification center unavailable / permission revoked; ignore.
+    }
+    return;
+  }
+
+  if (!webNotificationSupported() || Notification.permission !== 'granted') {
     return;
   }
   try {
@@ -107,6 +142,6 @@ export function fireAlertNotification(
     void playAlertSound(settings.ringtone).catch(() => undefined);
   }
   if (settings.desktopEnabled) {
-    showDesktopNotification(title, body);
+    void showDesktopNotification(title, body).catch(() => undefined);
   }
 }

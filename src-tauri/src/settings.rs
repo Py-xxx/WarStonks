@@ -8,6 +8,7 @@ use serde_json::json;
 use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
 
@@ -262,8 +263,32 @@ fn save_settings_to_path(path: &Path, settings: &AppSettings) -> Result<()> {
     updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
     let serialized =
         serde_json::to_string_pretty(&updated).context("failed to serialize app settings")?;
-    fs::write(path, serialized)
+    write_string_atomically(path, &serialized)
         .with_context(|| format!("failed to write settings file at {}", path.display()))
+}
+
+/// Writes `contents` to `path` atomically: write a sibling temp file, then rename it over the
+/// target. A crash mid-write leaves the previous file intact rather than a truncated/empty one.
+/// Callers serialize writes via [`lock_settings_file`], so the fixed temp name can't collide.
+fn write_string_atomically(path: &Path, contents: &str) -> Result<()> {
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, contents)
+        .with_context(|| format!("failed to write temp file {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    Ok(())
+}
+
+/// Serializes settings read-modify-write cycles. The two mutating commands
+/// (`save_alecaframe_settings` / `save_discord_webhook_settings`) each touch a different
+/// section; without this, two concurrent saves can interleave their load→modify→save and one
+/// silently drops the other's section.
+fn lock_settings_file() -> Result<std::sync::MutexGuard<'static, ()>> {
+    static SETTINGS_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    SETTINGS_FILE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| anyhow!("settings file lock was poisoned"))
 }
 
 pub(crate) fn load_settings_inner(app: &tauri::AppHandle) -> Result<AppSettings> {
@@ -744,6 +769,9 @@ pub fn save_alecaframe_settings(
     app: tauri::AppHandle,
     input: AlecaframeSettingsInput,
 ) -> Result<AppSettings, String> {
+    // Serialize the whole load→modify→save against the other settings-mutating command so a
+    // concurrent save can't clobber the section this one isn't touching.
+    let _settings_guard = lock_settings_file().map_err(|error| error.to_string())?;
     let mut settings = load_settings_inner(&app).map_err(|error| {
         log_settings_error_and_build_message(
             &app,
@@ -809,6 +837,9 @@ pub fn save_discord_webhook_settings(
     app: tauri::AppHandle,
     input: DiscordWebhookSettingsInput,
 ) -> Result<AppSettings, String> {
+    // Serialize the whole load→modify→save against the other settings-mutating command so a
+    // concurrent save can't clobber the section this one isn't touching.
+    let _settings_guard = lock_settings_file().map_err(|error| error.to_string())?;
     let mut settings = load_settings_inner(&app).map_err(|error| {
         log_settings_error_and_build_message(
             &app,

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
+import { useModalA11y } from '../../hooks/useModalA11y';
+import { formatTradesErrorMessage } from '../../lib/tradesErrorHandling';
 import {
   closeWfmSellOrder,
   createWfmBuyOrder,
@@ -56,6 +58,7 @@ interface ListingModalState {
   price: string;
   quantity: string;
   rank: string;
+  perTrade: string;
   visible: boolean;
 }
 
@@ -153,14 +156,17 @@ function useTradeSellHealthRefresh({
   sellerMode,
   setOverview,
   onHealthRefreshed,
+  onHealthRefreshFailed,
 }: {
   enabled: boolean;
   sellerMode: SellerMode;
   setOverview: Dispatch<SetStateAction<TradeOverview | null>>;
   onHealthRefreshed?: (orderId: string, refreshedAt: number) => void;
+  onHealthRefreshFailed?: (orderId: string) => void;
 }) {
   const healthRefreshedAt = useRef<Record<string, number>>({});
   const healthInFlight = useRef<Set<string>>(new Set());
+  const healthFailures = useRef<Record<string, number>>({});
   const sellOrdersRef = useRef<TradeSellOrder[]>([]);
 
   useEffect(() => {
@@ -202,6 +208,7 @@ function useTradeSellHealthRefresh({
             const refreshedAt = Date.parse(health.refreshedAt);
             const refreshedAtMs = Number.isFinite(refreshedAt) ? refreshedAt : Date.now();
             healthRefreshedAt.current[order.orderId] = refreshedAtMs;
+            healthFailures.current[order.orderId] = 0;
             onHealthRefreshed?.(order.orderId, refreshedAtMs);
             marketLowCache.set(marketLowKey(order.slug, order.rank), {
               marketLow: health.marketLow,
@@ -230,7 +237,13 @@ function useTradeSellHealthRefresh({
             });
           })
           .catch(() => {
-            // Non-blocking background refresh.
+            // Non-blocking background refresh — but after several consecutive failures, flag the
+            // order so the UI can show "couldn't refresh" instead of spinning on "refreshing…".
+            const count = (healthFailures.current[order.orderId] ?? 0) + 1;
+            healthFailures.current[order.orderId] = count;
+            if (count >= 3) {
+              onHealthRefreshFailed?.(order.orderId);
+            }
           })
           .finally(() => {
             healthInFlight.current.delete(order.orderId);
@@ -241,7 +254,7 @@ function useTradeSellHealthRefresh({
     tick();
     const interval = setInterval(tick, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [enabled, onHealthRefreshed, sellerMode, setOverview]);
+  }, [enabled, onHealthRefreshed, onHealthRefreshFailed, sellerMode, setOverview]);
 
   return { sellOrdersRef };
 }
@@ -276,6 +289,7 @@ function buildItemFromOrder(order: TradeSellOrder): WfmAutocompleteItem {
     maxRank: order.maxRank,
     itemFamily: null,
     imagePath: order.imagePath,
+    bulkTradable: order.bulkTradable,
   };
 }
 
@@ -300,12 +314,31 @@ function createListingModalState(
     price: order ? String(order.yourPrice) : '',
     quantity: order ? String(order.quantity) : '1',
     rank: rankValue,
+    perTrade: isBulkTradable(item) ? String(order?.perTrade ?? 1) : '',
     visible: order?.visible ?? true,
   };
 }
 
 function isRankApplicable(item: WfmAutocompleteItem | null): boolean {
   return Boolean(item?.maxRank && item.maxRank > 0);
+}
+
+function isBulkTradable(item: WfmAutocompleteItem | null): boolean {
+  return Boolean(item?.bulkTradable);
+}
+
+/** Valid per-trade batch sizes for a quantity: divisors of `quantity` capped at WFM's max of 6. */
+function perTradeOptions(quantity: number): number[] {
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    return [1];
+  }
+  const options: number[] = [];
+  for (let value = 1; value <= Math.min(6, quantity); value += 1) {
+    if (quantity % value === 0) {
+      options.push(value);
+    }
+  }
+  return options;
 }
 
 function formatGap(value: number | null): string {
@@ -620,7 +653,11 @@ function ListingModal({
   onChange: (patch: Partial<ListingModalState>) => void;
   onSelectItem: (item: WfmAutocompleteItem) => void;
 }) {
+  const modalRef = useModalA11y<HTMLDivElement>({ onClose });
   const rankApplicable = isRankApplicable(form.selectedItem);
+  const bulkApplicable = isBulkTradable(form.selectedItem);
+  const quantityNumber = Number.parseInt(form.quantity, 10);
+  const ptOptions = perTradeOptions(Number.isInteger(quantityNumber) ? quantityNumber : 0);
   const typeLocked = form.mode === 'edit';
   const showAnalysis = true;
 
@@ -655,7 +692,9 @@ function ListingModal({
             id="trade-listing-item"
             className="field-input"
             value={form.itemName}
-            onChange={(event) => onChange({ itemName: event.target.value, selectedItem: null, rank: '' })}
+            onChange={(event) =>
+              onChange({ itemName: event.target.value, selectedItem: null, rank: '', perTrade: '' })
+            }
             placeholder="Search local WFM catalog…"
             disabled={form.mode === 'edit'}
           />
@@ -727,7 +766,19 @@ function ListingModal({
               min={1}
               step={1}
               value={form.quantity}
-              onChange={(event) => onChange({ quantity: event.target.value })}
+              onChange={(event) => {
+                const nextQuantity = event.target.value;
+                if (!bulkApplicable) {
+                  onChange({ quantity: nextQuantity });
+                  return;
+                }
+                // Keep perTrade valid: it must divide the new quantity and stay ≤ 6.
+                const parsed = Number.parseInt(nextQuantity, 10);
+                const opts = perTradeOptions(Number.isInteger(parsed) ? parsed : 0);
+                const current = Number.parseInt(form.perTrade, 10);
+                const nextPerTrade = String(opts.includes(current) ? current : 1);
+                onChange({ quantity: nextQuantity, perTrade: nextPerTrade });
+              }}
               placeholder="Quantity"
             />
           </div>
@@ -750,6 +801,28 @@ function ListingModal({
               </select>
             </div>
           ) : null}
+          {bulkApplicable ? (
+            <div className="trade-listing-fieldset">
+              <label className="trade-listing-label" htmlFor="trade-listing-per-trade">
+                Per trade
+              </label>
+              <select
+                id="trade-listing-per-trade"
+                className="field-input"
+                value={form.perTrade || '1'}
+                onChange={(event) => onChange({ perTrade: event.target.value })}
+              >
+                {ptOptions.map((value) => (
+                  <option key={value} value={String(value)}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+              <span className="trade-listing-hint">
+                Bulk trade: units exchanged per in-game trade (max 6, must divide quantity).
+              </span>
+            </div>
+          ) : null}
           <div className="trade-listing-fieldset trade-listing-toggle-field">
             <span className="trade-listing-label">Visibility</span>
             <button
@@ -770,13 +843,15 @@ function ListingModal({
   );
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div className="modal-backdrop" role="presentation">
+      {/* Backdrop intentionally does NOT close on click — an accidental outside click would
+          discard a half-typed listing. Use Cancel, the × button, or Escape to close. */}
       <div
+        ref={modalRef}
         className={`settings-modal trade-listing-modal${showAnalysis ? ' has-analysis' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="trade-listing-modal-title"
-        onClick={(event) => event.stopPropagation()}
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
@@ -1136,6 +1211,7 @@ function HealthTab() {
 function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
+  const pushToast = useAppStore((s) => s.pushToast);
   const syncWatchlistTradeOverview = useAppStore((s) => s.syncWatchlistTradeOverview);
   const sellerMode = useAppStore((s) => s.sellerMode);
   const autoWatchlistBuyOrdersEnabled = useAppStore((s) => s.autoWatchlistBuyOrdersEnabled);
@@ -1154,17 +1230,47 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const [soldQuantities, setSoldQuantities] = useState<Record<string, string>>({});
   const [sessionExpiredPopupOpen, setSessionExpiredPopupOpen] = useState(false);
   const [visibilityActionPending, setVisibilityActionPending] = useState(false);
+  // Per-order in-flight guard for row mutations (toggle visibility / mark sold / remove). The
+  // ref blocks a rapid second click synchronously (before state commits); the state array
+  // drives the disabled buttons. Without this, double-clicks fire duplicate WFM mutations —
+  // e.g. closing more quantity than intended, or two deletes racing.
+  const pendingOrderIdsRef = useRef<Set<string>>(new Set());
+  const [pendingOrderIds, setPendingOrderIds] = useState<readonly string[]>([]);
+  const beginOrderAction = (orderId: string): boolean => {
+    if (pendingOrderIdsRef.current.has(orderId)) {
+      return false;
+    }
+    pendingOrderIdsRef.current.add(orderId);
+    setPendingOrderIds(Array.from(pendingOrderIdsRef.current));
+    return true;
+  };
+  const endOrderAction = (orderId: string) => {
+    pendingOrderIdsRef.current.delete(orderId);
+    setPendingOrderIds(Array.from(pendingOrderIdsRef.current));
+  };
+  const isOrderPending = (orderId: string) => pendingOrderIds.includes(orderId);
+  const sessionExpiredRef = useModalA11y<HTMLDivElement>({
+    onClose: () => setSessionExpiredPopupOpen(false),
+    active: sessionExpiredPopupOpen,
+  });
   // Analysis preview for the create-listing modal (cleared on modal close).
   const [listingAnalysis, setListingAnalysis] = useState<ListingAnalysisState | null>(null);
   // Display-layer state: epoch ms when each order's market_low was last fetched.
   // Kept in state so the "X ago" label re-renders when a fetch completes.
   const [marketLowTimestamps, setMarketLowTimestamps] = useState<Record<string, number>>({});
+  // Orders whose background health refresh has failed repeatedly — shown as "couldn't refresh"
+  // instead of an endless "refreshing…".
+  const [staleHealthIds, setStaleHealthIds] = useState<readonly string[]>([]);
   const { sellOrdersRef } = useTradeSellHealthRefresh({
     enabled: Boolean(tradeAccount) && listingType === 'sell',
     sellerMode,
     setOverview,
-    onHealthRefreshed: (orderId, refreshedAt) =>
-      setMarketLowTimestamps((prev) => ({ ...prev, [orderId]: refreshedAt })),
+    onHealthRefreshed: (orderId, refreshedAt) => {
+      setMarketLowTimestamps((prev) => ({ ...prev, [orderId]: refreshedAt }));
+      setStaleHealthIds((prev) => (prev.includes(orderId) ? prev.filter((id) => id !== orderId) : prev));
+    },
+    onHealthRefreshFailed: (orderId) =>
+      setStaleHealthIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId])),
   });
 
   const listingSuggestions = useMemo(
@@ -1174,6 +1280,16 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         : [],
     [autocompleteItems, listingModal],
   );
+
+  // Drop "couldn't refresh" flags for orders that no longer exist (sold/removed/signed out) so
+  // a stale flag can't linger. Only updates state when something was actually pruned.
+  useEffect(() => {
+    const currentIds = new Set((overview?.sellOrders ?? []).map((order) => order.orderId));
+    setStaleHealthIds((prev) => {
+      const next = prev.filter((id) => currentIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [overview]);
 
   useEffect(() => {
     if (!tradeAccount) {
@@ -1204,7 +1320,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         }
       } catch (error) {
         if (!cancelled) {
-          setOverviewError(error instanceof Error ? error.message : String(error));
+          setOverviewError(formatTradesErrorMessage('trade-overview-load', error));
           void loadTradeAccount();
         }
       } finally {
@@ -1238,7 +1354,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         }
       } catch (error) {
         if (!cancelled) {
-          setAutocompleteError(error instanceof Error ? error.message : String(error));
+          setAutocompleteError(formatTradesErrorMessage('trade-autocomplete-load', error));
         }
       } finally {
         if (!cancelled) {
@@ -1308,7 +1424,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             analysis: null,
             analytics: null,
             loading: false,
-            error: error instanceof Error ? error.message : String(error),
+            error: formatTradesErrorMessage('listing-analysis-load', error),
           });
         }
       });
@@ -1348,6 +1464,9 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const updateOrderFn = listingType === 'sell' ? updateWfmSellOrder : updateWfmBuyOrder;
 
   const handleToggleOrderVisibility = async (order: TradeSellOrder) => {
+    if (!beginOrderAction(order.orderId)) {
+      return;
+    }
     try {
       const nextOverview = await updateOrderFn(
         {
@@ -1356,12 +1475,16 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           quantity: order.quantity,
           rank: order.rank ?? null,
           visible: !order.visible,
+          wfmId: order.wfmId,
+          perTrade: order.bulkTradable ? order.perTrade : null,
         } satisfies TradeUpdateListingInput,
         sellerMode,
       );
       await applyOverview(nextOverview);
     } catch (error) {
       handleTradeActionFailure(error);
+    } finally {
+      endOrderAction(order.orderId);
     }
   };
 
@@ -1407,14 +1530,18 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   };
 
   const handleTradeActionFailure = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    if (isTradeSessionExpiredMessage(message)) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    if (isTradeSessionExpiredMessage(rawMessage)) {
       setSessionExpiredPopupOpen(true);
       setOverviewError(null);
       void loadTradeAccount();
       return;
     }
-    setOverviewError(message);
+    const friendly = formatTradesErrorMessage('trade-action', error);
+    setOverviewError(friendly);
+    // Also toast it — a row action's failure shouldn't only appear in the top-of-page banner,
+    // far from the button the user just clicked.
+    pushToast(friendly, 'error');
     void loadTradeAccount();
   };
 
@@ -1427,6 +1554,11 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     const price = Number.parseInt(listingModal.price, 10);
     const quantity = Number.parseInt(listingModal.quantity, 10);
     const rank = listingModal.rank === '' ? null : Number.parseInt(listingModal.rank, 10);
+    const bulkTradable = isBulkTradable(selectedItem);
+    const perTrade =
+      bulkTradable && listingModal.perTrade !== ''
+        ? Number.parseInt(listingModal.perTrade, 10)
+        : null;
 
     if (!selectedItem) {
       setListingActionError('Select an item from the local catalog first.');
@@ -1435,6 +1567,11 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
 
     if (!selectedItem.wfmId) {
       setListingActionError('That item cannot be listed because its market id is unavailable.');
+      return;
+    }
+
+    if (listingModal.mode === 'edit' && !listingModal.orderId) {
+      setListingActionError('This listing can’t be updated because its order id is missing. Close this and refresh your listings, then try again.');
       return;
     }
 
@@ -1453,6 +1590,11 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       return;
     }
 
+    if (perTrade !== null && (perTrade < 1 || perTrade > 6 || quantity % perTrade !== 0)) {
+      setListingActionError('Per-trade quantity must be between 1 and 6 and divide the quantity evenly.');
+      return;
+    }
+
     setListingActionPending(true);
     setListingActionError(null);
 
@@ -1466,6 +1608,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                 quantity,
                 rank,
                 visible: listingModal.visible,
+                perTrade,
               } satisfies TradeCreateListingInput,
               sellerMode,
             )
@@ -1476,6 +1619,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                 quantity,
                 rank,
                 visible: listingModal.visible,
+                wfmId: selectedItem.wfmId,
+                perTrade,
               } satisfies TradeUpdateListingInput,
               sellerMode,
             );
@@ -1486,18 +1631,18 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       setListingAnalysis(null);
       setListingActionPending(false);
       void applyOverview(nextOverview).catch((error) => {
-        setOverviewError(error instanceof Error ? error.message : String(error));
+        setOverviewError(formatTradesErrorMessage('trade-overview-refresh', error));
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (isTradeSessionExpiredMessage(message)) {
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      if (isTradeSessionExpiredMessage(rawMessage)) {
         setSessionExpiredPopupOpen(true);
         setListingActionError(null);
         void loadTradeAccount();
         setListingActionPending(false);
         return;
       }
-      setListingActionError(message);
+      setListingActionError(formatTradesErrorMessage('trade-action', error));
       setListingActionPending(false);
       void loadTradeAccount();
     }
@@ -1511,6 +1656,9 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       return;
     }
 
+    if (!beginOrderAction(order.orderId)) {
+      return;
+    }
     try {
       const nextOverview = await closeWfmSellOrder(
         order.orderId,
@@ -1520,10 +1668,15 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       await applyOverview(nextOverview);
     } catch (error) {
       handleTradeActionFailure(error);
+    } finally {
+      endOrderAction(order.orderId);
     }
   };
 
   const handleDeleteOrder = async (orderId: string) => {
+    if (!beginOrderAction(orderId)) {
+      return;
+    }
     try {
       const nextOverview =
         listingType === 'sell'
@@ -1532,6 +1685,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       await applyOverview(nextOverview);
     } catch (error) {
       handleTradeActionFailure(error);
+    } finally {
+      endOrderAction(orderId);
     }
   };
 
@@ -1688,7 +1843,9 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                         <div className="trade-cell-age">
                           {marketLowTimestamps[order.orderId]
                             ? formatMarketLowAge(marketLowTimestamps[order.orderId])
-                            : listingType === 'sell' ? 'refreshing…' : null}
+                            : listingType === 'sell'
+                              ? (staleHealthIds.includes(order.orderId) ? 'couldn’t refresh' : 'refreshing…')
+                              : null}
                         </div>
                       </div>
                     </div>
@@ -1697,7 +1854,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                     <button
                       type="button"
                       className={`trade-row-visibility${order.visible ? ' on' : ' off'}`}
-                      disabled={visibilityActionPending}
+                      disabled={visibilityActionPending || isOrderPending(order.orderId)}
                       onClick={() => void handleToggleOrderVisibility(order)}
                       title={order.visible ? 'Visible on warframe.market — click to hide' : 'Hidden from warframe.market — click to show'}
                       aria-label={order.visible ? 'Hide this order' : 'Show this order'}
@@ -1750,6 +1907,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                             type="number"
                             min={1}
                             max={order.quantity}
+                            aria-label={`Quantity to mark sold for ${order.name}`}
                             value={soldQuantities[order.orderId] ?? DEFAULT_MARK_SOLD_QTY}
                             onChange={(event) =>
                               setSoldQuantities((current) => ({
@@ -1758,15 +1916,30 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                               }))
                             }
                           />
-                          <button className="act-btn" type="button" onClick={() => void handleMarkAsSold(order)}>
-                            Mark as Sold
+                          <button
+                            className="act-btn"
+                            type="button"
+                            disabled={isOrderPending(order.orderId)}
+                            onClick={() => void handleMarkAsSold(order)}
+                          >
+                            {isOrderPending(order.orderId) ? 'Working…' : 'Mark as Sold'}
                           </button>
                         </div>
                       ) : null}
-                      <button className="act-btn" type="button" onClick={() => openEditListing(order)}>
+                      <button
+                        className="act-btn"
+                        type="button"
+                        disabled={isOrderPending(order.orderId)}
+                        onClick={() => openEditListing(order)}
+                      >
                         Edit
                       </button>
-                      <button className="act-btn danger" type="button" onClick={() => void handleDeleteOrder(order.orderId)}>
+                      <button
+                        className="act-btn danger"
+                        type="button"
+                        disabled={isOrderPending(order.orderId)}
+                        onClick={() => void handleDeleteOrder(order.orderId)}
+                      >
                         Remove
                       </button>
                     </div>
@@ -1796,6 +1969,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       {sessionExpiredPopupOpen ? (
         <div className="modal-backdrop" role="presentation">
           <div
+            ref={sessionExpiredRef}
             className="settings-modal trade-session-expired-modal"
             role="dialog"
             aria-modal="true"
@@ -1818,16 +1992,27 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             </div>
             <div className="settings-modal-body">
               <p className="trade-session-expired-copy">
-                Your session has expired, please try again.
+                Your Warframe Market session expired. Sign in again to keep managing your listings.
               </p>
             </div>
             <div className="settings-modal-actions">
               <button
-                className="btn-primary"
+                className="btn-secondary"
                 type="button"
                 onClick={() => setSessionExpiredPopupOpen(false)}
               >
-                OK
+                Dismiss
+              </button>
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={() => {
+                  setSessionExpiredPopupOpen(false);
+                  // Clear the dead session so the sign-in panel takes over immediately.
+                  void signOutTradeAccount().catch(() => undefined);
+                }}
+              >
+                Sign in again
               </button>
             </div>
           </div>
@@ -1856,6 +2041,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                     selectedItem: item,
                     itemName: item.name,
                     rank: isRankApplicable(item) ? '0' : '',
+                    perTrade: isBulkTradable(item) ? '1' : '',
                   }
                 : current,
             )
@@ -1881,15 +2067,35 @@ export function TradesPage() {
       <div className="subnav trades-page-subnav">
         <div className="subnav-left">
           <span className="page-title">Trades</span>
-          <span className={`subtab${tradesSubTab === 'sell-orders' ? ' active' : ''}`} onClick={() => setTradesSubTab('sell-orders')} role="tab" tabIndex={0}>
-            Sell Orders
-          </span>
-          <span className={`subtab${tradesSubTab === 'buy-orders' ? ' active' : ''}`} onClick={() => setTradesSubTab('buy-orders')} role="tab" tabIndex={0}>
-            Buy Orders
-          </span>
-          <span className={`subtab${tradesSubTab === 'health' ? ' active' : ''}`} onClick={() => setTradesSubTab('health')} role="tab" tabIndex={0}>
-            Health
-          </span>
+          <div className="subnav-tabs" role="tablist" aria-label="Trades sections">
+            <button
+              type="button"
+              className={`subtab${tradesSubTab === 'sell-orders' ? ' active' : ''}`}
+              onClick={() => setTradesSubTab('sell-orders')}
+              role="tab"
+              aria-selected={tradesSubTab === 'sell-orders'}
+            >
+              Sell Orders
+            </button>
+            <button
+              type="button"
+              className={`subtab${tradesSubTab === 'buy-orders' ? ' active' : ''}`}
+              onClick={() => setTradesSubTab('buy-orders')}
+              role="tab"
+              aria-selected={tradesSubTab === 'buy-orders'}
+            >
+              Buy Orders
+            </button>
+            <button
+              type="button"
+              className={`subtab${tradesSubTab === 'health' ? ' active' : ''}`}
+              onClick={() => setTradesSubTab('health')}
+              role="tab"
+              aria-selected={tradesSubTab === 'health'}
+            >
+              Health
+            </button>
+          </div>
         </div>
         {tradeAccount && (tradesSubTab === 'sell-orders' || tradesSubTab === 'buy-orders') ? (
           <div className="subnav-right">

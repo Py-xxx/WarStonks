@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { useAppStore } from '../../stores/useAppStore';
 import type { SettingsSection } from '../../types';
@@ -58,6 +58,40 @@ export function SettingsSidebar() {
   const notificationSettings = useAppStore((state) => state.notificationSettings);
   const appSettings = useAppStore((state) => state.appSettings);
   const walletSnapshot = useAppStore((state) => state.walletSnapshot);
+  // The drawer hosts the Alecaframe/Discord/Notifications modals; when one is open it owns
+  // Escape/focus, so the drawer must defer to it.
+  const anySubModalOpen = useAppStore(
+    (state) =>
+      state.alecaframeModalOpen || state.discordWebhookModalOpen || state.notificationsModalOpen,
+  );
+
+  // Lock background scroll while the drawer is open. (A full focus-trap is intentionally NOT
+  // used here — it would fight the focus-traps of the nested modals this drawer opens.)
+  useEffect(() => {
+    if (!sidebarOpen) {
+      return undefined;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [sidebarOpen]);
+
+  // Escape closes the drawer, but only when no nested modal is open — those handle their own
+  // Escape, and the drawer shouldn't close out from under them.
+  useEffect(() => {
+    if (!sidebarOpen || anySubModalOpen) {
+      return undefined;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeSidebar();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sidebarOpen, anySubModalOpen, closeSidebar]);
 
   const alecaframeStatus = useMemo(() => {
     if (!appSettings.alecaframe.enabled) {

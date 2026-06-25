@@ -73,8 +73,14 @@ fn save_cache_to_path(path: &Path, cache: &WorldStateCacheMap) -> Result<()> {
     };
     let serialized =
         serde_json::to_string_pretty(&file).context("failed to serialize worldstate cache")?;
-    fs::write(path, serialized)
-        .with_context(|| format!("failed to write worldstate cache at {}", path.display()))
+    // Atomic write: temp file + rename, so a crash mid-write leaves the previous cache intact
+    // instead of a truncated/empty file. Saves are serialized by FILE_LOCK in the caller, so
+    // the fixed temp name can't collide.
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, serialized)
+        .with_context(|| format!("failed to write temp worldstate cache at {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to replace worldstate cache at {}", path.display()))
 }
 
 fn load_worldstate_cache_inner(app: &tauri::AppHandle) -> Result<WorldStateCacheMap> {

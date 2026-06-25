@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useModalA11y } from '../../hooks/useModalA11y';
 
 interface WatchlistPurchaseModalProps {
   itemName: string;
@@ -24,6 +25,8 @@ export function WatchlistPurchaseModal({
     setPriceInput(String(Math.max(1, Math.round(defaultPrice))));
   }, [defaultPrice]);
 
+  const modalRef = useModalA11y<HTMLDivElement>({ onClose });
+
   if (typeof document === 'undefined') {
     return null;
   }
@@ -36,6 +39,7 @@ export function WatchlistPurchaseModal({
       onClick={(event) => event.stopPropagation()}
     >
       <div
+        ref={modalRef}
         className="settings-modal watchlist-purchase-modal watchlist-purchase-modal-fullscreen"
         role="dialog"
         aria-modal="true"

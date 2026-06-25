@@ -590,10 +590,15 @@ export function ScannersPage() {
     [],
   );
 
-  const loadScannerState = useCallback(async (cancelled = false) => {
+  // True only while the live effect (mount → cleanup) is active. loadScannerState reads this
+  // instead of taking a `cancelled` argument, so every call site (mount, poll, progress event,
+  // start/stop) is guarded uniformly and can never setState after unmount.
+  const scannerEffectActiveRef = useRef(false);
+
+  const loadScannerState = useCallback(async () => {
     try {
       const response = await getArbitrageScannerState();
-      if (cancelled) {
+      if (!scannerEffectActiveRef.current) {
         return;
       }
       setArbitrage(response.latestScan);
@@ -609,7 +614,7 @@ export function ScannersPage() {
         setScannerError(null);
       }
     } catch (error) {
-      if (cancelled) {
+      if (!scannerEffectActiveRef.current) {
         return;
       }
       const lastCompletedAt = lastSavedScanAtRef.current;
@@ -621,12 +626,12 @@ export function ScannersPage() {
   }, [setScannerErrorFrom, syncScannerStaleAlert]);
 
   useEffect(() => {
-    let cancelled = false;
+    scannerEffectActiveRef.current = true;
     void loadScannerState();
 
-    let unsubscribe: () => void = () => {};
+    let unsubscribe: (() => void) | null = null;
     void listenToArbitrageScannerProgress((nextProgress) => {
-      if (cancelled) {
+      if (!scannerEffectActiveRef.current) {
         return;
       }
 
@@ -643,18 +648,30 @@ export function ScannersPage() {
       if (nextProgress.status === 'success' || nextProgress.status === 'error') {
         void loadScannerState();
       }
-    }).then((cleanup) => {
-      unsubscribe = cleanup;
-    });
+    })
+      .then((cleanup) => {
+        // If we already unmounted before the subscription resolved, tear it down immediately —
+        // otherwise the real unlisten is never wired up and the listener leaks.
+        if (!scannerEffectActiveRef.current) {
+          cleanup();
+          return;
+        }
+        unsubscribe = cleanup;
+      })
+      .catch((error) => {
+        // A failed subscription must not silently stop progress — the 1250ms poll below is the
+        // backstop, so just log and keep going.
+        console.error('[scanners] failed to subscribe to scanner progress', error);
+      });
 
     const pollInterval = window.setInterval(() => {
-      void loadScannerState(cancelled);
+      void loadScannerState();
     }, 1250);
 
     return () => {
-      cancelled = true;
+      scannerEffectActiveRef.current = false;
       window.clearInterval(pollInterval);
-      unsubscribe();
+      unsubscribe?.();
     };
   }, [loadScannerState, setScannerErrorFrom]);
 
@@ -834,6 +851,7 @@ export function ScannersPage() {
       maxRank: null,
       itemFamily: null,
       imagePath: component.imagePath,
+      bulkTradable: false,
     };
 
     addExplicitItemToWatchlist(item, 'base', 'Base Market', targetPrice);

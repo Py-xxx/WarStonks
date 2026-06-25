@@ -116,6 +116,8 @@ export interface TradeSellOrder {
   rank: number | null;
   maxRank: number | null;
   quantity: number;
+  perTrade: number;
+  bulkTradable: boolean;
   yourPrice: number;
   marketLow: number | null;
   priceGap: number | null;
@@ -171,6 +173,8 @@ export interface TradeCreateListingInput {
   quantity: number;
   rank: number | null;
   visible: boolean;
+  /** Batch size for bulk-tradable items (arcanes). Omit/null for non-bulk items. */
+  perTrade?: number | null;
 }
 
 export interface TradeUpdateListingInput {
@@ -179,6 +183,9 @@ export interface TradeUpdateListingInput {
   quantity: number;
   rank: number | null;
   visible: boolean;
+  /** Item id of the order being edited — lets the backend decide whether perTrade applies. */
+  wfmId?: string | null;
+  perTrade?: number | null;
 }
 
 export interface PortfolioTradeLogEntry {
@@ -734,6 +741,7 @@ export interface WfmAutocompleteItem {
   maxRank: number | null;
   itemFamily: string | null;
   imagePath: string | null;
+  bulkTradable: boolean;
 }
 
 export interface WfmTopSellOrder {

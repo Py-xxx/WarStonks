@@ -11,10 +11,15 @@ export function ToastHost() {
 
   return (
     <div className="toast-host" role="region" aria-label="Notifications">
+      {/* Each toast carries its own live-region role (alert/status) so it's announced exactly
+          once; the container is a plain landmark region (no aria-live) to avoid double-announce. */}
       {toasts.map((toast) => (
         <button
           key={toast.id}
           type="button"
+          // Errors announce assertively (role="alert"); info/success announce politely via
+          // the region above (role="status") so screen-reader users hear every toast.
+          role={toast.tone === 'error' ? 'alert' : 'status'}
           className={`toast toast-${toast.tone}`}
           onClick={() => dismissToast(toast.id)}
           title="Dismiss"

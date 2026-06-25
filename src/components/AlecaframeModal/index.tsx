@@ -3,6 +3,7 @@ import { formatShortLocalDateTime, getUserTimeZone } from '../../lib/dateTime';
 import { formatSettingsErrorMessage } from '../../lib/settingsErrorHandling';
 import { testAlecaframePublicLink } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
+import { useModalA11y } from '../../hooks/useModalA11y';
 import type { AlecaframeValidationResult } from '../../types';
 
 const CloseIcon = () => (
@@ -60,6 +61,8 @@ export function AlecaframeModal() {
     clearSettingsError,
     modalOpen,
   ]);
+
+  const modalRef = useModalA11y<HTMLDivElement>({ onClose: closeModal, active: modalOpen });
 
   useEffect(() => {
     if (!modalOpen || !appSettings.alecaframe.enabled || !appSettings.alecaframe.publicLink) {
@@ -162,7 +165,7 @@ export function AlecaframeModal() {
         aria-label="Close Alecaframe settings"
         onClick={closeModal}
       />
-      <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Alecaframe API settings">
+      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Alecaframe API settings">
         <div className="settings-modal-header">
           <div className="settings-modal-title">
             <span className="card-label">Alecaframe API</span>
