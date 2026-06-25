@@ -19,23 +19,14 @@ export function formatWhisperRankSuffix(
   return ` (Rank ${rank})`;
 }
 
+/** Wraps the full item name in pipe delimiters, e.g. "| Wisp Prime Chassis Blueprint |". */
 export function formatWhisperItemName(itemName: string): string {
   const trimmedName = itemName.trim();
   if (!trimmedName) {
-    return '[]';
+    return '| |';
   }
 
-  if (/\sset$/i.test(trimmedName)) {
-    const baseName = trimmedName.replace(/\sset$/i, '').trim();
-    return `[${baseName}] set`;
-  }
-
-  if (/\sblueprint$/i.test(trimmedName)) {
-    const baseName = trimmedName.replace(/\sblueprint$/i, '').trim();
-    return `[${baseName}] Blueprint`;
-  }
-
-  return `[${trimmedName}]`;
+  return `| ${trimmedName} |`;
 }
 
 export function formatWhisperMessage(target: WhisperTarget, itemName: string): string {

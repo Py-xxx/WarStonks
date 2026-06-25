@@ -422,6 +422,7 @@ async function handleOpenExternalLink(url: string | null | undefined) {
     await openExternalUrl(url);
   } catch (error) {
     console.error('Failed to open external link', error);
+    useAppStore.getState().pushToast('Couldn’t open the link in your browser.', 'error');
   }
 }
 
@@ -1893,7 +1894,17 @@ function AnalyticsTab() {
   }, [selectedItem, selectedMarketVariantKey, refreshNonce, chartDomain, chartBucket, sellerMode]);
 
   useEffect(() => {
-    getBacktestSummary().then(setBacktestSummary).catch(() => undefined);
+    let isMounted = true;
+    getBacktestSummary()
+      .then((summary) => {
+        if (isMounted) {
+          setBacktestSummary(summary);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const trendMetrics =
@@ -2380,6 +2391,9 @@ function AnalysisTab() {
           return;
         }
         clearRevealTimeouts(revealTimeoutsRef);
+        // Reveal the panels anyway so they don't hang forever on "Building…"; the analysis
+        // error state surfaces the failure to the user.
+        queuePanelReveal(ANALYSIS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       });
 
     return () => {
@@ -2818,6 +2832,7 @@ function AnalysisTab() {
                           maxRank: null,
                           itemFamily: null,
                           imagePath: component.imagePath,
+                          bulkTradable: false,
                         }
                       : null;
 
@@ -3272,12 +3287,32 @@ function CalibrationTab() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let isMounted = true;
     setLoading(true);
     setError(null);
     getBacktestSummary()
-      .then(setSummary)
-      .catch((err: unknown) => setError(String(err)))
-      .finally(() => setLoading(false));
+      .then((nextSummary) => {
+        if (isMounted) {
+          setSummary(nextSummary);
+        }
+      })
+      .catch((err: unknown) => {
+        if (isMounted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Couldn’t load the backtest track record right now. Please try again.',
+          );
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const rolling30dHitPct =

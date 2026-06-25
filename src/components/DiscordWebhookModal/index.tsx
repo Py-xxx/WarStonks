@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { formatSettingsErrorMessage } from '../../lib/settingsErrorHandling';
 import { useAppStore } from '../../stores/useAppStore';
+import { useModalA11y } from '../../hooks/useModalA11y';
 
 const CloseIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -41,6 +42,8 @@ export function DiscordWebhookModal() {
     clearSettingsError();
   }, [appSettings.discordWebhook, clearSettingsError, modalOpen]);
 
+  const modalRef = useModalA11y<HTMLDivElement>({ onClose: closeModal, active: modalOpen });
+
   if (!modalOpen) {
     return null;
   }
@@ -71,7 +74,7 @@ export function DiscordWebhookModal() {
         aria-label="Close Discord webhook settings"
         onClick={closeModal}
       />
-      <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Discord webhook settings">
+      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Discord webhook settings">
         <div className="settings-modal-header">
           <div className="settings-modal-title">
             <span className="card-label">Discord Webhook</span>
@@ -138,6 +141,7 @@ export function DiscordWebhookModal() {
                   type="button"
                   role="switch"
                   aria-checked={watchlistFound}
+                  aria-label="Notify on Discord when a watchlist item is found"
                   onClick={() => setWatchlistFound((current) => !current)}
                 >
                   <span className="settings-toggle-track">
@@ -156,6 +160,7 @@ export function DiscordWebhookModal() {
                   type="button"
                   role="switch"
                   aria-checked={tradeDetected}
+                  aria-label="Notify on Discord when new trades are detected"
                   onClick={() => setTradeDetected((current) => !current)}
                 >
                   <span className="settings-toggle-track">
@@ -174,6 +179,7 @@ export function DiscordWebhookModal() {
                   type="button"
                   role="switch"
                   aria-checked={worldstateOffline}
+                  aria-label="Notify on Discord when worldstate feeds fail"
                   onClick={() => setWorldstateOffline((current) => !current)}
                 >
                   <span className="settings-toggle-track">

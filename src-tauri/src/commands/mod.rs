@@ -37,6 +37,9 @@ pub struct WfmAutocompleteItem {
     pub max_rank: Option<i64>,
     pub item_family: Option<String>,
     pub image_path: Option<String>,
+    /// Whether the item trades in batches (e.g. arcanes). When true, listing it requires a
+    /// `perTrade` batch size on the WFM order API.
+    pub bulk_tradable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,11 +266,27 @@ fn shared_wfm_client() -> Result<Client, String> {
 }
 
 fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    headers
+    let raw = headers
         .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
+        .and_then(|value| value.to_str().ok())?
+        .trim();
+    // delta-seconds form (the common case for WFM).
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    // HTTP-date form (IMF-fixdate), e.g. "Wed, 21 Oct 2025 07:28:00 GMT" — best-effort: compute
+    // the delta from now, clamped at 0. Falls back to None if the date can't be parsed.
+    let format = time::format_description::parse(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+    )
+    .ok()?;
+    let parsed = time::PrimitiveDateTime::parse(raw, &format)
+        .ok()?
+        .assume_utc();
+    let seconds = (parsed - time::OffsetDateTime::now_utc())
+        .whole_seconds()
+        .max(0);
+    Some(Duration::from_secs(seconds as u64))
 }
 
 fn execute_wfm_bytes_request(
@@ -631,7 +650,8 @@ fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAut
             slug,
             max_rank,
             item_family,
-            COALESCE(NULLIF(thumb, ''), NULLIF(icon, ''))
+            COALESCE(NULLIF(thumb, ''), NULLIF(icon, '')),
+            bulk_tradable
          FROM wfm_items
          WHERE name_en IS NOT NULL
          ORDER BY name_en COLLATE NOCASE, slug COLLATE NOCASE",
@@ -645,6 +665,7 @@ fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAut
             max_rank: row.get(4)?,
             item_family: row.get(5)?,
             image_path: row.get(6)?,
+            bulk_tradable: row.get::<_, Option<i64>>(7)?.unwrap_or(0) == 1,
         })
     })?;
 

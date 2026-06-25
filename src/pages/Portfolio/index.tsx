@@ -19,6 +19,18 @@ import type {
   SetCompletionInventoryValue,
 } from '../../types';
 
+// Safe error → message: never surfaces "[object Object]" from a non-Error throw, and falls
+// back to friendly copy when there's no usable message.
+function formatPortfolioError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+  return 'Something went wrong with your portfolio data. Please try again. If it keeps happening, report it in Discord.';
+}
+
 const RefreshIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -775,7 +787,7 @@ function TradeLogTab({ username }: { username: string | null }) {
       const nextState = await getWfmProfileTradeLog(username);
       applyTradeLogState(nextState);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(formatPortfolioError(error));
     } finally {
       setLoading(false);
     }
@@ -803,7 +815,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             delete next[orderId];
             return next;
           });
-          setErrorMessage(error instanceof Error ? error.message : String(error));
+          setErrorMessage(formatPortfolioError(error));
           break;
         }
         // Only accept the server state if the user hasn't clicked again mid-flight.
@@ -873,7 +885,7 @@ function TradeLogTab({ username }: { username: string | null }) {
       applyTradeLogState(nextState);
       setMigrateModalOpen(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(formatPortfolioError(error));
     } finally {
       setMigrating(false);
     }
@@ -892,7 +904,7 @@ function TradeLogTab({ username }: { username: string | null }) {
       const nextState = await forceWfmTradeLogResync(username);
       applyTradeLogState(nextState);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(formatPortfolioError(error));
     } finally {
       setResyncing(false);
     }
@@ -924,7 +936,7 @@ function TradeLogTab({ username }: { username: string | null }) {
       setAllocationGroupId(null);
       setAllocationDrafts({});
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(formatPortfolioError(error));
     } finally {
       setSavingAllocations(false);
     }
@@ -950,7 +962,7 @@ function TradeLogTab({ username }: { username: string | null }) {
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : String(error));
+          setErrorMessage(formatPortfolioError(error));
         }
       }
 
@@ -962,7 +974,7 @@ function TradeLogTab({ username }: { username: string | null }) {
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : String(error));
+          setErrorMessage(formatPortfolioError(error));
         }
       } finally {
         if (!cancelled) {
@@ -1540,6 +1552,7 @@ function PnlSummaryTab({
   // independently so it never blocks the rest of the page.
   const [inventory, setInventory] = useState<SetCompletionInventoryValue | null>(null);
   const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!username) {
@@ -1561,7 +1574,7 @@ function PnlSummaryTab({
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : String(error));
+          setErrorMessage(formatPortfolioError(error));
         }
       } finally {
         if (!cancelled) {
@@ -1579,22 +1592,53 @@ function PnlSummaryTab({
 
   // Owned-inventory value: period-independent, loaded in parallel with (and after) the
   // summary so the page populates progressively.
+  // Friendly, non-technical message for an inventory-value load failure.
+  const formatInventoryError = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/session expired|sign in/i.test(message)) {
+      return 'Your Warframe.Market session expired — sign in again to value your inventory.';
+    }
+    if (/network|timed out|timeout|reach|connection|fetch/i.test(message)) {
+      return 'Couldn’t reach Warframe.Market to value your inventory. Check your connection and retry.';
+    }
+    return 'Couldn’t load your inventory value right now. Please retry.';
+  };
+
+  // Retry-able inventory value load, shared by the manual refresh and the retry button so a
+  // failure surfaces a clear message instead of leaving the card spinning forever.
+  const reloadInventory = async () => {
+    setInventoryLoading(true);
+    setInventoryError(null);
+    try {
+      setInventory(await getPortfolioInventoryValue());
+    } catch (error) {
+      setInventoryError(formatInventoryError(error));
+    } finally {
+      setInventoryLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!username) {
       setInventory(null);
+      setInventoryError(null);
       return;
     }
 
     let cancelled = false;
     setInventoryLoading(true);
+    setInventoryError(null);
     void getPortfolioInventoryValue()
       .then((value) => {
         if (!cancelled) {
           setInventory(value);
+          setInventoryError(null);
         }
       })
       .catch((error) => {
-        console.error('[portfolio] failed to load inventory value', error);
+        if (!cancelled) {
+          setInventoryError(formatInventoryError(error));
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -1620,13 +1664,9 @@ function PnlSummaryTab({
       const nextSummary = await getPortfolioPnlSummary(username, period);
       setSummary(nextSummary);
       // Re-value inventory too (separate, slower) without blocking the summary refresh.
-      setInventoryLoading(true);
-      void getPortfolioInventoryValue()
-        .then((value) => setInventory(value))
-        .catch((error) => console.error('[portfolio] failed to refresh inventory value', error))
-        .finally(() => setInventoryLoading(false));
+      void reloadInventory();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(formatPortfolioError(error));
     } finally {
       setRefreshingTrades(false);
     }
@@ -1644,7 +1684,11 @@ function PnlSummaryTab({
           <button
             key={nextPeriod}
             className={`period-btn${period === nextPeriod ? ' active' : ''}`}
-            onClick={() => setTradePeriod(nextPeriod)}
+            onClick={() => {
+              // Clear any stale error from the previous period before switching.
+              setErrorMessage(null);
+              setTradePeriod(nextPeriod);
+            }}
           >
             {nextPeriod === 'all' ? 'All Time' : nextPeriod}
           </button>
@@ -1706,7 +1750,9 @@ function PnlSummaryTab({
               </div>
             </div>
             <div className="info-card portfolio-summary-loadable">
-              {inventoryLoading || !inventory ? <PortfolioLoadingOverlay /> : null}
+              {/* Don't show the loading overlay when the load failed — otherwise the card spins
+                  forever. The error state below offers a retry instead. */}
+              {(inventoryLoading || !inventory) && !inventoryError ? <PortfolioLoadingOverlay /> : null}
               <div className="info-card-label">
                 Inventory Value
                 <InfoHint
@@ -1715,7 +1761,19 @@ function PnlSummaryTab({
                 />
               </div>
               <div className="info-card-val neutral">{formatPlatinumValue(inventory?.totalValue ?? 0)}</div>
-              {inventory && inventory.unpricedCount > 0 ? (
+              {inventoryError ? (
+                <div className="info-card-subnote portfolio-inventory-error">
+                  <span>{inventoryError}</span>
+                  <button
+                    type="button"
+                    className="act-btn"
+                    onClick={() => void reloadInventory()}
+                    disabled={inventoryLoading}
+                  >
+                    {inventoryLoading ? 'Retrying…' : 'Retry'}
+                  </button>
+                </div>
+              ) : inventory && inventory.unpricedCount > 0 ? (
                 <div className="info-card-subnote">
                   {inventory.unpricedCount} part{inventory.unpricedCount === 1 ? '' : 's'} not yet priced
                 </div>

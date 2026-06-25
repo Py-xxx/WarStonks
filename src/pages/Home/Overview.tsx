@@ -10,6 +10,7 @@ import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/w
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useDocumentVisibility } from '../../hooks/useDocumentVisibility';
+import { useModalA11y } from '../../hooks/useModalA11y';
 import { useAppStore } from '../../stores/useAppStore';
 import type { ItemAnalysisResponse, WfmTopSellOrder } from '../../types';
 
@@ -308,6 +309,10 @@ function QuickViewCard() {
   const [viewAllOpen, setViewAllOpen] = useState(false);
 
   const selectedItem = quickView.selectedItem;
+  const viewAllRef = useModalA11y<HTMLDivElement>({
+    onClose: () => setViewAllOpen(false),
+    active: viewAllOpen && Boolean(selectedItem),
+  });
   const mainOrder = quickView.sellOrders[0] ?? null;
   const compactOrders = quickView.sellOrders.slice(1, 5);
   // Full snapshot, cheapest first, for the "View All" popup.
@@ -468,14 +473,14 @@ function QuickViewCard() {
             {sparklinePath ? (
               <div className="sparkline-wrap">
                 <svg width="100%" height="24" viewBox="0 0 300 24" preserveAspectRatio="none">
-                  <polyline points={sparklinePath} fill="none" stroke="#3DD68C" strokeWidth="1.5" opacity="0.8" />
-                  <polyline points={`${sparklinePath} 300,24 0,24`} fill="rgba(61,214,140,0.06)" stroke="none" />
+                  <polyline className="qv-sparkline-line" points={sparklinePath} fill="none" strokeWidth="1.5" opacity="0.8" />
+                  <polyline className="qv-sparkline-fill" points={`${sparklinePath} 300,24 0,24`} stroke="none" />
                 </svg>
               </div>
             ) : quickView.sparklineLoading ? (
               <div className="sparkline-wrap">
                 <svg width="100%" height="24" viewBox="0 0 300 24" preserveAspectRatio="none">
-                  <line x1="0" y1="12" x2="300" y2="12" stroke="rgba(152,170,210,0.24)" strokeDasharray="4 4" />
+                  <line className="qv-sparkline-mid" x1="0" y1="12" x2="300" y2="12" strokeDasharray="4 4" />
                 </svg>
               </div>
             ) : null}
@@ -535,7 +540,7 @@ function QuickViewCard() {
             aria-label="Close all sell orders"
             onClick={() => setViewAllOpen(false)}
           />
-          <div className="qv-viewall-modal">
+          <div ref={viewAllRef} className="qv-viewall-modal">
             <div className="qv-viewall-header">
               <div>
                 <span className="card-label">All Sell Orders</span>

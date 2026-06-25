@@ -86,10 +86,17 @@ export function StartupScreen({
         <div className="startup-stage-card">
           <div className="startup-stage-meta">
             <span className="startup-stage-label">{progress.stageLabel}</span>
-            <span className="startup-stage-state">In progress</span>
+            <span className="startup-stage-state">{errorMessage ? 'Error' : 'In progress'}</span>
           </div>
           <p className="startup-status-text">{friendlyErrorMessage ?? friendlyStatusText}</p>
-          <div className="startup-progress-track" aria-hidden="true">
+          <div
+            className="startup-progress-track"
+            role="progressbar"
+            aria-label="Startup progress"
+            aria-valuenow={Math.round(progressPercent)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
             <div className="startup-progress-fill" style={{ width: `${progressPercent}%` }} />
           </div>
         </div>

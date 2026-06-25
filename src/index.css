@@ -1,5 +1,33 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Respect the OS "reduce motion" setting — neutralize animations/transitions for
+   vestibular-sensitive users (spinners, fades, hover transforms, etc.). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Global keyboard-focus fallback for interactive elements that don't define their own
+   :focus-visible style. More specific component rules still override this. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+[role='button']:focus-visible,
+[role='tab']:focus-visible,
+[role='switch']:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
 :root {
   --bg-base: #0D0F14;
   --bg-surface: #13161E;
@@ -3944,13 +3972,20 @@ body {
 .data-stale-banner {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   padding: 8px 16px;
   background: color-mix(in srgb, var(--color-amber) 14%, var(--bg-surface));
   border-bottom: 1px solid color-mix(in srgb, var(--color-amber) 45%, transparent);
-  color: var(--color-amber);
+  /* Body text uses readable primary text (high contrast); the warning meaning is carried by
+     the amber icon, not by color alone. */
+  color: var(--text-primary);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.data-stale-banner-icon {
+  flex-shrink: 0;
+  color: var(--color-amber);
 }
 
 .data-stale-banner-text {
@@ -4150,6 +4185,12 @@ body {
 }
 
 .subtab {
+  /* Button reset so .subtab can be a real <button> (native Enter/Space) and still look like
+     the old span. The border-bottom underline below intentionally overrides this border:none. */
+  appearance: none;
+  background: none;
+  border: none;
+  font-family: inherit;
   padding: 0 12px;
   height: 40px;
   display: flex;
@@ -4161,6 +4202,11 @@ body {
   border-bottom: 2px solid transparent;
   transition: all 0.12s;
   white-space: nowrap;
+}
+/* Layout-transparent wrapper so a role="tablist" can group the tab buttons without disturbing
+   the flex subnav layout. */
+.subnav-tabs {
+  display: contents;
 }
 .subtab:hover { color: var(--text-primary); }
 .subtab.active {
@@ -4561,6 +4607,19 @@ body {
 .wl-table td:not(:first-child) { text-align: right; }
 .wl-table tr:last-child td { border-bottom: none; }
 .wl-table tr:hover td { background: var(--bg-elevated); }
+.watchlist-row {
+  cursor: pointer;
+}
+/* Price cell: default to primary text; turn green when the live price hit the target. */
+.wl-price-cell {
+  color: var(--text-primary);
+}
+.wl-price-cell.wl-price-hit {
+  color: var(--accent-green);
+}
+.wl-selected-name {
+  color: var(--text-primary);
+}
 .watchlist-row.watchlist-row-red td {
   background: rgba(240, 79, 88, 0.08);
 }
@@ -5041,6 +5100,17 @@ body {
 }
 .sparkline-wrap svg {
   display: block;
+}
+/* Quick-view sparkline colors — kept in CSS (SVG presentation attributes can't resolve
+   var()) so the theme palette is the single source of truth. */
+.qv-sparkline-line {
+  stroke: var(--accent-green);
+}
+.qv-sparkline-fill {
+  fill: color-mix(in srgb, var(--accent-green) 6%, transparent);
+}
+.qv-sparkline-mid {
+  stroke: color-mix(in srgb, var(--text-secondary) 24%, transparent);
 }
 .qv-hero {
   display: grid;
@@ -6390,7 +6460,21 @@ body {
 }
 .trade-list-card {
   padding: 0;
+  /* Horizontal scroll instead of clipping so the 8-column listing table (and long item names)
+     stay usable on narrow windows rather than overflowing the layout. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.listing-table .item-cell {
+  max-width: 280px;
+}
+.listing-table .item-cell .item-name {
+  display: inline-block;
+  max-width: 220px;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 .trade-subnav-hint {
   font-size: 11px;
@@ -6992,6 +7076,13 @@ body {
   text-transform: uppercase;
   color: var(--text-muted);
 }
+.trade-listing-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
 .trade-listing-toggle-field {
   align-content: end;
 }
@@ -7289,6 +7380,15 @@ body {
   color: var(--color-amber);
   font-size: 10px;
   font-family: 'JetBrains Mono', monospace;
+}
+.info-card-subnote.portfolio-inventory-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-red);
+}
+.info-card-subnote.portfolio-inventory-error .act-btn {
+  flex-shrink: 0;
 }
 .info-card-note {
   margin-top: 6px;

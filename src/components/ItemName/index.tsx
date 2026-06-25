@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { openExternalUrl } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
 import type { ItemQuickViewTarget } from '../../types';
@@ -7,6 +7,16 @@ type ItemNameProps = ItemQuickViewTarget & {
   className?: string;
   children?: ReactNode;
 };
+
+// Approximate menu size, used to keep it on-screen near the viewport edges.
+const ITEM_MENU_WIDTH = 210;
+const ITEM_MENU_HEIGHT = 116;
+
+function clampMenuPosition(x: number, y: number): { x: number; y: number } {
+  const maxX = Math.max(8, window.innerWidth - ITEM_MENU_WIDTH - 8);
+  const maxY = Math.max(8, window.innerHeight - ITEM_MENU_HEIGHT - 8);
+  return { x: Math.min(x, maxX), y: Math.min(y, maxY) };
+}
 
 /**
  * A clickable item/set name used anywhere an item is displayed. Left-click opens the item
@@ -17,6 +27,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const openItemInQuickView = useAppStore((state) => state.openItemInQuickView);
   const pushToast = useAppStore((state) => state.pushToast);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (!menu) {
@@ -72,6 +83,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   return (
     <>
       <span
+        ref={triggerRef}
         className={`item-name-link${className ? ` ${className}` : ''}`}
         role="button"
         tabIndex={0}
@@ -80,12 +92,21 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setMenu({ x: event.clientX, y: event.clientY });
+          setMenu(clampMenuPosition(event.clientX, event.clientY));
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             handleOpen(event);
+            return;
+          }
+          // Keyboard access to the context menu: ContextMenu key or Shift+F10, anchored to the
+          // element so it's reachable without a mouse.
+          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault();
+            event.stopPropagation();
+            const rect = triggerRef.current?.getBoundingClientRect();
+            setMenu(clampMenuPosition(rect?.left ?? 0, rect?.bottom ?? 0));
           }
         }}
       >

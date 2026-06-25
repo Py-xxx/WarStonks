@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
+import { useModalA11y } from '../../hooks/useModalA11y';
 import { RINGTONES, playAlertSound } from '../../lib/alertAudio';
 import {
-  desktopNotificationPermission,
   isDesktopNotificationSupported,
   requestDesktopNotificationPermission,
 } from '../../lib/notifications';
@@ -50,6 +50,7 @@ export function NotificationsModal() {
   const settings = useAppStore((state) => state.notificationSettings);
   const setSettings = useAppStore((state) => state.setNotificationSettings);
   const [permissionNote, setPermissionNote] = useState<string | null>(null);
+  const modalRef = useModalA11y<HTMLDivElement>({ onClose: closeModal, active: modalOpen });
 
   if (!modalOpen) {
     return null;
@@ -69,16 +70,19 @@ export function NotificationsModal() {
       setPermissionNote('Desktop notifications are not available in this environment.');
       return;
     }
-    const granted = await requestDesktopNotificationPermission();
-    if (granted) {
+    // Triggers the native OS permission prompt (via the Tauri notification plugin).
+    const permission = await requestDesktopNotificationPermission();
+    if (permission === 'granted') {
       update({ desktopEnabled: true });
       setPermissionNote(null);
-    } else {
+    } else if (permission === 'denied') {
       setPermissionNote(
-        desktopNotificationPermission() === 'denied'
-          ? 'Notification permission is blocked. Enable it for WarStonks in your OS settings.'
-          : 'Notification permission was not granted.',
+        'Notifications are blocked for WarStonks. Enable them in your OS settings (macOS: System Settings → Notifications → WarStonks; Windows: Settings → Notifications), then try again.',
       );
+    } else if (permission === 'unsupported') {
+      setPermissionNote('Desktop notifications are not available in this environment.');
+    } else {
+      setPermissionNote('Notification permission was not granted. Click Enable again to retry.');
     }
   };
 
@@ -90,7 +94,7 @@ export function NotificationsModal() {
         aria-label="Close notification settings"
         onClick={closeModal}
       />
-      <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Notification settings">
+      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Notification settings">
         <div className="settings-modal-header">
           <div className="settings-modal-title">
             <span className="card-label">Notifications</span>

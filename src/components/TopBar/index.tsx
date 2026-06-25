@@ -437,7 +437,9 @@ export function TopBar() {
         ) : null}
       </div>
 
-      <div className="currency-strip" role="status" aria-label="Currency balances">
+      {/* role="group" (not "status"): balances update on every poll, and a live region would
+          re-announce all of them on each refresh. */}
+      <div className="currency-strip" role="group" aria-label="Currency balances">
         <div className="currency-item ci-platinum">
           <div className="currency-icon">
             <img src={walletIcons.platinum} alt="" />
