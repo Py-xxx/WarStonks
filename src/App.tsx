@@ -20,6 +20,9 @@ import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
 import { useWatchlistSubscription } from './hooks/useWatchlistSubscription';
+import { useUnderpricedListings } from './hooks/useUnderpricedListings';
+import { useOpportunitiesSync } from './hooks/useOpportunitiesSync';
+import { useOwnedRelicsBootstrap } from './hooks/useOwnedRelicsBootstrap';
 import { useImageErrorRecovery } from './hooks/useImageErrorRecovery';
 import { useWorldStateEvents } from './hooks/useWorldStateEvents';
 import { useWorldStateFissures } from './hooks/useWorldStateFissures';
@@ -95,6 +98,9 @@ function PageRouter() {
 function AppShell() {
   useWatchlistScanner();
   useWatchlistSubscription();
+  useUnderpricedListings();
+  useOpportunitiesSync();
+  useOwnedRelicsBootstrap();
   useImageErrorRecovery();
   useMarketTracking();
   useTradeDetection();

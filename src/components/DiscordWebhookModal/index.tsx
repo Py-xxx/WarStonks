@@ -25,7 +25,7 @@ export function DiscordWebhookModal() {
   const [webhookUrl, setWebhookUrl] = useState('');
   const [watchlistFound, setWatchlistFound] = useState(true);
   const [tradeDetected, setTradeDetected] = useState(true);
-  const [worldstateOffline, setWorldstateOffline] = useState(false);
+  const [underpricedListing, setUnderpricedListing] = useState(true);
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,7 +37,7 @@ export function DiscordWebhookModal() {
     setWebhookUrl(appSettings.discordWebhook.webhookUrl ?? '');
     setWatchlistFound(appSettings.discordWebhook.notifications.watchlistFound);
     setTradeDetected(appSettings.discordWebhook.notifications.tradeDetected);
-    setWorldstateOffline(appSettings.discordWebhook.notifications.worldstateOffline);
+    setUnderpricedListing(appSettings.discordWebhook.notifications.underpricedListing);
     setLocalError(null);
     clearSettingsError();
   }, [appSettings.discordWebhook, clearSettingsError, modalOpen]);
@@ -58,7 +58,7 @@ export function DiscordWebhookModal() {
         notifications: {
           watchlistFound,
           tradeDetected,
-          worldstateOffline,
+          underpricedListing,
         },
       });
     } catch (error) {
@@ -171,16 +171,16 @@ export function DiscordWebhookModal() {
 
               <label className="settings-switch-row settings-switch-row-compact">
                 <span className="settings-field-copy">
-                  <span className="settings-field-label">WFStat Offline</span>
-                  <span className="settings-field-help">Notify when worldstate feeds fail.</span>
+                  <span className="settings-field-label">Underpriced Listing</span>
+                  <span className="settings-field-help">Notify when the radar finds a listing below its recommended price.</span>
                 </span>
                 <button
-                  className={`settings-toggle${worldstateOffline ? ' on' : ''}`}
+                  className={`settings-toggle${underpricedListing ? ' on' : ''}`}
                   type="button"
                   role="switch"
-                  aria-checked={worldstateOffline}
-                  aria-label="Notify on Discord when worldstate feeds fail"
-                  onClick={() => setWorldstateOffline((current) => !current)}
+                  aria-checked={underpricedListing}
+                  aria-label="Notify on Discord when an underpriced listing is found"
+                  onClick={() => setUnderpricedListing((current) => !current)}
                 >
                   <span className="settings-toggle-track">
                     <span className="settings-toggle-thumb" />

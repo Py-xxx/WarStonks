@@ -2,9 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   applySetCompletionScreenshotImportRows,
   getArbitrageScannerState,
-  getOwnedRelicInventoryCache,
   getWfmAutocompleteItems,
-  refreshOwnedRelicInventory,
   getSetCompletionOwnedItems,
   getSetCompletionOwnedItemPrices,
   setSetCompletionOwnedItemQuantity,
@@ -23,6 +21,7 @@ import {
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
+import { UnderpricedListingsPanel } from '../../components/UnderpricedListingsPanel';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import {
   clearWatchlistAddFeedbackTimeouts,
@@ -37,7 +36,6 @@ import type {
   ArbitrageScannerState,
   ArbitrageScannerSetEntry,
   OwnedRelicEntry,
-  OwnedRelicInventoryCache,
   RelicRefinementChanceProfile,
   RelicRoiDropEntry,
   RelicRoiEntry,
@@ -978,8 +976,29 @@ export function OpportunitiesPage({
   mode?: 'opportunities' | 'inventory';
 } = {}) {
   const [activeTab, setActiveTab] = useState<OppTab>(
-    mode === 'inventory' ? 'set-planner' : 'farm-now',
+    mode === 'inventory' ? 'set-planner' : 'opportunities',
   );
+
+  // Honour a subtab request from an opportunity action button (e.g. a "Farm" action → farm-now).
+  const requestedOpportunitiesTab = useAppStore((state) => state.requestedOpportunitiesTab);
+  const requestedFarmNowSearch = useAppStore((state) => state.requestedFarmNowSearch);
+  const clearRequestedOpportunitiesTab = useAppStore(
+    (state) => state.clearRequestedOpportunitiesTab,
+  );
+  const [farmNowSearch, setFarmNowSearch] = useState('');
+  useEffect(() => {
+    const validTabs: OppTab[] =
+      mode === 'inventory'
+        ? ['set-planner', 'inventory']
+        : ['opportunities', 'farm-now', 'owned-relics'];
+    if (requestedOpportunitiesTab && validTabs.includes(requestedOpportunitiesTab as OppTab)) {
+      setActiveTab(requestedOpportunitiesTab as OppTab);
+      if (requestedFarmNowSearch !== null) {
+        setFarmNowSearch(requestedFarmNowSearch);
+      }
+      clearRequestedOpportunitiesTab();
+    }
+  }, [requestedOpportunitiesTab, requestedFarmNowSearch, mode, clearRequestedOpportunitiesTab]);
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
   const [farmNowScan, setFarmNowScan] = useState<ArbitrageScannerResponse | null>(null);
   const [farmNowScanState, setFarmNowScanState] = useState<ArbitrageScannerState | null>(null);
@@ -993,13 +1012,16 @@ export function OpportunitiesPage({
   const [ownedSort, setOwnedSort] = useState<'name' | 'price'>('name');
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [ownedRelics, setOwnedRelics] = useState<OwnedRelicEntry[]>([]);
-  const [ownedRelicsLoading, setOwnedRelicsLoading] = useState(false);
-  const [farmNowRelicsRefreshing, setFarmNowRelicsRefreshing] = useState(false);
-  const [ownedRelicsError, setOwnedRelicsError] = useState<string | null>(null);
+  // Owned relics live in the store now (persist across navigation; cooldown-gated refresh).
+  const ownedRelics = useAppStore((state) => state.ownedRelics);
+  const ownedRelicsLoading = useAppStore((state) => state.ownedRelicsLoading);
+  const ownedRelicsRefreshing = useAppStore((state) => state.ownedRelicsRefreshing);
+  const ownedRelicsError = useAppStore((state) => state.ownedRelicsError);
+  const ownedRelicsCacheLoaded = useAppStore((state) => state.ownedRelicsCacheLoaded);
+  const ownedRelicsUpdatedAt = useAppStore((state) => state.ownedRelicsUpdatedAt);
+  const loadOwnedRelicsCache = useAppStore((state) => state.loadOwnedRelicsCache);
+  const refreshOwnedRelics = useAppStore((state) => state.refreshOwnedRelics);
   const [expandedRelicKey, setExpandedRelicKey] = useState<string | null>(null);
-  const [ownedRelicsLoaded, setOwnedRelicsLoaded] = useState(false);
-  const [ownedRelicsUpdatedAt, setOwnedRelicsUpdatedAt] = useState<string | null>(null);
   const [expandedSetSlug, setExpandedSetSlug] = useState<string | null>(null);
   const [componentQuery, setComponentQuery] = useState('');
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
@@ -1041,8 +1063,7 @@ export function OpportunitiesPage({
           { id: 'inventory', label: 'Inventory' },
         ]
       : [
-          // The "Opportunities" subtab is temporarily disabled; "What To Farm Now" is the
-          // default. Re-add `{ id: 'opportunities', label: 'Opportunities' }` here to restore it.
+          { id: 'opportunities', label: 'Opportunities' },
           { id: 'farm-now', label: 'What To Farm Now' },
           { id: 'owned-relics', label: 'Owned Relics' },
         ];
@@ -1142,99 +1163,13 @@ export function OpportunitiesPage({
     };
   }, [activeTab]);
 
+  // Relics: read the local cache once (instant, survives navigation), then ask for a cooldown-gated
+  // AlecaFrame refresh. Reopening the Opportunities page is what triggers a refresh — never a tab
+  // switch — and the 3-min cooldown in the store stops it hammering AlecaFrame.
   useEffect(() => {
-    if (activeTab !== 'set-planner' && activeTab !== 'inventory') {
-      return;
-    }
-
-    void loadOwnedRelics();
-  }, [activeTab]);
-
-  const applyOwnedRelicCache = (cache: OwnedRelicInventoryCache) => {
-    setOwnedRelics(cache.entries);
-    setOwnedRelicsLoaded(true);
-    setOwnedRelicsUpdatedAt(cache.updatedAt);
-  };
-
-  const loadOwnedRelics = async (force = false) => {
-    if (ownedRelicsLoading) {
-      return;
-    }
-    if (!force && ownedRelicsLoaded) {
-      return;
-    }
-
-    setOwnedRelicsLoading(true);
-    setOwnedRelicsError(null);
-
-    try {
-      const cache = force
-        ? await refreshOwnedRelicInventory()
-        : await getOwnedRelicInventoryCache();
-      applyOwnedRelicCache(cache);
-    } catch (error) {
-      setOwnedRelicsError(toErrorMessage(error));
-    } finally {
-      setOwnedRelicsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab !== 'farm-now') {
-      return;
-    }
-
-    let cancelled = false;
-
-    const primeFarmNowRelics = async () => {
-      setOwnedRelicsError(null);
-
-      try {
-        const cache = await getOwnedRelicInventoryCache();
-        if (cancelled) {
-          return;
-        }
-        applyOwnedRelicCache(cache);
-      } catch (error) {
-        if (!cancelled) {
-          setOwnedRelicsError(toErrorMessage(error));
-        }
-      }
-
-      setFarmNowRelicsRefreshing(true);
-      try {
-        const refreshedCache = await refreshOwnedRelicInventory();
-        if (cancelled) {
-          return;
-        }
-        applyOwnedRelicCache(refreshedCache);
-        setOwnedRelicsError(null);
-      } catch (error) {
-        if (!cancelled) {
-          setOwnedRelicsError(toErrorMessage(error));
-        }
-      } finally {
-        if (!cancelled) {
-          setFarmNowRelicsRefreshing(false);
-        }
-      }
-    };
-
-    void primeFarmNowRelics();
-
-    return () => {
-      cancelled = true;
-      setFarmNowRelicsRefreshing(false);
-    };
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (activeTab !== 'owned-relics') {
-      return;
-    }
-
-    void loadOwnedRelics();
-  }, [activeTab]);
+    void loadOwnedRelicsCache();
+    void refreshOwnedRelics(false);
+  }, [loadOwnedRelicsCache, refreshOwnedRelics]);
 
   const plannerScanSource =
     activeTab === 'farm-now' ? farmNowScan ?? scannerResponse : scannerResponse ?? farmNowScan;
@@ -1530,7 +1465,23 @@ export function OpportunitiesPage({
     });
   }, [ownedRelics, farmNowScan]);
 
-  const farmNowTopRelics = useMemo(() => farmNowRelics.slice(0, 3), [farmNowRelics]);
+  // Search filter (relic name + any of its item drops), shared by both farm-now subtabs.
+  const displayedFarmNowRelics = useMemo(() => {
+    const query = farmNowSearch.trim().toLowerCase();
+    if (!query) {
+      return farmNowRelics;
+    }
+    return farmNowRelics.filter(
+      (row) =>
+        row.relic.name.toLowerCase().includes(query) ||
+        row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
+    );
+  }, [farmNowRelics, farmNowSearch]);
+
+  const farmNowTopRelics = useMemo(
+    () => displayedFarmNowRelics.slice(0, 3),
+    [displayedFarmNowRelics],
+  );
   const farmNowMissingComponents = useMemo(() => {
     const byKey = new Map<
       string,
@@ -1638,9 +1589,21 @@ export function OpportunitiesPage({
     });
   }, [farmNowScan, ownedRelics, farmNowMissingComponents]);
 
+  const displayedFarmNowSetCompletionRelics = useMemo(() => {
+    const query = farmNowSearch.trim().toLowerCase();
+    if (!query) {
+      return farmNowSetCompletionRelics;
+    }
+    return farmNowSetCompletionRelics.filter(
+      (row) =>
+        row.relic.name.toLowerCase().includes(query) ||
+        row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
+    );
+  }, [farmNowSetCompletionRelics, farmNowSearch]);
+
   const farmNowSetCompletionTopRelics = useMemo(
-    () => farmNowSetCompletionRelics.slice(0, 3),
-    [farmNowSetCompletionRelics],
+    () => displayedFarmNowSetCompletionRelics.slice(0, 3),
+    [displayedFarmNowSetCompletionRelics],
   );
   const farmNowSetCompletionSetCount = useMemo(
     () => plannerEntries.filter((planner) => planner.components.some((component) => component.missingQuantity > 0))
@@ -2443,7 +2406,7 @@ export function OpportunitiesPage({
                   <button
                     type="button"
                     className="market-refresh-button"
-                    onClick={() => { void loadOwnedRelics(true); }}
+                    onClick={() => { void refreshOwnedRelics(true); }}
                     disabled={ownedRelicsLoading}
                     aria-label="Refresh owned relic inventory"
                   >
@@ -2454,7 +2417,9 @@ export function OpportunitiesPage({
 
               {ownedRelicsError ? <div className="scanner-inline-error">{ownedRelicsError}</div> : null}
 
-              {ownedRelicsLoading ? (
+              {/* Only show the blocking placeholder when there's nothing cached yet — otherwise
+                  the cached relics stay on screen while a background refresh runs. */}
+              {ownedRelicsLoading && ownedRelics.length === 0 ? (
                 <div className="opportunities-placeholder">Loading relic inventory…</div>
               ) : ownedRelics.length === 0 ? (
                 <div className="set-planner-empty">
@@ -2627,7 +2592,7 @@ export function OpportunitiesPage({
                     ) : (
                       <span>No scan data yet</span>
                     )}
-                    {farmNowRelicsRefreshing ? (
+                    {ownedRelicsRefreshing ? (
                       <span className="farm-now-refresh-indicator" title="Refreshing owned relic cache">
                         <span className="farm-now-refresh-spinner" aria-hidden="true" />
                         Refreshing relics
@@ -2644,6 +2609,26 @@ export function OpportunitiesPage({
                     Run Scan
                   </button>
                 </div>
+              </div>
+
+              <div className="farm-now-search">
+                <input
+                  type="search"
+                  className="settings-input farm-now-search-input"
+                  placeholder="Search relics or item drops…"
+                  value={farmNowSearch}
+                  onChange={(event) => setFarmNowSearch(event.target.value)}
+                  spellCheck={false}
+                />
+                {farmNowSearch ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setFarmNowSearch('')}
+                  >
+                    Clear
+                  </button>
+                ) : null}
               </div>
 
               {(farmNowTab === 'set-completion'
@@ -2702,7 +2687,25 @@ export function OpportunitiesPage({
                   </div>
                 ) : ownedRelicsLoading ? (
                   <div className="opportunities-placeholder">Loading owned relic inventory…</div>
-                ) : ownedRelicsLoaded && !ownedRelicsUpdatedAt ? (
+                ) : ownedRelicsError ? (
+                  <div className="set-planner-empty">
+                    <div>
+                      <span className="panel-title-eyebrow">Couldn't load relics</span>
+                      <h3>{ownedRelicsError}</h3>
+                      <p>
+                        Relics load from AlecaFrame. Enable the AlecaFrame API in Settings and save
+                        your public link, then retry.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => void refreshOwnedRelics(true)}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : ownedRelicsCacheLoaded && !ownedRelicsUpdatedAt ? (
                   <div className="set-planner-empty">
                     <div>
                       <span className="panel-title-eyebrow">Owned Relics Required</span>
@@ -2763,7 +2766,12 @@ export function OpportunitiesPage({
                       <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                     </div>
 
-                    {farmNowSetCompletionRelics.map((row) => {
+                    {displayedFarmNowSetCompletionRelics.length === 0 ? (
+                      <div className="opportunities-placeholder">
+                        No relics or item drops match “{farmNowSearch}”.
+                      </div>
+                    ) : null}
+                    {displayedFarmNowSetCompletionRelics.map((row) => {
                       const relicKey = `${row.relic.slug}:set-completion`;
                       const expanded = expandedFarmRelicKey === relicKey;
                       const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
@@ -2882,7 +2890,25 @@ export function OpportunitiesPage({
                 </div>
               ) : ownedRelicsLoading ? (
                 <div className="opportunities-placeholder">Loading owned relic inventory…</div>
-              ) : ownedRelicsLoaded && !ownedRelicsUpdatedAt ? (
+              ) : ownedRelicsError ? (
+                <div className="set-planner-empty">
+                  <div>
+                    <span className="panel-title-eyebrow">Couldn't load relics</span>
+                    <h3>{ownedRelicsError}</h3>
+                    <p>
+                      Relics load from AlecaFrame. Enable the AlecaFrame API in Settings and save
+                      your public link, then retry.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => void refreshOwnedRelics(true)}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : ownedRelicsCacheLoaded && !ownedRelicsUpdatedAt ? (
                 <div className="set-planner-empty">
                   <div>
                     <span className="panel-title-eyebrow">Owned Relics Required</span>
@@ -2924,7 +2950,12 @@ export function OpportunitiesPage({
                     <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                   </div>
 
-                  {farmNowRelics.map((row) => {
+                  {displayedFarmNowRelics.length === 0 ? (
+                    <div className="opportunities-placeholder">
+                      No relics or item drops match “{farmNowSearch}”.
+                    </div>
+                  ) : null}
+                  {displayedFarmNowRelics.map((row) => {
                     const relicKey = `${row.relic.slug}:${row.refinementKey}`;
                     const expanded = expandedFarmRelicKey === relicKey;
                     const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
@@ -3023,6 +3054,8 @@ export function OpportunitiesPage({
               )}
             </section>
           </div>
+        ) : activeTab === 'opportunities' ? (
+          <UnderpricedListingsPanel />
         ) : (
           <div className="opportunities-placeholder">
             No opportunities found — try adjusting strategy filters

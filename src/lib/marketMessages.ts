@@ -1,3 +1,8 @@
+// Inlined (not imported from tauriClient) so this module stays free of Tauri-only imports and
+// remains unit-testable under the node test runner.
+const isTauriRuntime = () =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
 interface WhisperTarget {
   username: string;
   platinum: number;
@@ -38,7 +43,21 @@ export async function copyWhisperMessage(
   target: WhisperTarget,
   itemName: string,
 ): Promise<void> {
-  const message = formatWhisperMessage(target, itemName);
+  await copyTextToClipboard(formatWhisperMessage(target, itemName));
+}
+
+/**
+ * Copies text to the clipboard. Inside the Tauri app the web `navigator.clipboard` API throws
+ * `NotAllowedError` whenever the write happens without a live user activation — e.g. after an
+ * `await`ed network call — so we go through the Tauri clipboard plugin there, which has no such
+ * restriction. In a plain browser we fall back to the web API, then to `execCommand`.
+ */
+export async function copyTextToClipboard(message: string): Promise<void> {
+  if (isTauriRuntime()) {
+    const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+    await writeText(message);
+    return;
+  }
 
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(message);

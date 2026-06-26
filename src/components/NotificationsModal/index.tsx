@@ -24,6 +24,11 @@ interface EventRow {
 
 const EVENT_ROWS: EventRow[] = [
   { key: 'watchlistAlert', label: 'Watchlist Alert', help: 'When a watchlist target price is hit.' },
+  {
+    key: 'underpricedListing',
+    label: 'Underpriced Listing',
+    help: 'When the radar finds a market listing well below its recommended price.',
+  },
   { key: 'scannerStale', label: 'Scanner Stale', help: 'When scanner data goes out of date.' },
   { key: 'appUpdate', label: 'App Update', help: 'When a new WarStonks version is available.' },
 ];

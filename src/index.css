@@ -63,6 +63,423 @@ textarea:focus-visible,
   font-size: 13px;
 }
 
+/* ── Underpriced-listings radar (Opportunities → Opportunities) ── */
+.radar-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+/* Main area: the opportunity board. The radar lives in the slim side panel. */
+.radar-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 200px;
+}
+
+/* --- Opportunity board (What To Do Now) --- */
+.opp-board {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.opp-board-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.opp-board-sub {
+  margin-top: 6px;
+  max-width: 60ch;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.opp-refresh {
+  flex: 0 0 auto;
+}
+.opp-board-error {
+  padding: 10px 12px;
+  border: 1px solid var(--accent-red);
+  border-radius: 8px;
+  background: rgba(240, 79, 88, 0.08);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.opp-board-empty {
+  padding: 32px 20px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+.opp-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.opp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-purple);
+  border-radius: 10px;
+}
+.opp-card-sellInventory {
+  border-left-color: var(--accent-amber);
+}
+.opp-card-flip {
+  border-left-color: var(--accent-blue);
+}
+.opp-card.is-pinned {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 1px rgba(61, 214, 140, 0.35);
+  background: linear-gradient(180deg, rgba(61, 214, 140, 0.06), transparent 60%), var(--bg-surface);
+}
+.opp-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.opp-filter-pill {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.opp-filter-pill:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-purple);
+}
+.opp-filter-pill.is-active {
+  color: var(--bg-base);
+  background: var(--accent-purple);
+  border-color: var(--accent-purple);
+}
+.opp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.opp-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.opp-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.opp-pin:hover {
+  border-color: var(--accent-green);
+  color: var(--text-primary);
+}
+.opp-pin.is-pinned {
+  color: var(--accent-green);
+  border-color: var(--accent-green);
+}
+.opp-card-reprice {
+  border-left-color: var(--accent-red);
+}
+
+.farm-now-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.farm-now-search-input {
+  flex: 1;
+  min-width: 0;
+}
+.opp-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.opp-card-icon {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: var(--bg-base);
+}
+.opp-card-icon-empty {
+  border: 1px solid var(--border);
+}
+.opp-card-titles {
+  flex: 1;
+  min-width: 0;
+}
+.opp-card-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.opp-card-subtitle {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.opp-card-value {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.1;
+}
+.opp-card-value-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--accent-green);
+}
+.opp-card-value-basis {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.opp-reasons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.opp-reason {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.opp-reason-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  position: relative;
+  top: 2px;
+}
+.opp-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.opp-conf {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.opp-conf-high { color: var(--accent-green); }
+.opp-conf-medium { color: var(--accent-amber); }
+.opp-conf-low { color: var(--text-muted); }
+.opp-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.opp-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.opp-action:hover {
+  border-color: var(--accent-purple);
+}
+.opp-action-static {
+  cursor: default;
+  color: var(--text-secondary);
+}
+.opp-action-static:hover {
+  border-color: var(--border);
+}
+.opp-action-price {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent-green);
+}
+.radar-side {
+  flex: 0 0 320px;
+  max-width: 320px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.radar-side-header p {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.radar-stats {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.radar-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.radar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+.radar-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.radar-card-yellow { border-left-color: var(--accent-amber); }
+.radar-card-red { border-left-color: var(--accent-red); }
+.radar-card.is-gone { opacity: 0.5; }
+.radar-card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.radar-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.radar-card-rank { color: var(--text-muted); font-weight: 400; }
+.radar-card-timer {
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.radar-card-seller {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.radar-card-completes {
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 1px rgba(139, 111, 255, 0.35);
+}
+.radar-card-completes-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-purple);
+  background: rgba(139, 111, 255, 0.1);
+  border-radius: 5px;
+  padding: 3px 6px;
+  line-height: 1.3;
+}
+.radar-card-prices {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.radar-card-listed { font-size: 14px; font-weight: 700; color: var(--accent-green); }
+.radar-card-pct { font-size: 11px; font-weight: 600; color: var(--accent-green); }
+.radar-card-red .radar-card-pct { color: var(--accent-red); }
+.radar-card-yellow .radar-card-pct { color: var(--accent-amber); }
+.radar-card-rec {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.15;
+  margin-left: auto;
+  text-align: right;
+}
+.radar-card-rec-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.radar-card-rec-value {
+  font-size: 15px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-primary);
+}
+.radar-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.radar-card-actions .act-btn { flex: 1; }
+.radar-card-dismiss {
+  flex: 0 0 auto;
+  width: 26px;
+  padding: 0;
+  line-height: 1;
+}
+.radar-card-gone {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* Domain-coded panel title dots. A card gets a colored dot before its title only when
    it carries an accent-* class, so non-panel card labels (modals etc.) stay plain. */
 .card.accent-blue   { --panel-accent: var(--accent-blue);   --panel-accent-glow: rgba(74, 158, 255, 0.45); }

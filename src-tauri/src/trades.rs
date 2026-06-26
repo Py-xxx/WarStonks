@@ -6340,6 +6340,27 @@ const PRESENCE_CHANGED_EVENT: &str = "wfm-presence-changed";
 /// Emitted to the frontend when a tracked watchlist item gets a matching sell ≤ target via
 /// the realtime newOrders feed.
 const WATCHLIST_ORDER_EVENT: &str = "wfm-watchlist-order";
+/// Emitted when a live `newOrders` sell listing is priced well below its recommended entry
+/// price (the "underpriced listings" radar on the Opportunities tab).
+const UNDERPRICED_LISTING_EVENT: &str = "wfm-underpriced-listing";
+
+/// The discount needed to flag a listing scales with the item's value: cheap items must be
+/// discounted hard before they're worth a ping, while expensive items fire on a shallower
+/// discount because the absolute plat saved is large. Returns the maximum `listed / recommended`
+/// ratio that still triggers an alert for a given recommended price.
+///
+/// `0.88 - 2.5/rec` (clamped to `[0, 0.88]`) yields, by recommended price:
+/// 5p → fire ≤ ~1.9p · 10p → ≤ ~6p · 20p → ≤ ~15p · 30p → ≤ ~24p · 50p → ≤ ~41p · 100p → ≤ ~85p.
+const UNDERPRICED_TRIGGER_BASE_RATIO: f64 = 0.88;
+const UNDERPRICED_TRIGGER_PRICE_OFFSET: f64 = 2.5;
+
+fn underpriced_trigger_ratio(recommended_price: f64) -> f64 {
+    if !recommended_price.is_finite() || recommended_price <= 0.0 {
+        return 0.0;
+    }
+    (UNDERPRICED_TRIGGER_BASE_RATIO - UNDERPRICED_TRIGGER_PRICE_OFFSET / recommended_price)
+        .clamp(0.0, UNDERPRICED_TRIGGER_BASE_RATIO)
+}
 const PRESENCE_KEEPALIVE_SECONDS: u64 = 20;
 const PRESENCE_STARTUP_DELAY_SECONDS: u64 = 8;
 
@@ -6352,7 +6373,7 @@ const PRESENCE_STARTUP_DELAY_SECONDS: u64 = 8;
 
 /// Commands sent to the persistent websocket task.
 #[derive(Debug, Clone)]
-enum WsCommand {
+pub(crate) enum WsCommand {
     /// Desired presence changed — apply it on the live connection.
     SetStatus,
     /// A session token became available (sign-in) — reconnect to authenticate.
@@ -6372,7 +6393,7 @@ fn ws_command_sender() -> &'static Mutex<Option<tokio::sync::mpsc::UnboundedSend
 /// Sends a command to the persistent websocket task, if it is running. Best-effort: if the
 /// task isn't up yet, the command is dropped (the task reconciles from shared state on its
 /// next loop anyway).
-fn send_ws_command(command: WsCommand) {
+pub(crate) fn send_ws_command(command: WsCommand) {
     if let Ok(guard) = ws_command_sender().lock() {
         if let Some(tx) = guard.as_ref() {
             let _ = tx.send(command);
@@ -6410,6 +6431,19 @@ fn has_tracked_items() -> bool {
         .lock()
         .map(|guard| !guard.is_empty())
         .unwrap_or(false)
+}
+
+/// True when the underpriced-listings radar has recommended prices to match against — in which
+/// case the WS connection + `newOrders` subscription should stay up even with no watchlist
+/// items, so the radar keeps running in the background.
+fn radar_active() -> bool {
+    crate::recommended_prices::tracked_count() > 0
+}
+
+/// Whether the `newOrders` subscription should be active: needed for watchlist alerts and/or the
+/// underpriced-listings radar.
+fn wants_new_orders_subscription() -> bool {
+    has_tracked_items() || radar_active()
 }
 
 /// Whether an order from a user with `status` is acceptable under the current seller mode.
@@ -6535,7 +6569,7 @@ async fn run_ws_manager(
 
     loop {
         let session = get_session_from_cache();
-        let want_connection = session.is_some() || has_tracked_items();
+        let want_connection = session.is_some() || wants_new_orders_subscription();
 
         if !want_connection {
             // Nothing to hold open. Wait for a command (sign-in / new tracked item) or
@@ -6606,14 +6640,14 @@ async fn run_ws_connection(
     let mut authenticated = false;
     let mut subscribed = false;
 
-    if has_tracked_items() {
+    if wants_new_orders_subscription() {
         ws_send_subscribe_new_orders(&mut ws).await?;
         subscribed = true;
         log_feature_event_best_effort(
             app,
             "trades-ws",
             "subscribe",
-            "Subscribed to newOrders feed for tracked items.",
+            "Subscribed to newOrders feed (watchlist and/or underpriced-listings radar).",
         );
     }
 
@@ -6623,7 +6657,7 @@ async fn run_ws_connection(
 
     loop {
         // Tear down when there's nothing left to hold the connection for.
-        if get_session_from_cache().is_none() && !has_tracked_items() {
+        if get_session_from_cache().is_none() && !wants_new_orders_subscription() {
             return Ok(WsOutcome::CommandReconnect);
         }
 
@@ -6641,7 +6675,7 @@ async fn run_ws_connection(
                         return Ok(WsOutcome::CommandReconnect)
                     }
                     Some(WsCommand::RefreshSubscription) => {
-                        let want = has_tracked_items();
+                        let want = wants_new_orders_subscription();
                         if want && !subscribed {
                             ws_send_subscribe_new_orders(&mut ws).await?;
                             subscribed = true;
@@ -6796,6 +6830,13 @@ fn handle_new_order_event(app: &tauri::AppHandle, payload: &Value) {
         return;
     };
 
+    // Count every firehose order we examine — a simple "the subscription is flowing" signal.
+    crate::recommended_prices::increment_scanned();
+
+    // Underpriced-listings radar — runs for the WHOLE firehose (any item with a recommended
+    // price), independent of the watchlist branch below.
+    check_underpriced_listing(app, &order, item_id);
+
     // Look up the tracked target; discard untracked items immediately.
     let Some(target) = watchlist_targets()
         .lock()
@@ -6847,6 +6888,92 @@ fn handle_new_order_event(app: &tauri::AppHandle, payload: &Value) {
             "quantity": order.quantity.unwrap_or(1),
             "rank": order.rank,
             "createdAt": order.created_at,
+        }),
+    );
+}
+
+/// Flags a live sell listing that is priced well below its recommended entry price. Looks up the
+/// item's recommended price (populated by the scanner / analysis), and on a strong-enough
+/// discount from an acceptable seller emits an `UNDERPRICED_LISTING_EVENT` for the Opportunities
+/// radar. Respects the user's seller mode, same as watchlist alerts.
+fn check_underpriced_listing(app: &tauri::AppHandle, order: &NewOrderEvent, item_id: &str) {
+    // Buying opportunities only: a new, visible SELL listing with a sane price.
+    if order.order_type != "sell" || order.visible == Some(false) {
+        return;
+    }
+    if !order.platinum.is_finite() || order.platinum <= 0.0 {
+        return;
+    }
+
+    let variant_key = crate::recommended_prices::variant_key_for_rank(order.rank);
+    let Some(recommended) = crate::recommended_prices::recommended_price(item_id, &variant_key)
+    else {
+        return;
+    };
+    if recommended.price <= 0.0 {
+        return;
+    }
+
+    let ratio = order.platinum / recommended.price;
+    let trigger_ratio = underpriced_trigger_ratio(recommended.price);
+    if !ratio.is_finite() || trigger_ratio <= 0.0 || ratio >= trigger_ratio {
+        return;
+    }
+
+    // Same seller-mode gate as watchlist alerts — only surface sellers you can trade with now.
+    let seller_mode = watchlist_seller_mode()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| "ingame".to_string());
+    let status = order.user.as_ref().and_then(|user| user.status.as_deref());
+    if !seller_status_allowed(status, &seller_mode) {
+        return;
+    }
+
+    let Some(username) = order.user.as_ref().and_then(|user| user.ingame_name.clone()) else {
+        // Can't whisper a seller we can't name.
+        return;
+    };
+
+    // Colour by how deep into the trigger zone the listing sits, not by an absolute discount —
+    // since the trigger ratio now scales with price, a fixed band would peg high-value items to
+    // "normal" forever. depth 0 = just qualified, 1 = nearly free.
+    let depth = ((trigger_ratio - ratio) / trigger_ratio).clamp(0.0, 1.0);
+    let tier = if depth >= 0.6 {
+        "red"
+    } else if depth >= 0.3 {
+        "yellow"
+    } else {
+        "normal"
+    };
+
+    // Snipe-completes-set: if this underpriced part finishes a set the user is close to, attach the
+    // context so the radar card can flag it as a buy-to-complete play.
+    let completes_set = crate::opportunities::owned_set_part_hint(&recommended.slug).map(|hint| {
+        json!({
+            "setSlug": hint.set_slug,
+            "setName": hint.set_name,
+            "ownedDistinct": hint.owned_distinct,
+            "neededDistinct": hint.needed_distinct,
+        })
+    });
+
+    let _ = app.emit(
+        UNDERPRICED_LISTING_EVENT,
+        json!({
+            "itemId": item_id,
+            "slug": recommended.slug,
+            "itemName": recommended.name,
+            "orderId": order.id,
+            "username": username,
+            "userSlug": order.user.as_ref().and_then(|user| user.slug.clone()),
+            "rank": order.rank,
+            "quantity": order.quantity.unwrap_or(1),
+            "listedPrice": order.platinum,
+            "recommendedPrice": recommended.price,
+            "pctBelow": (1.0 - ratio) * 100.0,
+            "tier": tier,
+            "completesSet": completes_set,
         }),
     );
 }
@@ -7379,6 +7506,137 @@ fn fetch_my_orders(client: &Client, token: &str) -> Result<Vec<WfmOwnOrder>> {
     Ok(payload.data)
 }
 
+#[derive(Debug, Deserialize)]
+struct WfmUserOrdersResponse {
+    #[serde(default)]
+    data: Vec<WfmUserOrder>,
+}
+
+/// A compact order from `GET /v2/orders/user/{slug}`. All fields optional/lenient so a shape
+/// change can't break the verify call.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfmUserOrder {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(rename = "type", default)]
+    order_type: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_lenient_optional_i64")]
+    platinum: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_lenient_optional_i64")]
+    rank: Option<i64>,
+    #[serde(default)]
+    visible: Option<bool>,
+    #[serde(default)]
+    item_id: Option<String>,
+}
+
+/// Result of re-checking whether an underpriced listing is still live on Warframe.Market.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyMarketListingResult {
+    pub still_listed: bool,
+    pub current_price: Option<i64>,
+}
+
+fn verify_market_listing_inner(
+    user_slug: &str,
+    order_id: &str,
+    item_id: &str,
+    rank: Option<i64>,
+    expected_price: i64,
+    token: Option<&str>,
+) -> Result<VerifyMarketListingResult> {
+    if user_slug.is_empty() {
+        return Err(anyhow!("That listing has no seller to re-check."));
+    }
+
+    let client = shared_wfm_client()?;
+    // The v2 user-orders endpoint rejects anonymous callers, so send the cached session JWT when
+    // we have one (the radar only runs while signed in, so we normally do).
+    let response = execute_wfm_bytes_request(
+        send_wfm_request(
+            &client,
+            Method::GET,
+            format!("{WFM_API_BASE_URL_V2}/orders/user/{user_slug}"),
+            token,
+        ),
+        RequestPriority::Instant,
+        "verify market listing",
+        Some(format!("orders:user:{user_slug}")),
+    )?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(extract_wfm_bytes_error("verify market listing", &response));
+    }
+
+    let payload = serde_json::from_slice::<WfmUserOrdersResponse>(&response.body)
+        .context("failed to parse user orders response")?;
+
+    let is_buyable_sell = |order: &WfmUserOrder| {
+        order.order_type.as_deref() == Some("sell") && order.visible != Some(false)
+    };
+
+    // Primary: the exact listing by order id (a price edit keeps the same id).
+    if let Some(order) = payload
+        .data
+        .iter()
+        .find(|order| order.id.as_deref() == Some(order_id))
+    {
+        if is_buyable_sell(order) {
+            return Ok(VerifyMarketListingResult {
+                still_listed: true,
+                current_price: order.platinum,
+            });
+        }
+        return Ok(VerifyMarketListingResult {
+            still_listed: false,
+            current_price: None,
+        });
+    }
+
+    // Fallback: any visible sell for the same item + rank still at or below the price we saw.
+    let fallback = payload.data.iter().find(|order| {
+        is_buyable_sell(order)
+            && order.item_id.as_deref() == Some(item_id)
+            && order.rank == rank
+            && order.platinum.map(|price| price <= expected_price).unwrap_or(false)
+    });
+    Ok(match fallback {
+        Some(order) => VerifyMarketListingResult {
+            still_listed: true,
+            current_price: order.platinum,
+        },
+        None => VerifyMarketListingResult {
+            still_listed: false,
+            current_price: None,
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn verify_market_listing(
+    order_id: String,
+    user_slug: String,
+    item_id: String,
+    rank: Option<i64>,
+    expected_price: i64,
+) -> Result<VerifyMarketListingResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = get_session_from_cache().map(|session| session.token);
+        verify_market_listing_inner(
+            user_slug.trim(),
+            order_id.trim(),
+            item_id.trim(),
+            rank,
+            expected_price,
+            token.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| friendly_order_error(&error))
+}
+
 fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
     let mut session = ensure_authenticated_session(app)?;
     let connection = open_catalog_database(app)?;
@@ -7449,6 +7707,27 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
         .filter(|order| order.visible)
         .map(|order| order.your_price.saturating_mul(order.quantity))
         .sum::<i64>();
+
+    // Cache a slim snapshot of the active sell orders so the opportunities engine can flag
+    // overpriced listings without a live WFM fetch (best-effort; never fails the overview).
+    let cached_orders: Vec<crate::opportunities::CachedSellOrder> = sell_orders
+        .iter()
+        .map(|order| crate::opportunities::CachedSellOrder {
+            order_id: order.order_id.clone(),
+            slug: order.slug.clone(),
+            name: order.name.clone(),
+            image_path: order.image_path.clone(),
+            item_id: order.item_id,
+            rank: order.rank,
+            your_price: order.your_price,
+            visible: order.visible,
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&cached_orders) {
+        if crate::market_observatory::persist_trade_sell_orders(app, &json).is_ok() {
+            crate::opportunities::signal_stale(app); // Active listings changed → board is stale.
+        }
+    }
 
     Ok(TradeOverview {
         account: session.account.clone(),
@@ -8078,6 +8357,19 @@ pub async fn get_portfolio_inventory_value(
     .map_err(|error| error.to_string())
 }
 
+/// The signed-in user's currently-held positions (open + kept buys) with cost basis and current
+/// estimated value. Cache/DB-only (no WFM calls); empty when not signed in. Used by the
+/// opportunities engine's sell-inventory detector.
+pub(crate) fn load_portfolio_holdings(
+    app: &tauri::AppHandle,
+) -> Result<Vec<PortfolioInventoryRow>> {
+    let Some(session) = get_session_from_cache() else {
+        return Ok(Vec::new());
+    };
+    let summary = build_portfolio_pnl_summary_inner(app, &session.account.name, "all")?;
+    Ok(summary.inventory_rows)
+}
+
 /// Per-owned-item recommended exit prices (cache-only) for the Inventory panel.
 #[tauri::command]
 pub async fn get_set_completion_owned_item_prices(
@@ -8304,6 +8596,7 @@ mod tests {
         parse_status_from_payload, prune_stale_trade_log_overrides_inner, resolve_per_trade,
         replace_trade_log_rows_inner, save_trade_log_rows_inner,
         should_attempt_trade_session_reauth, trade_record_is_before_cutoff,
+        underpriced_trigger_ratio, UNDERPRICED_TRIGGER_BASE_RATIO,
         AlecaframeRawTradeRecord, AlecaframeTradeItemRecord, AlecaframeTradeResponse,
         PortfolioTradeLogEntry, StoredTradeLogRecord, TradeSetComponentRecord,
         TradeSetMapComponentRecord, TradeSetMapFile, TradeSetMapSetRecord, TradeSetRootRecord,
@@ -8318,6 +8611,32 @@ mod tests {
     use serde_json::json;
     use time::format_description::well_known::Rfc3339;
     use time::OffsetDateTime;
+
+    #[test]
+    fn underpriced_trigger_scales_discount_with_price() {
+        // The trigger price (rec * ratio) should match the price-weighted curve: cheap items need
+        // a deep discount, expensive items fire on a shallow one.
+        let trigger_price = |rec: f64| rec * underpriced_trigger_ratio(rec);
+
+        // Cheap items: only a steep discount qualifies.
+        assert!(trigger_price(5.0) < 2.5, "5p should fire only near 1-2p");
+        assert!(trigger_price(10.0) < 7.0, "10p should fire only near 5-6p");
+
+        // A 20p item listed at 15p must qualify (user's explicit floor).
+        assert!(15.0 < trigger_price(20.0), "20p item at 15p should trigger");
+        // A 50p item listed at 40p must qualify.
+        assert!(40.0 < trigger_price(50.0), "50p item at 40p should trigger");
+
+        // The required discount eases as price rises (ratio is monotonic increasing).
+        assert!(underpriced_trigger_ratio(10.0) < underpriced_trigger_ratio(50.0));
+        // Even very expensive items keep a floor discount (never fire just below rec).
+        assert!(underpriced_trigger_ratio(1000.0) <= UNDERPRICED_TRIGGER_BASE_RATIO);
+
+        // Non-positive / non-finite recommended prices never trigger.
+        assert_eq!(underpriced_trigger_ratio(0.0), 0.0);
+        assert_eq!(underpriced_trigger_ratio(-5.0), 0.0);
+        assert_eq!(underpriced_trigger_ratio(f64::NAN), 0.0);
+    }
 
     #[test]
     fn normalizes_relative_avatar_path_to_static_assets_host() {

@@ -667,7 +667,7 @@ export interface DiscordWebhookSettings {
 export interface DiscordWebhookNotificationSettings {
   watchlistFound: boolean;
   tradeDetected: boolean;
-  worldstateOffline: boolean;
+  underpricedListing: boolean;
 }
 
 export interface AppSettings {
@@ -688,6 +688,7 @@ export interface NotificationSettings {
     watchlistAlert: boolean;
     scannerStale: boolean;
     appUpdate: boolean;
+    underpricedListing: boolean;
   };
 }
 
@@ -713,6 +714,17 @@ export interface DiscordWatchlistNotificationInput {
   rank: number | null;
   orderId: string;
   createdAt: string;
+}
+
+export interface DiscordUnderpricedNotificationInput {
+  itemName: string;
+  itemSlug: string;
+  listedPrice: number;
+  recommendedPrice: number;
+  pctBelow: number;
+  username: string;
+  rank: number | null;
+  orderId: string;
 }
 
 export interface AlecaframeValidationResult {

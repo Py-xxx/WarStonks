@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { openExternalUrl } from '../../lib/tauriClient';
+import { copyTextToClipboard } from '../../lib/marketMessages';
 import { useAppStore } from '../../stores/useAppStore';
 import type { ItemQuickViewTarget } from '../../types';
 
@@ -62,8 +63,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const handleCopy = (event: { stopPropagation: () => void }) => {
     stop(event);
     setMenu(null);
-    void navigator.clipboard
-      .writeText(target.name)
+    void copyTextToClipboard(target.name)
       .then(() => pushToast('Item name copied', 'success'))
       .catch(() => pushToast("Couldn't copy the item name", 'error'));
   };

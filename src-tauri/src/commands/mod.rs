@@ -207,6 +207,23 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Lightweight stats for the underpriced-listings radar so the UI can confirm the firehose is
+/// flowing: how many live orders we've examined and how many priced items we're watching.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadarStats {
+    pub scanned_count: u64,
+    pub tracked_items: u64,
+}
+
+#[tauri::command]
+pub fn get_radar_stats() -> RadarStats {
+    RadarStats {
+        scanned_count: crate::recommended_prices::scanned_count(),
+        tracked_items: crate::recommended_prices::tracked_count() as u64,
+    }
+}
+
 #[tauri::command]
 pub fn get_wfm_scheduler_snapshot() -> WfmSchedulerSnapshot {
     wfm_scheduler_snapshot()

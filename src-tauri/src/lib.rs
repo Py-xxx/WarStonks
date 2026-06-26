@@ -2,6 +2,8 @@ mod commands;
 mod error_log;
 mod item_catalog;
 mod market_observatory;
+mod opportunities;
+mod recommended_prices;
 mod settings;
 mod trades;
 mod wfm_scheduler;
@@ -12,11 +14,28 @@ mod worldstate_cache;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             wfm_queue_log::initialize_wfm_queue_log_best_effort(&app.handle());
+            // Prime the underpriced-listings radar from the last cached scan so it has coverage
+            // immediately. Off the main thread — it does a catalog read + map build.
+            let radar_app = app.handle().clone();
+            std::thread::spawn(move || {
+                market_observatory::prime_recommended_prices_on_startup(&radar_app);
+            });
+            // Keep the owned-set-part index fresh AND the opportunity board cache warm (both
+            // independent of the Opportunities tab). The firehose reads the index to flag parts
+            // that complete a set the user is close to; the warm board cache makes the tab paint
+            // instantly on open. Both are cache-only (no WFM calls).
+            let index_app = app.handle().clone();
+            std::thread::spawn(move || loop {
+                let _ = opportunities::refresh_owned_set_index(&index_app);
+                let _ = opportunities::compute_opportunities(&index_app);
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            });
             // Start the single persistent Warframe.Market websocket: it holds presence when
             // signed in (surviving re-auth) and the newOrders subscription when there are
             // tracked items. Idles with no connection until either is true.
@@ -26,6 +45,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_shell_info,
             commands::get_app_version,
+            commands::get_radar_stats,
+            opportunities::get_opportunities,
+            opportunities::get_cached_opportunities,
             commands::get_wfm_scheduler_snapshot,
             commands::open_external_url,
             commands::initialize_app_catalog,
@@ -81,6 +103,7 @@ pub fn run() {
             trades::delete_wfm_buy_order,
             trades::get_trade_sell_order_market_low,
             trades::get_trade_sell_order_health,
+            trades::verify_market_listing,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
             commands::get_worldstate_sortie,
@@ -98,6 +121,7 @@ pub fn run() {
             settings::save_alecaframe_settings,
             settings::save_discord_webhook_settings,
             settings::send_watchlist_found_discord_notification,
+            settings::send_underpriced_listing_discord_notification,
             settings::get_currency_balances,
             settings::refresh_alecaframe_wallet_snapshot,
         ])

@@ -73,7 +73,7 @@ pub struct DiscordWebhookSettings {
 pub struct DiscordWebhookNotificationSettings {
     pub watchlist_found: bool,
     pub trade_detected: bool,
-    pub worldstate_offline: bool,
+    pub underpriced_listing: bool,
 }
 
 impl Default for DiscordWebhookNotificationSettings {
@@ -81,7 +81,7 @@ impl Default for DiscordWebhookNotificationSettings {
         Self {
             watchlist_found: true,
             trade_detected: true,
-            worldstate_offline: false,
+            underpriced_listing: true,
         }
     }
 }
@@ -146,6 +146,19 @@ pub struct DiscordWatchlistNotificationInput {
     pub rank: Option<i64>,
     pub order_id: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordUnderpricedNotificationInput {
+    pub item_name: String,
+    pub item_slug: String,
+    pub listed_price: i64,
+    pub recommended_price: i64,
+    pub pct_below: i64,
+    pub username: String,
+    pub rank: Option<i64>,
+    pub order_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,6 +423,38 @@ fn build_watchlist_found_payload(input: &DiscordWatchlistNotificationInput) -> s
         ],
         "footer": { "text": "WarStonks • Watchlist alert" },
         "timestamp": input.created_at
+      }]
+    })
+}
+
+fn build_underpriced_listing_payload(
+    input: &DiscordUnderpricedNotificationInput,
+) -> serde_json::Value {
+    let rank_value = input
+        .rank
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    let market_url = format!("https://warframe.market/items/{}", input.item_slug);
+
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "title": "💸 Underpriced Listing",
+        "description": format!(
+            "{} is listed at **{}p** — {}% below its recommended entry of {}p.",
+            input.item_name, input.listed_price, input.pct_below, input.recommended_price
+        ),
+        "url": market_url,
+        "color": 0xF0A030,
+        "fields": [
+          { "name": "Item", "value": input.item_name, "inline": true },
+          { "name": "Seller", "value": input.username, "inline": true },
+          { "name": "Listed", "value": format!("{}p", input.listed_price), "inline": true },
+          { "name": "Recommended", "value": format!("{}p", input.recommended_price), "inline": true },
+          { "name": "Below Rec", "value": format!("{}%", input.pct_below), "inline": true },
+          { "name": "Rank", "value": rank_value, "inline": true }
+        ],
+        "footer": { "text": "WarStonks • Underpriced listings radar" }
       }]
     })
 }
@@ -955,6 +1000,32 @@ pub fn send_watchlist_found_discord_notification(
     input: DiscordWatchlistNotificationInput,
 ) -> Result<bool, String> {
     send_watchlist_found_discord_notification_inner(&app, &input).map_err(|error| error.to_string())
+}
+
+pub(crate) fn send_underpriced_listing_discord_notification_inner(
+    app: &tauri::AppHandle,
+    input: &DiscordUnderpricedNotificationInput,
+) -> Result<bool> {
+    let settings = load_settings_inner(app)?;
+    let discord = settings.discord_webhook;
+    if !discord.enabled || !discord.notifications.underpriced_listing {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+
+    post_discord_webhook_payload(&webhook_url, build_underpriced_listing_payload(input))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn send_underpriced_listing_discord_notification(
+    app: tauri::AppHandle,
+    input: DiscordUnderpricedNotificationInput,
+) -> Result<bool, String> {
+    send_underpriced_listing_discord_notification_inner(&app, &input)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

@@ -17,6 +17,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     watchlistAlert: true,
     scannerStale: true,
     appUpdate: true,
+    underpricedListing: true,
   },
 };
 
@@ -136,7 +137,11 @@ export async function sendTestDesktopNotification(): Promise<boolean> {
   return showDesktopNotification('WarStonks', 'Test notification — desktop alerts are working.');
 }
 
-export type NotificationEventKind = 'watchlistAlert' | 'scannerStale' | 'appUpdate';
+export type NotificationEventKind =
+  | 'watchlistAlert'
+  | 'scannerStale'
+  | 'appUpdate'
+  | 'underpricedListing';
 
 /**
  * Fires an alert through the channels enabled in settings: an in-app tone and/or a

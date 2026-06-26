@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "updater:default",
-    "notification:default"
+    "notification:default",
+    "clipboard-manager:allow-write-text"
   ]
 }

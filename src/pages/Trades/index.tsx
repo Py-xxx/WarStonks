@@ -1529,6 +1529,48 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     setListingAnalysis(null);
   };
 
+  // Consume a pre-filled listing request from an Opportunities action button: resolve the item to
+  // a full WFM entry (so the order is confirmable) and open the create modal with name + price set.
+  const pendingTradeListing = useAppStore((s) => s.pendingTradeListing);
+  const clearPendingTradeListing = useAppStore((s) => s.clearPendingTradeListing);
+  useEffect(() => {
+    if (!pendingTradeListing || pendingTradeListing.orderType !== listingType) {
+      return;
+    }
+    const request = pendingTradeListing;
+    let cancelled = false;
+    void (async () => {
+      let item: WfmAutocompleteItem | null = null;
+      try {
+        const catalog = await getWfmAutocompleteItems();
+        item =
+          catalog.find((entry) => entry.slug === request.slug) ??
+          catalog.find((entry) => entry.name === request.name) ??
+          null;
+      } catch {
+        // Couldn't resolve — open with the name pre-typed so the user can pick it manually.
+      }
+      if (cancelled) {
+        return;
+      }
+      setListingActionError(null);
+      setListingAnalysis(null);
+      const base = createListingModalState('create', listingType, item);
+      setListingModal({
+        ...base,
+        itemName: request.name,
+        price: request.price != null ? String(request.price) : base.price,
+        rank: request.rank != null && (item?.maxRank ?? 0) > 0 ? String(request.rank) : base.rank,
+      });
+      // Clear only AFTER the modal is open — clearing earlier re-runs this effect and its cleanup
+      // cancels the in-flight resolve, so the modal would never open.
+      clearPendingTradeListing();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingTradeListing, listingType, clearPendingTradeListing]);
+
   const handleTradeActionFailure = (error: unknown) => {
     const rawMessage = error instanceof Error ? error.message : String(error);
     if (isTradeSessionExpiredMessage(rawMessage)) {

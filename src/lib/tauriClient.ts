@@ -10,6 +10,7 @@ import type {
   AlecaframeValidationResult,
   DiscordWebhookSettingsInput,
   DiscordWatchlistNotificationInput,
+  DiscordUnderpricedNotificationInput,
   ArbitrageScannerResponse,
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
@@ -182,6 +183,12 @@ export async function sendWatchlistFoundDiscordNotification(
   input: DiscordWatchlistNotificationInput,
 ): Promise<boolean> {
   return invoke<boolean>('send_watchlist_found_discord_notification', { input });
+}
+
+export async function sendUnderpricedListingDiscordNotification(
+  input: DiscordUnderpricedNotificationInput,
+): Promise<boolean> {
+  return invoke<boolean>('send_underpriced_listing_discord_notification', { input });
 }
 
 export async function getCurrencyBalances(): Promise<WalletSnapshot> {
@@ -772,6 +779,139 @@ export async function listenToWatchlistOrders(
   const { listen } = await import('@tauri-apps/api/event');
   return listen<RealtimeWatchlistOrder>('wfm-watchlist-order', (event) => {
     onOrder(event.payload);
+  });
+}
+
+/** A live sell listing flagged as underpriced vs its recommended entry price (Opportunities radar). */
+export interface UnderpricedListing {
+  itemId: string;
+  slug: string;
+  itemName: string;
+  orderId: string;
+  username: string;
+  userSlug: string | null;
+  rank: number | null;
+  quantity: number;
+  listedPrice: number;
+  recommendedPrice: number;
+  pctBelow: number;
+  tier: 'red' | 'yellow' | 'normal';
+  /** Present when this underpriced part finishes a set the user is close to completing. */
+  completesSet: {
+    setSlug: string;
+    setName: string;
+    ownedDistinct: number;
+    neededDistinct: number;
+  } | null;
+}
+
+/** A structured reason chip explaining WHY an opportunity is worth acting on. */
+export interface OpportunityReason {
+  icon: 'inventory' | 'market' | 'relics' | 'math' | string;
+  text: string;
+  source: string;
+}
+
+/** A suggested action on an opportunity card. */
+export interface OpportunityAction {
+  kind: 'buyPart' | 'sellPart' | 'sellSet' | 'farmRelic' | 'openWfm' | string;
+  label: string;
+  itemSlug: string | null;
+  itemName: string | null;
+  price: number | null;
+}
+
+/** A single ranked, explained "what to do now" play on the Opportunities board. */
+export interface Opportunity {
+  id: string;
+  /** Stable key for the underlying subject (a set/holding) — survives the recommendation changing.
+   *  Pins track this so a pinned "complete set" auto-becomes "sell set" once you own the parts. */
+  subjectKey: string;
+  category: 'setCompletion' | 'sellInventory' | string;
+  title: string;
+  subtitle: string | null;
+  setSlug: string | null;
+  imagePath: string | null;
+  estValue: number;
+  valueBasis: 'profit' | 'liquidation' | string;
+  confidence: number;
+  confidenceLabel: string;
+  urgency: 'persistent' | 'expiring' | 'timed' | string;
+  reasons: OpportunityReason[];
+  actions: OpportunityAction[];
+  score: number;
+}
+
+/** Computes the current opportunity board (cache-only on the backend; safe to poll). */
+export async function getOpportunities(): Promise<Opportunity[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+  return invoke<Opportunity[]>('get_opportunities');
+}
+
+/** Returns the last persisted board instantly (no recompute) for stale-while-revalidate paint. */
+export async function getCachedOpportunities(): Promise<Opportunity[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+  return invoke<Opportunity[]>('get_cached_opportunities');
+}
+
+/** Fires when a board input changes (owned parts, relics, a fresh scan) → time to recompute. */
+export async function listenToOpportunitiesStale(onStale: () => void): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen('opportunities-stale', () => onStale());
+}
+
+export async function listenToUnderpricedListings(
+  onListing: (listing: UnderpricedListing) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<UnderpricedListing>('wfm-underpriced-listing', (event) => {
+    onListing(event.payload);
+  });
+}
+
+export interface RadarStats {
+  scannedCount: number;
+  trackedItems: number;
+}
+
+/** Throughput stats for the underpriced-listings radar — confirms the firehose is flowing. */
+export async function getRadarStats(): Promise<RadarStats> {
+  if (!isTauriRuntime()) {
+    return { scannedCount: 0, trackedItems: 0 };
+  }
+  return invoke<RadarStats>('get_radar_stats');
+}
+
+export interface VerifyMarketListingResult {
+  stillListed: boolean;
+  currentPrice: number | null;
+}
+
+/** Re-checks (instant priority) whether an underpriced listing is still live on Warframe.Market. */
+export async function verifyMarketListing(input: {
+  orderId: string;
+  userSlug: string;
+  itemId: string;
+  rank: number | null;
+  expectedPrice: number;
+}): Promise<VerifyMarketListingResult> {
+  return invoke<VerifyMarketListingResult>('verify_market_listing', {
+    orderId: input.orderId,
+    userSlug: input.userSlug,
+    itemId: input.itemId,
+    rank: input.rank,
+    expectedPrice: input.expectedPrice,
   });
 }
 

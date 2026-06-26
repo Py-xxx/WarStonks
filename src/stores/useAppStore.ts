@@ -21,11 +21,18 @@ import {
   saveAlecaframeSettings,
   saveDiscordWebhookSettings,
   sendWatchlistFoundDiscordNotification,
+  sendUnderpricedListingDiscordNotification,
   signInWfmTradeAccount,
   signOutWfmTradeAccount,
   stopMarketTracking,
   tryAutoSignInWfmTradeAccount,
+  getOpportunities,
+  getCachedOpportunities,
+  getOwnedRelicInventoryCache,
+  refreshOwnedRelicInventory,
   type RealtimeWatchlistOrder,
+  type UnderpricedListing,
+  type Opportunity,
 } from '../lib/tauriClient';
 import {
   fetchWorldStateAlertsSnapshot,
@@ -79,6 +86,7 @@ import { formatSettingsErrorMessage } from '../lib/settingsErrorHandling';
 import type {
   AppToast,
   ItemQuickViewTarget,
+  OwnedRelicEntry,
   NavigationSnapshot,
   HomeSubTab,
   PageId,
@@ -122,6 +130,12 @@ import {
   loadNotificationSettings,
   saveNotificationSettings,
 } from '../lib/notifications';
+import {
+  loadPinnedOpportunities,
+  savePinnedOpportunities,
+  mergePinSnapshots,
+  type PinnedOpportunities,
+} from '../lib/pinnedOpportunities';
 
 let quickViewRequestSequence = 0;
 let marketAnalysisRequestSequence = 0;
@@ -154,7 +168,7 @@ const defaultAppSettings: AppSettings = {
     notifications: {
       watchlistFound: true,
       tradeDetected: true,
-      worldstateOffline: false,
+      underpricedListing: true,
     },
     lastValidatedAt: null,
   },
@@ -1180,6 +1194,37 @@ async function persistSearchedItemSelection(
   return syncedSelection.nextTrackedSelection;
 }
 
+/** How long an underpriced-listing card lives before it's auto-removed (we can't see removals). */
+export const UNDERPRICED_LISTING_TTL_MS = 5 * 60 * 1000;
+const UNDERPRICED_LISTING_CAP = 60;
+
+/** Hard cooldown between AlecaFrame relic refreshes (manual refresh bypasses it). */
+const OWNED_RELICS_REFRESH_COOLDOWN_MS = 3 * 60 * 1000;
+
+/** A request to open the Trades listing modal pre-filled (from an opportunity action button). */
+export interface PendingTradeListing {
+  orderType: 'sell' | 'buy';
+  name: string;
+  slug: string | null;
+  rank: number | null;
+  price: number | null;
+}
+
+/** A request to switch the Opportunities page's subtab from elsewhere (e.g. a "Farm" action). */
+export type RequestedOpportunitiesTab =
+  | 'opportunities'
+  | 'farm-now'
+  | 'owned-relics'
+  | 'set-planner'
+  | 'inventory';
+
+/** A live underpriced listing as held in the store: the backend event plus UI/verify state. */
+export interface UnderpricedListingCard extends UnderpricedListing {
+  receivedAt: number;
+  status: 'new' | 'verifying' | 'verified' | 'gone';
+  verifiedPrice: number | null;
+}
+
 interface AppStore {
   activePage: PageId;
   setActivePage: (page: PageId) => void;
@@ -1341,6 +1386,47 @@ interface AppStore {
    */
   ingestRealtimeWatchlistOrder: (order: RealtimeWatchlistOrder) => boolean;
 
+  // Underpriced-listings radar (Opportunities tab). Collected from the always-on firehose.
+  underpricedListings: UnderpricedListingCard[];
+  ingestUnderpricedListing: (listing: UnderpricedListing) => void;
+  updateUnderpricedListing: (orderId: string, patch: Partial<UnderpricedListingCard>) => void;
+  removeUnderpricedListing: (orderId: string) => void;
+  pruneExpiredUnderpricedListings: () => void;
+
+  // Opportunities board (the Set Decision Engine + future detectors). Computed cache-side.
+  opportunities: Opportunity[];
+  opportunitiesLoading: boolean;
+  opportunitiesError: string | null;
+  opportunitiesLoadedAt: number | null;
+  loadCachedOpportunities: () => Promise<void>;
+  refreshOpportunities: () => Promise<void>;
+  // Pinned ("accepted") opportunities — kept on top, survive recomputes + app restarts, and update
+  // in place when the recompute produces a newer card for the same subject.
+  pinnedOpportunities: PinnedOpportunities;
+  pinOpportunity: (opportunity: Opportunity) => void;
+  unpinOpportunity: (subjectKey: string) => void;
+  // In-app routing for opportunity action buttons.
+  pendingTradeListing: PendingTradeListing | null;
+  requestTradeListing: (req: PendingTradeListing) => void;
+  clearPendingTradeListing: () => void;
+  requestedOpportunitiesTab: RequestedOpportunitiesTab | null;
+  requestedFarmNowSearch: string | null;
+  requestOpportunitiesTab: (tab: RequestedOpportunitiesTab, search?: string) => void;
+  clearRequestedOpportunitiesTab: () => void;
+  openItemAnalysis: (target: ItemQuickViewTarget) => Promise<void>;
+
+  // Owned relics — single source of truth in the store (persists across navigation). Display reads
+  // the local SQLite cache; AlecaFrame refresh is cooldown-gated so we don't hammer/timeout it.
+  ownedRelics: OwnedRelicEntry[];
+  ownedRelicsUpdatedAt: string | null;
+  ownedRelicsCacheLoaded: boolean;
+  ownedRelicsLoading: boolean;
+  ownedRelicsRefreshing: boolean;
+  ownedRelicsError: string | null;
+  ownedRelicsLastRefreshAt: number | null;
+  loadOwnedRelicsCache: () => Promise<void>;
+  refreshOwnedRelics: (force?: boolean) => Promise<void>;
+
   quickView: QuickViewSelection;
   marketVariants: MarketVariant[];
   marketVariantsLoading: boolean;
@@ -1395,6 +1481,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
   navigationBack: null,
   recentItems: readPersistedRecentItems(),
   toasts: [],
+  underpricedListings: [],
+  opportunities: [],
+  opportunitiesLoading: false,
+  opportunitiesError: null,
+  opportunitiesLoadedAt: null,
+  pinnedOpportunities: loadPinnedOpportunities(),
+  pendingTradeListing: null,
+  requestedOpportunitiesTab: null,
+  requestedFarmNowSearch: null,
+  ownedRelics: [],
+  ownedRelicsUpdatedAt: null,
+  ownedRelicsCacheLoaded: false,
+  ownedRelicsLoading: false,
+  ownedRelicsRefreshing: false,
+  ownedRelicsError: null,
+  ownedRelicsLastRefreshAt: null,
   searchFocusNonce: 0,
   requestSearchFocus: () => set((state) => ({ searchFocusNonce: state.searchFocusNonce + 1 })),
   pushToast: (message, tone = 'info') => {
@@ -3103,6 +3205,201 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { alertTriggered: false };
     }
   },
+
+  ingestUnderpricedListing: (listing) => {
+    const isNew = !get().underpricedListings.some((entry) => entry.orderId === listing.orderId);
+
+    set((state) => {
+      const card: UnderpricedListingCard = {
+        ...listing,
+        receivedAt: Date.now(),
+        status: 'new',
+        verifiedPrice: null,
+      };
+      // Dedupe by order id (refresh it if the same listing re-arrives), newest first, capped.
+      const without = state.underpricedListings.filter((entry) => entry.orderId !== card.orderId);
+      return { underpricedListings: [card, ...without].slice(0, UNDERPRICED_LISTING_CAP) };
+    });
+
+    // Only alert the first time a given listing appears, so a re-arriving order doesn't re-notify.
+    if (!isNew) {
+      return;
+    }
+
+    const title = 'Underpriced listing found';
+    const body = `${listing.itemName} — ${listing.listedPrice}p (${listing.pctBelow}% below ${listing.recommendedPrice}p) from ${listing.username}`;
+    fireAlertNotification(get().notificationSettings, 'underpricedListing', title, body);
+    void sendUnderpricedListingDiscordNotification({
+      itemName: listing.itemName,
+      itemSlug: listing.slug,
+      listedPrice: listing.listedPrice,
+      recommendedPrice: listing.recommendedPrice,
+      pctBelow: listing.pctBelow,
+      username: listing.username,
+      rank: listing.rank,
+      orderId: listing.orderId,
+    }).catch((error) => {
+      console.error('[discord] failed to send underpriced listing notification', error);
+    });
+  },
+  updateUnderpricedListing: (orderId, patch) =>
+    set((state) => ({
+      underpricedListings: state.underpricedListings.map((entry) =>
+        entry.orderId === orderId ? { ...entry, ...patch } : entry,
+      ),
+    })),
+  removeUnderpricedListing: (orderId) =>
+    set((state) => ({
+      underpricedListings: state.underpricedListings.filter((entry) => entry.orderId !== orderId),
+    })),
+  pruneExpiredUnderpricedListings: () =>
+    set((state) => {
+      const cutoff = Date.now() - UNDERPRICED_LISTING_TTL_MS;
+      const next = state.underpricedListings.filter((entry) => entry.receivedAt > cutoff);
+      return next.length === state.underpricedListings.length
+        ? state
+        : { underpricedListings: next };
+    }),
+
+  loadCachedOpportunities: async () => {
+    // Instant paint from the persisted board; only fills in if we don't already have fresher data.
+    try {
+      const cached = await getCachedOpportunities();
+      set((state) => {
+        if (state.opportunitiesLoadedAt !== null || cached.length === 0) {
+          return state;
+        }
+        const pinnedOpportunities = mergePinSnapshots(state.pinnedOpportunities, cached);
+        if (pinnedOpportunities !== state.pinnedOpportunities) {
+          savePinnedOpportunities(pinnedOpportunities);
+        }
+        return { opportunities: cached, pinnedOpportunities };
+      });
+    } catch {
+      // Best-effort; the live refresh is the source of truth.
+    }
+  },
+
+  requestTradeListing: (req) => {
+    get().setTradesSubTab(req.orderType === 'sell' ? 'sell-orders' : 'buy-orders');
+    set({ pendingTradeListing: req, activePage: 'trades', navigationBack: null });
+  },
+  clearPendingTradeListing: () => set({ pendingTradeListing: null }),
+  requestOpportunitiesTab: (tab, search) =>
+    set({
+      requestedOpportunitiesTab: tab,
+      requestedFarmNowSearch: search ?? null,
+      activePage: 'opportunities',
+      navigationBack: null,
+    }),
+  clearRequestedOpportunitiesTab: () =>
+    set({ requestedOpportunitiesTab: null, requestedFarmNowSearch: null }),
+  openItemAnalysis: async (target) => {
+    await get().openItemInQuickView(target);
+    set({ activePage: 'market', navigationBack: null });
+    void get().loadSelectedMarketAnalysis({ force: false });
+  },
+
+  // Reads the local SQLite relic cache once per session (cheap, no network). Subsequent navigation
+  // reuses the in-memory store, so switching tabs never wipes the relics or refetches.
+  loadOwnedRelicsCache: async () => {
+    if (get().ownedRelicsCacheLoaded || get().ownedRelicsLoading) {
+      return;
+    }
+    set({ ownedRelicsLoading: true });
+    try {
+      const cache = await getOwnedRelicInventoryCache();
+      set({
+        ownedRelics: cache.entries,
+        ownedRelicsUpdatedAt: cache.updatedAt,
+        ownedRelicsCacheLoaded: true,
+        ownedRelicsLoading: false,
+      });
+    } catch (error) {
+      set({
+        ownedRelicsLoading: false,
+        ownedRelicsError: error instanceof Error ? error.message : 'Could not load relics.',
+      });
+    }
+  },
+
+  // Refreshes from AlecaFrame and re-caches. Cooldown-gated (3 min) unless forced, so reopening the
+  // Opportunities tab can't hammer AlecaFrame. On failure the cached relics stay on screen.
+  refreshOwnedRelics: async (force = false) => {
+    const state = get();
+    if (state.ownedRelicsRefreshing) {
+      return;
+    }
+    if (
+      !force &&
+      state.ownedRelicsLastRefreshAt !== null &&
+      Date.now() - state.ownedRelicsLastRefreshAt < OWNED_RELICS_REFRESH_COOLDOWN_MS
+    ) {
+      return;
+    }
+    // Stamp the attempt up front so a hang/timeout still counts toward the cooldown.
+    set({ ownedRelicsRefreshing: true, ownedRelicsLastRefreshAt: Date.now() });
+    try {
+      const cache = await refreshOwnedRelicInventory();
+      set({
+        ownedRelics: cache.entries,
+        ownedRelicsUpdatedAt: cache.updatedAt,
+        ownedRelicsCacheLoaded: true,
+        ownedRelicsRefreshing: false,
+        ownedRelicsError: null,
+      });
+    } catch (error) {
+      set({
+        ownedRelicsRefreshing: false,
+        ownedRelicsError: error instanceof Error ? error.message : 'Could not refresh relics.',
+      });
+    }
+  },
+
+  refreshOpportunities: async () => {
+    set({ opportunitiesLoading: true, opportunitiesError: null });
+    try {
+      const opportunities = await getOpportunities();
+      set((state) => {
+        const pinnedOpportunities = mergePinSnapshots(state.pinnedOpportunities, opportunities);
+        if (pinnedOpportunities !== state.pinnedOpportunities) {
+          savePinnedOpportunities(pinnedOpportunities);
+        }
+        return {
+          opportunities,
+          opportunitiesLoading: false,
+          opportunitiesLoadedAt: Date.now(),
+          pinnedOpportunities,
+        };
+      });
+    } catch (error) {
+      set({
+        opportunitiesLoading: false,
+        opportunitiesError:
+          error instanceof Error ? error.message : 'Could not load opportunities.',
+      });
+    }
+  },
+
+  pinOpportunity: (opportunity) =>
+    set((state) => {
+      const pinnedOpportunities = {
+        ...state.pinnedOpportunities,
+        [opportunity.subjectKey]: opportunity,
+      };
+      savePinnedOpportunities(pinnedOpportunities);
+      return { pinnedOpportunities };
+    }),
+  unpinOpportunity: (subjectKey) =>
+    set((state) => {
+      if (!(subjectKey in state.pinnedOpportunities)) {
+        return state;
+      }
+      const pinnedOpportunities = { ...state.pinnedOpportunities };
+      delete pinnedOpportunities[subjectKey];
+      savePinnedOpportunities(pinnedOpportunities);
+      return { pinnedOpportunities };
+    }),
 
   ingestRealtimeWatchlistOrder: (order) => {
     const item = get().watchlist.find((entry) => entry.id === order.watchlistId);

@@ -1401,6 +1401,18 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           payload_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS opportunity_board_cache (
+          cache_key TEXT PRIMARY KEY,
+          payload_json TEXT NOT NULL,
+          computed_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS trade_sell_order_cache (
+          cache_key TEXT PRIMARY KEY,
+          payload_json TEXT NOT NULL,
+          computed_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS scanner_progress (
           scanner_key TEXT PRIMARY KEY,
           status TEXT NOT NULL,
@@ -7274,6 +7286,23 @@ pub struct SetCompletionOwnedItemValue {
     pub recommended_exit_price: Option<i64>,
 }
 
+/// Cache-only recommended *exit* (realistic sell) prices for a set of catalog item ids. Used by
+/// the opportunities engine's reprice detector to judge whether an active listing is overpriced.
+pub(crate) fn recommended_exit_prices_for_items(
+    app: &tauri::AppHandle,
+    item_ids: &[i64],
+) -> Result<HashMap<i64, i64>> {
+    let observatory = open_market_observatory_database(app)?;
+    let mut memo: HashMap<i64, Option<f64>> = HashMap::new();
+    let mut out = HashMap::new();
+    for &item_id in item_ids {
+        if let Some(price) = cached_recommended_exit_price(&observatory, &mut memo, item_id) {
+            out.insert(item_id, price.round() as i64);
+        }
+    }
+    Ok(out)
+}
+
 pub fn compute_set_completion_owned_item_prices(
     app: &tauri::AppHandle,
 ) -> Result<Vec<SetCompletionOwnedItemValue>> {
@@ -7909,11 +7938,219 @@ fn load_arbitrage_scanner_cache(
         .transpose()
 }
 
+/// Latest cached arbitrage scan (no network). Used by the opportunities engine as its price book:
+/// per-set exit prices and per-component entry prices + liquidity all come from here.
+pub(crate) fn load_latest_arbitrage_scanner(
+    app: &tauri::AppHandle,
+) -> Result<Option<ArbitrageScannerResponse>> {
+    let connection = open_market_observatory_database(app)?;
+    load_arbitrage_scanner_cache(&connection)
+}
+
+/// The user's owned prime-part inventory (quantities), from the Set Completion Planner store.
+pub(crate) fn load_owned_set_components(
+    app: &tauri::AppHandle,
+) -> Result<Vec<SetCompletionOwnedItem>> {
+    let connection = open_market_observatory_database(app)?;
+    load_set_completion_owned_items(&connection)
+}
+
+/// The user's cached owned-relic inventory (with each relic's drop list). Cache-only, no network.
+/// Used by the opportunities engine to mark missing set parts as farmable.
+pub(crate) fn load_owned_relics(app: &tauri::AppHandle) -> Result<OwnedRelicInventoryCache> {
+    let connection = open_market_observatory_database(app)?;
+    load_owned_relic_inventory_cache(app, &connection)
+}
+
+const OPPORTUNITY_BOARD_CACHE_KEY: &str = "opportunity_board";
+
+/// Persists the computed opportunity board JSON so the tab can paint instantly on next open
+/// (stale-while-revalidate), and so the cache stays warm even when the tab is closed.
+pub(crate) fn persist_opportunity_board(app: &tauri::AppHandle, payload_json: &str) -> Result<()> {
+    let connection = open_market_observatory_database(app)?;
+    let computed_at = format_timestamp(now_utc())?;
+    connection
+        .execute(
+            "INSERT OR REPLACE INTO opportunity_board_cache (cache_key, payload_json, computed_at)
+             VALUES (?1, ?2, ?3)",
+            params![OPPORTUNITY_BOARD_CACHE_KEY, payload_json, computed_at],
+        )
+        .context("failed to persist opportunity board cache")?;
+    Ok(())
+}
+
+/// The last persisted opportunity board JSON, if any.
+pub(crate) fn load_opportunity_board_json(app: &tauri::AppHandle) -> Result<Option<String>> {
+    let connection = open_market_observatory_database(app)?;
+    connection
+        .query_row(
+            "SELECT payload_json FROM opportunity_board_cache WHERE cache_key = ?1",
+            params![OPPORTUNITY_BOARD_CACHE_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load opportunity board cache")
+}
+
+const TRADE_SELL_ORDER_CACHE_KEY: &str = "trade_sell_orders";
+
+/// Persists a slim snapshot of the user's active sell orders (with market_low/recommended price)
+/// so the opportunity engine can flag mispriced listings without a live WFM fetch.
+pub(crate) fn persist_trade_sell_orders(app: &tauri::AppHandle, payload_json: &str) -> Result<()> {
+    let connection = open_market_observatory_database(app)?;
+    let computed_at = format_timestamp(now_utc())?;
+    connection
+        .execute(
+            "INSERT OR REPLACE INTO trade_sell_order_cache (cache_key, payload_json, computed_at)
+             VALUES (?1, ?2, ?3)",
+            params![TRADE_SELL_ORDER_CACHE_KEY, payload_json, computed_at],
+        )
+        .context("failed to persist trade sell order cache")?;
+    Ok(())
+}
+
+/// The last persisted sell-order snapshot JSON, if any.
+pub(crate) fn load_trade_sell_orders_json(app: &tauri::AppHandle) -> Result<Option<String>> {
+    let connection = open_market_observatory_database(app)?;
+    connection
+        .query_row(
+            "SELECT payload_json FROM trade_sell_order_cache WHERE cache_key = ?1",
+            params![TRADE_SELL_ORDER_CACHE_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load trade sell order cache")
+}
+
 fn load_arbitrage_scanner_state(connection: &Connection) -> Result<ArbitrageScannerState> {
     Ok(ArbitrageScannerState {
         latest_scan: load_arbitrage_scanner_cache(connection)?,
         progress: load_arbitrage_scanner_progress(connection)?,
     })
+}
+
+/// Resolves a WFM slug to its WFM item id (the hex string the realtime firehose carries).
+fn resolve_wfm_item_id(connection: &Connection, slug: &str) -> Option<String> {
+    connection
+        .query_row(
+            "SELECT wfm_id FROM wfm_items WHERE slug = ?1 AND wfm_id IS NOT NULL AND wfm_id <> '' LIMIT 1",
+            params![slug],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+}
+
+/// Feeds a scan's component recommended-entry prices into the recommended-price store so the
+/// realtime firehose can flag underpriced listings. Best-effort: a catalog/DB hiccup just skips
+/// the update. Wakes the WS manager afterwards so the radar holds the firehose open.
+pub(crate) fn update_recommended_prices_from_scan(
+    app: &tauri::AppHandle,
+    response: &ArbitrageScannerResponse,
+) {
+    let Ok(connection) = open_catalog_database(app) else {
+        return;
+    };
+
+    // The scan touches many components, so load slug → wfm_id once.
+    let mut slug_to_wfm: HashMap<String, String> = HashMap::new();
+    if let Ok(mut statement) = connection
+        .prepare("SELECT slug, wfm_id FROM wfm_items WHERE wfm_id IS NOT NULL AND wfm_id <> ''")
+    {
+        if let Ok(rows) = statement
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        {
+            for (slug, wfm_id) in rows.flatten() {
+                slug_to_wfm.insert(slug, wfm_id);
+            }
+        }
+    }
+    if slug_to_wfm.is_empty() {
+        return;
+    }
+
+    for set in &response.results {
+        for component in &set.components {
+            let Some(price) = component.recommended_entry_price else {
+                continue;
+            };
+            if let Some(wfm_id) = slug_to_wfm.get(&component.slug) {
+                crate::recommended_prices::set_recommended_price(
+                    wfm_id,
+                    "base",
+                    crate::recommended_prices::RecommendedPriceEntry {
+                        price,
+                        slug: component.slug.clone(),
+                        name: component.name.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    crate::trades::send_ws_command(crate::trades::WsCommand::RefreshSubscription);
+}
+
+/// Captures recommended entry prices from an item-analysis result (the analyzed item + its set
+/// components), widening radar coverage to items the user opens in Analysis.
+pub(crate) fn update_recommended_prices_from_analysis(
+    app: &tauri::AppHandle,
+    analysis: &ItemAnalysisResponse,
+) {
+    let Ok(connection) = open_catalog_database(app) else {
+        return;
+    };
+
+    let mut updated = false;
+
+    if let Some(price) = analysis.headline.entry_price {
+        if let Some(wfm_id) = resolve_wfm_item_id(&connection, &analysis.slug) {
+            crate::recommended_prices::set_recommended_price(
+                &wfm_id,
+                &analysis.variant_key,
+                crate::recommended_prices::RecommendedPriceEntry {
+                    price,
+                    slug: analysis.slug.clone(),
+                    name: analysis.item_details.name.clone(),
+                },
+            );
+            updated = true;
+        }
+    }
+
+    for component in &analysis.supply_context.components {
+        let Some(price) = component.recommended_entry_price else {
+            continue;
+        };
+        if let Some(wfm_id) = resolve_wfm_item_id(&connection, &component.slug) {
+            crate::recommended_prices::set_recommended_price(
+                &wfm_id,
+                &component.variant_key,
+                crate::recommended_prices::RecommendedPriceEntry {
+                    price,
+                    slug: component.slug.clone(),
+                    name: component.name.clone(),
+                },
+            );
+            updated = true;
+        }
+    }
+
+    if updated {
+        crate::trades::send_ws_command(crate::trades::WsCommand::RefreshSubscription);
+    }
+}
+
+/// Primes the recommended-price store from the last cached scan at startup so the radar has
+/// coverage immediately, without waiting for a fresh scan.
+pub(crate) fn prime_recommended_prices_on_startup(app: &tauri::AppHandle) {
+    let Ok(connection) = open_market_observatory_database(app) else {
+        return;
+    };
+    if let Ok(Some(response)) = load_arbitrage_scanner_cache(&connection) {
+        update_recommended_prices_from_scan(app, &response);
+    }
 }
 
 fn emit_arbitrage_scanner_progress(app: &tauri::AppHandle, progress: &ArbitrageScannerProgress) {
@@ -10681,6 +10918,8 @@ pub async fn get_item_analysis(
             &error,
         )
     })
+    // On success, capture the recommended prices for the underpriced-listings radar.
+    .inspect(|analysis| update_recommended_prices_from_analysis(&app, analysis))
 }
 
 #[tauri::command]
@@ -10768,14 +11007,16 @@ pub async fn set_set_completion_owned_item_quantity(
 ) -> Result<Vec<SetCompletionOwnedItem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let connection = open_market_observatory_database(&app)?;
-        upsert_set_completion_owned_item(
+        let result = upsert_set_completion_owned_item(
             &connection,
             item_id,
             &slug,
             &name,
             image_path.as_deref(),
             quantity,
-        )
+        )?;
+        crate::opportunities::signal_stale(&app); // Owned parts changed → board is stale.
+        Ok::<_, anyhow::Error>(result)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -10789,7 +11030,9 @@ pub async fn apply_set_completion_screenshot_import_rows(
 ) -> Result<Vec<SetCompletionOwnedItem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut connection = open_market_observatory_database(&app)?;
-        replace_set_completion_owned_items(&mut connection, &rows)
+        let result = replace_set_completion_owned_items(&mut connection, &rows)?;
+        crate::opportunities::signal_stale(&app); // Owned parts changed → board is stale.
+        Ok::<_, anyhow::Error>(result)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -11031,10 +11274,14 @@ pub async fn get_owned_relic_inventory_cache(
 pub async fn refresh_owned_relic_inventory(
     app: tauri::AppHandle,
 ) -> Result<OwnedRelicInventoryCache, String> {
-    tauri::async_runtime::spawn_blocking(move || refresh_owned_relic_inventory_cache_inner(&app))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = refresh_owned_relic_inventory_cache_inner(&app)?;
+        crate::opportunities::signal_stale(&app); // Owned relics changed → farmable parts changed.
+        Ok::<_, anyhow::Error>(result)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -11253,6 +11500,10 @@ pub async fn start_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Stri
                 let response = outcome.response;
                 let skipped_entry_count = outcome.skipped_entry_count;
                 let _ = persist_arbitrage_scanner_cache(&progress_connection, &response);
+                // Feed the fresh recommended prices into the underpriced-listings radar.
+                update_recommended_prices_from_scan(&worker_app, &response);
+                // Fresh prices → the opportunity board's price book moved; recompute it.
+                crate::opportunities::signal_stale(&worker_app);
                 let progress = ArbitrageScannerProgress {
                     scanner_key: ARBITRAGE_SCANNER_KEY.to_string(),
                     status: "success".to_string(),
