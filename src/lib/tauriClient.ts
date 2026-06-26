@@ -814,11 +814,13 @@ export interface OpportunityReason {
 
 /** A suggested action on an opportunity card. */
 export interface OpportunityAction {
-  kind: 'buyPart' | 'sellPart' | 'sellSet' | 'farmRelic' | 'openWfm' | string;
+  kind: 'buyPart' | 'sellPart' | 'sellSet' | 'farmRelic' | 'openWfm' | 'copyWhisper' | string;
   label: string;
   itemSlug: string | null;
   itemName: string | null;
   price: number | null;
+  /** Seller in-game name, only set for `copyWhisper` (live snipe) actions. */
+  username?: string | null;
 }
 
 /** A single ranked, explained "what to do now" play on the Opportunities board. */
@@ -833,7 +835,11 @@ export interface Opportunity {
   setSlug: string | null;
   imagePath: string | null;
   estValue: number;
-  valueBasis: 'profit' | 'liquidation' | string;
+  /** Upfront plat needed to act (0 for sell/reprice/farm). Drives the budget filter. */
+  cost: number;
+  valueBasis: 'profit' | 'liquidation' | 'savings' | 'unlock' | string;
+  /** When the prices were last computed (scan time) — for the freshness indicator. */
+  pricedAt: string | null;
   confidence: number;
   confidenceLabel: string;
   urgency: 'persistent' | 'expiring' | 'timed' | string;

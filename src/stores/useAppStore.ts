@@ -552,6 +552,21 @@ function buildWatchlistAlertId(watchlistId: string, orderId: string): string {
   return `${watchlistId}:${orderId}`;
 }
 
+/**
+ * Identity of an alert by what it MEANS, not which order id triggered it: the same item, from the
+ * same seller, at the same price. Dismissing records this so the exact same alert can't reappear
+ * when the trigger refreshes — while a cheaper price or a different seller (a new signature) still
+ * alerts as it should.
+ */
+function watchlistAlertSignature(alert: {
+  watchlistId: string;
+  rank: number | null;
+  price: number;
+  username: string;
+}): string {
+  return `${alert.watchlistId}:${alert.rank ?? 'base'}:${alert.price}:${alert.username.trim().toLowerCase()}`;
+}
+
 function sanitizePositiveIntegerInput(value: string): string {
   const digitsOnly = value.replace(/\D+/g, '');
   const trimmedLeadingZeroes = digitsOnly.replace(/^0+/, '');
@@ -1347,6 +1362,9 @@ interface AppStore {
 
   watchlist: WatchlistItem[];
   alerts: WatchlistAlert[];
+  /** Signatures of alerts the user dismissed this session — suppresses the exact same alert from
+   *  reappearing on refresh. Cleared on app restart (a fresh session re-alerts). */
+  dismissedAlertKeys: Set<string>;
   systemAlerts: SystemAlert[];
   worldStateSystemAlertDismissed: boolean;
   selectedWatchlistId: string | null;
@@ -1405,6 +1423,10 @@ interface AppStore {
   pinnedOpportunities: PinnedOpportunities;
   pinOpportunity: (opportunity: Opportunity) => void;
   unpinOpportunity: (subjectKey: string) => void;
+  // Dismissed ("not interested") subjects — hidden for this session only (cleared on restart).
+  dismissedOpportunityKeys: Set<string>;
+  dismissOpportunity: (subjectKey: string) => void;
+  restoreDismissedOpportunities: () => void;
   // In-app routing for opportunity action buttons.
   pendingTradeListing: PendingTradeListing | null;
   requestTradeListing: (req: PendingTradeListing) => void;
@@ -1487,6 +1509,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   opportunitiesError: null,
   opportunitiesLoadedAt: null,
   pinnedOpportunities: loadPinnedOpportunities(),
+  dismissedOpportunityKeys: new Set<string>(),
   pendingTradeListing: null,
   requestedOpportunitiesTab: null,
   requestedFarmNowSearch: null,
@@ -2507,6 +2530,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   watchlist: restoredWatchlist,
   alerts: [],
+  dismissedAlertKeys: new Set<string>(),
   systemAlerts: [],
   worldStateSystemAlertDismissed: false,
   selectedWatchlistId: restoredSelectedWatchlistId,
@@ -2873,10 +2897,28 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   dismissAlert: (id) =>
-    set((state) => ({
-      alerts: state.alerts.filter((alert) => alert.id !== id),
-    })),
-  clearAllAlerts: () => set({ alerts: [] }),
+    set((state) => {
+      const alert = state.alerts.find((entry) => entry.id === id);
+      if (!alert) {
+        return state;
+      }
+      // Remember the dismissal so this exact item/seller/price can't re-trigger on refresh.
+      const dismissedAlertKeys = new Set(state.dismissedAlertKeys);
+      dismissedAlertKeys.add(watchlistAlertSignature(alert));
+      return {
+        alerts: state.alerts.filter((entry) => entry.id !== id),
+        dismissedAlertKeys,
+      };
+    }),
+  clearAllAlerts: () =>
+    set((state) => {
+      // Treat "clear all" as dismissing each — none of them should pop straight back.
+      const dismissedAlertKeys = new Set(state.dismissedAlertKeys);
+      for (const alert of state.alerts) {
+        dismissedAlertKeys.add(watchlistAlertSignature(alert));
+      }
+      return { alerts: [], dismissedAlertKeys };
+    }),
   markAlertNoResponse: (id) =>
     set((state) => {
       const alert = state.alerts.find((entry) => entry.id === id);
@@ -3118,10 +3160,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const existingAlert = resolvedState.alerts.find(
         (alert) => alert.watchlistId === latestItem.id,
       );
-      const nextAlert =
+      const builtAlert =
         preferredOrder && latestItem.targetPrice >= preferredOrder.platinum
           ? buildWatchlistAlert(latestItem, preferredOrder)
           : null;
+      // Suppress an alert the user already dismissed (same item/seller/price); the watchlist item
+      // itself still updates below.
+      const nextAlert =
+        builtAlert && get().dismissedAlertKeys.has(watchlistAlertSignature(builtAlert))
+          ? null
+          : builtAlert;
       const alertTriggered =
         nextAlert !== null &&
         (!existingAlert || existingAlert.orderId !== nextAlert.orderId);
@@ -3400,6 +3448,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
       savePinnedOpportunities(pinnedOpportunities);
       return { pinnedOpportunities };
     }),
+  dismissOpportunity: (subjectKey) =>
+    set((state) => {
+      const dismissedOpportunityKeys = new Set(state.dismissedOpportunityKeys);
+      dismissedOpportunityKeys.add(subjectKey);
+      // Dismissing also drops it from "accepted" if it was pinned.
+      if (subjectKey in state.pinnedOpportunities) {
+        const pinnedOpportunities = { ...state.pinnedOpportunities };
+        delete pinnedOpportunities[subjectKey];
+        savePinnedOpportunities(pinnedOpportunities);
+        return { dismissedOpportunityKeys, pinnedOpportunities };
+      }
+      return { dismissedOpportunityKeys };
+    }),
+  restoreDismissedOpportunities: () => set({ dismissedOpportunityKeys: new Set<string>() }),
 
   ingestRealtimeWatchlistOrder: (order) => {
     const item = get().watchlist.find((entry) => entry.id === order.watchlistId);
@@ -3427,6 +3489,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
 
     const nextAlert = buildWatchlistAlert(item, realtimeOrder);
+    // The user already dismissed this exact item/seller/price — don't pop it back up.
+    if (get().dismissedAlertKeys.has(watchlistAlertSignature(nextAlert))) {
+      return false;
+    }
     const isNewAlert = !existingAlert || existingAlert.orderId !== nextAlert.orderId;
 
     set((state) => {

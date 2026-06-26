@@ -35,8 +35,13 @@ pub struct Opportunity {
     pub image_path: Option<String>,
     /// Estimated plat you gain by acting (meaning depends on `value_basis`).
     pub est_value: i64,
+    /// Upfront plat needed to act (buy missing parts / the basket). 0 for sell/reprice/farm plays.
+    /// Drives the "what can I afford" budget filter.
+    pub cost: i64,
     /// `profit` (complete & sell), `liquidation` (sell parts you hold).
     pub value_basis: String,
+    /// When the underlying prices were last computed (the scan time) — for a freshness indicator.
+    pub priced_at: Option<String>,
     /// 0..1 — how much to trust the numbers (data freshness / liquidity / price completeness).
     pub confidence: f64,
     pub confidence_label: String,
@@ -194,7 +199,9 @@ pub fn evaluate_reprice(
         set_slug: None,
         image_path: order.image_path.clone(),
         est_value: recommended_exit,
+        cost: 0,
         value_basis: "unlock".into(),
+        priced_at: None,
         confidence,
         confidence_label: confidence_label(confidence).into(),
         urgency: "persistent".into(),
@@ -269,7 +276,9 @@ pub fn evaluate_set_flip(flip: &FlipInput, config: &EvalConfig) -> Option<Opport
         set_slug: Some(flip.set_slug.clone()),
         image_path: flip.image_path.clone(),
         est_value,
+        cost: round_plat(cost),
         value_basis: "profit".into(),
+        priced_at: None,
         confidence,
         confidence_label: confidence_label(confidence).into(),
         urgency: "persistent".into(),
@@ -346,7 +355,9 @@ pub fn evaluate_holding(holding: &HoldingInput, config: &EvalConfig) -> Option<O
         set_slug: None,
         image_path: holding.image_path.clone(),
         est_value: profit,
+        cost: 0,
         value_basis: "profit".into(),
+        priced_at: None,
         confidence,
         confidence_label: confidence_label(confidence).into(),
         urgency: "persistent".into(),
@@ -418,7 +429,9 @@ pub fn evaluate_stale_hold(hold: &StaleHoldInput, config: &EvalConfig) -> Option
         set_slug: None,
         image_path: hold.image_path.clone(),
         est_value: hold.estimated_value,
+        cost: 0,
         value_basis: "liquidation".into(),
+        priced_at: None,
         confidence,
         confidence_label: confidence_label(confidence).into(),
         urgency: "persistent".into(),
@@ -747,7 +760,9 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
             set_slug: Some(input.set_slug.clone()),
             image_path: input.image_path.clone(),
             est_value,
+            cost: round_plat(plan.completion_cost),
             value_basis: "profit".into(),
+            priced_at: None,
             confidence,
             confidence_label: confidence_label(confidence).into(),
             urgency: "persistent".into(),
@@ -827,7 +842,9 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
         set_slug: Some(input.set_slug.clone()),
         image_path: input.image_path.clone(),
         est_value,
+        cost: 0,
         value_basis: "liquidation".into(),
+        priced_at: None,
         confidence,
         confidence_label: confidence_label(confidence).into(),
         urgency: "persistent".into(),
@@ -1025,6 +1042,11 @@ pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Oppor
         if let Some(opportunity) = evaluate_stale_hold(&stale, &config) {
             opportunities.push(opportunity);
         }
+    }
+
+    // Stamp every play with the price-data freshness (the scan time) for the UI's "priced X ago".
+    for opportunity in &mut opportunities {
+        opportunity.priced_at = Some(scanner.computed_at.clone());
     }
 
     // Rank for the quest-board feel: high value first, but interleave categories and cap the list.
@@ -1360,7 +1382,9 @@ mod tests {
             set_slug: None,
             image_path: None,
             est_value: score as i64,
+            cost: 0,
             value_basis: "profit".into(),
+            priced_at: None,
             confidence: 1.0,
             confidence_label: "High".into(),
             urgency: "persistent".into(),

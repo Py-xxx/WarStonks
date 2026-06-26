@@ -467,9 +467,14 @@ function SetPlannerRow({
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
 }) {
   const imageUrl = resolveWfmAssetUrl(planner.entry.imagePath);
+  const isComplete =
+    planner.totalComponentCount > 0 &&
+    planner.ownedComponentCount >= planner.totalComponentCount;
 
   return (
-    <article className={`planner-set-row${expanded ? ' is-expanded' : ''}`}>
+    <article
+      className={`planner-set-row${expanded ? ' is-expanded' : ''}${isComplete ? ' is-complete' : ''}`}
+    >
       <button type="button" className="planner-set-button" onClick={onToggle}>
         <div className="planner-set-main">
           <span className="planner-set-thumb">
@@ -482,6 +487,9 @@ function SetPlannerRow({
             </span>
           </div>
           <div className="planner-set-status-pills">
+            {isComplete ? (
+              <span className="market-panel-badge tone-green">✓ Complete</span>
+            ) : null}
             <span className="market-panel-badge tone-green">
               {planner.ownedComponentCount}/{planner.totalComponentCount} owned
             </span>
@@ -1303,8 +1311,13 @@ export function OpportunitiesPage({
     }
 
     return computed.sort((left, right) => {
-      if (right.ownedComponentCount !== left.ownedComponentCount) {
-        return right.ownedComponentCount - left.ownedComponentCount;
+      // Sort by completion fraction, not absolute count — a 3/3 or 2/2 (100%) outranks a 3/4 (75%).
+      const leftRatio =
+        left.totalComponentCount > 0 ? left.ownedComponentCount / left.totalComponentCount : 0;
+      const rightRatio =
+        right.totalComponentCount > 0 ? right.ownedComponentCount / right.totalComponentCount : 0;
+      if (rightRatio !== leftRatio) {
+        return rightRatio - leftRatio;
       }
 
       const leftProfit = left.completionProfit ?? Number.NEGATIVE_INFINITY;
@@ -2045,6 +2058,9 @@ export function OpportunitiesPage({
                 aria-selected={activeTab === tab.id}
               >
                 {tab.label}
+                {tab.id === 'opportunities' ? (
+                  <span className="subtab-beta-badge">Beta</span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -2067,27 +2083,29 @@ export function OpportunitiesPage({
               </div>
 
               {plannerPositiveSummary.profitableSetCount > 0 ? (
-                <div className="set-planner-summary-grid">
-                  <article className="set-planner-summary-card">
-                    <span className="card-label">Expected Investment</span>
-                    <strong>{formatPlat(plannerPositiveSummary.expectedInvestment)}</strong>
-                  </article>
-                  <article className="set-planner-summary-card">
-                    <span className="card-label">Expected Value</span>
-                    <strong>{formatPlat(plannerPositiveSummary.expectedValue)}</strong>
-                  </article>
-                  <article className="set-planner-summary-card">
-                    <span className="card-label">Expected Profit</span>
-                    <strong className="set-planner-summary-value-positive">
-                      {formatPlat(plannerPositiveSummary.expectedProfit)}
-                    </strong>
-                  </article>
-                  <article className="set-planner-summary-card">
-                    <span className="card-label">Expected Margin</span>
-                    <strong className="set-planner-summary-value-positive">
-                      {formatPercent(plannerPositiveSummary.expectedMarginPct)}
-                    </strong>
-                  </article>
+                <div className="farm-now-summary">
+                  <div className="farm-now-summary-main">
+                    <div className="farm-now-metrics">
+                      <span className="market-panel-badge tone-blue">
+                        Investment {formatPlat(plannerPositiveSummary.expectedInvestment)}
+                      </span>
+                      <span className="market-panel-badge tone-blue">
+                        Value {formatPlat(plannerPositiveSummary.expectedValue)}
+                      </span>
+                      <span className="market-panel-badge tone-green">
+                        Profit {formatPlat(plannerPositiveSummary.expectedProfit)}
+                      </span>
+                      <span className="market-panel-badge tone-green">
+                        Margin {formatPercent(plannerPositiveSummary.expectedMarginPct)}
+                      </span>
+                    </div>
+                    <div className="farm-now-meta">
+                      <span>
+                        {plannerPositiveSummary.profitableSetCount} profitable set
+                        {plannerPositiveSummary.profitableSetCount === 1 ? '' : 's'} to complete
+                      </span>
+                    </div>
+                  </div>
                 </div>
               ) : null}
 
@@ -2469,7 +2487,9 @@ export function OpportunitiesPage({
                               <strong>{relic.counts.total}</strong>
                             </span>
                             <div className="farm-now-cell owned-relics-refinement-pills">
-                              {RELIC_REFINEMENT_COLUMNS.map((column) => (
+                              {RELIC_REFINEMENT_COLUMNS.filter(
+                                (column) => relic.counts[column.key] > 0,
+                              ).map((column) => (
                                 <span
                                   key={`${relicKey}-${column.key}`}
                                   className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(column.key)}`}
