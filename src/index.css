@@ -327,6 +327,65 @@ textarea:focus-visible,
   flex: 1;
   min-width: 0;
 }
+.farm-now-search {
+  flex-wrap: wrap;
+}
+.farm-now-select {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.farm-now-refine {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: rgba(74, 158, 255, 0.06);
+  border: 1px solid rgba(74, 158, 255, 0.2);
+  border-radius: 10px;
+}
+.farm-now-refine-hint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.farm-now-refine-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.farm-now-refine-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.farm-now-refine-cell.is-best {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 1px rgba(61, 214, 140, 0.3);
+}
+.farm-now-refine-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.farm-now-refine-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.farm-now-refine-cell.is-best .farm-now-refine-value {
+  color: var(--accent-green);
+}
+.farm-now-refine-owned {
+  font-size: 10px;
+  color: var(--text-muted);
+}
 .opp-card-head {
   display: flex;
   align-items: flex-start;

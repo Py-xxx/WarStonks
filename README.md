@@ -1,6 +1,5 @@
 # WarStonks
 
-[![Latest Release](https://img.shields.io/github/v/release/Py-xxx/WarStonks?display_name=tag&style=for-the-badge)](https://github.com/Py-xxx/WarStonks/releases)
 [![Windows](https://img.shields.io/badge/platform-Windows-0f172a?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/releases)
 [![Auto Updates](https://img.shields.io/badge/updates-automatic-15803d?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/releases)
 [![Local-First](https://img.shields.io/badge/local--first-SQLite%20cache-075985?style=for-the-badge)](https://github.com/Py-xxx/WarStonks)
@@ -16,12 +15,7 @@
 [![Alecaframe](https://img.shields.io/badge/integration-Alecaframe-0891b2?style=for-the-badge)](https://stats.alecaframe.com/api/swagger/index.html)
 
 [![Scanners](https://img.shields.io/badge/scanners-arbitrage%20%26%20relic%20ROI-b45309?style=for-the-badge)](https://github.com/Py-xxx/WarStonks)
-[![WorldState](https://img.shields.io/badge/worldstate-tracking-7c3aed?style=for-the-badge)](https://github.com/Py-xxx/WarStonks)
 [![Watchlists](https://img.shields.io/badge/watchlists-alerts-dc2626?style=for-the-badge)](https://github.com/Py-xxx/WarStonks)
-
-[![Stars](https://img.shields.io/github/stars/Py-xxx/WarStonks?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/stargazers)
-[![Open Issues](https://img.shields.io/github/issues/Py-xxx/WarStonks?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/Py-xxx/WarStonks?style=for-the-badge)](https://github.com/Py-xxx/WarStonks/commits/main)
 
 WarStonks is a desktop trading companion for Warframe players who want to stop guessing and start making cleaner, faster market decisions.
 

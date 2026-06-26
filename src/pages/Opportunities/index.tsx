@@ -71,13 +71,21 @@ type PlannerSetEntry = {
   components: PlannerComponentState[];
 };
 
+type RefinementMetric = { key: string; label: string; value: number | null; owned: number };
+type RefinementGuidance = {
+  metrics: RefinementMetric[];
+  bestKey: string;
+  bestLabel: string;
+  hint: string;
+};
+
 type FarmNowRelicRow = {
   relic: RelicRoiEntry;
-  refinementKey: string;
-  refinementLabel: string;
-  expectedProfit: number | null;
-  platPerHour: number | null;
+  tier: string;
   ownedCount: number;
+  expectedProfit: number | null; // EV/run at the recommended refinement
+  platPerHour: number | null;
+  guidance: RefinementGuidance;
   bestDropSlug: string | null;
   drops: Array<{
     drop: RelicRoiDropEntry;
@@ -92,15 +100,24 @@ type FarmNowSetCompletionDrop = {
   missingQuantity: number;
   coveredSetCount: number;
   setNames: string[];
+  /** Best (closest-to-complete) set this drop helps: owned/total parts. */
+  bestSetProgress: { owned: number; total: number } | null;
 };
 
 type FarmNowSetCompletionRow = {
   relic: RelicRoiEntry;
+  tier: string;
   ownedCount: number;
   neededDropCount: number;
   totalMissingQuantity: number;
   coveredSetCount: number;
   coveredSetNames: string[];
+  /** Progress-weighted priority: completes near-finished sets first. */
+  completionScore: number;
+  /** The closest-to-complete set this relic helps. */
+  bestSetProgress: { owned: number; total: number; name: string } | null;
+  /** Which refinement to run for the best shot at the NEEDED parts. */
+  guidance: RefinementGuidance;
   drops: FarmNowSetCompletionDrop[];
 };
 
@@ -374,6 +391,62 @@ function chanceForRefinement(
   }
 }
 
+const REFINEMENT_ORDER: { key: string; label: string }[] = [
+  { key: 'intact', label: 'Intact' },
+  { key: 'exceptional', label: 'Exceptional' },
+  { key: 'flawless', label: 'Flawless' },
+  { key: 'radiant', label: 'Radiant' },
+];
+
+/**
+ * Turns a per-refinement metric (plat-per-run for profit, % chance at a needed part for set
+ * completion) into a recommendation: which refinement to run, and whether refining beyond Intact
+ * is actually worth it.
+ */
+function buildRefinementGuidance(
+  metrics: RefinementMetric[],
+  unit: 'plat' | 'pct',
+): RefinementGuidance {
+  const best = metrics
+    .filter((metric) => metric.value !== null)
+    .reduce<RefinementMetric | null>(
+      (acc, metric) => (acc === null || (metric.value ?? 0) > (acc.value ?? 0) ? metric : acc),
+      null,
+    );
+  const intactValue = metrics.find((metric) => metric.key === 'intact')?.value ?? null;
+
+  let hint = 'Run any refinement.';
+  if (best) {
+    if (best.key === 'intact' || intactValue === null) {
+      hint =
+        unit === 'plat'
+          ? 'Intact is fine — refining adds little.'
+          : `Intact gives ${formatChance(best.value)} at a needed part.`;
+    } else {
+      const delta = (best.value ?? 0) - intactValue;
+      const worthRefining =
+        unit === 'plat' ? delta >= 5 && (best.value ?? 0) >= intactValue * 1.15 : delta >= 5;
+      if (worthRefining) {
+        hint =
+          unit === 'plat'
+            ? `Refine to ${best.label}: +${Math.round(delta)}p/run over Intact.`
+            : `Refine to ${best.label}: ${formatChance(best.value)} vs ${formatChance(
+                intactValue,
+              )} at a needed part.`;
+      } else {
+        hint = 'Intact is fine — refining barely helps here.';
+      }
+    }
+  }
+
+  return {
+    metrics,
+    bestKey: best?.key ?? 'intact',
+    bestLabel: best?.label ?? 'Intact',
+    hint,
+  };
+}
+
 function formatChance(value: number | null): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return '—';
@@ -381,6 +454,42 @@ function formatChance(value: number | null): string {
 
   const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
   return `${rounded}%`;
+}
+
+function RefinementGuidancePanel({
+  guidance,
+  unit,
+}: {
+  guidance: RefinementGuidance;
+  unit: 'plat' | 'pct';
+}) {
+  return (
+    <div className="farm-now-refine">
+      <div className="farm-now-refine-hint">
+        {unit === 'plat' ? 'Best plat per run' : 'Chance at a needed part'} — {guidance.hint}
+      </div>
+      <div className="farm-now-refine-grid">
+        {guidance.metrics.map((metric) => (
+          <div
+            key={metric.key}
+            className={`farm-now-refine-cell${
+              metric.key === guidance.bestKey ? ' is-best' : ''
+            }`}
+          >
+            <span className="farm-now-refine-label">{metric.label}</span>
+            <span className="farm-now-refine-value">
+              {metric.value === null
+                ? '—'
+                : unit === 'plat'
+                  ? `${metric.value}p/run`
+                  : formatChance(metric.value)}
+            </span>
+            <span className="farm-now-refine-owned">×{metric.owned} owned</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function parseRelicTierCode(name: string): { tier: string; code: string } | null {
@@ -1008,6 +1117,8 @@ export function OpportunitiesPage({
     }
   }, [requestedOpportunitiesTab, requestedFarmNowSearch, mode, clearRequestedOpportunitiesTab]);
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
+  const [farmNowEra, setFarmNowEra] = useState<string>('all');
+  const [farmNowSort, setFarmNowSort] = useState<string>('default');
   const [farmNowScan, setFarmNowScan] = useState<ArbitrageScannerResponse | null>(null);
   const [farmNowScanState, setFarmNowScanState] = useState<ArbitrageScannerState | null>(null);
   const [farmNowLoading, setFarmNowLoading] = useState(false);
@@ -1416,80 +1527,92 @@ export function OpportunitiesPage({
     for (const relic of relics) {
       const parsed = parseRelicTierCode(relic.name);
       const ownedEntry = parsed ? ownedMap.get(`${parsed.tier}:${parsed.code}`) : undefined;
-
-      for (const refinement of relic.refinements) {
-        const ownedCount = ownedEntry
-          ? ownedEntry.counts[refinement.refinementKey as keyof OwnedRelicEntry['counts']] ?? 0
-          : 0;
-        if (!ownedCount) {
-          continue;
-        }
-
-        let expectedProfit = 0;
-        let hasContribution = false;
-        let bestDropSlug: string | null = null;
-        let bestValue = -1;
-
-        const drops = relic.drops.map((drop) => {
-          const chance = chanceForRefinement(drop.chanceProfile, refinement.refinementKey);
-          const exitPrice = drop.recommendedExitPrice;
-          const expectedValue =
-            chance !== null && exitPrice !== null ? (chance / 100) * exitPrice : null;
-
-          if (expectedValue !== null) {
-            hasContribution = true;
-            expectedProfit += expectedValue;
-            if (expectedValue > bestValue) {
-              bestValue = expectedValue;
-              bestDropSlug = drop.slug;
-            }
-          }
-
-          return {
-            drop,
-            chance,
-            expectedValue,
-          };
-        });
-
-        rows.push({
-          relic,
-          refinementKey: refinement.refinementKey,
-          refinementLabel: refinement.refinementLabel,
-          expectedProfit: hasContribution ? expectedProfit : null,
-          platPerHour: hasContribution ? expectedProfit * 12 : null,
-          ownedCount,
-          bestDropSlug,
-          drops,
-        });
+      if (!ownedEntry || (ownedEntry.counts.total ?? 0) <= 0) {
+        continue; // one row per OWNED relic
       }
+
+      // Expected plat per run at each refinement (chance × exit summed over drops).
+      const metrics: RefinementMetric[] = REFINEMENT_ORDER.map((refinement) => {
+        let value: number | null = null;
+        for (const drop of relic.drops) {
+          const chance = chanceForRefinement(drop.chanceProfile, refinement.key);
+          const exit = drop.recommendedExitPrice;
+          if (chance !== null && exit !== null) {
+            value = (value ?? 0) + (chance / 100) * exit;
+          }
+        }
+        const owned = ownedEntry.counts[refinement.key as keyof OwnedRelicEntry['counts']] ?? 0;
+        return {
+          key: refinement.key,
+          label: refinement.label,
+          value: value === null ? null : Math.round(value),
+          owned,
+        };
+      });
+      const guidance = buildRefinementGuidance(metrics, 'plat');
+
+      // Drop breakdown at the recommended refinement.
+      let bestDropSlug: string | null = null;
+      let bestValue = -1;
+      const drops = relic.drops.map((drop) => {
+        const chance = chanceForRefinement(drop.chanceProfile, guidance.bestKey);
+        const exitPrice = drop.recommendedExitPrice;
+        const expectedValue =
+          chance !== null && exitPrice !== null ? (chance / 100) * exitPrice : null;
+        if (expectedValue !== null && expectedValue > bestValue) {
+          bestValue = expectedValue;
+          bestDropSlug = drop.slug;
+        }
+        return { drop, chance, expectedValue };
+      });
+
+      const expectedProfit =
+        metrics.find((metric) => metric.key === guidance.bestKey)?.value ?? null;
+
+      rows.push({
+        relic,
+        tier: parsed?.tier ?? '',
+        ownedCount: ownedEntry.counts.total ?? 0,
+        expectedProfit,
+        platPerHour: expectedProfit !== null ? expectedProfit * 12 : null,
+        guidance,
+        bestDropSlug,
+        drops,
+      });
     }
 
-    return rows.sort((left, right) => {
-      const leftProfit = left.expectedProfit ?? Number.NEGATIVE_INFINITY;
-      const rightProfit = right.expectedProfit ?? Number.NEGATIVE_INFINITY;
-      if (rightProfit !== leftProfit) {
-        return rightProfit - leftProfit;
-      }
-      if (right.ownedCount !== left.ownedCount) {
+    return rows;
+  }, [ownedRelics, farmNowScan]);
+
+  // Search (relic name + drops) + era filter + sort — shared controls for the part-profit list.
+  const displayedFarmNowRelics = useMemo(() => {
+    const query = farmNowSearch.trim().toLowerCase();
+    let rows = farmNowRelics;
+    if (query) {
+      rows = rows.filter(
+        (row) =>
+          row.relic.name.toLowerCase().includes(query) ||
+          row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
+      );
+    }
+    if (farmNowEra !== 'all') {
+      rows = rows.filter((row) => row.tier === farmNowEra);
+    }
+    const sorted = [...rows];
+    sorted.sort((left, right) => {
+      if (farmNowSort === 'owned' && right.ownedCount !== left.ownedCount) {
         return right.ownedCount - left.ownedCount;
+      }
+      // Default: best plat-per-hour first.
+      const leftValue = left.platPerHour ?? Number.NEGATIVE_INFINITY;
+      const rightValue = right.platPerHour ?? Number.NEGATIVE_INFINITY;
+      if (rightValue !== leftValue) {
+        return rightValue - leftValue;
       }
       return left.relic.name.localeCompare(right.relic.name);
     });
-  }, [ownedRelics, farmNowScan]);
-
-  // Search filter (relic name + any of its item drops), shared by both farm-now subtabs.
-  const displayedFarmNowRelics = useMemo(() => {
-    const query = farmNowSearch.trim().toLowerCase();
-    if (!query) {
-      return farmNowRelics;
-    }
-    return farmNowRelics.filter(
-      (row) =>
-        row.relic.name.toLowerCase().includes(query) ||
-        row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
-    );
-  }, [farmNowRelics, farmNowSearch]);
+    return sorted;
+  }, [farmNowRelics, farmNowSearch, farmNowEra, farmNowSort]);
 
   const farmNowTopRelics = useMemo(
     () => displayedFarmNowRelics.slice(0, 3),
@@ -1500,11 +1623,17 @@ export function OpportunitiesPage({
       string,
       {
         missingQuantity: number;
-        setNames: Set<string>;
+        // Per set this component is missing from, the set's completion progress.
+        sets: Map<string, { name: string; owned: number; total: number }>;
       }
     >();
 
     for (const planner of plannerEntries) {
+      const progress = {
+        name: planner.entry.name,
+        owned: planner.ownedComponentCount,
+        total: planner.totalComponentCount,
+      };
       for (const component of planner.components) {
         if (component.missingQuantity <= 0) {
           continue;
@@ -1518,10 +1647,10 @@ export function OpportunitiesPage({
         for (const key of keys) {
           const current = byKey.get(key) ?? {
             missingQuantity: 0,
-            setNames: new Set<string>(),
+            sets: new Map<string, { name: string; owned: number; total: number }>(),
           };
           current.missingQuantity += component.missingQuantity;
-          current.setNames.add(planner.entry.name);
+          current.sets.set(planner.entry.name, progress);
           byKey.set(key, current);
         }
       }
@@ -1532,32 +1661,54 @@ export function OpportunitiesPage({
 
   const farmNowSetCompletionRelics = useMemo<FarmNowSetCompletionRow[]>(() => {
     const relics = farmNowScan?.relicRoiResults ?? [];
-    const ownedByRelic = new Map<string, number>();
-
+    const ownedMap = new Map<string, OwnedRelicEntry>();
     for (const relic of ownedRelics) {
-      ownedByRelic.set(`${relic.tier}:${relic.code}`, relic.counts.total ?? 0);
+      ownedMap.set(`${relic.tier}:${relic.code}`, relic);
     }
+
+    const ratio = (progress: { owned: number; total: number }) =>
+      progress.total > 0 ? progress.owned / progress.total : 0;
 
     const rows: FarmNowSetCompletionRow[] = [];
 
     for (const relic of relics) {
       const parsedRelic = parseRelicTierCode(relic.name);
-      const ownedCount = parsedRelic
-        ? ownedByRelic.get(`${parsedRelic.tier}:${parsedRelic.code}`) ?? 0
-        : 0;
+      const ownedEntry = parsedRelic
+        ? ownedMap.get(`${parsedRelic.tier}:${parsedRelic.code}`)
+        : undefined;
+      const ownedCount = ownedEntry?.counts.total ?? 0;
       if (!ownedCount) {
         continue;
       }
       const coveredSetNames = new Set<string>();
+      let rowBestProgress: { owned: number; total: number; name: string } | null = null;
+      let completionScore = 0;
 
       const drops = relic.drops.map<FarmNowSetCompletionDrop>((drop) => {
         const neededMatch =
           (drop.itemId !== null ? farmNowMissingComponents.get(`item:${drop.itemId}`) : undefined) ??
           farmNowMissingComponents.get(`slug:${drop.slug}`);
-        const setNames = neededMatch ? [...neededMatch.setNames].sort() : [];
-
+        const setNames = neededMatch ? [...neededMatch.sets.keys()].sort() : [];
         for (const setName of setNames) {
           coveredSetNames.add(setName);
+        }
+
+        // The closest-to-complete set this drop helps — that's what we prioritise.
+        let dropBest: { owned: number; total: number } | null = null;
+        if (neededMatch) {
+          for (const setProgress of neededMatch.sets.values()) {
+            if (dropBest === null || ratio(setProgress) > ratio(dropBest)) {
+              dropBest = { owned: setProgress.owned, total: setProgress.total };
+            }
+            if (rowBestProgress === null || ratio(setProgress) > ratio(rowBestProgress)) {
+              rowBestProgress = {
+                owned: setProgress.owned,
+                total: setProgress.total,
+                name: setProgress.name,
+              };
+            }
+          }
+          completionScore += dropBest ? ratio(dropBest) : 0;
         }
 
         return {
@@ -1566,6 +1717,7 @@ export function OpportunitiesPage({
           missingQuantity: neededMatch?.missingQuantity ?? 0,
           coveredSetCount: setNames.length,
           setNames,
+          bestSetProgress: dropBest,
         };
       });
 
@@ -1574,45 +1726,70 @@ export function OpportunitiesPage({
         continue;
       }
 
+      // Refinement guidance: chance your single reward is one of the NEEDED parts, per refinement.
+      const metrics: RefinementMetric[] = REFINEMENT_ORDER.map((refinement) => {
+        let chanceSum: number | null = null;
+        for (const needed of neededDrops) {
+          const chance = chanceForRefinement(needed.drop.chanceProfile, refinement.key);
+          if (chance !== null) {
+            chanceSum = (chanceSum ?? 0) + chance;
+          }
+        }
+        const owned = ownedEntry?.counts[refinement.key as keyof OwnedRelicEntry['counts']] ?? 0;
+        return { key: refinement.key, label: refinement.label, value: chanceSum, owned };
+      });
+      const guidance = buildRefinementGuidance(metrics, 'pct');
+
       rows.push({
         relic,
+        tier: parsedRelic?.tier ?? '',
         ownedCount,
         neededDropCount: neededDrops.length,
         totalMissingQuantity: neededDrops.reduce((sum, drop) => sum + drop.missingQuantity, 0),
         coveredSetCount: coveredSetNames.size,
         coveredSetNames: [...coveredSetNames].sort(),
+        completionScore,
+        bestSetProgress: rowBestProgress,
+        guidance,
         drops,
       });
     }
 
-    return rows.sort((left, right) => {
-      if (right.neededDropCount !== left.neededDropCount) {
-        return right.neededDropCount - left.neededDropCount;
-      }
-      if (right.coveredSetCount !== left.coveredSetCount) {
-        return right.coveredSetCount - left.coveredSetCount;
-      }
-      if (right.totalMissingQuantity !== left.totalMissingQuantity) {
-        return right.totalMissingQuantity - left.totalMissingQuantity;
-      }
-      if (right.ownedCount !== left.ownedCount) {
-        return right.ownedCount - left.ownedCount;
-      }
-      return left.relic.name.localeCompare(right.relic.name);
-    });
+    return rows;
   }, [farmNowScan, ownedRelics, farmNowMissingComponents]);
 
   const displayedFarmNowSetCompletionRelics = useMemo(() => {
     const query = farmNowSearch.trim().toLowerCase();
-    if (!query) {
-      return farmNowSetCompletionRelics;
+    let rows = farmNowSetCompletionRelics;
+    if (query) {
+      rows = rows.filter(
+        (row) =>
+          row.relic.name.toLowerCase().includes(query) ||
+          row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
+      );
     }
-    return farmNowSetCompletionRelics.filter(
-      (row) =>
-        row.relic.name.toLowerCase().includes(query) ||
-        row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
-    );
-  }, [farmNowSetCompletionRelics, farmNowSearch]);
+    if (farmNowEra !== 'all') {
+      rows = rows.filter((row) => row.tier === farmNowEra);
+    }
+    const sorted = [...rows];
+    sorted.sort((left, right) => {
+      if (farmNowSort === 'coverage' && right.coveredSetCount !== left.coveredSetCount) {
+        return right.coveredSetCount - left.coveredSetCount;
+      }
+      if (farmNowSort === 'owned' && right.ownedCount !== left.ownedCount) {
+        return right.ownedCount - left.ownedCount;
+      }
+      // Default: completion priority — relics that finish near-complete sets first.
+      if (right.completionScore !== left.completionScore) {
+        return right.completionScore - left.completionScore;
+      }
+      if (right.coveredSetCount !== left.coveredSetCount) {
+        return right.coveredSetCount - left.coveredSetCount;
+      }
+      return left.relic.name.localeCompare(right.relic.name);
+    });
+    return sorted;
+  }, [farmNowSetCompletionRelics, farmNowSearch, farmNowEra, farmNowSort]);
 
   const farmNowSetCompletionTopRelics = useMemo(
     () => displayedFarmNowSetCompletionRelics.slice(0, 3),
@@ -2649,6 +2826,37 @@ export function OpportunitiesPage({
                     Clear
                   </button>
                 ) : null}
+                <select
+                  className="settings-input farm-now-select"
+                  value={farmNowEra}
+                  onChange={(event) => setFarmNowEra(event.target.value)}
+                  aria-label="Filter by relic era"
+                >
+                  <option value="all">All eras</option>
+                  <option value="Lith">Lith</option>
+                  <option value="Meso">Meso</option>
+                  <option value="Neo">Neo</option>
+                  <option value="Axi">Axi</option>
+                </select>
+                <select
+                  className="settings-input farm-now-select"
+                  value={farmNowSort}
+                  onChange={(event) => setFarmNowSort(event.target.value)}
+                  aria-label="Sort relics"
+                >
+                  {farmNowTab === 'set-completion' ? (
+                    <>
+                      <option value="default">Sort: completion priority</option>
+                      <option value="coverage">Sort: sets helped</option>
+                      <option value="owned">Sort: owned</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="default">Sort: plat / hour</option>
+                      <option value="owned">Sort: owned</option>
+                    </>
+                  )}
+                </select>
               </div>
 
               {(farmNowTab === 'set-completion'
@@ -2667,15 +2875,12 @@ export function OpportunitiesPage({
                         </div>
                       ))
                     : farmNowTopRelics.map((row) => (
-                        <div
-                          key={`${row.relic.slug}-${row.refinementKey}`}
-                          className="farm-now-top-card"
-                        >
+                        <div key={row.relic.slug} className="farm-now-top-card">
                           <span className="panel-title-eyebrow">Top pick</span>
                           <strong>{row.relic.name}</strong>
                           <span className="farm-now-top-meta">
-                            {row.refinementLabel} · {formatPlatDecimal(row.expectedProfit)} ·{' '}
-                            {formatPlatDecimal(row.platPerHour)}/hr · x{row.ownedCount}
+                            Run {row.guidance.bestLabel} · {formatPlatDecimal(row.platPerHour)}/hr ·
+                            x{row.ownedCount}
                           </span>
                         </div>
                       ))}
@@ -2818,7 +3023,9 @@ export function OpportunitiesPage({
                                 <div className="farm-now-copy">
                                   <strong>{row.relic.name}</strong>
                                   <span className="farm-now-subtitle">
-                                    {row.totalMissingQuantity} missing parts covered
+                                    {row.bestSetProgress
+                                      ? `Closest: ${row.bestSetProgress.name} ${row.bestSetProgress.owned}/${row.bestSetProgress.total}`
+                                      : `${row.totalMissingQuantity} missing parts covered`}
                                   </span>
                                 </div>
                               </div>
@@ -2837,6 +3044,7 @@ export function OpportunitiesPage({
 
                           {expanded ? (
                             <div className="farm-now-row-body">
+                              <RefinementGuidancePanel guidance={row.guidance} unit="pct" />
                               <div className="farm-now-drop-grid">
                                 {row.drops.map((entry) => {
                                   const dropImage = resolveWfmAssetUrl(entry.drop.imagePath);
@@ -2976,7 +3184,7 @@ export function OpportunitiesPage({
                     </div>
                   ) : null}
                   {displayedFarmNowRelics.map((row) => {
-                    const relicKey = `${row.relic.slug}:${row.refinementKey}`;
+                    const relicKey = `${row.relic.slug}:part-profit`;
                     const expanded = expandedFarmRelicKey === relicKey;
                     const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
                     return (
@@ -3006,9 +3214,10 @@ export function OpportunitiesPage({
                             </div>
                             <span className="farm-now-cell farm-now-cell-refinement">
                               <span
-                                className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(row.refinementKey)}`}
+                                className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(row.guidance.bestKey)}`}
+                                title="Best refinement to run"
                               >
-                                {row.refinementLabel}
+                                Run {row.guidance.bestLabel}
                               </span>
                             </span>
                             <span className="farm-now-cell farm-now-cell-owned">
@@ -3026,6 +3235,7 @@ export function OpportunitiesPage({
 
                         {expanded ? (
                           <div className="farm-now-row-body">
+                            <RefinementGuidancePanel guidance={row.guidance} unit="plat" />
                             <div className="farm-now-drop-grid">
                               {row.drops.map((entry) => {
                                 const drop = entry.drop;

@@ -1076,19 +1076,10 @@ pub async fn refresh_alecaframe_wallet_snapshot(
                 &error,
             )
         })?;
-        if snapshot.enabled && snapshot.configured && snapshot.error_message.is_none() {
-            if let Err(error) =
-                crate::market_observatory::refresh_owned_relic_inventory_cache_inner(&app_for_worker)
-            {
-                log_feature_error_best_effort(
-                    &app_for_worker,
-                    "alecaframe",
-                    "owned-relic-cache-refresh",
-                    "Failed to refresh the owned relic cache after refreshing Alecaframe balances.",
-                    &error,
-                );
-            }
-        }
+        // NOTE: do NOT refresh the owned-relic cache here. The wallet snapshot polls every 60s, and
+        // bundling relics in would fetch /api/stats/relics every 60s too — bypassing the relic
+        // refresh's 3-minute cooldown and doubling AlecaFrame load. Relics refresh only via the
+        // dedicated, cooldown-gated `refresh_owned_relic_inventory` command.
         Ok(snapshot)
     })
     .await
