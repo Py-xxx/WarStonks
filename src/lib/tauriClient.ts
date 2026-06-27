@@ -235,6 +235,15 @@ export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
   return invoke<WfstatVoidTrader>('get_worldstate_void_trader');
 }
 
+export interface VoidTraderItemPrice {
+  item: string;
+  recommendedExitPrice: number | null;
+}
+
+export async function scanVoidTraderPrices(items: string[]): Promise<VoidTraderItemPrice[]> {
+  return invoke<VoidTraderItemPrice[]>('scan_void_trader_prices', { items });
+}
+
 export async function getWorldStateMarketNews(): Promise<WorldStateMarketNewsResponse> {
   return invoke<WorldStateMarketNewsResponse>('get_worldstate_market_news');
 }
@@ -313,6 +322,20 @@ export async function getWfmTradeOverview(
   sellerMode: SellerMode,
 ): Promise<TradeOverview> {
   return invoke<TradeOverview>('get_wfm_trade_overview', { sellerMode });
+}
+
+// ---- Import / Export (.baddie) ----
+export async function exportUserDataPayload(): Promise<string> {
+  return invoke<string>('export_user_data');
+}
+export async function exportMarketDataPayload(): Promise<string> {
+  return invoke<string>('export_market_data');
+}
+export async function importUserDataPayload(payload: string): Promise<void> {
+  return invoke<void>('import_user_data', { payload });
+}
+export async function importMarketDataPayload(payload: string): Promise<void> {
+  return invoke<void>('import_market_data', { payload });
 }
 
 export async function getWfmProfileTradeLog(

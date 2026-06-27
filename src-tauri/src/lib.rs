@@ -1,6 +1,8 @@
 mod commands;
+mod data_transfer;
 mod error_log;
 mod item_catalog;
+mod maintenance;
 mod market_observatory;
 mod opportunities;
 mod recommended_prices;
@@ -114,6 +116,11 @@ pub fn run() {
             commands::get_worldstate_invasions,
             commands::get_worldstate_syndicate_missions,
             commands::get_worldstate_void_trader,
+            commands::scan_void_trader_prices,
+            data_transfer::export_user_data,
+            data_transfer::export_market_data,
+            data_transfer::import_user_data,
+            data_transfer::import_market_data,
             commands::get_worldstate_cycles,
             commands::get_worldstate_steel_path,
             commands::get_worldstate_nightwave,

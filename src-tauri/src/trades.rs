@@ -1237,7 +1237,7 @@ fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection
     Ok(connection)
 }
 
-fn open_trades_cache_database(app: &tauri::AppHandle) -> Result<Connection> {
+pub(crate) fn open_trades_cache_database(app: &tauri::AppHandle) -> Result<Connection> {
     let db_path = build_trades_cache_database_path(app)?;
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).with_context(|| {

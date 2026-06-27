@@ -246,6 +246,36 @@ fn build_settings_path(app: &tauri::AppHandle) -> Result<PathBuf> {
         .join(SETTINGS_FILE_NAME))
 }
 
+/// Returns the saved settings with secrets stripped, for inclusion in a data export.
+/// The Discord webhook URL and Alecaframe link are removed so the export is safe to share.
+pub(crate) fn export_settings_stripped(app: &tauri::AppHandle) -> Result<AppSettings> {
+    let path = build_settings_path(app)?;
+    let mut settings = load_settings_from_path(&path)?;
+    settings.discord_webhook.webhook_url = None;
+    settings.discord_webhook.last_validated_at = None;
+    settings.alecaframe.public_link = None;
+    settings.alecaframe.username_when_public = None;
+    settings.alecaframe.last_validated_at = None;
+    Ok(settings)
+}
+
+/// Applies imported settings (enabled flags + Discord notification toggles) while preserving
+/// the existing secrets (webhook URL, Alecaframe link), which are never part of an export.
+pub(crate) fn import_settings_preserving_secrets(
+    app: &tauri::AppHandle,
+    imported: &AppSettings,
+) -> Result<()> {
+    let path = build_settings_path(app)?;
+    let mut current = load_settings_from_path(&path)?;
+    // Only re-enable an integration if its secret (which is never exported) is present locally,
+    // so we never leave an integration "enabled" with no URL/link that would silently do nothing.
+    current.alecaframe.enabled = imported.alecaframe.enabled && current.alecaframe.public_link.is_some();
+    current.discord_webhook.enabled =
+        imported.discord_webhook.enabled && current.discord_webhook.webhook_url.is_some();
+    current.discord_webhook.notifications = imported.discord_webhook.notifications.clone();
+    save_settings_to_path(&path, &current)
+}
+
 fn load_settings_from_path(path: &Path) -> Result<AppSettings> {
     if !path.exists() {
         return Ok(AppSettings::default());

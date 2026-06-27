@@ -38,15 +38,14 @@ const mainSections: SectionConfig[] = [
     label: 'Notifications',
     description: 'Desktop alerts and in-app sound for watchlist hits and more.',
   },
-];
-
-const footerSections: SectionConfig[] = [
   {
     id: 'import-export',
     label: 'Import & Export',
-    description: 'Reserved for future app-data import/export actions.',
+    description: 'Back up or restore your inventory, watchlist, trades, and market data.',
   },
 ];
+
+const footerSections: SectionConfig[] = [];
 
 export function SettingsSidebar() {
   const sidebarOpen = useAppStore((state) => state.settingsSidebarOpen);
@@ -55,6 +54,7 @@ export function SettingsSidebar() {
   const openAlecaframeModal = useAppStore((state) => state.openAlecaframeModal);
   const openDiscordWebhookModal = useAppStore((state) => state.openDiscordWebhookModal);
   const openNotificationsModal = useAppStore((state) => state.openNotificationsModal);
+  const openImportExportModal = useAppStore((state) => state.openImportExportModal);
   const notificationSettings = useAppStore((state) => state.notificationSettings);
   const appSettings = useAppStore((state) => state.appSettings);
   const walletSnapshot = useAppStore((state) => state.walletSnapshot);
@@ -188,6 +188,8 @@ export function SettingsSidebar() {
                     openDiscordWebhookModal();
                   } else if (section.id === 'notifications') {
                     openNotificationsModal();
+                  } else if (section.id === 'import-export') {
+                    openImportExportModal();
                   }
                 }}
               >
@@ -221,25 +223,27 @@ export function SettingsSidebar() {
             <div className="settings-inline-warning">{walletSnapshot.errorMessage}</div>
           ) : null}
 
-          <div className="settings-nav-footer">
-            {footerSections.map((section) => (
-              <button
-                key={section.id}
-                className="settings-nav-item"
-                type="button"
-                onClick={() => setSection(section.id)}
-              >
-                <span className="settings-nav-copy">
-                  <span className="settings-nav-head">
-                    <span className="settings-nav-label">{section.label}</span>
-                    <span className="badge badge-muted">Soon</span>
+          {footerSections.length > 0 ? (
+            <div className="settings-nav-footer">
+              {footerSections.map((section) => (
+                <button
+                  key={section.id}
+                  className="settings-nav-item"
+                  type="button"
+                  onClick={() => setSection(section.id)}
+                >
+                  <span className="settings-nav-copy">
+                    <span className="settings-nav-head">
+                      <span className="settings-nav-label">{section.label}</span>
+                      <span className="badge badge-muted">Soon</span>
+                    </span>
+                    <span className="settings-nav-description">{section.description}</span>
                   </span>
-                  <span className="settings-nav-description">{section.description}</span>
-                </span>
-                <ChevronIcon />
-              </button>
-            ))}
-          </div>
+                  <ChevronIcon />
+                </button>
+              ))}
+            </div>
+          ) : null}
         </nav>
       </aside>
     </>

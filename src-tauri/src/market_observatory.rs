@@ -7324,6 +7324,28 @@ pub fn compute_set_completion_owned_item_prices(
     Ok(values)
 }
 
+/// One-shot price scan: for each (item_id, slug) that lacks fresh cached statistics, fetches
+/// them over the rate-limited WFM scheduler, then returns the recommended exit price per item.
+/// Used by the Void Trader (Baro) inventory scan — runs once per visit. Best-effort per item:
+/// a fetch/pricing failure for one item yields `None` and never aborts the whole scan.
+pub fn scan_recommended_exit_prices(
+    app: &tauri::AppHandle,
+    items: &[(i64, String)],
+) -> Result<Vec<Option<i64>>> {
+    let observatory = open_market_observatory_database(app)?;
+    let mut prices = Vec::with_capacity(items.len());
+    for (item_id, slug) in items {
+        let _ = ensure_statistics_cached_for_scan(&observatory, *item_id, slug, "base", || false);
+        let price = build_statistics_price_model(&observatory, *item_id, "base")
+            .ok()
+            .flatten()
+            .and_then(|model| model.recommended_exit_price)
+            .map(|value| value.round() as i64);
+        prices.push(price);
+    }
+    Ok(prices)
+}
+
 /// Cache-only recommended exit price for an item (no network), memoized per call.
 fn cached_recommended_exit_price(
     observatory: &Connection,
