@@ -22,6 +22,7 @@ import { formatPlatinumValue, formatTradeStatusLabel, getTradeStatusToneClass } 
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
+import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   ItemAnalysisResponse,
@@ -843,6 +844,7 @@ function ListingModal({
   );
 
   return (
+    <ModalPortal>
     <div className="modal-backdrop" role="presentation">
       {/* Backdrop intentionally does NOT close on click — an accidental outside click would
           discard a half-typed listing. Use Cancel, the × button, or Escape to close. */}
@@ -904,6 +906,7 @@ function ListingModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -2009,6 +2012,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       </div>
 
       {sessionExpiredPopupOpen ? (
+        <ModalPortal>
         <div className="modal-backdrop" role="presentation">
           <div
             ref={sessionExpiredRef}
@@ -2059,6 +2063,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             </div>
           </div>
         </div>
+        </ModalPortal>
       ) : null}
 
       {listingModal ? (

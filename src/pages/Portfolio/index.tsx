@@ -18,6 +18,7 @@ import type {
   PortfolioTradeLogEntry,
   SetCompletionInventoryValue,
 } from '../../types';
+import { ModalPortal } from '../../components/ModalPortal';
 
 // Safe error → message: never surfaces "[object Object]" from a non-Error throw, and falls
 // back to friendly copy when there's no usable message.
@@ -1339,6 +1340,7 @@ function TradeLogTab({ username }: { username: string | null }) {
       )}
 
       {migrateModalOpen ? (
+        <ModalPortal>
         <div className="modal-backdrop" onClick={() => setMigrateModalOpen(false)}>
           <div
             className="settings-modal portfolio-modal"
@@ -1398,9 +1400,11 @@ function TradeLogTab({ username }: { username: string | null }) {
             </div>
           </div>
         </div>
+        </ModalPortal>
       ) : null}
 
       {allocationGroup ? (
+        <ModalPortal>
         <div className="modal-backdrop" onClick={() => setAllocationGroupId(null)}>
           <div
             className="settings-modal portfolio-modal"
@@ -1478,6 +1482,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             </div>
           </div>
         </div>
+        </ModalPortal>
       ) : null}
     </>
   );

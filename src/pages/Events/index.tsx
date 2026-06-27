@@ -1,28 +1,33 @@
 import { useAppStore } from '../../stores/useAppStore';
+import type { EventsSubTab } from '../../types';
 import { ActiveEventsPanel } from '../../components/ActiveEventsPanel';
 import { ActivitiesPanel } from '../../components/ActivitiesPanel';
 import { FissuresPanel } from '../../components/FissuresPanel';
 import { MarketNewsPanel } from '../../components/MarketNewsPanel';
 import { VoidTraderPanel } from '../../components/VoidTraderPanel';
+import { VaultTraderPanel } from '../../components/VaultTraderPanel';
+import { NightwavePanel } from '../../components/NightwavePanel';
+import { SteelPathPanel } from '../../components/SteelPathPanel';
+import { WorldClockPanel } from '../../components/WorldClockPanel';
+
+const TABS: { id: EventsSubTab; label: string }[] = [
+  { id: 'vendors', label: 'Vendors' },
+  { id: 'fissures', label: 'Fissures' },
+  { id: 'activities', label: 'Activities' },
+  { id: 'progression', label: 'Nightwave & Steel Path' },
+  { id: 'events-news', label: 'Events & News' },
+];
 
 export function EventsPage() {
   const eventsSubTab = useAppStore((s) => s.eventsSubTab);
   const setEventsSubTab = useAppStore((s) => s.setEventsSubTab);
-
-  const tabs = [
-    { id: 'active-events' as const, label: 'Active Events' },
-    { id: 'void-trader'  as const, label: 'Void Trader' },
-    { id: 'fissures'     as const, label: 'Fissures' },
-    { id: 'activities'   as const, label: 'Activities' },
-    { id: 'market-news'  as const, label: 'Market & News' },
-  ];
 
   return (
     <>
       <div className="subnav">
         <div className="subnav-left">
           <span className="page-title">Events</span>
-          {tabs.map((tab) => (
+          {TABS.map((tab) => (
             <span
               key={tab.id}
               className={`subtab${eventsSubTab === tab.id ? ' active' : ''}`}
@@ -36,13 +41,30 @@ export function EventsPage() {
         </div>
       </div>
 
-        <div className="page-content events-page-content">
-        {eventsSubTab === 'active-events' && <ActiveEventsPanel />}
-        {eventsSubTab === 'void-trader' && <VoidTraderPanel />}
+      <div className="page-content events-page-content">
+        {/* Always-visible world clock — the open-world cycles people check constantly. */}
+        <WorldClockPanel />
+
+        {eventsSubTab === 'vendors' && (
+          <div className="events-stack">
+            <VoidTraderPanel />
+            <VaultTraderPanel />
+          </div>
+        )}
         {eventsSubTab === 'fissures' && <FissuresPanel />}
         {eventsSubTab === 'activities' && <ActivitiesPanel />}
-        {eventsSubTab === 'market-news' && <MarketNewsPanel />}
-
+        {eventsSubTab === 'progression' && (
+          <div className="events-stack">
+            <NightwavePanel />
+            <SteelPathPanel />
+          </div>
+        )}
+        {eventsSubTab === 'events-news' && (
+          <div className="events-stack">
+            <ActiveEventsPanel />
+            <MarketNewsPanel />
+          </div>
+        )}
       </div>
     </>
   );
