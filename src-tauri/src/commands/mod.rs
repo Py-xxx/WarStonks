@@ -558,6 +558,81 @@ fn resolve_catalog_item_id_by_name(
     Ok(indexed_item_id)
 }
 
+/// Resolves an item name to its catalog item id and WFM slug (needed to fetch statistics).
+fn resolve_catalog_item_id_and_slug_by_name(
+    connection: &Connection,
+    item_name: &str,
+) -> Result<Option<(i64, String)>> {
+    let Some(item_id) = resolve_catalog_item_id_by_name(connection, item_name)? else {
+        return Ok(None);
+    };
+    let slug: Option<String> = connection
+        .query_row(
+            "SELECT wfm_slug FROM items WHERE item_id = ?1 AND wfm_slug IS NOT NULL LIMIT 1",
+            [item_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(slug.map(|slug| (item_id, slug)))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoidTraderItemPrice {
+    pub item: String,
+    pub recommended_exit_price: Option<i64>,
+}
+
+fn scan_void_trader_prices_inner(
+    app: &tauri::AppHandle,
+    items: Vec<String>,
+) -> Result<Vec<VoidTraderItemPrice>> {
+    let mut result: Vec<VoidTraderItemPrice> = items
+        .iter()
+        .map(|item| VoidTraderItemPrice {
+            item: item.clone(),
+            recommended_exit_price: None,
+        })
+        .collect();
+
+    let Some(catalog) = open_catalog_database(app).ok() else {
+        return Ok(result);
+    };
+
+    // Resolve names → (item_id, slug); track which result index each maps to.
+    let mut resolved: Vec<(usize, i64, String)> = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        if let Some((item_id, slug)) = resolve_catalog_item_id_and_slug_by_name(&catalog, item)? {
+            resolved.push((index, item_id, slug));
+        }
+    }
+
+    let pairs: Vec<(i64, String)> = resolved
+        .iter()
+        .map(|(_, item_id, slug)| (*item_id, slug.clone()))
+        .collect();
+    let prices = crate::market_observatory::scan_recommended_exit_prices(app, &pairs)?;
+
+    for ((index, _, _), price) in resolved.iter().zip(prices.iter()) {
+        result[*index].recommended_exit_price = *price;
+    }
+    Ok(result)
+}
+
+/// Scans the Void Trader (Baro) inventory once and returns the recommended exit price for each
+/// resolvable, tradeable item. Rate-limited via the WFM scheduler; the frontend runs it a single
+/// time per Baro visit.
+#[tauri::command]
+pub async fn scan_void_trader_prices(
+    app: tauri::AppHandle,
+    items: Vec<String>,
+) -> Result<Vec<VoidTraderItemPrice>, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_void_trader_prices_inner(&app, items))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
 fn load_catalog_item_metadata(
     connection: &Connection,
     item_id: i64,

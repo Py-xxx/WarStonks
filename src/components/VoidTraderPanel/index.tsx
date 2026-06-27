@@ -42,6 +42,8 @@ export function VoidTraderPanel() {
   const error = useAppStore((state) => state.worldStateVoidTraderError);
   const lastUpdatedAt = useAppStore((state) => state.worldStateVoidTraderLastUpdatedAt);
   const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
+  const voidTraderPrices = useAppStore((state) => state.voidTraderPrices);
+  const voidTraderPricesLoading = useAppStore((state) => state.voidTraderPricesLoading);
 
   const [nowMs, setNowMs] = useState(Date.now());
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -189,6 +191,8 @@ export function VoidTraderPanel() {
                 <div className="void-trader-grid">
                   {filteredInventory.map((item) => {
                     const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                    const exitPrice = voidTraderPrices[item.item];
+                    const hasExitPrice = exitPrice !== undefined && exitPrice !== null;
 
                     return (
                       <article key={`${item.category}-${item.item}`} className="void-trader-item-card">
@@ -212,6 +216,16 @@ export function VoidTraderPanel() {
                           <div className="void-trader-cost-pill">
                             <span className="qv-stat-label">Credits</span>
                             <span className="void-trader-cost-value">{item.credits ?? '—'}</span>
+                          </div>
+                          <div className="void-trader-cost-pill void-trader-cost-pill-exit">
+                            <span className="qv-stat-label">Exit</span>
+                            <span className="void-trader-cost-value">
+                              {hasExitPrice
+                                ? `${exitPrice} pt`
+                                : voidTraderPricesLoading
+                                  ? '…'
+                                  : '—'}
+                            </span>
                           </div>
                         </div>
                       </article>

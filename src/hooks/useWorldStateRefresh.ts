@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { WORLDSTATE_RETRY_DELAY_MS } from '../lib/worldState';
+import { useAppStore } from '../stores/useAppStore';
 import { useDocumentVisibility } from './useDocumentVisibility';
 
 interface UseWorldStateRefreshOptions {
@@ -13,19 +14,21 @@ interface UseWorldStateRefreshOptions {
 export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
   const { lastUpdatedAt, nextRefreshAt, error, loading, refresh } = options;
   const isVisible = useDocumentVisibility();
+  // Pause refreshes while a data import/export is running.
+  const maintenance = useAppStore((state) => state.dataMaintenanceActive);
 
   useEffect(() => {
-    if (!isVisible || lastUpdatedAt || nextRefreshAt || error || loading) {
+    if (maintenance || !isVisible || lastUpdatedAt || nextRefreshAt || error || loading) {
       return;
     }
 
     void refresh();
-  }, [error, isVisible, lastUpdatedAt, loading, nextRefreshAt, refresh]);
+  }, [error, isVisible, lastUpdatedAt, loading, maintenance, nextRefreshAt, refresh]);
 
   useEffect(() => {
     // Don't keep a refresh timer armed while hidden; re-arm on resume. The effect
     // re-runs when isVisible flips, so a due refresh fires promptly once visible.
-    if (!isVisible) {
+    if (!isVisible || maintenance) {
       return undefined;
     }
 
@@ -44,5 +47,5 @@ export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
     }, Math.max(0, targetMs - Date.now()));
 
     return () => window.clearTimeout(timeoutId);
-  }, [error, isVisible, nextRefreshAt, refresh]);
+  }, [error, isVisible, maintenance, nextRefreshAt, refresh]);
 }

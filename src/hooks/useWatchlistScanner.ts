@@ -23,15 +23,16 @@ export function useWatchlistScanner() {
   });
   const requestInFlightRef = useRef(false);
   const timeoutIdRef = useRef<number | null>(null);
+  const maintenance = useAppStore((state) => state.dataMaintenanceActive);
 
   useEffect(() => {
     primeAlertAudio();
   }, []);
 
   useEffect(() => {
-    // Pause scanning while hidden so WebView2 throttling can't queue a backlog of
-    // scans that all flush through the rate-limited WFM scheduler on window restore.
-    if (!isVisible) {
+    // Pause scanning while hidden or during a data import/export, so WebView2 throttling
+    // can't queue a backlog and no scan writes mid import/export.
+    if (!isVisible || maintenance) {
       return undefined;
     }
 
@@ -96,5 +97,5 @@ export function useWatchlistScanner() {
       disposed = true;
       clearScheduledTick();
     };
-  }, [watchlistScheduleVersion, isVisible]);
+  }, [watchlistScheduleVersion, isVisible, maintenance]);
 }

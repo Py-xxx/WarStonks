@@ -38,6 +38,7 @@ function computeNextRefreshDelay(
 export function useTradeDetection() {
   const tradeAccountName = useAppStore((state) => state.tradeAccount?.name ?? null);
   const handleDetectedBuys = useAppStore((state) => state.handleDetectedTradeBuys);
+  const maintenance = useAppStore((state) => state.dataMaintenanceActive);
 
   // NOTE: trade detection deliberately keeps running while the window is hidden, so
   // background trades (and Discord notifications) are still captured while the user is
@@ -45,7 +46,8 @@ export function useTradeDetection() {
   // in-flight guard, so — unlike the heavier market/watchlist pollers — it cannot
   // build up a WebView2-throttled backlog that floods the scheduler on resume.
   useEffect(() => {
-    if (!tradeAccountName) {
+    // Pause trade detection during a data import/export so it can't write mid-operation.
+    if (!tradeAccountName || maintenance) {
       return;
     }
 
@@ -153,5 +155,5 @@ export function useTradeDetection() {
         clearTimeout(alecaframeTimer);
       }
     };
-  }, [tradeAccountName, handleDetectedBuys]);
+  }, [tradeAccountName, handleDetectedBuys, maintenance]);
 }

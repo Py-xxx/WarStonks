@@ -13,11 +13,11 @@ export function useMarketTracking() {
   const requestInFlightRef = useRef(false);
   const sellerMode = useAppStore((state) => state.sellerMode);
   const isVisible = useDocumentVisibility();
+  const maintenance = useAppStore((state) => state.dataMaintenanceActive);
 
   useEffect(() => {
-    // Pause polling entirely while the window is hidden. WebView2 would otherwise
-    // throttle the interval and replay a backlog on restore, freezing the UI.
-    if (!isVisible) {
+    // Pause polling while the window is hidden or a data import/export is in progress.
+    if (!isVisible || maintenance) {
       return undefined;
     }
 
@@ -43,5 +43,5 @@ export function useMarketTracking() {
       window.clearTimeout(initialTimeoutId);
       window.clearInterval(intervalId);
     };
-  }, [sellerMode, isVisible]);
+  }, [sellerMode, isVisible, maintenance]);
 }

@@ -2,7 +2,8 @@
 name = "warstonks"
 version = "3.0.11"
 description = "WarStonks — Warframe market assistant"
-authors = []
+authors = ["py."]
+license = "GPL-3.0-only"
 edition = "2021"
 
 [lib]

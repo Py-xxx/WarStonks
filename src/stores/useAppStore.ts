@@ -30,6 +30,7 @@ import {
   getCachedOpportunities,
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
+  scanVoidTraderPrices,
   getWorldStateCycles,
   getWorldStateSteelPath,
   getWorldStateNightwave,
@@ -1328,6 +1329,11 @@ interface AppStore {
   alecaframeModalOpen: boolean;
   discordWebhookModalOpen: boolean;
   notificationsModalOpen: boolean;
+  importExportModalOpen: boolean;
+  // While true (during an import/export), background scans/polls pause so nothing writes
+  // to the databases mid-operation.
+  dataMaintenanceActive: boolean;
+  setDataMaintenanceActive: (active: boolean) => void;
   /** True when WFStat data (item catalog enrichment and/or live worldstate) is being served
    * from cache because warframestat.us was unreachable at startup. Drives a dismissible banner;
    * resolves itself once WFStat is back online. */
@@ -1389,6 +1395,11 @@ interface AppStore {
   worldStateVoidTraderError: string | null;
   worldStateVoidTraderNextRefreshAt: string | null;
   worldStateVoidTraderLastUpdatedAt: string | null;
+  // Recommended exit prices for Baro's inventory (item name → platinum). Scanned once per visit.
+  voidTraderPrices: Record<string, number | null>;
+  voidTraderPricesScannedFor: string | null;
+  voidTraderPricesLoading: boolean;
+  scanVoidTraderPricesIfNeeded: () => Promise<void>;
   // Reference worldstate sources (cycles / steel-path / nightwave / vault-trader), held generically.
   worldStateExtra: Record<WorldStateExtraKey, WorldStateExtraEntry>;
   refreshWorldStateExtra: (key: WorldStateExtraKey) => Promise<void>;
@@ -1401,6 +1412,8 @@ interface AppStore {
   closeDiscordWebhookModal: () => void;
   openNotificationsModal: () => void;
   closeNotificationsModal: () => void;
+  openImportExportModal: () => void;
+  closeImportExportModal: () => void;
   setWfstatDataStale: (stale: boolean) => void;
   setNotificationSettings: (settings: NotificationSettings) => void;
   clearSettingsError: () => void;
@@ -1680,6 +1693,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   alecaframeModalOpen: false,
   discordWebhookModalOpen: false,
   notificationsModalOpen: false,
+  importExportModalOpen: false,
+  dataMaintenanceActive: false,
+  setDataMaintenanceActive: (active) => set({ dataMaintenanceActive: active }),
   wfstatDataStale: false,
   notificationSettings: loadNotificationSettings(),
   appSettings: defaultAppSettings,
@@ -1735,6 +1751,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateSyndicateMissionsLastUpdatedAt: null,
   worldStateVoidTrader: null,
   worldStateVoidTraderLoading: false,
+  voidTraderPrices: {},
+  voidTraderPricesScannedFor: null,
+  voidTraderPricesLoading: false,
   worldStateVoidTraderError: null,
   worldStateVoidTraderNextRefreshAt: null,
   worldStateVoidTraderLastUpdatedAt: null,
@@ -1838,6 +1857,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
       settingsError: null,
     }),
   closeNotificationsModal: () => set({ notificationsModalOpen: false }),
+  openImportExportModal: () =>
+    set({
+      settingsSidebarOpen: true,
+      settingsSection: 'import-export',
+      alecaframeModalOpen: false,
+      discordWebhookModalOpen: false,
+      notificationsModalOpen: false,
+      importExportModalOpen: true,
+      settingsError: null,
+    }),
+  closeImportExportModal: () => set({ importExportModalOpen: false }),
   setWfstatDataStale: (stale) => set({ wfstatDataStale: stale }),
   setNotificationSettings: (settings) => {
     saveNotificationSettings(settings);
@@ -2623,6 +2653,37 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })();
 
     return worldStateVoidTraderRefreshPromise;
+  },
+  scanVoidTraderPricesIfNeeded: async () => {
+    const state = get();
+    const voidTrader = state.worldStateVoidTrader;
+    // Only scan while Baro is actually present (he has inventory) and not yet scanned this visit.
+    if (
+      !voidTrader ||
+      voidTrader.inventory.length === 0 ||
+      state.voidTraderPricesLoading ||
+      state.voidTraderPricesScannedFor === voidTrader.id
+    ) {
+      return;
+    }
+
+    set({ voidTraderPricesLoading: true });
+    try {
+      const names = voidTrader.inventory.map((entry) => entry.item);
+      const results = await scanVoidTraderPrices(names);
+      const prices: Record<string, number | null> = {};
+      for (const result of results) {
+        prices[result.item] = result.recommendedExitPrice;
+      }
+      set({
+        voidTraderPrices: prices,
+        voidTraderPricesScannedFor: voidTrader.id,
+        voidTraderPricesLoading: false,
+      });
+    } catch (error) {
+      console.error('[void-trader] failed to scan inventory prices', error);
+      set({ voidTraderPricesLoading: false });
+    }
   },
 
   sellerMode: 'ingame',

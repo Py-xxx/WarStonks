@@ -421,6 +421,15 @@ where
     C: FnMut() -> bool,
     F: FnOnce() -> Result<WfmHttpResponse> + Send + 'static,
 {
+    // Hold all WFM requests while a data import/export is in progress so no scan or poll
+    // writes to the databases mid-operation.
+    while crate::maintenance::is_maintenance_active() {
+        if is_cancelled() {
+            return Err(anyhow!("{label} cancelled during data maintenance"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
     let total_started_at = Instant::now();
     let Some(coalesce_key) = coalesce_key else {
         acquire_wfm_slot_interruptible(priority, label, || is_cancelled())?;
