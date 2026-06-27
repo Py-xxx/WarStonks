@@ -39,6 +39,8 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const markAlertNoResponse = useAppStore((state) => state.markAlertNoResponse);
   const markWatchlistItemBought = useAppStore((state) => state.markWatchlistItemBought);
   const retryWorldStateSystemAlert = useAppStore((state) => state.retryWorldStateSystemAlert);
+  const underpricedAlert = useAppStore((state) => state.underpricedAlert);
+  const dismissUnderpricedAlert = useAppStore((state) => state.dismissUnderpricedAlert);
   const [purchaseModal, setPurchaseModal] = useState<{
     watchlistId: string;
     itemName: string;
@@ -49,7 +51,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const totalAlerts = alerts.length + systemAlerts.length;
+  const totalAlerts = alerts.length + systemAlerts.length + (underpricedAlert ? 1 : 0);
 
   if (totalAlerts === 0) {
     return (
@@ -73,6 +75,70 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
     <div className={`alerts-panel${compact ? ' compact' : ''}`}>
       {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
       {actionError ? <div className="settings-inline-error">{actionError}</div> : null}
+
+      {underpricedAlert ? (
+        <div className="alerts-section alerts-section-card">
+          <div className="alerts-section-header">
+            <div className="alerts-section-title-wrap">
+              <span className="alerts-section-title">Underpriced Radar</span>
+              <span className={`badge badge-${underpricedAlert.listing.tier === 'red' ? 'red' : underpricedAlert.listing.tier === 'yellow' ? 'amber' : 'green'}`}>
+                {Math.round(underpricedAlert.listing.pctBelow)}% below
+              </span>
+            </div>
+            <button className="text-btn" type="button" onClick={dismissUnderpricedAlert}>
+              Dismiss
+            </button>
+          </div>
+          <div className="alerts-list">
+            <div className="alert-item">
+              <div className="alert-main">
+                <span className="alert-item-thumb">
+                  <span>{underpricedAlert.listing.itemName.slice(0, 1)}</span>
+                </span>
+                <div className="alert-copy">
+                  <div className="alert-topline">
+                    <span className="alert-item-name">{underpricedAlert.listing.itemName}</span>
+                    <span className="badge badge-green">{underpricedAlert.listing.listedPrice} pt</span>
+                  </div>
+                  <div className="alert-meta">
+                    <span>{underpricedAlert.listing.username}</span>
+                    <span>Qty {underpricedAlert.listing.quantity}</span>
+                    <span>Rec {underpricedAlert.listing.recommendedPrice} pt</span>
+                    {underpricedAlert.listing.rank !== null && underpricedAlert.listing.rank !== undefined ? (
+                      <span>Rank {underpricedAlert.listing.rank}</span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              <div className="alert-actions">
+                <button
+                  className="act-btn"
+                  type="button"
+                  onClick={() => {
+                    void copyWhisperMessage(
+                      {
+                        username: underpricedAlert.listing.username,
+                        platinum: underpricedAlert.listing.listedPrice,
+                        rank: underpricedAlert.listing.rank,
+                      },
+                      underpricedAlert.listing.itemName,
+                    ).catch(() => undefined);
+                  }}
+                >
+                  Copy Message
+                </button>
+              </div>
+            </div>
+          </div>
+          {underpricedAlert.otherCount > 0 ? (
+            <div className="alerts-underpriced-more">
+              {underpricedAlert.otherCount} other underpriced listing
+              {underpricedAlert.otherCount === 1 ? '' : 's'} found
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {visibleSystemAlerts.length > 0 ? (
         <div className="alerts-section alerts-section-card">
           <div className="alerts-section-header">

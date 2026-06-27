@@ -63,6 +63,10 @@ export const WORLDSTATE_ENDPOINT_KEYS = {
   invasions: 'invasions',
   syndicateMissions: 'syndicate-missions',
   voidTrader: 'void-trader',
+  cycles: 'cycles',
+  steelPath: 'steel-path',
+  nightwave: 'nightwave',
+  vaultTrader: 'vault-trader',
 } as const satisfies Record<string, WorldStateEndpointKey>;
 export const WORLDSTATE_ENDPOINT_LABELS: Record<WorldStateEndpointKey, string> = {
   events: 'Active Events',
@@ -75,7 +79,36 @@ export const WORLDSTATE_ENDPOINT_LABELS: Record<WorldStateEndpointKey, string> =
   invasions: 'Invasions',
   'syndicate-missions': 'Syndicate Missions',
   'void-trader': 'Void Trader',
+  cycles: 'World Cycles',
+  'steel-path': 'Steel Path',
+  nightwave: 'Nightwave',
+  'vault-trader': 'Prime Resurgence',
 };
+
+/** Reads an ISO `expiry` from a worldstate object payload (for scheduling the next refresh). */
+export function worldStateObjectExpiry(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const expiry = (payload as Record<string, unknown>).expiry;
+  return typeof expiry === 'string' && !Number.isNaN(Date.parse(expiry)) ? expiry : null;
+}
+
+/** Next refresh for the combined cycles payload = the soonest of the cycles' expiries. */
+export function worldStateCyclesNextRefresh(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  const timestamps = ['cetusCycle', 'vallisCycle', 'cambionCycle', 'earthCycle']
+    .map((key) => worldStateObjectExpiry(record[key]))
+    .filter((value): value is string => value !== null)
+    .map((value) => Date.parse(value));
+  if (timestamps.length === 0) {
+    return null;
+  }
+  return new Date(Math.min(...timestamps)).toISOString();
+}
 
 function parseOptionalNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;

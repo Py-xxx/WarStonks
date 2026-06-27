@@ -13,6 +13,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   desktopEnabled: false,
   soundEnabled: true,
   ringtone: 'chime',
+  underpricedMinPctBelow: 10,
   events: {
     watchlistAlert: true,
     scannerStale: true,
@@ -20,6 +21,9 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     underpricedListing: true,
   },
 };
+
+/** Discount thresholds (percent below recommended) offered in the notification settings. */
+export const UNDERPRICED_PCT_BELOW_OPTIONS = [10, 20, 25, 30, 40, 50] as const;
 
 export function loadNotificationSettings(): NotificationSettings {
   if (typeof window === 'undefined' || !window.localStorage) {
@@ -101,19 +105,19 @@ export async function requestDesktopNotificationPermission(): Promise<DesktopNot
   }
 }
 
-/** Sends a native desktop notification. Returns false if it couldn't be sent (no permission,
- *  unsupported environment, etc.). */
+/** Sends a native desktop notification. Returns false only if the send call itself threw. */
 async function showDesktopNotification(title: string, body: string): Promise<boolean> {
   if (isTauriRuntime()) {
+    // Send directly — do NOT gate on `isPermissionGranted()`. That getter is unreliable on
+    // macOS (it can report `false`/`provisional` even when the OS has granted notifications),
+    // and gating on it silently swallows every alert. If the OS truly hasn't granted
+    // permission the plugin just no-ops; if it has, the notification shows.
     try {
-      if (await tauriIsPermissionGranted()) {
-        tauriSendNotification({ title, body });
-        return true;
-      }
+      tauriSendNotification({ title, body });
+      return true;
     } catch {
-      // OS notification center unavailable / permission revoked; ignore.
+      return false;
     }
-    return false;
   }
 
   if (!webNotificationSupported() || Notification.permission !== 'granted') {

@@ -20,6 +20,6 @@ test('formatWhisperItemName keeps the blueprint suffix inside the pipes', () => 
 test('formatWhisperMessage uses the pipe item-name formatting and please text', () => {
   assert.equal(
     formatWhisperMessage({ username: 'seller', platinum: 42 }, 'Wisp Prime Set'),
-    '/w seller Hey there! I would like to buy | Wisp Prime Set | for 42 :platinum: please (WarStonks - by py)',
+    '/w "seller" Hey there! I would like to buy | Wisp Prime Set | for 42 :platinum: please (WarStonks - by py)',
   );
 });

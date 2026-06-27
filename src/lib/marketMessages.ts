@@ -36,7 +36,7 @@ export function formatWhisperItemName(itemName: string): string {
 
 export function formatWhisperMessage(target: WhisperTarget, itemName: string): string {
   const rankSuffix = formatWhisperRankSuffix(target.rank, target.maxRank);
-  return `/w ${target.username} Hey there! I would like to buy ${formatWhisperItemName(itemName)}${rankSuffix} for ${target.platinum} :platinum: please (WarStonks - by py)`;
+  return `/w "${target.username}" Hey there! I would like to buy ${formatWhisperItemName(itemName)}${rankSuffix} for ${target.platinum} :platinum: please (WarStonks - by py)`;
 }
 
 export async function copyWhisperMessage(

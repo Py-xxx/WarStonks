@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ItemName } from '../ItemName';
+import { ModalPortal } from '../ModalPortal';
 import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { formatElapsedTime } from '../../lib/dateTime';
@@ -289,6 +290,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
       ) : null}
 
       {removeTarget ? (
+        <ModalPortal>
         <div className="modal-backdrop" role="presentation" onClick={() => setRemoveItemId(null)}>
           <div
             ref={removeModalRef}
@@ -337,6 +339,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             </div>
           </div>
         </div>
+        </ModalPortal>
       ) : null}
     </>
   );

@@ -452,6 +452,41 @@ pub fn get_worldstate_market_news() -> Result<MarketNewsResponse, String> {
     Ok(MarketNewsResponse { news, flash_sales })
 }
 
+/// Open-world day/night & temperature cycles (Cetus, Orb Vallis, Cambion Drift, Earth). Pulled
+/// from the `/pc` master payload in one request so all cycles stay consistent.
+#[tauri::command]
+pub fn get_worldstate_cycles() -> Result<serde_json::Value, String> {
+    let payload = fetch_wfstat_object("/pc", "cycles")?;
+    let record = payload
+        .as_object()
+        .ok_or_else(|| "WFStat cycles response was not an object.".to_string())?;
+    let pick = |key: &str| record.get(key).cloned().unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::json!({
+        "cetusCycle": pick("cetusCycle"),
+        "vallisCycle": pick("vallisCycle"),
+        "cambionCycle": pick("cambionCycle"),
+        "earthCycle": pick("earthCycle"),
+    }))
+}
+
+/// Teshin's weekly Steel Path offering (current reward + rotation).
+#[tauri::command]
+pub fn get_worldstate_steel_path() -> Result<serde_json::Value, String> {
+    fetch_wfstat_object("/pc/steelPath", "steel path")
+}
+
+/// Current Nightwave season (active challenges + rewards).
+#[tauri::command]
+pub fn get_worldstate_nightwave() -> Result<serde_json::Value, String> {
+    fetch_wfstat_object("/pc/nightwave", "nightwave")
+}
+
+/// Varzia / Prime Resurgence — the vaulted-relic vendor in Maroo's Bazaar.
+#[tauri::command]
+pub fn get_worldstate_vault_trader() -> Result<serde_json::Value, String> {
+    fetch_wfstat_object("/pc/vaultTrader", "vault trader")
+}
+
 fn normalize_catalog_lookup_value(value: &str) -> Option<String> {
     let normalized = value
         .split_whitespace()

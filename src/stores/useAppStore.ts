@@ -30,6 +30,10 @@ import {
   getCachedOpportunities,
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
+  getWorldStateCycles,
+  getWorldStateSteelPath,
+  getWorldStateNightwave,
+  getWorldStateVaultTrader,
   type RealtimeWatchlistOrder,
   type UnderpricedListing,
   type Opportunity,
@@ -58,6 +62,8 @@ import {
   WORLDSTATE_ENDPOINT_KEYS,
   WORLDSTATE_ENDPOINT_LABELS,
   WORLDSTATE_RETRY_DELAY_MS,
+  worldStateObjectExpiry,
+  worldStateCyclesNextRefresh,
 } from '../lib/worldState';
 import {
   persistWorldStateCacheEntry,
@@ -101,6 +107,8 @@ import type {
   WatchlistItem,
   SystemAlert,
   WorldStateEndpointKey,
+  WorldStateExtraKey,
+  EventsSubTab,
   WfstatAlert,
   WfstatArchonHunt,
   WfstatArbitration,
@@ -151,6 +159,45 @@ let worldStateInvasionsRefreshPromise: Promise<void> | null = null;
 let worldStateSyndicateMissionsRefreshPromise: Promise<void> | null = null;
 let worldStateVoidTraderRefreshPromise: Promise<void> | null = null;
 let tradeAccountLoadPromise: Promise<void> | null = null;
+
+/** One reference worldstate source held generically — raw payload + its load/cache state. */
+export interface WorldStateExtraEntry {
+  payload: unknown;
+  loading: boolean;
+  error: string | null;
+  nextRefreshAt: string | null;
+  lastUpdatedAt: string | null;
+}
+
+/** Generic plumbing for the four reference worldstate sources (cycles/steel-path/nightwave/vault). */
+export const WORLDSTATE_EXTRA_KEYS: WorldStateExtraKey[] = [
+  'cycles',
+  'steel-path',
+  'nightwave',
+  'vault-trader',
+];
+const WORLDSTATE_EXTRA_CONFIG: Record<
+  WorldStateExtraKey,
+  { fetch: () => Promise<unknown>; nextRefreshAt: (payload: unknown) => string | null }
+> = {
+  cycles: { fetch: getWorldStateCycles, nextRefreshAt: worldStateCyclesNextRefresh },
+  'steel-path': { fetch: getWorldStateSteelPath, nextRefreshAt: worldStateObjectExpiry },
+  nightwave: { fetch: getWorldStateNightwave, nextRefreshAt: worldStateObjectExpiry },
+  'vault-trader': { fetch: getWorldStateVaultTrader, nextRefreshAt: worldStateObjectExpiry },
+};
+const worldStateExtraRefreshPromises: Record<WorldStateExtraKey, Promise<void> | null> = {
+  cycles: null,
+  'steel-path': null,
+  nightwave: null,
+  'vault-trader': null,
+};
+const emptyWorldStateExtraEntry = (): WorldStateExtraEntry => ({
+  payload: null,
+  loading: false,
+  error: null,
+  nextRefreshAt: null,
+  lastUpdatedAt: null,
+});
 let backgroundWalletRefreshPromise: Promise<void> | null = null;
 const watchlistRefreshGenerations = new Map<string, number>();
 let autocompleteCatalogPromise: Promise<WfmAutocompleteItem[]> | null = null;
@@ -734,6 +781,12 @@ function upsertScannerStaleSystemAlert(
     return filteredAlerts;
   }
 
+  // Once the user dismisses the stale-scanner alert, stop re-adding it and stop
+  // re-notifying for that scan for the rest of the session (until a fresh scan runs).
+  if (dismissedScannerStaleScans.has(scanFinishedAt)) {
+    return filteredAlerts;
+  }
+
   // Fire a desktop/sound notification once per distinct stale scan (not on every
   // reconciliation tick).
   if (lastScannerStaleNotifiedAt !== scanFinishedAt) {
@@ -750,6 +803,8 @@ function upsertScannerStaleSystemAlert(
 }
 
 let lastScannerStaleNotifiedAt: string | null = null;
+// Scan timestamps the user has dismissed this session; not re-added or re-notified.
+const dismissedScannerStaleScans = new Set<string>();
 
 function upsertAppUpdateSystemAlert(
   alerts: SystemAlert[],
@@ -1240,6 +1295,13 @@ export interface UnderpricedListingCard extends UnderpricedListing {
   verifiedPrice: number | null;
 }
 
+/** The single underpriced alert card shown in the notification bar. */
+export interface UnderpricedAlertState {
+  listing: UnderpricedListingCard;
+  /** How many other notified underpriced listings arrived since this card was last cleared. */
+  otherCount: number;
+}
+
 interface AppStore {
   activePage: PageId;
   setActivePage: (page: PageId) => void;
@@ -1327,6 +1389,9 @@ interface AppStore {
   worldStateVoidTraderError: string | null;
   worldStateVoidTraderNextRefreshAt: string | null;
   worldStateVoidTraderLastUpdatedAt: string | null;
+  // Reference worldstate sources (cycles / steel-path / nightwave / vault-trader), held generically.
+  worldStateExtra: Record<WorldStateExtraKey, WorldStateExtraEntry>;
+  refreshWorldStateExtra: (key: WorldStateExtraKey) => Promise<void>;
   openSettingsSidebar: (section?: SettingsSection) => void;
   closeSettingsSidebar: () => void;
   setSettingsSection: (section: SettingsSection) => void;
@@ -1410,6 +1475,10 @@ interface AppStore {
   updateUnderpricedListing: (orderId: string, patch: Partial<UnderpricedListingCard>) => void;
   removeUnderpricedListing: (orderId: string) => void;
   pruneExpiredUnderpricedListings: () => void;
+  // Single replaceable alert card shown in the notification bar for the latest notified
+  // underpriced listing (so a ping always has a visible counterpart).
+  underpricedAlert: UnderpricedAlertState | null;
+  dismissUnderpricedAlert: () => void;
 
   // Opportunities board (the Set Decision Engine + future detectors). Computed cache-side.
   opportunities: Opportunity[];
@@ -1487,8 +1556,8 @@ interface AppStore {
   marketSubTab: 'analysis' | 'analytics' | 'calibration';
   setMarketSubTab: (tab: 'analysis' | 'analytics' | 'calibration') => void;
 
-  eventsSubTab: 'active-events' | 'void-trader' | 'fissures' | 'activities' | 'market-news';
-  setEventsSubTab: (tab: 'active-events' | 'void-trader' | 'fissures' | 'activities' | 'market-news') => void;
+  eventsSubTab: EventsSubTab;
+  setEventsSubTab: (tab: EventsSubTab) => void;
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -1504,6 +1573,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   recentItems: readPersistedRecentItems(),
   toasts: [],
   underpricedListings: [],
+  underpricedAlert: null,
   opportunities: [],
   opportunitiesLoading: false,
   opportunitiesError: null,
@@ -1668,6 +1738,62 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateVoidTraderError: null,
   worldStateVoidTraderNextRefreshAt: null,
   worldStateVoidTraderLastUpdatedAt: null,
+  worldStateExtra: {
+    cycles: emptyWorldStateExtraEntry(),
+    'steel-path': emptyWorldStateExtraEntry(),
+    nightwave: emptyWorldStateExtraEntry(),
+    'vault-trader': emptyWorldStateExtraEntry(),
+  },
+  refreshWorldStateExtra: async (key) => {
+    if (worldStateExtraRefreshPromises[key]) {
+      return worldStateExtraRefreshPromises[key]!;
+    }
+    set((state) => ({
+      worldStateExtra: {
+        ...state.worldStateExtra,
+        [key]: { ...state.worldStateExtra[key], loading: true },
+      },
+    }));
+
+    const config = WORLDSTATE_EXTRA_CONFIG[key];
+    worldStateExtraRefreshPromises[key] = (async () => {
+      try {
+        const payload = await config.fetch();
+        const fetchedAt = new Date().toISOString();
+        const nextRefreshAt = config.nextRefreshAt(payload);
+        await persistWorldStateSnapshot(key, { payload, fetchedAt, nextRefreshAt });
+        set((state) => ({
+          worldStateExtra: {
+            ...state.worldStateExtra,
+            [key]: { payload, loading: false, error: null, nextRefreshAt, lastUpdatedAt: fetchedAt },
+          },
+        }));
+      } catch (error) {
+        // Keep the last-good payload on screen; retry on the standard backoff.
+        const cached = await loadCachedWorldStateSnapshot(key, (value) => value);
+        set((state) => {
+          const existing = state.worldStateExtra[key];
+          return {
+            worldStateExtra: {
+              ...state.worldStateExtra,
+              [key]: {
+                payload: existing.payload ?? cached?.payload ?? null,
+                loading: false,
+                error:
+                  error instanceof Error ? error.message : 'Could not load worldstate data.',
+                nextRefreshAt: new Date(Date.now() + WORLDSTATE_RETRY_DELAY_MS).toISOString(),
+                lastUpdatedAt: existing.lastUpdatedAt ?? cached?.fetchedAt ?? null,
+              },
+            },
+          };
+        });
+      } finally {
+        worldStateExtraRefreshPromises[key] = null;
+      }
+    })();
+
+    return worldStateExtraRefreshPromises[key]!;
+  },
   openSettingsSidebar: (section = 'alecaframe') =>
     set({
       settingsSidebarOpen: true,
@@ -2954,6 +3080,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
         void clearPendingAppUpdate();
       }
 
+      // Remember the dismissed stale scan so it isn't re-added/re-notified this session.
+      if (id === SCANNER_STALE_SYSTEM_ALERT_ID) {
+        const staleAlert = state.systemAlerts.find(
+          (alert) => alert.id === SCANNER_STALE_SYSTEM_ALERT_ID,
+        );
+        if (staleAlert) {
+          dismissedScannerStaleScans.add(staleAlert.createdAt);
+        }
+      }
+
       return {
         systemAlerts: state.systemAlerts.filter((alert) => alert.id !== id),
         worldStateSystemAlertDismissed:
@@ -2964,6 +3100,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set((state) => {
       if (state.systemAlerts.some((alert) => alert.id === APP_UPDATE_SYSTEM_ALERT_ID)) {
         void clearPendingAppUpdate();
+      }
+
+      const staleAlert = state.systemAlerts.find(
+        (alert) => alert.id === SCANNER_STALE_SYSTEM_ALERT_ID,
+      );
+      if (staleAlert) {
+        dismissedScannerStaleScans.add(staleAlert.createdAt);
       }
 
       return {
@@ -3274,9 +3417,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
+    // Respect the user's minimum-discount threshold for underpriced alerts (applies to the
+    // in-app tone, desktop notification, Discord webhook, and the alert card alike).
+    const notificationSettings = get().notificationSettings;
+    if (listing.pctBelow < notificationSettings.underpricedMinPctBelow) {
+      return;
+    }
+
+    // Surface a single, replaceable alert card in the notification bar so a ping is never
+    // silent — newest listing shown, earlier ones rolled into the "N others" count.
+    set((state) => ({
+      underpricedAlert: {
+        listing: { ...listing, receivedAt: Date.now(), status: 'new', verifiedPrice: null },
+        otherCount: state.underpricedAlert ? state.underpricedAlert.otherCount + 1 : 0,
+      },
+    }));
+
     const title = 'Underpriced listing found';
-    const body = `${listing.itemName} — ${listing.listedPrice}p (${listing.pctBelow}% below ${listing.recommendedPrice}p) from ${listing.username}`;
-    fireAlertNotification(get().notificationSettings, 'underpricedListing', title, body);
+    const body = `${listing.itemName} — ${listing.listedPrice}p (${Math.round(listing.pctBelow)}% below ${listing.recommendedPrice}p) from ${listing.username}`;
+    fireAlertNotification(notificationSettings, 'underpricedListing', title, body);
     void sendUnderpricedListingDiscordNotification({
       itemName: listing.itemName,
       itemSlug: listing.slug,
@@ -3300,6 +3459,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set((state) => ({
       underpricedListings: state.underpricedListings.filter((entry) => entry.orderId !== orderId),
     })),
+  dismissUnderpricedAlert: () => set({ underpricedAlert: null }),
   pruneExpiredUnderpricedListings: () =>
     set((state) => {
       const cutoff = Date.now() - UNDERPRICED_LISTING_TTL_MS;
@@ -4115,6 +4275,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   marketSubTab: 'analysis',
   setMarketSubTab: (tab) => set({ marketSubTab: tab }),
 
-  eventsSubTab: 'active-events',
+  eventsSubTab: 'vendors',
   setEventsSubTab: (tab) => set({ eventsSubTab: tab }),
 }));

@@ -3,6 +3,7 @@ import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { RINGTONES, playAlertSound } from '../../lib/alertAudio';
 import {
+  UNDERPRICED_PCT_BELOW_OPTIONS,
   isDesktopNotificationSupported,
   requestDesktopNotificationPermission,
   sendTestDesktopNotification,
@@ -93,18 +94,25 @@ export function NotificationsModal() {
     }
     // Triggers the native OS permission prompt (via the Tauri notification plugin).
     const permission = await requestDesktopNotificationPermission();
-    if (permission === 'granted') {
-      update({ desktopEnabled: true });
-      setPermissionNote(null);
-    } else if (permission === 'denied') {
+    if (permission === 'denied') {
       setPermissionNote(
-        'Notifications are blocked for WarStonks. Enable them in your OS settings (macOS: System Settings → Notifications → WarStonks; Windows: Settings → Notifications), then try again.',
+        'Notifications are blocked for WarStonks in your OS settings (macOS: System Settings → Notifications → WarStonks; Windows: Settings → Notifications). Enable them there, then try again.',
       );
-    } else if (permission === 'unsupported') {
-      setPermissionNote('Desktop notifications are not available in this environment.');
-    } else {
-      setPermissionNote('Notification permission was not granted. Click Enable again to retry.');
+      return;
     }
+    if (permission === 'unsupported') {
+      setPermissionNote('Desktop notifications are not available in this environment.');
+      return;
+    }
+    // 'granted' or 'default' — enable optimistically. The permission getter is unreliable on
+    // macOS and can report 'default' even when granted, so we don't block on it; use Test to
+    // confirm delivery.
+    update({ desktopEnabled: true });
+    setPermissionNote(
+      permission === 'granted'
+        ? null
+        : 'Enabled. If notifications don’t appear, press Test and allow WarStonks in your OS notification settings.',
+    );
   };
 
   return (
@@ -208,6 +216,28 @@ export function NotificationsModal() {
                 </label>
               ))}
             </div>
+
+            {settings.events.underpricedListing ? (
+              <label className="settings-field notif-underpriced-tier">
+                <span className="settings-field-label">Underpriced — minimum discount</span>
+                <span className="settings-field-help">
+                  Only notify for listings at least this far below the recommended price.
+                </span>
+                <select
+                  className="settings-input"
+                  value={settings.underpricedMinPctBelow}
+                  onChange={(event) =>
+                    update({ underpricedMinPctBelow: Number(event.target.value) })
+                  }
+                >
+                  {UNDERPRICED_PCT_BELOW_OPTIONS.map((pct) => (
+                    <option key={pct} value={pct}>
+                      {pct}% or more below recommended
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
           </div>
         </div>
       </div>

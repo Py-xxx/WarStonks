@@ -180,7 +180,7 @@ function EventsCard() {
 
   const openActiveEventsPage = () => {
     setActivePage('events');
-    setEventsSubTab('active-events');
+    setEventsSubTab('events-news');
   };
 
   return (

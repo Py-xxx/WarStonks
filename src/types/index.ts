@@ -25,7 +25,22 @@ export type WorldStateEndpointKey =
   | 'invasions'
   | 'syndicate-missions'
   | 'void-trader'
-  | 'market-news';
+  | 'market-news'
+  | 'cycles'
+  | 'steel-path'
+  | 'nightwave'
+  | 'vault-trader';
+
+/** The four reference worldstate sources added in the Events overhaul, served via a generic slice. */
+export type WorldStateExtraKey = 'cycles' | 'steel-path' | 'nightwave' | 'vault-trader';
+
+/** Events-page sub-tabs after the overhaul. */
+export type EventsSubTab =
+  | 'vendors'
+  | 'fissures'
+  | 'activities'
+  | 'progression'
+  | 'events-news';
 
 export type SystemAlertKind = 'worldstate-offline' | 'scanner-stale' | 'app-update';
 export type AppUpdateInstallState = 'available' | 'downloading' | 'installing' | 'error';
@@ -684,6 +699,11 @@ export interface NotificationSettings {
   soundEnabled: boolean;
   /** Which in-app tone to play. */
   ringtone: RingtoneId;
+  /**
+   * Minimum discount (percent below recommended price) an underpriced listing must reach
+   * to trigger a notification. e.g. 25 = only listings ≥25% below recommended notify.
+   */
+  underpricedMinPctBelow: number;
   events: {
     watchlistAlert: boolean;
     scannerStale: boolean;

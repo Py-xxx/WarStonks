@@ -29,6 +29,7 @@ import { useWorldStateFissures } from './hooks/useWorldStateFissures';
 import { useWorldStateMarketNews } from './hooks/useWorldStateMarketNews';
 import { useWorldStateVoidTrader } from './hooks/useWorldStateVoidTrader';
 import { useWorldStateActivities } from './hooks/useWorldStateActivities';
+import { useWorldStateExtras } from './hooks/useWorldStateExtras';
 import { useMarketTracking } from './hooks/useMarketTracking';
 import { useTradeDetection } from './hooks/useTradeDetection';
 import { useTradePresence } from './hooks/useTradePresence';
@@ -112,6 +113,7 @@ function AppShell() {
   useWorldStateMarketNews();
   useWorldStateVoidTrader();
   useWorldStateActivities();
+  useWorldStateExtras();
 
   return (
     <>

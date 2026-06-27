@@ -239,6 +239,23 @@ export async function getWorldStateMarketNews(): Promise<WorldStateMarketNewsRes
   return invoke<WorldStateMarketNewsResponse>('get_worldstate_market_news');
 }
 
+// Reference worldstate sources (Events overhaul) — returned as raw JSON; the panels parse them.
+export async function getWorldStateCycles(): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>('get_worldstate_cycles');
+}
+
+export async function getWorldStateSteelPath(): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>('get_worldstate_steel_path');
+}
+
+export async function getWorldStateNightwave(): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>('get_worldstate_nightwave');
+}
+
+export async function getWorldStateVaultTrader(): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>('get_worldstate_vault_trader');
+}
+
 export async function getWorldStateCache(): Promise<
   Record<string, PersistedWorldStateCacheEntry>
 > {
