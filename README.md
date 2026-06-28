@@ -142,4 +142,4 @@ pnpm test           # frontend tests (Node test runner)
 pnpm run test:rust  # Rust tests
 ```
 
-Releases are published through GitHub Releases; for users the install artifact is the Windows `.exe`. See [`Resources/WINDOWS_SIGNING.md`](Resources/WINDOWS_SIGNING.md) for the code-signing setup.
+Releases are published through GitHub Releases; for users the install artifact is the Windows `.exe`. 
