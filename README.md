@@ -1,6 +1,6 @@
 # WarStonks
 
-> **WarStonks is free, open-source software** licensed under the [GNU GPL-3.0](LICENSE) — you're
+> **WarStonks is SOON TO BE (hopefully) free, open-source software** licensed under the [GNU GPL-3.0](LICENSE) — you're
 > free to use, study, modify, and redistribute it under those terms. **However**, the name
 > *"WarStonks"*, the *"py."* identity, and the project's branding/logos are **not** licensed: if
 > you fork and redistribute a modified version, please **rename it** and don't present it as the
