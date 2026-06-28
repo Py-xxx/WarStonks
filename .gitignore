@@ -11,7 +11,6 @@ Resources/*
 !Resources/pics/**
 .codex/
 .claude/
-WARSTONKS_CASE_STUDY.md
 
 # OS / editor files
 .DS_Store
@@ -26,6 +25,3 @@ yarn-error.log*
 pnpm-debug.log*
 __pycache__/
 *.pyc
-
-CLAUDE.md
-STATS_FOR_NERDS.md
