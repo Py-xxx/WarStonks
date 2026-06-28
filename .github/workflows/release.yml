@@ -1,0 +1,121 @@
+# WarStonks release: build → (optionally) Authenticode-sign via SignPath → updater-sign → publish.
+#
+# Works in TWO modes automatically:
+#   • No SignPath secret yet  -> publishes a normal UNSIGNED release (same as releasing today).
+#   • SIGNPATH_API_TOKEN set   -> Authenticode-signs the installer via SignPath, then publishes.
+# So you can use this now and it upgrades itself once you're approved — no edits needed except
+# filling in the three SignPath TODO values below.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY           -> minisign updater PRIVATE key (pairs with the pubkey in
+#                                          tauri.conf.json → plugins.updater). NEEDED for auto-update
+#                                          to work — add this now; you already use it locally.
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  -> its password ('' if none).
+#   SIGNPATH_API_TOKEN                  -> add LATER, once SignPath approves. Until then signing
+#                                          is skipped automatically.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync version across manifests
+        run: node scripts/sync-version.mjs
+
+      # Detect whether SignPath is configured this run.
+      - name: Detect signing config
+        id: cfg
+        shell: bash
+        run: echo "signpath=${{ secrets.SIGNPATH_API_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+      # Build. With createUpdaterArtifacts on, this emits the installer + a minisign .sig over the
+      # UNSIGNED installer. If SignPath will re-sign the bytes, that .sig is discarded & redone.
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm exec tauri build
+
+      - name: Find installer
+        id: installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Path src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          if (-not $exe) { throw "No NSIS installer found" }
+          echo "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          echo "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+
+      # ---- SignPath path (only when SIGNPATH_API_TOKEN is set) ----
+      - name: Upload unsigned installer (for SignPath)
+        id: upload
+        if: steps.cfg.outputs.signpath == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: warstonks-installer
+          path: ${{ steps.installer.outputs.path }}
+
+      - name: Authenticode-sign (SignPath)
+        if: steps.cfg.outputs.signpath == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: 'TODO-SIGNPATH-ORG-ID'         # TODO: fill from your SignPath account
+          project-slug: 'warstonks'                       # TODO: confirm
+          signing-policy-slug: 'release-signing'          # TODO: confirm
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      # ---- Resolve which installer to ship, then updater-sign THAT one + build latest.json ----
+      - name: Updater-sign + build latest.json
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ("${{ steps.cfg.outputs.signpath }}" -eq "true") {
+            $installer = "signed/${{ steps.installer.outputs.name }}"
+          } else {
+            $installer = "${{ steps.installer.outputs.path }}"
+          }
+          # (Re)create the updater signature over the installer we're actually shipping.
+          pnpm exec tauri signer sign "$installer"   # writes "$installer.sig"
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          node scripts/create-windows-updater-manifest.mjs `
+            --version $version `
+            --installer "$installer" `
+            --signature "$installer.sig" `
+            --output "latest.json" `
+            --tag "$env:GITHUB_REF_NAME"
+          echo "INSTALLER_PATH=$installer" >> $env:GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.INSTALLER_PATH }}
+            latest.json
