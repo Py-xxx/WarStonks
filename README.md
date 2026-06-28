@@ -7,7 +7,7 @@
 > official WarStonks or imply endorsement by py.
 >
 > ⚠️ **Only download official builds** from the [GitHub Releases](https://github.com/Py-xxx/WarStonks/releases)
-> or [pyth.co.za](https://pyth.co.za). WarStonks signs into your Warframe.Market account — unofficial
+> or [pyth.co.za](https://pyth.co.za/portfolio/workshop/warstonks). WarStonks signs into your Warframe.Market account — unofficial
 > builds could be tampered with to steal credentials. See [`NOTICE.md`](NOTICE.md) and
 > [`PRIVACY.md`](PRIVACY.md).
 
@@ -32,7 +32,7 @@ If you actively use Warframe.Market and want better timing, better visibility, a
 
 ## Download
 
-Download the latest version from [Releases](https://github.com/Py-xxx/WarStonks/releases).
+Download the latest version from [Releases](https://github.com/Py-xxx/WarStonks/releases) or https://pyth.co.za/portfolio/workshop/warstonks.
 
 For normal use:
 
