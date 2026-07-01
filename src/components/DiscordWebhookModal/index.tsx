@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { formatSettingsErrorMessage } from '../../lib/settingsErrorHandling';
+import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 
@@ -20,6 +21,7 @@ export function DiscordWebhookModal() {
     (state) => state.saveDiscordWebhookConfiguration,
   );
   const clearSettingsError = useAppStore((state) => state.clearSettingsError);
+  const { t } = useTranslation();
 
   const [enabled, setEnabled] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -71,20 +73,20 @@ export function DiscordWebhookModal() {
       <button
         className="modal-backdrop"
         type="button"
-        aria-label="Close Discord webhook settings"
+        aria-label={t('discord.close')}
         onClick={closeModal}
       />
-      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Discord webhook settings">
+      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label={t('discord.subtitle')}>
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Discord Webhook</span>
-            <h3>Discord Notifications</h3>
+            <span className="card-label">{t('settings.section.discord.label')}</span>
+            <h3>{t('discord.subtitle')}</h3>
           </div>
           <div className="settings-modal-actions">
             <button
               className="settings-close-btn"
               type="button"
-              aria-label="Close Discord webhook settings"
+              aria-label={t('discord.close')}
               onClick={closeModal}
             >
               <CloseIcon />
@@ -96,9 +98,9 @@ export function DiscordWebhookModal() {
           <div className="settings-form-card">
             <label className="settings-switch-row">
               <span className="settings-field-copy">
-                <span className="settings-field-label">Enable Discord Webhook</span>
+                <span className="settings-field-label">{t('discord.enable.label')}</span>
                 <span className="settings-field-help">
-                  Sends rich Discord embeds for selected WarStonks alerts. Saving will send a test notification.
+                  {t('discord.enable.help')}
                 </span>
               </span>
               <button
@@ -111,12 +113,12 @@ export function DiscordWebhookModal() {
                 <span className="settings-toggle-track">
                   <span className="settings-toggle-thumb" />
                 </span>
-                <span className="settings-toggle-label">{enabled ? 'On' : 'Off'}</span>
+                <span className="settings-toggle-label">{enabled ? t('common.on') : t('common.off')}</span>
               </button>
             </label>
 
             <label className="settings-field">
-              <span className="settings-field-label">Webhook URL</span>
+              <span className="settings-field-label">{t('discord.urlLabel')}</span>
               <input
                 className="settings-input"
                 type="text"
@@ -133,15 +135,15 @@ export function DiscordWebhookModal() {
             <div className="settings-notification-grid">
               <label className="settings-switch-row settings-switch-row-compact">
                 <span className="settings-field-copy">
-                  <span className="settings-field-label">Watchlist Item Found</span>
-                  <span className="settings-field-help">Notify when a target price is hit.</span>
+                  <span className="settings-field-label">{t('discord.event.watchlist.label')}</span>
+                  <span className="settings-field-help">{t('discord.event.watchlist.help')}</span>
                 </span>
                 <button
                   className={`settings-toggle${watchlistFound ? ' on' : ''}`}
                   type="button"
                   role="switch"
                   aria-checked={watchlistFound}
-                  aria-label="Notify on Discord when a watchlist item is found"
+                  aria-label={t('discord.event.watchlist.aria')}
                   onClick={() => setWatchlistFound((current) => !current)}
                 >
                   <span className="settings-toggle-track">
@@ -152,15 +154,15 @@ export function DiscordWebhookModal() {
 
               <label className="settings-switch-row settings-switch-row-compact">
                 <span className="settings-field-copy">
-                  <span className="settings-field-label">New Trades Detected</span>
-                  <span className="settings-field-help">Notify when new buy or sell trades are detected.</span>
+                  <span className="settings-field-label">{t('discord.event.trades.label')}</span>
+                  <span className="settings-field-help">{t('discord.event.trades.help')}</span>
                 </span>
                 <button
                   className={`settings-toggle${tradeDetected ? ' on' : ''}`}
                   type="button"
                   role="switch"
                   aria-checked={tradeDetected}
-                  aria-label="Notify on Discord when new trades are detected"
+                  aria-label={t('discord.event.trades.aria')}
                   onClick={() => setTradeDetected((current) => !current)}
                 >
                   <span className="settings-toggle-track">
@@ -171,15 +173,15 @@ export function DiscordWebhookModal() {
 
               <label className="settings-switch-row settings-switch-row-compact">
                 <span className="settings-field-copy">
-                  <span className="settings-field-label">Underpriced Listing</span>
-                  <span className="settings-field-help">Notify when the radar finds a listing below its recommended price.</span>
+                  <span className="settings-field-label">{t('discord.event.underpriced.label')}</span>
+                  <span className="settings-field-help">{t('discord.event.underpriced.help')}</span>
                 </span>
                 <button
                   className={`settings-toggle${underpricedListing ? ' on' : ''}`}
                   type="button"
                   role="switch"
                   aria-checked={underpricedListing}
-                  aria-label="Notify on Discord when an underpriced listing is found"
+                  aria-label={t('discord.event.underpriced.aria')}
                   onClick={() => setUnderpricedListing((current) => !current)}
                 >
                   <span className="settings-toggle-track">
@@ -198,7 +200,7 @@ export function DiscordWebhookModal() {
                 }}
                 disabled={settingsLoading}
               >
-                {settingsLoading ? 'Saving…' : 'Save'}
+                {settingsLoading ? t('common.saving') : t('common.save')}
               </button>
             </div>
 

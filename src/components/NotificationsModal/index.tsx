@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { RINGTONES, playAlertSound } from '../../lib/alertAudio';
@@ -19,19 +21,31 @@ const CloseIcon = () => (
 
 interface EventRow {
   key: keyof NotificationSettings['events'];
-  label: string;
-  help: string;
+  labelKey: TranslationKey;
+  helpKey: TranslationKey;
 }
 
 const EVENT_ROWS: EventRow[] = [
-  { key: 'watchlistAlert', label: 'Watchlist Alert', help: 'When a watchlist target price is hit.' },
+  {
+    key: 'watchlistAlert',
+    labelKey: 'notif.event.watchlistAlert.label',
+    helpKey: 'notif.event.watchlistAlert.help',
+  },
   {
     key: 'underpricedListing',
-    label: 'Underpriced Listing',
-    help: 'When the radar finds a market listing well below its recommended price.',
+    labelKey: 'notif.event.underpricedListing.label',
+    helpKey: 'notif.event.underpricedListing.help',
   },
-  { key: 'scannerStale', label: 'Scanner Stale', help: 'When scanner data goes out of date.' },
-  { key: 'appUpdate', label: 'App Update', help: 'When a new WarStonks version is available.' },
+  {
+    key: 'scannerStale',
+    labelKey: 'notif.event.scannerStale.label',
+    helpKey: 'notif.event.scannerStale.help',
+  },
+  {
+    key: 'appUpdate',
+    labelKey: 'notif.event.appUpdate.label',
+    helpKey: 'notif.event.appUpdate.help',
+  },
 ];
 
 function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label?: string }) {
@@ -56,7 +70,8 @@ export function NotificationsModal() {
   const closeModal = useAppStore((state) => state.closeNotificationsModal);
   const settings = useAppStore((state) => state.notificationSettings);
   const setSettings = useAppStore((state) => state.setNotificationSettings);
-  const [permissionNote, setPermissionNote] = useState<string | null>(null);
+  const { t } = useTranslation();
+  const [permissionNote, setPermissionNote] = useState<TranslationKey | null>(null);
   const modalRef = useModalA11y<HTMLDivElement>({ onClose: closeModal, active: modalOpen });
 
   if (!modalOpen) {
@@ -74,11 +89,7 @@ export function NotificationsModal() {
     }
     if (settings.desktopEnabled) {
       const delivered = await sendTestDesktopNotification();
-      setPermissionNote(
-        delivered
-          ? null
-          : 'Couldn’t send a desktop notification — permission may have been revoked. Re-enable WarStonks notifications in your OS settings.',
-      );
+      setPermissionNote(delivered ? null : 'notif.note.sendFailed');
     }
   };
 
@@ -89,30 +100,24 @@ export function NotificationsModal() {
       return;
     }
     if (!isDesktopNotificationSupported()) {
-      setPermissionNote('Desktop notifications are not available in this environment.');
+      setPermissionNote('notif.note.unavailable');
       return;
     }
     // Triggers the native OS permission prompt (via the Tauri notification plugin).
     const permission = await requestDesktopNotificationPermission();
     if (permission === 'denied') {
-      setPermissionNote(
-        'Notifications are blocked for WarStonks in your OS settings (macOS: System Settings → Notifications → WarStonks; Windows: Settings → Notifications). Enable them there, then try again.',
-      );
+      setPermissionNote('notif.note.blocked');
       return;
     }
     if (permission === 'unsupported') {
-      setPermissionNote('Desktop notifications are not available in this environment.');
+      setPermissionNote('notif.note.unavailable');
       return;
     }
     // 'granted' or 'default' — enable optimistically. The permission getter is unreliable on
     // macOS and can report 'default' even when granted, so we don't block on it; use Test to
     // confirm delivery.
     update({ desktopEnabled: true });
-    setPermissionNote(
-      permission === 'granted'
-        ? null
-        : 'Enabled. If notifications don’t appear, press Test and allow WarStonks in your OS notification settings.',
-    );
+    setPermissionNote(permission === 'granted' ? null : 'notif.note.enabledHint');
   };
 
   return (
@@ -120,20 +125,20 @@ export function NotificationsModal() {
       <button
         className="modal-backdrop"
         type="button"
-        aria-label="Close notification settings"
+        aria-label={t('notif.close')}
         onClick={closeModal}
       />
-      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Notification settings">
+      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label={t('settings.section.notifications.label')}>
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Notifications</span>
-            <h3>Alerts &amp; Sound</h3>
+            <span className="card-label">{t('settings.section.notifications.label')}</span>
+            <h3>{t('notif.subtitle')}</h3>
           </div>
           <div className="settings-modal-actions">
             <button
               className="settings-close-btn"
               type="button"
-              aria-label="Close notification settings"
+              aria-label={t('notif.close')}
               onClick={closeModal}
             >
               <CloseIcon />
@@ -145,36 +150,36 @@ export function NotificationsModal() {
           <div className="settings-form-card">
             <label className="settings-switch-row">
               <span className="settings-field-copy">
-                <span className="settings-field-label">Desktop Notifications</span>
+                <span className="settings-field-label">{t('notif.desktop.label')}</span>
                 <span className="settings-field-help">
-                  Show a native OS notification when an alert fires (requires permission).
+                  {t('notif.desktop.help')}
                 </span>
               </span>
               <Toggle
                 on={settings.desktopEnabled}
                 onClick={() => void handleToggleDesktop()}
-                label={settings.desktopEnabled ? 'On' : 'Off'}
+                label={settings.desktopEnabled ? t('common.on') : t('common.off')}
               />
             </label>
 
             {permissionNote ? (
-              <div className="settings-inline-warning">{permissionNote}</div>
+              <div className="settings-inline-warning">{t(permissionNote)}</div>
             ) : null}
 
             <label className="settings-switch-row">
               <span className="settings-field-copy">
-                <span className="settings-field-label">Alert Sound</span>
-                <span className="settings-field-help">Play an in-app tone when an alert fires.</span>
+                <span className="settings-field-label">{t('notif.sound.label')}</span>
+                <span className="settings-field-help">{t('notif.sound.help')}</span>
               </span>
               <Toggle
                 on={settings.soundEnabled}
                 onClick={() => update({ soundEnabled: !settings.soundEnabled })}
-                label={settings.soundEnabled ? 'On' : 'Off'}
+                label={settings.soundEnabled ? t('common.on') : t('common.off')}
               />
             </label>
 
             <label className="settings-field">
-              <span className="settings-field-label">Ringtone</span>
+              <span className="settings-field-label">{t('notif.ringtone')}</span>
               <div className="notif-ringtone-row">
                 <select
                   className="settings-input notif-ringtone-select"
@@ -194,20 +199,20 @@ export function NotificationsModal() {
                   disabled={!settings.soundEnabled && !settings.desktopEnabled}
                   onClick={() => void handleTest()}
                 >
-                  Test
+                  {t('common.test')}
                 </button>
               </div>
             </label>
           </div>
 
           <div className="settings-form-card">
-            <span className="settings-field-label">Notify me about</span>
+            <span className="settings-field-label">{t('notif.notifyAbout')}</span>
             <div className="settings-notification-grid">
               {EVENT_ROWS.map((row) => (
                 <label key={row.key} className="settings-switch-row settings-switch-row-compact">
                   <span className="settings-field-copy">
-                    <span className="settings-field-label">{row.label}</span>
-                    <span className="settings-field-help">{row.help}</span>
+                    <span className="settings-field-label">{t(row.labelKey)}</span>
+                    <span className="settings-field-help">{t(row.helpKey)}</span>
                   </span>
                   <Toggle
                     on={settings.events[row.key]}
@@ -219,9 +224,9 @@ export function NotificationsModal() {
 
             {settings.events.underpricedListing ? (
               <label className="settings-field notif-underpriced-tier">
-                <span className="settings-field-label">Underpriced — minimum discount</span>
+                <span className="settings-field-label">{t('notif.underpriced.label')}</span>
                 <span className="settings-field-help">
-                  Only notify for listings at least this far below the recommended price.
+                  {t('notif.underpriced.help')}
                 </span>
                 <select
                   className="settings-input"
@@ -232,7 +237,7 @@ export function NotificationsModal() {
                 >
                   {UNDERPRICED_PCT_BELOW_OPTIONS.map((pct) => (
                     <option key={pct} value={pct}>
-                      {pct}% or more below recommended
+                      {t('notif.underpriced.option', { pct })}
                     </option>
                   ))}
                 </select>

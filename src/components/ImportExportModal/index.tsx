@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react';
+import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import {
@@ -17,16 +19,18 @@ const CloseIcon = () => (
   </svg>
 );
 
-type Status = { tone: 'success' | 'error' | 'info'; message: string } | null;
-
-function describeKind(kind: BaddieKind): string {
-  return kind === 'user' ? 'app data (inventory, watchlist, trades, settings)' : 'market data (saved snapshots)';
-}
+// `message` is a raw string (e.g. an exception message); `messageKey` is a translation key.
+// Exactly one is set. Raw errors from the backend stay untranslated by design.
+type Status =
+  | { tone: 'success' | 'error' | 'info'; messageKey: TranslationKey }
+  | { tone: 'success' | 'error' | 'info'; message: string }
+  | null;
 
 export function ImportExportModal() {
   const modalOpen = useAppStore((state) => state.importExportModalOpen);
   const closeModal = useAppStore((state) => state.closeImportExportModal);
   const setDataMaintenanceActive = useAppStore((state) => state.setDataMaintenanceActive);
+  const { t } = useTranslation();
   const modalRef = useModalA11y<HTMLDivElement>({ onClose: closeModal, active: modalOpen });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -45,15 +49,15 @@ export function ImportExportModal() {
   const runExport = async (which: 'user' | 'market') => {
     setBusy(true);
     setStatus(null);
-    setProgressLabel('Starting…');
+    setProgressLabel(t('ie.progress.starting'));
     setDataMaintenanceActive(true);
     try {
       if (which === 'user') {
         await exportUserData(setProgressLabel);
-        setStatus({ tone: 'success', message: 'Exported your app data to a .baddie file.' });
+        setStatus({ tone: 'success', messageKey: 'ie.status.exportedUser' });
       } else {
         await exportMarketData(setProgressLabel);
-        setStatus({ tone: 'success', message: 'Exported your market data to a .baddie file.' });
+        setStatus({ tone: 'success', messageKey: 'ie.status.exportedMarket' });
       }
     } catch (error) {
       setStatus({ tone: 'error', message: error instanceof Error ? error.message : String(error) });
@@ -70,15 +74,13 @@ export function ImportExportModal() {
     }
     setBusy(true);
     setStatus(null);
-    setProgressLabel('Reading file…');
+    setProgressLabel(t('ie.progress.reading'));
     try {
       const bundle = await readBaddieFile(file);
       setPendingImport({ kind: bundle.kind, bundle });
       setStatus({
         tone: 'info',
-        message: `Ready to import ${describeKind(bundle.kind)}. This will replace your current ${
-          bundle.kind === 'user' ? 'app data' : 'market data'
-        }.`,
+        messageKey: bundle.kind === 'user' ? 'ie.status.readyUser' : 'ie.status.readyMarket',
       });
     } catch (error) {
       setStatus({ tone: 'error', message: error instanceof Error ? error.message : String(error) });
@@ -97,16 +99,13 @@ export function ImportExportModal() {
     }
     setBusy(true);
     setStatus(null);
-    setProgressLabel('Starting…');
+    setProgressLabel(t('ie.progress.starting'));
     setDataMaintenanceActive(true);
     try {
       await applyBaddieBundle(pendingImport.bundle, setProgressLabel);
       setPendingImport(null);
-      setProgressLabel('Done — reloading…');
-      setStatus({
-        tone: 'success',
-        message: 'Import complete. Reloading WarStonks to apply your restored data…',
-      });
+      setProgressLabel(t('ie.progress.done'));
+      setStatus({ tone: 'success', messageKey: 'ie.status.importComplete' });
       // Reload so the in-memory store and backend-fed views reflect the restored data
       // (a brief delay lets the success message render first).
       window.setTimeout(() => window.location.reload(), 1200);
@@ -124,28 +123,24 @@ export function ImportExportModal() {
       <button
         className="modal-backdrop"
         type="button"
-        aria-label="Close import and export"
+        aria-label={t('ie.close')}
         onClick={closeModal}
       />
-      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Import and export">
+      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label={t('settings.section.importExport.label')}>
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Import &amp; Export</span>
-            <h3>Back up &amp; restore your data</h3>
+            <span className="card-label">{t('settings.section.importExport.label')}</span>
+            <h3>{t('ie.subtitle')}</h3>
           </div>
-          <button className="settings-close-btn" type="button" aria-label="Close" onClick={closeModal}>
+          <button className="settings-close-btn" type="button" aria-label={t('common.close')} onClick={closeModal}>
             <CloseIcon />
           </button>
         </div>
 
         <div className="settings-modal-body">
           <div className="settings-form-card">
-            <span className="settings-field-label">Export</span>
-            <span className="settings-field-help">
-              Saves a <code>.baddie</code> file. App data (inventory, watchlist, accepted
-              opportunities, trade log, settings) and market snapshots are separate files — the
-              market file is large. Your Discord webhook URL and Alecaframe link are never included.
-            </span>
+            <span className="settings-field-label">{t('ie.export')}</span>
+            <span className="settings-field-help">{t('ie.export.help')}</span>
             <div className="import-export-actions">
               <button
                 type="button"
@@ -153,7 +148,7 @@ export function ImportExportModal() {
                 disabled={busy}
                 onClick={() => void runExport('user')}
               >
-                Export App Data
+                {t('ie.export.userBtn')}
               </button>
               <button
                 type="button"
@@ -161,17 +156,14 @@ export function ImportExportModal() {
                 disabled={busy}
                 onClick={() => void runExport('market')}
               >
-                Export Market Data
+                {t('ie.export.marketBtn')}
               </button>
             </div>
           </div>
 
           <div className="settings-form-card">
-            <span className="settings-field-label">Import</span>
-            <span className="settings-field-help">
-              Loading a file <strong>replaces</strong> the matching data. The file type (app vs
-              market) is detected automatically.
-            </span>
+            <span className="settings-field-label">{t('ie.import')}</span>
+            <span className="settings-field-help">{t('ie.import.help')}</span>
             <input
               ref={fileInputRef}
               type="file"
@@ -186,7 +178,7 @@ export function ImportExportModal() {
                 disabled={busy}
                 onClick={() => fileInputRef.current?.click()}
               >
-                Choose .baddie File…
+                {t('ie.import.chooseBtn')}
               </button>
               {pendingImport ? (
                 <button
@@ -195,7 +187,9 @@ export function ImportExportModal() {
                   disabled={busy}
                   onClick={() => void confirmImport()}
                 >
-                  {busy ? 'Importing…' : `Replace ${pendingImport.kind === 'user' ? 'App' : 'Market'} Data`}
+                  {busy
+                    ? t('ie.importing')
+                    : t(pendingImport.kind === 'user' ? 'ie.import.replaceUser' : 'ie.import.replaceMarket')}
                 </button>
               ) : null}
             </div>
@@ -206,7 +200,7 @@ export function ImportExportModal() {
               <div className="import-export-progress-track">
                 <div className="import-export-progress-bar" />
               </div>
-              <span className="import-export-progress-label">{progressLabel ?? 'Working…'}</span>
+              <span className="import-export-progress-label">{progressLabel ?? t('ie.progress.working')}</span>
             </div>
           ) : null}
 
@@ -220,7 +214,7 @@ export function ImportExportModal() {
                     : 'settings-inline-warning'
               }
             >
-              {status.message}
+              {'messageKey' in status ? t(status.messageKey) : status.message}
             </div>
           ) : null}
         </div>
