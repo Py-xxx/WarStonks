@@ -3,6 +3,8 @@ import type { KeyboardEvent } from 'react';
 import { AlertsPanel } from '../AlertsPanel';
 import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
+import { wfmLangCode } from '../../lib/language';
+import { useTranslation } from '../../i18n';
 import { formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -70,6 +72,8 @@ function formatTopBarVariantLabel(variantKey: string, fallbackLabel: string): st
 }
 
 export function TopBar() {
+  const language = useAppStore((s) => s.language);
+  const { t } = useTranslation();
   const autoProfile = useAppStore((s) => s.autoProfile);
   const alerts = useAppStore((s) => s.alerts);
   const marketVariants = useAppStore((s) => s.marketVariants);
@@ -130,7 +134,7 @@ export function TopBar() {
       setAutocompleteError(null);
 
       try {
-        const items = await getWfmAutocompleteItems();
+        const items = await getWfmAutocompleteItems(wfmLangCode(language));
         if (!isMounted) {
           return;
         }
@@ -152,7 +156,7 @@ export function TopBar() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [language]);
 
   useEffect(() => {
     if (selectedQuickViewItem) {
@@ -300,14 +304,14 @@ export function TopBar() {
           ref={searchRef}
           className={`search-bar${dropdownOpen ? ' open' : ''}`}
           role="search"
-          aria-label="Search items"
+          aria-label={t('search.placeholder')}
         >
           <SearchIcon />
           <input
             className="search-input"
             type="text"
             value={searchValue}
-            placeholder="Search WFM items, sets, relics…"
+            placeholder={t('search.placeholder')}
             onFocus={() => setDropdownOpen(suggestions.length > 0 || recentItems.length > 0)}
             onChange={(event) => {
               setSearchValue(event.target.value);

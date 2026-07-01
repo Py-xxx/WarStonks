@@ -29,6 +29,7 @@ import {
   WATCHLIST_ADD_SUCCESS_MESSAGE,
 } from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
+import { wfmLangCode } from '../../lib/language';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import type {
   ArbitrageScannerComponentEntry,
@@ -1202,7 +1203,7 @@ export function OpportunitiesPage({
         const [scannerState, owned, autocompleteItems, ownedPrices] = await Promise.all([
           getArbitrageScannerState(),
           getSetCompletionOwnedItems(),
-          getWfmAutocompleteItems(),
+          getWfmAutocompleteItems(wfmLangCode(useAppStore.getState().language)),
           getSetCompletionOwnedItemPrices(),
         ]);
         if (cancelled) {

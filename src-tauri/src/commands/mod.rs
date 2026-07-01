@@ -767,23 +767,31 @@ fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
     .context("failed to open the local item catalog")
 }
 
-fn load_wfm_autocomplete_items_inner(app: tauri::AppHandle) -> Result<Vec<WfmAutocompleteItem>> {
+fn load_wfm_autocomplete_items_inner(
+    app: tauri::AppHandle,
+    language: Option<String>,
+) -> Result<Vec<WfmAutocompleteItem>> {
     let connection = open_catalog_database(&app)?;
+    // Localize the display name from the catalog's per-language table (wfm_item_i18n),
+    // falling back to English when no translation exists. Passing "en" is a harmless no-op.
+    let lang_code = language.unwrap_or_else(|| "en".to_string());
     let mut statement = connection.prepare(
         "SELECT
-            item_id,
-            wfm_id,
-            name_en,
-            slug,
-            max_rank,
-            item_family,
-            COALESCE(NULLIF(thumb, ''), NULLIF(icon, '')),
-            bulk_tradable
-         FROM wfm_items
-         WHERE name_en IS NOT NULL
-         ORDER BY name_en COLLATE NOCASE, slug COLLATE NOCASE",
+            w.item_id,
+            w.wfm_id,
+            COALESCE(NULLIF(t.name, ''), w.name_en) AS name,
+            w.slug,
+            w.max_rank,
+            w.item_family,
+            COALESCE(NULLIF(w.thumb, ''), NULLIF(w.icon, '')),
+            w.bulk_tradable
+         FROM wfm_items w
+         LEFT JOIN wfm_item_i18n t
+           ON t.wfm_id = w.wfm_id AND t.lang_code = ?1
+         WHERE w.name_en IS NOT NULL
+         ORDER BY name COLLATE NOCASE, w.slug COLLATE NOCASE",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map([lang_code.as_str()], |row| {
         Ok(WfmAutocompleteItem {
             item_id: row.get(0)?,
             wfm_id: row.get(1)?,
@@ -1076,8 +1084,9 @@ pub async fn initialize_app_catalog(
 #[tauri::command]
 pub async fn get_wfm_autocomplete_items(
     app: tauri::AppHandle,
+    language: Option<String>,
 ) -> Result<Vec<WfmAutocompleteItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || load_wfm_autocomplete_items_inner(app))
+    tauri::async_runtime::spawn_blocking(move || load_wfm_autocomplete_items_inner(app, language))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())

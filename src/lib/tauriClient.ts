@@ -286,12 +286,14 @@ export async function getRelicTierIcons(): Promise<RelicTierIcon[]> {
   return invoke<RelicTierIcon[]>('get_relic_tier_icons');
 }
 
-export async function getWfmAutocompleteItems(): Promise<WfmAutocompleteItem[]> {
+export async function getWfmAutocompleteItems(
+  language?: string,
+): Promise<WfmAutocompleteItem[]> {
   if (!isTauriRuntime()) {
     return [];
   }
 
-  return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items');
+  return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items', { language });
 }
 
 export async function getWfmTradeSessionState(): Promise<TradeSessionState> {

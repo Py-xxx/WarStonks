@@ -139,6 +139,7 @@ import {
   loadNotificationSettings,
   saveNotificationSettings,
 } from '../lib/notifications';
+import { type AppLanguage, loadLanguage, saveLanguage, wfmLangCode } from '../lib/language';
 import {
   loadPinnedOpportunities,
   savePinnedOpportunities,
@@ -202,6 +203,8 @@ const emptyWorldStateExtraEntry = (): WorldStateExtraEntry => ({
 let backgroundWalletRefreshPromise: Promise<void> | null = null;
 const watchlistRefreshGenerations = new Map<string, number>();
 let autocompleteCatalogPromise: Promise<WfmAutocompleteItem[]> | null = null;
+// The catalog is fetched per display language; changing language invalidates it.
+let autocompleteCatalogLang: string | null = null;
 
 const defaultAppSettings: AppSettings = {
   alecaframe: {
@@ -511,9 +514,12 @@ function clearLinkedBuyOrderFromWatchlistState(
 }
 
 async function getAutocompleteCatalog(): Promise<WfmAutocompleteItem[]> {
-  if (!autocompleteCatalogPromise) {
-    autocompleteCatalogPromise = getWfmAutocompleteItems().catch((error) => {
+  const lang = wfmLangCode(useAppStore.getState().language);
+  if (!autocompleteCatalogPromise || autocompleteCatalogLang !== lang) {
+    autocompleteCatalogLang = lang;
+    autocompleteCatalogPromise = getWfmAutocompleteItems(lang).catch((error) => {
       autocompleteCatalogPromise = null;
+      autocompleteCatalogLang = null;
       throw error;
     });
   }
@@ -1334,6 +1340,9 @@ interface AppStore {
   // to the databases mid-operation.
   dataMaintenanceActive: boolean;
   setDataMaintenanceActive: (active: boolean) => void;
+  // Display language (Phase 1: localizes item names via the catalog's per-language data).
+  language: AppLanguage;
+  setLanguage: (language: AppLanguage) => void;
   /** True when WFStat data (item catalog enrichment and/or live worldstate) is being served
    * from cache because warframestat.us was unreachable at startup. Drives a dismissible banner;
    * resolves itself once WFStat is back online. */
@@ -1645,7 +1654,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       };
     } else {
       try {
-        const catalog = await getWfmAutocompleteItems();
+        const catalog = await getAutocompleteCatalog();
         const needleSlug = target.slug?.trim().toLowerCase();
         const needleName = target.name.trim().toLowerCase();
         resolved =
@@ -1696,6 +1705,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
   importExportModalOpen: false,
   dataMaintenanceActive: false,
   setDataMaintenanceActive: (active) => set({ dataMaintenanceActive: active }),
+  language: loadLanguage(),
+  setLanguage: (language) => {
+    saveLanguage(language);
+    // Invalidate the cached item catalog so search/quick-view re-fetch localized names.
+    autocompleteCatalogPromise = null;
+    autocompleteCatalogLang = null;
+    set({ language });
+  },
   wfstatDataStale: false,
   notificationSettings: loadNotificationSettings(),
   appSettings: defaultAppSettings,

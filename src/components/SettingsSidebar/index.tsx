@@ -1,5 +1,8 @@
 import { useEffect, useMemo } from 'react';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
+import { LANGUAGES, type AppLanguage } from '../../lib/language';
+import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import { useAppStore } from '../../stores/useAppStore';
 import type { SettingsSection } from '../../types';
 
@@ -18,30 +21,30 @@ const ChevronIcon = () => (
 
 interface SectionConfig {
   id: SettingsSection;
-  label: string;
-  description: string;
+  labelKey: TranslationKey;
+  descKey: TranslationKey;
 }
 
 const mainSections: SectionConfig[] = [
   {
     id: 'alecaframe',
-    label: 'Alecaframe API',
-    description: 'Wallet sync, public stats validation, and top-bar balances.',
+    labelKey: 'settings.section.alecaframe.label',
+    descKey: 'settings.section.alecaframe.desc',
   },
   {
     id: 'discord-webhook',
-    label: 'Discord Webhook',
-    description: 'Reserved for outbound alerts and status push workflows.',
+    labelKey: 'settings.section.discord.label',
+    descKey: 'settings.section.discord.desc',
   },
   {
     id: 'notifications',
-    label: 'Notifications',
-    description: 'Desktop alerts and in-app sound for watchlist hits and more.',
+    labelKey: 'settings.section.notifications.label',
+    descKey: 'settings.section.notifications.desc',
   },
   {
     id: 'import-export',
-    label: 'Import & Export',
-    description: 'Back up or restore your inventory, watchlist, trades, and market data.',
+    labelKey: 'settings.section.importExport.label',
+    descKey: 'settings.section.importExport.desc',
   },
 ];
 
@@ -55,6 +58,9 @@ export function SettingsSidebar() {
   const openDiscordWebhookModal = useAppStore((state) => state.openDiscordWebhookModal);
   const openNotificationsModal = useAppStore((state) => state.openNotificationsModal);
   const openImportExportModal = useAppStore((state) => state.openImportExportModal);
+  const language = useAppStore((state) => state.language);
+  const setLanguage = useAppStore((state) => state.setLanguage);
+  const { t } = useTranslation();
   const notificationSettings = useAppStore((state) => state.notificationSettings);
   const appSettings = useAppStore((state) => state.appSettings);
   const walletSnapshot = useAppStore((state) => state.walletSnapshot);
@@ -93,36 +99,36 @@ export function SettingsSidebar() {
     return () => document.removeEventListener('keydown', onKey);
   }, [sidebarOpen, anySubModalOpen, closeSidebar]);
 
-  const alecaframeStatus = useMemo(() => {
+  const alecaframeStatus = useMemo<TranslationKey>(() => {
     if (!appSettings.alecaframe.enabled) {
-      return 'Disabled';
+      return 'status.disabled';
     }
 
     if (!appSettings.alecaframe.publicLink) {
-      return 'Missing link';
+      return 'status.missingLink';
     }
 
     if (walletSnapshot.errorMessage) {
-      return 'Sync error';
+      return 'status.syncError';
     }
 
-    return 'Enabled';
+    return 'status.enabled';
   }, [
     appSettings.alecaframe.enabled,
     appSettings.alecaframe.publicLink,
     walletSnapshot.errorMessage,
   ]);
 
-  const discordStatus = useMemo(() => {
+  const discordStatus = useMemo<TranslationKey>(() => {
     if (!appSettings.discordWebhook.enabled) {
-      return 'Disabled';
+      return 'status.disabled';
     }
 
     if (!appSettings.discordWebhook.webhookUrl) {
-      return 'Missing URL';
+      return 'status.missingUrl';
     }
 
-    return 'Enabled';
+    return 'status.enabled';
   }, [appSettings.discordWebhook.enabled, appSettings.discordWebhook.webhookUrl]);
 
   if (!sidebarOpen) {
@@ -134,32 +140,49 @@ export function SettingsSidebar() {
       <button
         className="settings-backdrop"
         type="button"
-        aria-label="Close settings"
+        aria-label={t('settings.close')}
         onClick={closeSidebar}
       />
       <aside className="settings-drawer" aria-label="Settings">
         <div className="settings-drawer-header">
           <div>
-            <span className="card-label">Settings</span>
-            <h2>Integrations</h2>
+            <span className="card-label">{t('settings.title')}</span>
+            <h2>{t('settings.heading')}</h2>
           </div>
           <button
             className="settings-close-btn"
             type="button"
-            aria-label="Close settings"
+            aria-label={t('settings.close')}
             onClick={closeSidebar}
           >
             <CloseIcon />
           </button>
         </div>
 
+        <label className="settings-language-row">
+          <span className="settings-language-glyph" aria-hidden="true">🌐</span>
+          <span className="settings-language-label">{t('settings.language')}</span>
+          <select
+            className="settings-input settings-language-select"
+            value={language}
+            onChange={(event) => setLanguage(event.target.value as AppLanguage)}
+            aria-label={t('settings.language.aria')}
+          >
+            {LANGUAGES.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.flag} {option.native}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <nav className="settings-nav" aria-label="Settings sections">
           {mainSections.map((section) => {
-            const notificationsStatus =
+            const notificationsStatus: TranslationKey =
               notificationSettings.desktopEnabled || notificationSettings.soundEnabled
-                ? 'Enabled'
-                : 'Disabled';
-            const statusLabel =
+                ? 'status.enabled'
+                : 'status.disabled';
+            const statusKey: TranslationKey | null =
               section.id === 'alecaframe'
                 ? alecaframeStatus
                 : section.id === 'discord-webhook'
@@ -169,9 +192,9 @@ export function SettingsSidebar() {
                     : null;
 
             const statusClassName =
-              statusLabel === 'Enabled'
+              statusKey === 'status.enabled'
                 ? 'badge-green'
-                : statusLabel === 'Sync error'
+                : statusKey === 'status.syncError'
                   ? 'badge-red'
                   : 'badge-muted';
 
@@ -195,21 +218,21 @@ export function SettingsSidebar() {
               >
                 <span className="settings-nav-copy">
                   <span className="settings-nav-head">
-                    <span className="settings-nav-label">{section.label}</span>
-                    {statusLabel ? (
-                      <span className={`badge ${statusClassName}`}>{statusLabel}</span>
+                    <span className="settings-nav-label">{t(section.labelKey)}</span>
+                    {statusKey ? (
+                      <span className={`badge ${statusClassName}`}>{t(statusKey)}</span>
                     ) : null}
                   </span>
-                  <span className="settings-nav-description">{section.description}</span>
+                  <span className="settings-nav-description">{t(section.descKey)}</span>
                   {section.id === 'alecaframe' ? (
                     <span className="settings-nav-subtext">
-                      Last validation:{' '}
+                      {t('settings.lastValidation')}{' '}
                       {formatShortLocalDateTime(appSettings.alecaframe.lastValidatedAt)}
                     </span>
                   ) : null}
                   {section.id === 'discord-webhook' ? (
                     <span className="settings-nav-subtext">
-                      Last validation:{' '}
+                      {t('settings.lastValidation')}{' '}
                       {formatShortLocalDateTime(appSettings.discordWebhook.lastValidatedAt)}
                     </span>
                   ) : null}
@@ -234,10 +257,10 @@ export function SettingsSidebar() {
                 >
                   <span className="settings-nav-copy">
                     <span className="settings-nav-head">
-                      <span className="settings-nav-label">{section.label}</span>
-                      <span className="badge badge-muted">Soon</span>
+                      <span className="settings-nav-label">{t(section.labelKey)}</span>
+                      <span className="badge badge-muted">{t('status.soon')}</span>
                     </span>
-                    <span className="settings-nav-description">{section.description}</span>
+                    <span className="settings-nav-description">{t(section.descKey)}</span>
                   </span>
                   <ChevronIcon />
                 </button>

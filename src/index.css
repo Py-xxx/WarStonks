@@ -289,7 +289,7 @@ textarea:focus-visible,
 }
 .opp-card-cost {
   font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   color: var(--accent-amber);
 }
 .opp-card-priced {
@@ -374,7 +374,7 @@ textarea:focus-visible,
   color: var(--text-muted);
 }
 .farm-now-refine-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
@@ -425,7 +425,7 @@ textarea:focus-visible,
   line-height: 1.1;
 }
 .opp-card-value-num {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 17px;
   font-weight: 700;
   color: var(--accent-green);
@@ -507,7 +507,7 @@ textarea:focus-visible,
   border-color: var(--border);
 }
 .opp-action-price {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   color: var(--accent-green);
 }
 .radar-side {
@@ -531,7 +531,7 @@ textarea:focus-visible,
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-muted);
 }
@@ -579,7 +579,7 @@ textarea:focus-visible,
 .radar-card-rank { color: var(--text-muted); font-weight: 400; }
 .radar-card-timer {
   flex-shrink: 0;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-muted);
 }
@@ -607,7 +607,7 @@ textarea:focus-visible,
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .radar-card-listed { font-size: 14px; font-weight: 700; color: var(--accent-green); }
 .radar-card-pct { font-size: 11px; font-weight: 600; color: var(--accent-green); }
@@ -631,7 +631,7 @@ textarea:focus-visible,
 .radar-card-rec-value {
   font-size: 15px;
   font-weight: 700;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   color: var(--text-primary);
 }
 .radar-card-actions {
@@ -683,7 +683,7 @@ textarea:focus-visible,
   align-items: center;
   gap: 12px;
   margin: 6px 2px 0;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -805,7 +805,7 @@ textarea:focus-visible,
 
 /* "Recent" section label in the search dropdown. */
 .search-section-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -884,7 +884,7 @@ textarea:focus-visible,
   align-items: center;
   gap: 8px;
   padding: 12px 18px;
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
@@ -985,7 +985,7 @@ textarea:focus-visible,
 }
 .import-export-actions code,
 .settings-field-help code {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 5px;
@@ -1004,7 +1004,7 @@ textarea:focus-visible,
 .inventory-search-input {
   width: 100%;
   padding: 14px 44px 14px 44px;
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 15px;
   color: var(--text-primary);
   background: var(--bg-surface);
@@ -1183,7 +1183,7 @@ textarea:focus-visible,
 
 .inventory-row-value {
   flex: 0 0 auto;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   font-weight: 600;
   color: var(--accent-green);
@@ -1301,7 +1301,7 @@ textarea:focus-visible,
 .inventory-qty-value {
   min-width: 28px;
   text-align: center;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
@@ -1413,7 +1413,7 @@ textarea:focus-visible,
   color: var(--text-muted);
   font-size: 11px;
   margin-top: 2px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 .set-planner-drawer-icon {
@@ -2353,7 +2353,7 @@ textarea:focus-visible,
   font-size: 10px;
   font-weight: 700;
   color: #6de0aa;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 .set-planner-mini-empty {
@@ -2941,7 +2941,7 @@ textarea:focus-visible,
 .owned-relics-total-label {
   color: var(--text-secondary);
   font-size: 9px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -3367,7 +3367,7 @@ textarea:focus-visible,
 body {
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 13px;
   height: 100vh;
   overflow: hidden;
@@ -3422,7 +3422,7 @@ body {
 
 .startup-eyebrow {
   margin-bottom: 0;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -3450,7 +3450,7 @@ body {
   border: 1px solid rgba(61, 214, 140, 0.22);
   background: rgba(61, 214, 140, 0.08);
   color: var(--accent-green);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 14px;
   font-weight: 700;
   text-align: center;
@@ -3483,7 +3483,7 @@ body {
 
 .startup-stage-state {
   color: var(--accent-blue);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3527,7 +3527,7 @@ body {
 
 .startup-info-label {
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -3615,7 +3615,7 @@ body {
 }
 
 .logo {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
@@ -3665,7 +3665,7 @@ body {
 .search-input:focus { outline: none; }
 .search-bar .kbd {
   margin-left: auto;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -3761,7 +3761,7 @@ body {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 82%, black);
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   text-transform: uppercase;
 }
@@ -3785,7 +3785,7 @@ body {
   text-overflow: ellipsis;
 }
 .search-suggestion-meta {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3805,7 +3805,7 @@ body {
 }
 
 .topbar-market-variant-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3871,7 +3871,7 @@ body {
   justify-content: center;
   background: var(--accent-red);
   color: #fff;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
@@ -3900,7 +3900,7 @@ body {
 }
 
 .strategy-pill {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -3920,7 +3920,7 @@ body {
   border: 1px solid var(--accent-blue);
   background: transparent;
   color: var(--accent-blue);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -4070,7 +4070,7 @@ body {
 
 .currency-info { display: flex; flex-direction: column; gap: 0px; }
 .currency-name {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 8px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -4079,7 +4079,7 @@ body {
   line-height: 1;
 }
 .currency-val {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   font-weight: 700;
   color: var(--text-primary);
@@ -4188,6 +4188,28 @@ body {
   min-height: 0;
 }
 
+.settings-language-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 4px 14px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-language-glyph {
+  font-size: 16px;
+}
+.settings-language-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.settings-language-select {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+}
+
 .settings-nav-footer {
   margin-top: auto;
   padding-top: 10px;
@@ -4261,7 +4283,7 @@ body {
 
 .settings-meta-label {
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -4516,7 +4538,7 @@ body {
 }
 
 .settings-toggle-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -4720,7 +4742,7 @@ body {
   gap: 8px;
 }
 .sidebar-footer .version {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-muted);
 }
@@ -4932,7 +4954,7 @@ body {
   min-height: 36px;
 }
 .card-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -4945,7 +4967,7 @@ body {
 
 /* ── BADGES ── */
 .badge {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   font-weight: 600;
   padding: 2px 7px;
@@ -5068,7 +5090,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   padding: 0 8px;
   text-align: right;
@@ -5079,7 +5101,7 @@ body {
 .input-label {
   font-size: 10px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 .field-input {
@@ -5088,7 +5110,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 12px;
   padding: 0 10px;
 }
@@ -5101,7 +5123,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 3px;
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   text-align: center;
   padding: 0 4px;
@@ -5139,7 +5161,7 @@ body {
   margin-bottom: 14px;
 }
 .panel-title-eyebrow {
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
@@ -5180,7 +5202,7 @@ body {
   gap: 4px;
 }
 .watchlist-add-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -5193,7 +5215,7 @@ body {
   gap: 4px;
 }
 .watchlist-add-success {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -5219,7 +5241,7 @@ body {
 /* ── WATCHLIST TABLE ── */
 .wl-table { width: 100%; border-collapse: collapse; }
 .wl-table th {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -5232,7 +5254,7 @@ body {
 }
 .wl-table th:not(:first-child) { text-align: right; }
 .wl-table td {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   padding: 7px 10px;
   border-bottom: 1px solid var(--border-subtle);
@@ -5296,7 +5318,7 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-muted);
   background: var(--bg-base);
@@ -5352,7 +5374,7 @@ body {
 .watchlist-alert-summary-item-meta,
 .watchlist-alert-summary-empty,
 .watchlist-alert-summary-item-price {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
 }
@@ -5397,7 +5419,7 @@ body {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 80%, black);
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   text-transform: uppercase;
 }
@@ -5441,7 +5463,7 @@ body {
   gap: 8px;
 }
 .alerts-section-title {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -5484,7 +5506,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(17, 24, 36, 0.92);
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   text-transform: uppercase;
 }
@@ -5532,7 +5554,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
 }
@@ -5611,7 +5633,7 @@ body {
 }
 .metric-card { padding: 8px 12px; }
 .metric-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
@@ -5661,19 +5683,19 @@ body {
 .qv-stat-label {
   font-size: 9px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   margin-bottom: 3px;
 }
 .qv-stat-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 15px;
   font-weight: 700;
 }
 .qv-stat-pending { color: var(--text-secondary); }
 .qv-title {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   color: var(--accent-green);
 }
@@ -5702,7 +5724,7 @@ body {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 80%, black);
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px;
   text-transform: uppercase;
 }
@@ -5723,7 +5745,7 @@ body {
 }
 .qv-focus-status {
   margin-top: 4px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -5763,7 +5785,7 @@ body {
 }
 .qv-hero-status {
   margin-top: 4px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -5774,7 +5796,7 @@ body {
   text-align: right;
 }
 .qv-hero-price {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 24px;
   font-weight: 700;
   color: var(--accent-green);
@@ -5799,7 +5821,7 @@ body {
 }
 .qv-chart-value,
 .qv-chart-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
 }
@@ -5822,7 +5844,7 @@ body {
 }
 .qv-order-hint {
   margin-top: -2px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -5838,7 +5860,7 @@ body {
   border: 1px solid var(--border);
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   cursor: pointer;
 }
@@ -5871,7 +5893,7 @@ body {
   font-weight: 700;
 }
 .qv-copy-feedback {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -5952,7 +5974,7 @@ body {
 }
 
 .qv-viewall-row-head {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -5963,13 +5985,13 @@ body {
 }
 
 .qv-viewall-price {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-weight: 700;
   color: var(--accent-green);
 }
 
 .qv-viewall-qty {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   color: var(--text-secondary);
 }
 
@@ -6004,14 +6026,14 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 .qv-spread-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
 .qv-spread-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 700;
   color: var(--accent-amber);
@@ -6023,7 +6045,7 @@ body {
 .abar-label {
   font-size: 9px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   width: 68px;
   flex-shrink: 0;
   text-transform: uppercase;
@@ -6032,7 +6054,7 @@ body {
 .abar-track { flex: 1; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
 .abar-fill { height: 100%; border-radius: 2px; }
 .abar-val {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
   width: 24px;
@@ -6178,7 +6200,7 @@ body {
 /* ── EVENTS ── */
 .world-event-updated-at {
   margin-bottom: 12px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-muted);
 }
@@ -6250,14 +6272,14 @@ body {
   background: var(--bg-base);
 }
 .world-event-meta-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
 .world-event-meta-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   color: var(--text-primary);
   overflow-wrap: anywhere;
@@ -6281,7 +6303,7 @@ body {
 }
 .world-event-expand-copy {
   margin-top: 12px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -6308,7 +6330,7 @@ body {
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-base);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
 }
@@ -6328,7 +6350,7 @@ body {
   background: var(--bg-base);
 }
 .world-event-step-goal {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--accent-amber);
 }
@@ -6402,7 +6424,7 @@ body {
   background: rgba(9, 11, 16, 0.48);
 }
 .activity-meta-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -6443,7 +6465,7 @@ body {
     var(--bg-surface);
 }
 .activity-step-index {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -6607,7 +6629,7 @@ body {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 80%, black);
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   text-transform: uppercase;
 }
@@ -6651,7 +6673,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   color: var(--text-secondary);
 }
@@ -6710,7 +6732,7 @@ body {
   background: rgba(13, 15, 20, 0.52);
 }
 .void-trader-meta-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   line-height: 1.45;
   color: var(--text-primary);
@@ -6776,7 +6798,7 @@ body {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 80%, black);
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   text-transform: uppercase;
 }
@@ -6816,7 +6838,7 @@ body {
   background: rgba(26, 30, 42, 0.68);
 }
 .void-trader-cost-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
@@ -6924,7 +6946,7 @@ body {
 .world-clock-state-warm { color: var(--accent-red); }
 .world-clock-state-cold { color: var(--accent-blue); }
 .world-clock-countdown {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -6954,7 +6976,7 @@ body {
   gap: 8px;
 }
 .nightwave-standing {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   color: var(--accent-green);
 }
@@ -6983,7 +7005,7 @@ body {
   align-items: flex-end;
   gap: 1px;
   font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   color: var(--accent-amber);
 }
 .steel-path-current {
@@ -7001,7 +7023,7 @@ body {
   color: var(--text-primary);
 }
 .steel-path-cost {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   color: var(--accent-amber);
 }
@@ -7106,7 +7128,7 @@ body {
 .wl-fullscreen { padding: 20px; flex: 1; overflow-y: auto; }
 .wl-fs-table { width: 100%; border-collapse: collapse; }
 .wl-fs-table th {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -7121,7 +7143,7 @@ body {
 .wl-fs-table th:nth-child(4),
 .wl-fs-table th:last-child { text-align: left; }
 .wl-fs-table td {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border-subtle);
@@ -7228,7 +7250,7 @@ body {
 }
 .trade-avatar.fallback {
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px;
   font-weight: 700;
 }
@@ -7285,7 +7307,7 @@ body {
 .trade-subnav-hint {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -7357,7 +7379,7 @@ body {
   padding: 10px 12px;
 }
 .stat-mini-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -7365,7 +7387,7 @@ body {
   margin-bottom: 5px;
 }
 .stat-mini-val {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 16px;
   font-weight: 700;
   color: var(--accent-green);
@@ -7381,7 +7403,7 @@ body {
   margin-bottom: 14px;
 }
 .create-order-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -7397,7 +7419,7 @@ body {
 
 .listing-table { width: 100%; border-collapse: collapse; }
 .listing-table th {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -7429,7 +7451,7 @@ body {
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-base);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -7486,9 +7508,9 @@ body {
   background: linear-gradient(180deg, rgba(22, 26, 34, 0.98), rgba(12, 14, 19, 0.98));
 }
 .item-name { font-weight: 600; color: var(--text-primary); font-size: 12px; }
-.item-id { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: var(--text-muted); margin-top: 2px; }
+.item-id { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 9px; color: var(--text-muted); margin-top: 2px; }
 
-.health-score { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; }
+.health-score { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 14px; font-weight: 700; }
 .health-note { font-size: 11px; color: var(--text-secondary); margin-top: 2px; line-height: 1.3; max-width: 220px; }
 .health-checked { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
 .actions-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -7503,14 +7525,14 @@ body {
 }
 .trade-cell-label {
   margin-bottom: 3px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
 .trade-cell-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
@@ -7523,7 +7545,7 @@ body {
   margin-top: 4px;
   font-size: 10px;
   color: var(--text-muted);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
 }
 .trade-health-stack {
   display: grid;
@@ -7586,7 +7608,7 @@ body {
 }
 .has-analysis .listing-form-section-title {
   display: block;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -7615,7 +7637,7 @@ body {
 .listing-analysis-freshness {
   font-size: 10px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -7646,7 +7668,7 @@ body {
 .listing-analysis-loading-text {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.04em;
 }
 .listing-analysis-error {
@@ -7659,7 +7681,7 @@ body {
   padding: 40px 16px;
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.04em;
   text-align: center;
   line-height: 1.6;
@@ -7674,7 +7696,7 @@ body {
   border-bottom: none;
 }
 .listing-analysis-section-title {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -7687,7 +7709,7 @@ body {
   border-bottom: 1px solid rgba(61, 214, 140, 0.12) !important;
 }
 .listing-analysis-exit-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -7695,7 +7717,7 @@ body {
   opacity: 0.8;
 }
 .listing-analysis-exit-price {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 26px;
   font-weight: 700;
   color: var(--accent-green);
@@ -7705,7 +7727,7 @@ body {
 .listing-analysis-exit-sub {
   font-size: 10px;
   color: var(--text-muted);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
 }
 /* Rows and KV pairs */
 .listing-analysis-row {
@@ -7714,7 +7736,7 @@ body {
   gap: 8px;
 }
 .listing-analysis-metric {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
@@ -7726,7 +7748,7 @@ body {
   padding: 0 7px;
   border-radius: 5px;
   font-size: 9px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
@@ -7746,7 +7768,7 @@ body {
 .listing-analysis-note {
   font-size: 10px;
   color: var(--text-muted);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   line-height: 1.5;
 }
 .listing-analysis-kv {
@@ -7758,13 +7780,13 @@ body {
 .listing-analysis-kv-label {
   font-size: 10px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
 .listing-analysis-kv-value {
   font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   color: var(--text-primary);
   text-align: right;
 }
@@ -7775,14 +7797,14 @@ body {
   gap: 8px;
 }
 .listing-analysis-zone-range {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
 }
 /* Trend */
 .listing-analysis-trend-dir {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
   font-weight: 600;
   text-transform: capitalize;
@@ -7852,7 +7874,7 @@ body {
   border-radius: 9px;
   background: transparent;
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -7876,7 +7898,7 @@ body {
   gap: 8px;
 }
 .trade-listing-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -8104,7 +8126,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 .trade-health-metric-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -8165,7 +8187,7 @@ body {
   align-items: flex-start;
   justify-content: flex-start;
   gap: 6px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -8173,7 +8195,7 @@ body {
   margin-bottom: 5px;
 }
 .info-card-val {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px;
   font-weight: 700;
   color: var(--accent-green);
@@ -8185,7 +8207,7 @@ body {
   margin-top: 3px;
   color: var(--color-amber);
   font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .info-card-subnote.portfolio-inventory-error {
   display: flex;
@@ -8210,14 +8232,14 @@ body {
   align-items: flex-start;
   justify-content: flex-start;
   gap: 6px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 8px;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 4px;
 }
-.perf-val { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.perf-val { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 14px; font-weight: 700; color: var(--text-primary); }
 .perf-val.green { color: var(--accent-green); }
 .perf-val.blue  { color: var(--accent-blue); }
 
@@ -8249,7 +8271,7 @@ body {
 }
 .portfolio-quality-card-value {
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px;
   font-weight: 800;
   line-height: 1.1;
@@ -8280,7 +8302,7 @@ body {
     rgba(10, 14, 22, 0.7);
 }
 .portfolio-chart-callout-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -8288,7 +8310,7 @@ body {
 }
 .portfolio-chart-callout-value {
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px;
   font-weight: 800;
   line-height: 1.1;
@@ -8347,7 +8369,7 @@ body {
 }
 .portfolio-breakdown-value {
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
@@ -8413,7 +8435,7 @@ body {
 .portfolio-loading-copy {
   color: var(--text-secondary);
   font-size: 12px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .portfolio-panel-header {
   display: flex;
@@ -8555,7 +8577,7 @@ body {
 .portfolio-filter-field > span {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -8611,7 +8633,7 @@ body {
 .portfolio-log-header {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -8681,7 +8703,7 @@ body {
 .portfolio-log-item-slug {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .portfolio-row-badges {
   display: flex;
@@ -8855,7 +8877,7 @@ body {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .portfolio-detail-row {
   padding: 8px 0;
@@ -8903,7 +8925,7 @@ body {
 .portfolio-allocation-meta {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .portfolio-allocation-input-wrap {
   display: inline-flex;
@@ -8916,7 +8938,7 @@ body {
 .portfolio-allocation-unit {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .portfolio-allocation-summary {
   display: flex;
@@ -8941,7 +8963,7 @@ body {
 .chart-header {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-subtle);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -9104,7 +9126,7 @@ body {
 }
 
 .flash-sale-stat-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
@@ -9467,7 +9489,7 @@ body {
   background: rgba(18, 34, 60, 0.82);
   color: #cfe6ff;
   font-size: 9px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -9479,7 +9501,7 @@ body {
   gap: 12px;
   color: var(--text-secondary);
   font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -9697,7 +9719,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   font-weight: 700;
 }
@@ -9736,7 +9758,7 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
   font-weight: 700;
 }
@@ -9770,7 +9792,7 @@ body {
 .scanner-list-metric span {
   color: var(--text-secondary);
   font-size: 9px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -9803,7 +9825,7 @@ body {
 .scanner-list-header-relic > span {
   color: var(--text-secondary);
   font-size: 9px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   text-align: center;
@@ -9997,7 +10019,7 @@ body {
 .scanner-stat-pill-label {
   color: var(--text-secondary);
   font-size: 9px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -10092,7 +10114,7 @@ body {
 .market-item-meta {
   color: var(--text-muted);
   font-size: 12px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 .market-item-freshness {
@@ -10421,7 +10443,7 @@ body {
 .market-chart-hover-time,
 .market-chart-hover-grid,
 .market-chart-hover-section {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 /* Sectioned hover card — grouped, two-column rows so each value is readable. */
@@ -10481,7 +10503,7 @@ body {
   position: relative;
   color: var(--text-muted);
   font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 /* Each tick is absolutely positioned at the exact fraction of its matching SVG gridline so
@@ -10574,7 +10596,7 @@ body {
 .market-chart-axis-label {
   fill: var(--text-muted);
   font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 .market-chart-gridline-vertical {
@@ -10618,7 +10640,7 @@ body {
   gap: 10px;
   color: var(--text-secondary);
   font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 
 .market-chart-delta {
@@ -11066,13 +11088,13 @@ body {
 .market-tod-coltick {
   font-size: 9px;
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   text-align: center;
 }
 .market-tod-row-label {
   font-size: 10px;
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .market-tod-row.is-today .market-tod-row-label {
   color: var(--accent-green);
@@ -11106,7 +11128,7 @@ body {
   gap: 8px;
   margin-top: 8px;
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
 }
 
@@ -11184,7 +11206,7 @@ body {
 
 .market-item-detail-slug {
   color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 12px;
 }
 
@@ -11930,7 +11952,7 @@ img[data-asset-failed='true'] {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 13px;
   padding: 6px 10px;
   min-width: 200px;
@@ -11949,7 +11971,7 @@ img[data-asset-failed='true'] {
 
 .guide-intro {
   color: var(--text-secondary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 14px;
   line-height: 1.6;
   padding: 4px 0 20px;
@@ -11965,7 +11987,7 @@ img[data-asset-failed='true'] {
 .guide-section-header { margin-bottom: 14px; }
 
 .guide-section-title {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
@@ -11986,14 +12008,14 @@ img[data-asset-failed='true'] {
 
 .guide-paragraph {
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 14px;
   line-height: 1.65;
   margin: 0;
 }
 
 .guide-subheading {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 14.5px;
   font-weight: 600;
   color: var(--accent-blue);
@@ -12010,7 +12032,7 @@ img[data-asset-failed='true'] {
 .guide-steps,
 .guide-list {
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 14px;
   line-height: 1.6;
   margin: 0;
@@ -12025,7 +12047,7 @@ img[data-asset-failed='true'] {
   border-left: 3px solid var(--accent-blue);
   background: rgba(74, 158, 255, 0.08);
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 13.5px;
   line-height: 1.55;
   padding: 12px 14px;
@@ -12050,7 +12072,7 @@ img[data-asset-failed='true'] {
 }
 
 .guide-tab-card-title {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
@@ -12058,7 +12080,7 @@ img[data-asset-failed='true'] {
 
 .guide-tab-card-line {
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 13.5px;
   line-height: 1.55;
   margin: 0 0 6px;
@@ -12067,7 +12089,7 @@ img[data-asset-failed='true'] {
 
 .guide-tab-card-label {
   display: block;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -12088,7 +12110,7 @@ img[data-asset-failed='true'] {
 }
 
 .guide-glossary-item dt {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px;
   font-weight: 600;
   color: var(--accent-blue);
@@ -12097,7 +12119,7 @@ img[data-asset-failed='true'] {
 
 .guide-glossary-item dd {
   color: var(--text-secondary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 13px;
   line-height: 1.5;
   margin: 0;
@@ -12111,7 +12133,7 @@ img[data-asset-failed='true'] {
 
 .guide-faq-q {
   display: block;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
@@ -12120,7 +12142,7 @@ img[data-asset-failed='true'] {
 
 .guide-faq-a {
   color: var(--text-secondary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
   font-size: 13.5px;
   line-height: 1.6;
   margin: 0;
