@@ -16,6 +16,7 @@ import {
 } from '../../lib/watchlistAddFeedback';
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { wfmLangCode } from '../../lib/language';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   AnalyticsChartPoint,
@@ -2285,7 +2286,7 @@ function AnalysisTab() {
 
   useEffect(() => {
     let isMounted = true;
-    void getWfmAutocompleteItems()
+    void getWfmAutocompleteItems(wfmLangCode(useAppStore.getState().language))
       .then((items) => {
         if (!isMounted) {
           return;

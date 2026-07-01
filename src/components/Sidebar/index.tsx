@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getAppVersion, openExternalUrl } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import type { PageId } from '../../types';
 
 interface NavItemDef {
@@ -108,6 +110,7 @@ export function Sidebar() {
   const setActivePage = useAppStore((s) => s.setActivePage);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const { t } = useTranslation();
   const [appVersion, setAppVersion] = useState<string>('…');
 
   const handleOpenDiscord = () => {
@@ -141,14 +144,16 @@ export function Sidebar() {
 
   return (
     <nav className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`} aria-label="Main navigation">
-      {NAV_ITEMS.map((item) => (
+      {NAV_ITEMS.map((item) => {
+        const label = t(`nav.${item.id}` as TranslationKey);
+        return (
         <div
           key={item.id}
           className={`nav-item${activePage === item.id ? ' active' : ''}`}
           onClick={() => setActivePage(item.id)}
           role="button"
           tabIndex={0}
-          aria-label={item.label}
+          aria-label={label}
           aria-current={activePage === item.id ? 'page' : undefined}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -158,9 +163,10 @@ export function Sidebar() {
           }}
         >
           <span className="nav-icon">{item.icon}</span>
-          <span className="nav-label">{item.label}</span>
+          <span className="nav-label">{label}</span>
         </div>
-      ))}
+        );
+      })}
 
       <div className="sidebar-footer">
         <div className="sidebar-footer-links">
@@ -169,7 +175,7 @@ export function Sidebar() {
             onClick={() => setActivePage('guide')}
             role="button"
             tabIndex={0}
-            aria-label="Guide"
+            aria-label={t('nav.guide')}
             aria-current={activePage === 'guide' ? 'page' : undefined}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -179,14 +185,14 @@ export function Sidebar() {
             }}
           >
             <span className="nav-icon"><BookOpenIcon /></span>
-            <span className="nav-label">Guide</span>
+            <span className="nav-label">{t('nav.guide')}</span>
           </div>
           <div
             className="nav-item sidebar-footer-link"
             onClick={handleOpenDiscord}
             role="button"
             tabIndex={0}
-            aria-label="Join Discord"
+            aria-label={t('nav.discord')}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
@@ -195,7 +201,7 @@ export function Sidebar() {
             }}
           >
             <span className="nav-icon"><DiscordIcon /></span>
-            <span className="nav-label">Join Discord</span>
+            <span className="nav-label">{t('nav.discord')}</span>
           </div>
         </div>
         <div className="sidebar-footer-meta">
@@ -203,7 +209,7 @@ export function Sidebar() {
           <button
             className="icon-btn-sm"
             onClick={toggleSidebar}
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={sidebarCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')}
           >
             {sidebarCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
           </button>
