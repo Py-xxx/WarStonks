@@ -6353,6 +6353,9 @@ const UNDERPRICED_LISTING_EVENT: &str = "wfm-underpriced-listing";
 /// 5p → fire ≤ ~1.9p · 10p → ≤ ~6p · 20p → ≤ ~15p · 30p → ≤ ~24p · 50p → ≤ ~41p · 100p → ≤ ~85p.
 const UNDERPRICED_TRIGGER_BASE_RATIO: f64 = 0.88;
 const UNDERPRICED_TRIGGER_PRICE_OFFSET: f64 = 2.5;
+/// Listings priced below this are ignored — almost always accidental/typo prices (e.g. 1p),
+/// not real opportunities.
+const UNDERPRICED_MIN_LISTED_PLAT: f64 = 3.0;
 
 fn underpriced_trigger_ratio(recommended_price: f64) -> f64 {
     if !recommended_price.is_finite() || recommended_price <= 0.0 {
@@ -6902,6 +6905,11 @@ fn check_underpriced_listing(app: &tauri::AppHandle, order: &NewOrderEvent, item
         return;
     }
     if !order.platinum.is_finite() || order.platinum <= 0.0 {
+        return;
+    }
+    // Ignore very cheap listings — these are almost always accidental/typo prices
+    // (e.g. someone listing for 1p) rather than a real underpriced opportunity.
+    if order.platinum < UNDERPRICED_MIN_LISTED_PLAT {
         return;
     }
 
