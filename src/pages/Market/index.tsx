@@ -17,6 +17,10 @@ import {
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { wfmLangCode } from '../../lib/language';
+import { useTranslation } from '../../i18n';
+import type { TranslateFn } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
+import { translate } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
 import type {
   AnalyticsChartPoint,
@@ -209,12 +213,12 @@ const BUCKET_OPTIONS_BY_DOMAIN: Record<ChartDomainKey, ChartBucketKey[]> = {
 };
 
 const SERIES_OPTIONS: ChartSeriesOption[] = [
-  { key: 'median', label: 'Median', colorClass: 'secondary' },
-  { key: 'lowest', label: 'Lowest', colorClass: 'primary' },
-  { key: 'movingAverage', label: 'SMA', colorClass: 'moving' },
-  { key: 'average', label: 'Avg Price', colorClass: 'average' },
-  { key: 'entryZone', label: 'Entry Zone', colorClass: 'entry' },
-  { key: 'exitZone', label: 'Exit Zone', colorClass: 'exit' },
+  { key: 'median', label: 'mkt.median', colorClass: 'secondary' },
+  { key: 'lowest', label: 'mkt.lowest', colorClass: 'primary' },
+  { key: 'movingAverage', label: 'mkt.sma', colorClass: 'moving' },
+  { key: 'average', label: 'mkt.series.avgPrice', colorClass: 'average' },
+  { key: 'entryZone', label: 'mkt.entryZone', colorClass: 'entry' },
+  { key: 'exitZone', label: 'mkt.exitZone', colorClass: 'exit' },
 ];
 
 const DEFAULT_SERIES_TOGGLES: Record<ChartSeriesKey, boolean> = {
@@ -355,7 +359,7 @@ function getConfidenceTone(confidence: MarketConfidenceSummary | null | undefine
   }
 }
 
-function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null) {
+function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null, t: TranslateFn) {
   const netMargin = analysis?.headline.netMargin ?? null;
   const liquidityScore = analysis?.headline.liquidityScore ?? null;
   const riskLevel = analysis?.manipulationRisk.riskLevel ?? null;
@@ -369,48 +373,48 @@ function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null) {
 
   if (netMargin === null || liquidityScore === null) {
     return {
-      label: 'Building Readout',
+      label: t('mkt.hero.buildingReadout'),
       tone: 'blue' as PanelTone,
-      note: 'The market posture will settle as live orders, observatory tape, and catalog context finish loading.',
+      note: t('mkt.hero.note.building'),
     };
   }
 
   if (riskTone === 'red') {
     return {
-      label: 'High Caution',
+      label: t('mkt.hero.highCaution'),
       tone: 'red' as PanelTone,
-      note: `Risk is currently elevated, so any margin on the board should be discounted until the signal stack clears.${confidenceNote}`,
+      note: `${t('mkt.hero.note.highCaution')}${confidenceNote}`,
     };
   }
 
   if (headlineConfidence?.level === 'low') {
     return {
-      label: 'Cautious Read',
+      label: t('mkt.hero.cautiousRead'),
       tone: 'amber' as PanelTone,
-      note: `The current setup has usable context, but confidence is not strong enough to present an assertive posture.${confidenceNote}`,
+      note: `${t('mkt.hero.note.cautiousRead')}${confidenceNote}`,
     };
   }
 
   if (netMargin > 0 && liquidityScore >= 60 && trendTone === 'green') {
     return {
-      label: 'Buy Bias',
+      label: t('mkt.hero.buyBias'),
       tone: 'green' as PanelTone,
-      note: `Current spread supports an entry bias, with ${Math.round(liquidityScore)}% liquidity and ${Math.round(confidence ?? 0)}% trend confidence backing the setup.${confidenceNote}`,
+      note: `${t('mkt.hero.note.buyBias', { liq: Math.round(liquidityScore), conf: Math.round(confidence ?? 0) })}${confidenceNote}`,
     };
   }
 
   if (netMargin > 0 && liquidityScore >= 42) {
     return {
-      label: 'Selective',
+      label: t('mkt.hero.selective'),
       tone: 'blue' as PanelTone,
-      note: `There is usable edge here, but execution quality matters more than aggression because the market is not fully aligned yet.${confidenceNote}`,
+      note: `${t('mkt.hero.note.selective')}${confidenceNote}`,
     };
   }
 
   return {
-    label: 'Wait',
+    label: t('mkt.hero.wait'),
     tone: 'amber' as PanelTone,
-    note: `The current structure is not clean enough to justify forcing a trade. Let price or liquidity improve first.${confidenceNote}`,
+    note: `${t('mkt.hero.note.wait')}${confidenceNote}`,
   };
 }
 
@@ -423,7 +427,7 @@ async function handleOpenExternalLink(url: string | null | undefined) {
     await openExternalUrl(url);
   } catch (error) {
     console.error('Failed to open external link', error);
-    useAppStore.getState().pushToast('Couldn’t open the link in your browser.', 'error');
+    useAppStore.getState().pushToast(translate(useAppStore.getState().language, 'mkt.err.openLink'), 'error');
   }
 }
 
@@ -527,6 +531,7 @@ function StaticAnalyticsChart({
   onDomainChange: (value: ChartDomainKey) => void;
   onBucketChange: (value: ChartBucketKey) => void;
 }) {
+  const { t } = useTranslation();
   const [chartMode, setChartMode] = useState<ChartMode>('line');
   const [seriesToggles, setSeriesToggles] = useState<Record<ChartSeriesKey, boolean>>(DEFAULT_SERIES_TOGGLES);
   const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
@@ -643,7 +648,7 @@ function StaticAnalyticsChart({
       <div className="card-header">
         <div className="market-chart-header">
           <div className="market-chart-header-copy">
-            <span className="panel-title-eyebrow">Price Chart</span>
+            <span className="panel-title-eyebrow">{t('market.priceChart')}</span>
             <span className="card-label market-panel-title-row">
               <span>{itemName}</span>
               <AdaptiveInfoHint text="Historical price view for the selected item, including live hover details, entry and exit zones, and optional series overlays." />
@@ -651,7 +656,7 @@ function StaticAnalyticsChart({
           </div>
           <div className="market-chart-select-row">
             <label className="market-toolbar-group">
-              <span className="market-toolbar-label">Range</span>
+              <span className="market-toolbar-label">{t('market.toolbar.range')}</span>
               <select
                 className="market-variant-select"
                 value={domain}
@@ -659,13 +664,13 @@ function StaticAnalyticsChart({
               >
                 {DOMAIN_OPTIONS.map((option) => (
                   <option key={option.key} value={option.key}>
-                    {option.label}
+                    {t(option.label as TranslationKey)}
                   </option>
                 ))}
               </select>
             </label>
             <label className="market-toolbar-group">
-              <span className="market-toolbar-label">Bucket</span>
+              <span className="market-toolbar-label">{t('market.toolbar.bucket')}</span>
               <select
                 className="market-variant-select"
                 value={bucket}
@@ -744,7 +749,7 @@ function StaticAnalyticsChart({
             {errorMessage && !chartLoading ? (
               <div className="market-chart-status is-error">{errorMessage}</div>
             ) : points.length === 0 ? (
-              <div className="market-chart-status">No chart history is available for the selected item and variant.</div>
+              <div className="market-chart-status">{t('mkt.noChartHistory')}</div>
             ) : (
               <div className="market-chart-plot-wrap">
                 {activePoint ? (
@@ -752,27 +757,27 @@ function StaticAnalyticsChart({
                     className={`market-chart-hover-card${hoverCardOnRight ? ' is-right' : ' is-left'}`}
                   >
                     <div className="market-chart-hover-header">
-                      <span className="market-chart-hover-label">Hovered Bucket</span>
+                      <span className="market-chart-hover-label">{t('mkt.hoveredBucket')}</span>
                       <span className="market-chart-hover-time">{formatChartTimestamp(activePoint.timestamp, domain)}</span>
                     </div>
                     <div className="market-chart-hover-section">
-                      <span className="market-chart-hover-section-title">Market</span>
+                      <span className="market-chart-hover-section-title">{t('mkt.market')}</span>
                       <div className="market-chart-hover-rows">
-                        <span className="market-chart-hover-row"><span>Lowest</span><span>{formatPrice(activePoint.lowest)}</span></span>
-                        <span className="market-chart-hover-row"><span>Highest</span><span>{formatPrice(activePoint.high)}</span></span>
-                        <span className="market-chart-hover-row"><span>Median</span><span>{formatPrice(activePoint.median)}</span></span>
-                        <span className="market-chart-hover-row"><span>Average</span><span>{formatPrice(activePoint.average)}</span></span>
-                        <span className="market-chart-hover-row"><span>Volume</span><span>{formatNumber(activePoint.volume, 0)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.lowest')}</span><span>{formatPrice(activePoint.lowest)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.highest')}</span><span>{formatPrice(activePoint.high)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.median')}</span><span>{formatPrice(activePoint.median)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.average')}</span><span>{formatPrice(activePoint.average)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.volume')}</span><span>{formatNumber(activePoint.volume, 0)}</span></span>
                       </div>
                     </div>
                     <div className="market-chart-hover-section">
-                      <span className="market-chart-hover-section-title">Levels</span>
+                      <span className="market-chart-hover-section-title">{t('mkt.levels')}</span>
                       <div className="market-chart-hover-rows">
-                        <span className="market-chart-hover-row"><span>Open</span><span>{formatPrice(activePoint.open)}</span></span>
-                        <span className="market-chart-hover-row"><span>Close</span><span>{formatPrice(activePoint.close)}</span></span>
-                        <span className="market-chart-hover-row"><span>SMA</span><span>{formatPrice(activePoint.movingAverage)}</span></span>
-                        <span className="market-chart-hover-row"><span>Entry</span><span>{formatPrice(activePoint.entryZone)}</span></span>
-                        <span className="market-chart-hover-row"><span>Exit</span><span>{formatPrice(activePoint.exitZone)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.open')}</span><span>{formatPrice(activePoint.open)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.close')}</span><span>{formatPrice(activePoint.close)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.sma')}</span><span>{formatPrice(activePoint.movingAverage)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.entry')}</span><span>{formatPrice(activePoint.entryZone)}</span></span>
+                        <span className="market-chart-hover-row"><span>{t('mkt.exit')}</span><span>{formatPrice(activePoint.exitZone)}</span></span>
                       </div>
                     </div>
                   </div>
@@ -781,7 +786,7 @@ function StaticAnalyticsChart({
                   className="market-chart-svg"
                   viewBox={`0 0 ${plotWidth} ${totalPlotHeight + xAxisHeight}`}
                   preserveAspectRatio="none"
-                  aria-label="Market price graph"
+                  aria-label={t('market.graphAria')}
                   onMouseMove={handleChartPointerMove}
                   onMouseLeave={handleChartPointerLeave}
                 >
@@ -1133,12 +1138,12 @@ function formatDateCompact(value: string | null | undefined): string {
   return formatShortLocalDate(value);
 }
 
-function formatNullableBoolean(value: boolean | null | undefined): string {
+function formatNullableBoolean(value: boolean | null | undefined, t: TranslateFn): string {
   if (value === null || value === undefined) {
     return '—';
   }
 
-  return value ? 'Yes' : 'No';
+  return value ? t('mkt.yes') : t('mkt.no');
 }
 
 function formatStatPercent(value: number | null | undefined, digits = 1): string {
@@ -1252,7 +1257,7 @@ function classifyItemDetail(detail: ItemDetailSummary | null): ItemDetailKind {
   return 'generic';
 }
 
-function buildItemDetailSections(detail: ItemDetailSummary | null): ItemDetailSection[] {
+function buildItemDetailSections(detail: ItemDetailSummary | null, t: TranslateFn): ItemDetailSection[] {
   if (!detail) {
     return [];
   }
@@ -1261,124 +1266,124 @@ function buildItemDetailSections(detail: ItemDetailSummary | null): ItemDetailSe
   const sections: ItemDetailSection[] = [];
   const overviewFields: ItemDetailField[] = [];
 
-  pushDetailField(overviewFields, 'Category', detail.category ?? '—');
-  pushDetailField(overviewFields, 'Rarity', detail.rarity ?? '—');
-  pushDetailField(overviewFields, 'Prime', formatNullableBoolean(detail.prime));
-  pushDetailField(overviewFields, 'Vaulted', formatNullableBoolean(detail.vaulted));
+  pushDetailField(overviewFields, t('mkt.field.category'), detail.category ?? '—');
+  pushDetailField(overviewFields, t('mkt.field.rarity'), detail.rarity ?? '—');
+  pushDetailField(overviewFields, t('mkt.field.prime'), formatNullableBoolean(detail.prime, t));
+  pushDetailField(overviewFields, t('mkt.field.vaulted'), formatNullableBoolean(detail.vaulted, t));
   if (overviewFields.length > 0) {
-    sections.push({ title: 'Overview', fields: overviewFields });
+    sections.push({ title: t('mkt.section.overview'), fields: overviewFields });
   }
 
   if (detailKind === 'mod' || detailKind === 'arcane') {
     const upgradeFields: ItemDetailField[] = [];
-    pushDetailField(upgradeFields, 'Compatibility', detail.compatName ?? '—');
-    pushDetailField(upgradeFields, 'Polarity', detail.polarity ?? '—');
-    pushDetailField(upgradeFields, 'Stance Polarity', detail.stancePolarity ?? '—');
-    pushDetailField(upgradeFields, 'Mod Set', detail.modSet ?? '—');
-    pushDetailField(upgradeFields, 'Base Drain', formatNumber(detail.baseDrain, 0));
-    pushDetailField(upgradeFields, 'Fusion Limit', formatNumber(detail.fusionLimit, 0));
-    pushDetailField(upgradeFields, 'Max Rank', formatNumber(detail.maxRank, 0));
-    pushDetailField(upgradeFields, 'Mastery', formatNumber(detail.masteryReq, 0));
+    pushDetailField(upgradeFields, t('mkt.field.compatibility'), detail.compatName ?? '—');
+    pushDetailField(upgradeFields, t('mkt.field.polarity'), detail.polarity ?? '—');
+    pushDetailField(upgradeFields, t('mkt.field.stancePolarity'), detail.stancePolarity ?? '—');
+    pushDetailField(upgradeFields, t('mkt.field.modSet'), detail.modSet ?? '—');
+    pushDetailField(upgradeFields, t('mkt.field.baseDrain'), formatNumber(detail.baseDrain, 0));
+    pushDetailField(upgradeFields, t('mkt.field.fusionLimit'), formatNumber(detail.fusionLimit, 0));
+    pushDetailField(upgradeFields, t('mkt.field.maxRank'), formatNumber(detail.maxRank, 0));
+    pushDetailField(upgradeFields, t('mkt.field.mastery'), formatNumber(detail.masteryReq, 0));
     if (upgradeFields.length > 0) {
-      sections.push({ title: detailKind === 'arcane' ? 'Arcane Profile' : 'Mod Profile', fields: upgradeFields });
+      sections.push({ title: detailKind === 'arcane' ? t('mkt.section.arcaneProfile') : t('mkt.section.modProfile'), fields: upgradeFields });
     }
   }
 
   if (detailKind === 'weapon' || detailKind === 'component') {
     const combatFields: ItemDetailField[] = [];
-    pushDetailField(combatFields, 'Total Damage', formatNumber(detail.totalDamage, 1));
-    pushDetailField(combatFields, 'Crit Chance', formatStatPercent(detail.criticalChance));
-    pushDetailField(combatFields, 'Crit Mult', formatMultiplier(detail.criticalMultiplier));
-    pushDetailField(combatFields, 'Status Chance', formatStatPercent(detail.statusChance));
-    pushDetailField(combatFields, 'Fire Rate', formatNumber(detail.fireRate, 2));
-    pushDetailField(combatFields, 'Reload', detail.reloadTime !== null ? `${formatNumber(detail.reloadTime, 2)}s` : '—');
-    pushDetailField(combatFields, 'Magazine', formatNumber(detail.magazineSize, 0));
-    pushDetailField(combatFields, 'Multishot', formatNumber(detail.multishot, 0));
-    pushDetailField(combatFields, 'Disposition', formatNumber(detail.disposition, 0));
-    pushDetailField(combatFields, 'Range', formatNumber(detail.range, 1));
+    pushDetailField(combatFields, t('mkt.field.totalDamage'), formatNumber(detail.totalDamage, 1));
+    pushDetailField(combatFields, t('mkt.field.critChance'), formatStatPercent(detail.criticalChance));
+    pushDetailField(combatFields, t('mkt.field.critMult'), formatMultiplier(detail.criticalMultiplier));
+    pushDetailField(combatFields, t('mkt.field.statusChance'), formatStatPercent(detail.statusChance));
+    pushDetailField(combatFields, t('mkt.field.fireRate'), formatNumber(detail.fireRate, 2));
+    pushDetailField(combatFields, t('mkt.field.reload'), detail.reloadTime !== null ? `${formatNumber(detail.reloadTime, 2)}s` : '—');
+    pushDetailField(combatFields, t('mkt.field.magazine'), formatNumber(detail.magazineSize, 0));
+    pushDetailField(combatFields, t('mkt.field.multishot'), formatNumber(detail.multishot, 0));
+    pushDetailField(combatFields, t('mkt.field.disposition'), formatNumber(detail.disposition, 0));
+    pushDetailField(combatFields, t('mkt.field.range'), formatNumber(detail.range, 1));
     if (combatFields.length > 0) {
-      sections.push({ title: detailKind === 'component' ? 'Component Combat' : 'Combat Stats', fields: combatFields });
+      sections.push({ title: detailKind === 'component' ? t('mkt.section.componentCombat') : t('mkt.section.combatStats'), fields: combatFields });
     }
 
     const handlingFields: ItemDetailField[] = [];
-    pushDetailField(handlingFields, 'Trigger', detail.trigger ?? '—');
-    pushDetailField(handlingFields, 'Noise', detail.noise ?? '—');
-    pushDetailField(handlingFields, 'Follow Through', formatNumber(detail.followThrough, 2));
-    pushDetailField(handlingFields, 'Blocking Angle', formatNumber(detail.blockingAngle, 0));
-    pushDetailField(handlingFields, 'Combo Duration', formatNumber(detail.comboDuration, 1));
-    pushDetailField(handlingFields, 'Heavy Attack', formatNumber(detail.heavyAttackDamage, 0));
-    pushDetailField(handlingFields, 'Slam Attack', formatNumber(detail.slamAttack, 0));
-    pushDetailField(handlingFields, 'Heavy Slam', formatNumber(detail.heavySlamAttack, 0));
-    pushDetailField(handlingFields, 'Wind Up', detail.windUp !== null ? `${formatNumber(detail.windUp, 2)}s` : '—');
+    pushDetailField(handlingFields, t('mkt.field.trigger'), detail.trigger ?? '—');
+    pushDetailField(handlingFields, t('mkt.field.fieldNoise'), detail.noise ?? '—');
+    pushDetailField(handlingFields, t('mkt.field.followThrough'), formatNumber(detail.followThrough, 2));
+    pushDetailField(handlingFields, t('mkt.field.blockingAngle'), formatNumber(detail.blockingAngle, 0));
+    pushDetailField(handlingFields, t('mkt.field.comboDuration'), formatNumber(detail.comboDuration, 1));
+    pushDetailField(handlingFields, t('mkt.field.heavyAttack'), formatNumber(detail.heavyAttackDamage, 0));
+    pushDetailField(handlingFields, t('mkt.field.slamAttack'), formatNumber(detail.slamAttack, 0));
+    pushDetailField(handlingFields, t('mkt.field.heavySlam'), formatNumber(detail.heavySlamAttack, 0));
+    pushDetailField(handlingFields, t('mkt.field.windUp'), detail.windUp !== null ? `${formatNumber(detail.windUp, 2)}s` : '—');
     if (handlingFields.length > 0) {
-      sections.push({ title: 'Handling', fields: handlingFields });
+      sections.push({ title: t('mkt.section.handling'), fields: handlingFields });
     }
   }
 
   if (detailKind === 'warframe') {
     const baseStatFields: ItemDetailField[] = [];
-    pushDetailField(baseStatFields, 'Health', formatNumber(detail.health, 0));
-    pushDetailField(baseStatFields, 'Shield', formatNumber(detail.shield, 0));
-    pushDetailField(baseStatFields, 'Armor', formatNumber(detail.armor, 0));
-    pushDetailField(baseStatFields, 'Sprint Speed', formatNumber(detail.sprintSpeed, 2));
-    pushDetailField(baseStatFields, 'Power', formatNumber(detail.power, 0));
-    pushDetailField(baseStatFields, 'Stamina', formatNumber(detail.stamina, 0));
-    pushDetailField(baseStatFields, 'Mastery', formatNumber(detail.masteryReq, 0));
+    pushDetailField(baseStatFields, t('mkt.field.health'), formatNumber(detail.health, 0));
+    pushDetailField(baseStatFields, t('mkt.field.shield'), formatNumber(detail.shield, 0));
+    pushDetailField(baseStatFields, t('mkt.field.armor'), formatNumber(detail.armor, 0));
+    pushDetailField(baseStatFields, t('mkt.field.sprintSpeed'), formatNumber(detail.sprintSpeed, 2));
+    pushDetailField(baseStatFields, t('mkt.field.power'), formatNumber(detail.power, 0));
+    pushDetailField(baseStatFields, t('mkt.field.stamina'), formatNumber(detail.stamina, 0));
+    pushDetailField(baseStatFields, t('mkt.field.mastery'), formatNumber(detail.masteryReq, 0));
     if (baseStatFields.length > 0) {
-      sections.push({ title: 'Base Stats', fields: baseStatFields });
+      sections.push({ title: t('mkt.section.baseStats'), fields: baseStatFields });
     }
 
     const kitFields: ItemDetailField[] = [];
-    pushDetailField(kitFields, 'Abilities', detail.abilityNames.length > 0 ? detail.abilityNames.join(', ') : '—');
-    pushDetailField(kitFields, 'Polarities', detail.polarities.length > 0 ? detail.polarities.join(', ') : '—');
+    pushDetailField(kitFields, t('mkt.field.abilities'), detail.abilityNames.length > 0 ? detail.abilityNames.join(', ') : '—');
+    pushDetailField(kitFields, t('mkt.field.polarities'), detail.polarities.length > 0 ? detail.polarities.join(', ') : '—');
     if (kitFields.length > 0) {
-      sections.push({ title: 'Kit', fields: kitFields });
+      sections.push({ title: t('mkt.section.kit'), fields: kitFields });
     }
   }
 
   if (detailKind === 'relic') {
     const relicFields: ItemDetailField[] = [];
-    pushDetailField(relicFields, 'Tier', detail.relicTier ?? '—');
-    pushDetailField(relicFields, 'Code', detail.relicCode ?? '—');
-    pushDetailField(relicFields, 'Release', formatDateCompact(detail.releaseDate));
-    pushDetailField(relicFields, 'Est. Vault', formatDateCompact(detail.estimatedVaultDate));
-    pushDetailField(relicFields, 'Vault Date', formatDateCompact(detail.vaultDate));
-    pushDetailField(relicFields, 'Item Count', formatNumber(detail.itemCount, 0));
+    pushDetailField(relicFields, t('mkt.field.tier'), detail.relicTier ?? '—');
+    pushDetailField(relicFields, t('mkt.field.code'), detail.relicCode ?? '—');
+    pushDetailField(relicFields, t('mkt.field.release'), formatDateCompact(detail.releaseDate));
+    pushDetailField(relicFields, t('mkt.field.estVault'), formatDateCompact(detail.estimatedVaultDate));
+    pushDetailField(relicFields, t('mkt.field.vaultDate'), formatDateCompact(detail.vaultDate));
+    pushDetailField(relicFields, t('mkt.field.itemCount'), formatNumber(detail.itemCount, 0));
     if (relicFields.length > 0) {
-      sections.push({ title: 'Relic Profile', fields: relicFields });
+      sections.push({ title: t('mkt.section.relicProfile'), fields: relicFields });
     }
   }
 
   if (detailKind === 'set') {
     const setFields: ItemDetailField[] = [];
-    pushDetailField(setFields, 'Item Count', formatNumber(detail.itemCount, 0));
-    pushDetailField(setFields, 'Release', formatDateCompact(detail.releaseDate));
-    pushDetailField(setFields, 'Est. Vault', formatDateCompact(detail.estimatedVaultDate));
-    pushDetailField(setFields, 'Vault Date', formatDateCompact(detail.vaultDate));
-    pushDetailField(setFields, 'Ducats', formatNumber(detail.ducats, 0));
+    pushDetailField(setFields, t('mkt.field.itemCount'), formatNumber(detail.itemCount, 0));
+    pushDetailField(setFields, t('mkt.field.release'), formatDateCompact(detail.releaseDate));
+    pushDetailField(setFields, t('mkt.field.estVault'), formatDateCompact(detail.estimatedVaultDate));
+    pushDetailField(setFields, t('mkt.field.vaultDate'), formatDateCompact(detail.vaultDate));
+    pushDetailField(setFields, t('mkt.field.ducats'), formatNumber(detail.ducats, 0));
     if (setFields.length > 0) {
-      sections.push({ title: 'Set Profile', fields: setFields });
+      sections.push({ title: t('mkt.section.setProfile'), fields: setFields });
     }
   }
 
   if (detailKind === 'component' || detailKind === 'resource' || detailKind === 'generic') {
     const profileFields: ItemDetailField[] = [];
-    pushDetailField(profileFields, 'Product Category', detail.productCategory ?? '—');
-    pushDetailField(profileFields, 'Parents', detail.parentNames.length > 0 ? detail.parentNames.join(', ') : '—');
-    pushDetailField(profileFields, 'Build Price', formatNumber(detail.buildPrice, 0));
-    pushDetailField(profileFields, 'Build Qty', formatNumber(detail.buildQuantity, 0));
-    pushDetailField(profileFields, 'Build Time', formatDurationSeconds(detail.buildTime));
-    pushDetailField(profileFields, 'Skip Build', formatNumber(detail.skipBuildTimePrice, 0));
-    pushDetailField(profileFields, 'Market Cost', formatNumber(detail.marketCost, 0));
-    pushDetailField(profileFields, 'Ducats', formatNumber(detail.ducats, 0));
+    pushDetailField(profileFields, t('mkt.field.productCategory'), detail.productCategory ?? '—');
+    pushDetailField(profileFields, t('mkt.field.parents'), detail.parentNames.length > 0 ? detail.parentNames.join(', ') : '—');
+    pushDetailField(profileFields, t('mkt.field.buildPrice'), formatNumber(detail.buildPrice, 0));
+    pushDetailField(profileFields, t('mkt.field.buildQty'), formatNumber(detail.buildQuantity, 0));
+    pushDetailField(profileFields, t('mkt.field.buildTime'), formatDurationSeconds(detail.buildTime));
+    pushDetailField(profileFields, t('mkt.field.skipBuild'), formatNumber(detail.skipBuildTimePrice, 0));
+    pushDetailField(profileFields, t('mkt.field.marketCost'), formatNumber(detail.marketCost, 0));
+    pushDetailField(profileFields, t('mkt.field.ducats'), formatNumber(detail.ducats, 0));
     if (profileFields.length > 0) {
-      sections.push({ title: detailKind === 'component' ? 'Component Profile' : 'Item Profile', fields: profileFields });
+      sections.push({ title: detailKind === 'component' ? t('mkt.section.componentProfile') : t('mkt.section.itemProfile'), fields: profileFields });
     }
   }
 
   if (detail.attackNames.length > 0 && (detailKind === 'weapon' || detailKind === 'component')) {
     sections.push({
-      title: 'Attack Modes',
+      title: t('mkt.section.attackModes'),
       fields: detail.attackNames.map((name, index) => ({
         label: `${index + 1}`,
         value: name,
@@ -1517,11 +1522,11 @@ interface EventContextEntry {
   impact: string;
 }
 
-function buildEventContextConfidence(entries: EventContextEntry[]): MarketConfidenceSummary {
+function buildEventContextConfidence(entries: EventContextEntry[], t: TranslateFn): MarketConfidenceSummary {
   if (entries.length === 0) {
     return {
       level: 'low',
-      label: 'Low confidence',
+      label: t('mkt.conf.low'),
       reasons: ['No active context'],
       isDegraded: true,
     };
@@ -1534,7 +1539,7 @@ function buildEventContextConfidence(entries: EventContextEntry[]): MarketConfid
   if (hasDirectRetailHook || entries.length >= 2) {
     return {
       level: 'high',
-      label: 'High confidence',
+      label: t('mkt.conf.high'),
       reasons: [],
       isDegraded: false,
     };
@@ -1542,7 +1547,7 @@ function buildEventContextConfidence(entries: EventContextEntry[]): MarketConfid
 
   return {
     level: 'medium',
-    label: 'Medium confidence',
+    label: t('mkt.conf.medium'),
     reasons: ['Indirect context'],
     isDegraded: true,
   };
@@ -1581,6 +1586,7 @@ function ConfidenceNote({
 }
 
 function buildEventContextEntries(
+  t: TranslateFn,
   analysis: ItemAnalysisResponse | null,
   eventData: {
     alerts: ReturnType<typeof useAppStore.getState>['worldStateAlerts'];
@@ -1606,7 +1612,7 @@ function buildEventContextEntries(
     const rewardItems = alert.mission?.reward?.items ?? [];
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
-        label: 'Alert Reward',
+        label: t('mkt.event.alertReward'),
         impact: `${alert.mission?.node ?? 'Unknown node'} is currently rewarding this item.`,
       });
     }
@@ -1616,7 +1622,7 @@ function buildEventContextEntries(
     const rewardItems = event.rewards.flatMap((reward) => reward.items);
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
-        label: 'Active Event',
+        label: t('mkt.event.activeEvent'),
         impact: `${event.description} currently includes this item in its reward pool.`,
       });
     }
@@ -1629,7 +1635,7 @@ function buildEventContextEntries(
     ];
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
-        label: 'Invasion Reward',
+        label: t('mkt.event.invasionReward'),
         impact: `${invasion.node ?? 'Unknown node'} currently offers this item through invasion rewards.`,
       });
     }
@@ -1639,7 +1645,7 @@ function buildEventContextEntries(
     const rewardItems = mission.jobs.flatMap((job) => job.rewardPool);
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
-        label: 'Syndicate Mission',
+        label: t('mkt.event.syndicateMission'),
         impact: `${mission.syndicate ?? 'Syndicate'} currently has a mission reward pool that includes this item.`,
       });
     }
@@ -1651,7 +1657,7 @@ function buildEventContextEntries(
     )
   ) {
     entries.push({
-      label: 'Void Trader',
+      label: t('mkt.event.voidTrader'),
       impact: 'Baro Ki’Teer is currently selling this item, which can pressure short-term pricing.',
     });
   }
@@ -1662,7 +1668,7 @@ function buildEventContextEntries(
     )
   ) {
     entries.push({
-      label: 'Flash Sale',
+      label: t('mkt.event.flashSale'),
       impact: 'A flash sale is active for this item, which can distort short-term market behavior.',
     });
   }
@@ -1785,6 +1791,7 @@ function AnalyticsPanel({
 }
 
 function AnalyticsTab() {
+  const { t } = useTranslation();
   const pageContentRef = useRef<HTMLDivElement | null>(null);
   const revealTimeoutsRef = useRef<number[]>([]);
   const analyticsIdentityRef = useRef<string | null>(null);
@@ -1974,8 +1981,8 @@ function AnalyticsTab() {
         <button
           className="market-refresh-button"
           type="button"
-          aria-label="Refresh market analytics"
-          title="Refresh market analytics"
+          aria-label={t('market.refreshAnalytics')}
+          title={t('market.refreshAnalytics')}
           onClick={() => setRefreshNonce((value) => value + 1)}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2014,33 +2021,33 @@ function AnalyticsTab() {
             >
               <div className="market-metric-grid">
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Current Lowest</span>
+                  <span className="market-metric-label">{t('mkt.currentLowest')}</span>
                   <span className="market-metric-value">{formatPrice(analytics?.entryExitZoneOverview.currentLowestPrice)}</span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Median Lowest</span>
+                  <span className="market-metric-label">{t('mkt.medianLowest')}</span>
                   <span className="market-metric-value">{formatPrice(analytics?.entryExitZoneOverview.currentMedianLowestPrice)}</span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Fair Value Band</span>
+                  <span className="market-metric-label">{t('mkt.fairValueBand')}</span>
                   <span className="market-metric-value">
                     {formatPrice(analytics?.entryExitZoneOverview.fairValueLow)} - {formatPrice(analytics?.entryExitZoneOverview.fairValueHigh)}
                   </span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Zone Quality</span>
+                  <span className="market-metric-label">{t('mkt.zoneQuality')}</span>
                   <span className="market-metric-value">{analytics?.entryExitZoneOverview.zoneQuality ?? '—'}</span>
                 </div>
               </div>
               <div className="market-copy-block">
-                <span className="market-copy-title">Entry Zone</span>
+                <span className="market-copy-title">{t('mkt.entryZone')}</span>
                 <span>
                   {formatPrice(analytics?.entryExitZoneOverview.entryZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.entryZoneHigh)}
                 </span>
                 <p>{analytics?.entryExitZoneOverview.entryRationale ?? '—'}</p>
               </div>
               <div className="market-copy-block">
-                <span className="market-copy-title">Exit Zone</span>
+                <span className="market-copy-title">{t('mkt.exitZone')}</span>
                 <span>
                   {formatPrice(analytics?.entryExitZoneOverview.exitZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.exitZoneHigh)}
                 </span>
@@ -2061,35 +2068,35 @@ function AnalyticsTab() {
             >
               <div className="market-metric-grid">
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Cheapest Sell</span>
+                  <span className="market-metric-label">{t('mkt.cheapestSell')}</span>
                   <span className="market-metric-value">{formatPrice(analytics?.orderbookPressure.cheapestSell)}</span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Highest Buy</span>
+                  <span className="market-metric-label">{t('mkt.highestBuy')}</span>
                   <span className="market-metric-value">{formatPrice(analytics?.orderbookPressure.highestBuy)}</span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Spread</span>
+                  <span className="market-metric-label">{t('mkt.spread')}</span>
                   <span className="market-metric-value">
                     {formatPrice(analytics?.orderbookPressure.spread)} · {formatPercent(analytics?.orderbookPressure.spreadPct)}
                   </span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Pressure</span>
+                  <span className="market-metric-label">{t('mkt.pressure')}</span>
                   <span className="market-metric-value">{analytics?.orderbookPressure.pressureLabel ?? '—'}</span>
                 </div>
               </div>
               <div className="market-pressure-row">
                 <div>
-                  <span className="market-copy-title">Entry Depth</span>
+                  <span className="market-copy-title">{t('mkt.entryDepth')}</span>
                   <span>{formatNumber(analytics?.orderbookPressure.entryDepth, 0)} visible quantity</span>
                 </div>
                 <div>
-                  <span className="market-copy-title">Exit Depth</span>
+                  <span className="market-copy-title">{t('mkt.exitDepth')}</span>
                   <span>{formatNumber(analytics?.orderbookPressure.exitDepth, 0)} visible quantity</span>
                 </div>
                 <div>
-                  <span className="market-copy-title">Pressure Ratio</span>
+                  <span className="market-copy-title">{t('mkt.pressureRatio')}</span>
                   <span>{formatNumber(analytics?.orderbookPressure.pressureRatio, 2)}</span>
                 </div>
               </div>
@@ -2113,7 +2120,7 @@ function AnalyticsTab() {
                     type="button"
                     onClick={() => setTrendTab(key)}
                   >
-                    {key === 'lowestSell' ? 'Lowest Sell' : key === 'medianSell' ? 'Median Lowest' : 'Weighted Avg'}
+                    {key === 'lowestSell' ? t('mkt.trend.lowestSell') : key === 'medianSell' ? t('mkt.trend.medianLowest') : t('mkt.trend.weightedAvg')}
                   </button>
                 ))}
               </div>
@@ -2131,16 +2138,16 @@ function AnalyticsTab() {
                   <span className="market-metric-value">{formatPercent(trendMetrics?.slope6h)}</span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">Confidence</span>
+                  <span className="market-metric-label">{t('mkt.confidence')}</span>
                   <span className="market-metric-value">{formatPercent(trendMetrics?.confidence)}</span>
                 </div>
               </div>
               <div className="market-copy-block">
-                <span className="market-copy-title">Cross Signal</span>
+                <span className="market-copy-title">{t('mkt.crossSignal')}</span>
                 <p>{trendMetrics?.crossSignal ?? '—'}</p>
               </div>
               <div className="market-copy-block">
-                <span className="market-copy-title">Reversal</span>
+                <span className="market-copy-title">{t('mkt.reversal')}</span>
                 <p>{trendMetrics?.reversal ?? '—'}</p>
               </div>
               <div className="market-signal-list">
@@ -2150,15 +2157,15 @@ function AnalyticsTab() {
               </div>
               <div className="market-pressure-row">
                 <div>
-                  <span className="market-copy-title">Stability</span>
+                  <span className="market-copy-title">{t('mkt.stability')}</span>
                   <span>{formatPercent(analytics?.trendQualityBreakdown.stability)}</span>
                 </div>
                 <div>
-                  <span className="market-copy-title">Volatility</span>
+                  <span className="market-copy-title">{t('mkt.volatility')}</span>
                   <span>{formatPercent(analytics?.trendQualityBreakdown.volatility)}</span>
                 </div>
                 <div>
-                  <span className="market-copy-title">Noise</span>
+                  <span className="market-copy-title">{t('mkt.noise')}</span>
                   <span>{formatPercent(analytics?.trendQualityBreakdown.noise)}</span>
                 </div>
               </div>
@@ -2176,26 +2183,26 @@ function AnalyticsTab() {
             >
               <div className={`market-action-card tone-${analytics?.actionCard.tone ?? 'neutral'}`}>
                 <div className="market-action-header">
-                  <span className="market-action-label">Suggested Action</span>
+                  <span className="market-action-label">{t('mkt.suggestedAction')}</span>
                   <span className="market-action-value">{analytics?.actionCard.suggestedAction ?? '—'}</span>
                 </div>
                 <div className="market-metric-grid">
                   <div className="market-metric-card">
-                    <span className="market-metric-label">Zone Quality</span>
+                    <span className="market-metric-label">{t('mkt.zoneQuality')}</span>
                     <span className="market-metric-value">{analytics?.actionCard.zoneQuality ?? '—'}</span>
                   </div>
                   <div className="market-metric-card">
-                    <span className="market-metric-label">Zone Adjusted Edge</span>
+                    <span className="market-metric-label">{t('mkt.zoneAdjustedEdge')}</span>
                     <span className="market-metric-value">{formatPrice(analytics?.actionCard.zoneAdjustedEdge)}</span>
                   </div>
                   <div className="market-metric-card">
-                    <span className="market-metric-label">Spread</span>
+                    <span className="market-metric-label">{t('mkt.spread')}</span>
                     <span className="market-metric-value">
                       {formatPrice(analytics?.actionCard.spread)} · {formatPercent(analytics?.actionCard.spreadPct)}
                     </span>
                   </div>
                   <div className="market-metric-card">
-                    <span className="market-metric-label">Book Bias</span>
+                    <span className="market-metric-label">{t('mkt.bookBias')}</span>
                     <span className="market-metric-value">{analytics?.actionCard.pressureLabel ?? '—'}</span>
                   </div>
                 </div>
@@ -2226,6 +2233,7 @@ function ActionCardTrackRecord({
   action: string | null;
   backtestSummary: BacktestSummary | null;
 }) {
+  const { t } = useTranslation();
   if (!action || !backtestSummary) return null;
 
   const stats = backtestSummary.buyTradeStats.find((s) => s.label === action);
@@ -2242,7 +2250,7 @@ function ActionCardTrackRecord({
 
   return (
     <div className={`market-track-record tone-${tone}`}>
-      <span className="market-track-record-label">Track record</span>
+      <span className="market-track-record-label">{t('mkt.trackRecord')}</span>
       <span>
         {`${action} signals here: ${hitPct}% hit rate, median ${returnSign}${stats.medianReturnPct.toFixed(1)}%${dayNote} (${stats.tradeCount} graded trades)`}
       </span>
@@ -2251,6 +2259,7 @@ function ActionCardTrackRecord({
 }
 
 function AnalysisTab() {
+  const { t } = useTranslation();
   const pageContentRef = useRef<HTMLDivElement | null>(null);
   const revealTimeoutsRef = useRef<number[]>([]);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
@@ -2403,7 +2412,7 @@ function AnalysisTab() {
     };
   }, [selectedItem, selectedMarketVariantKey, loadSelectedMarketAnalysis]);
 
-  const eventContextEntries = buildEventContextEntries(analysis, {
+  const eventContextEntries = buildEventContextEntries(t, analysis, {
     alerts: worldStateAlerts,
     events: worldStateEvents,
     invasions: worldStateInvasions,
@@ -2411,7 +2420,7 @@ function AnalysisTab() {
     voidTrader: worldStateVoidTrader,
     flashSales: worldStateFlashSales,
   });
-  const eventContextConfidence = buildEventContextConfidence(eventContextEntries);
+  const eventContextConfidence = buildEventContextConfidence(eventContextEntries, t);
 
   if (!selectedItem) {
     return (
@@ -2454,8 +2463,8 @@ function AnalysisTab() {
 
   const effectiveItemDetails = itemDetails ?? analysis?.itemDetails ?? null;
   const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath);
-  const itemDetailSections = buildItemDetailSections(effectiveItemDetails);
-  const heroState = buildAnalysisHeroState(analysis);
+  const itemDetailSections = buildItemDetailSections(effectiveItemDetails, t);
+  const heroState = buildAnalysisHeroState(analysis, t);
   const liquidityMeterValue = toUnitInterval(analysis?.headline.liquidityScore);
   const trendConfidenceValue = toUnitInterval(analysis?.trend.confidence);
   const riskMeterValue = getRiskTone(analysis?.manipulationRisk.riskLevel) === 'red'
@@ -2503,8 +2512,8 @@ function AnalysisTab() {
         <button
           className="market-refresh-button"
           type="button"
-          aria-label="Refresh market analysis"
-          title="Refresh market analysis"
+          aria-label={t('market.refreshAnalysis')}
+          title={t('market.refreshAnalysis')}
           disabled={analysisLoading}
           onClick={() => {
             void loadSelectedMarketAnalysis({ force: true });
@@ -2529,7 +2538,7 @@ function AnalysisTab() {
               <div className="market-hero-copy">
                 <div className="market-hero-title-row">
                   <span className="market-hero-kicker market-hero-kicker-row">
-                    <span>Trade Posture</span>
+                    <span>{t('mkt.tradePosture')}</span>
                     <AdaptiveInfoHint text="High-level trading readout combining current entry, exit, margin, liquidity, trend confidence, and risk posture." />
                   </span>
                   <div className="market-badge-stack">
@@ -2542,7 +2551,7 @@ function AnalysisTab() {
               </div>
               <div className="market-hero-meter-grid">
                 <div className="market-meter-card">
-                  <span className="market-copy-title">Liquidity</span>
+                  <span className="market-copy-title">{t('mkt.liquidity')}</span>
                   <div className="market-meter-track">
                     <div
                       className="market-meter-fill tone-blue"
@@ -2554,7 +2563,7 @@ function AnalysisTab() {
                   </span>
                 </div>
                 <div className="market-meter-card">
-                  <span className="market-copy-title">Trend Confidence</span>
+                  <span className="market-copy-title">{t('mkt.trendConfidence')}</span>
                   <div className="market-meter-track">
                     <div
                       className="market-meter-fill tone-green"
@@ -2566,7 +2575,7 @@ function AnalysisTab() {
                   </span>
                 </div>
                 <div className="market-meter-card">
-                  <span className="market-copy-title">Risk Posture</span>
+                  <span className="market-copy-title">{t('mkt.riskPosture')}</span>
                   <div className="market-meter-track">
                     <div
                       className={`market-meter-fill tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
@@ -2579,7 +2588,7 @@ function AnalysisTab() {
             </div>
             <div className="market-analysis-summary-grid">
               <div className="market-summary-card">
-                <span className="market-summary-label">Entry Price</span>
+                <span className="market-summary-label">{t('mkt.entryPrice')}</span>
                 <span className="market-summary-value">{formatPrice(analysis?.headline.entryPrice)}</span>
               </div>
               <div className="market-summary-card">
@@ -2587,11 +2596,11 @@ function AnalysisTab() {
                 <span className="market-summary-value">{formatPrice(analysis?.headline.exitPrice)}</span>
               </div>
               <div className="market-summary-card">
-                <span className="market-summary-label">Net Margin</span>
+                <span className="market-summary-label">{t('mkt.netMargin')}</span>
                 <span className="market-summary-value">{formatPrice(analysis?.headline.netMargin)}</span>
               </div>
               <div className="market-summary-card">
-                <span className="market-summary-label">Liquidity</span>
+                <span className="market-summary-label">{t('mkt.liquidity')}</span>
                 <span className="market-summary-value">
                   {formatPercent(analysis?.headline.liquidityScore)} · {analysis?.headline.liquidityLabel ?? '—'}
                 </span>
@@ -2623,23 +2632,23 @@ function AnalysisTab() {
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
-                <span className="market-metric-label">Entry Price</span>
+                <span className="market-metric-label">{t('mkt.entryPrice')}</span>
                 <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.entryPrice)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Exit Price</span>
+                <span className="market-metric-label">{t('mkt.exitPrice')}</span>
                 <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.exitPrice)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Gross Margin</span>
+                <span className="market-metric-label">{t('mkt.grossMargin')}</span>
                 <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.grossMargin)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Net Margin</span>
+                <span className="market-metric-label">{t('mkt.netMargin')}</span>
                 <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.netMargin)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Efficiency Score</span>
+                <span className="market-metric-label">{t('mkt.efficiencyScore')}</span>
                 <span className="market-metric-value">
                   {formatPercent(analysis?.flipAnalysis.efficiencyScore)} · {analysis?.flipAnalysis.efficiencyLabel ?? '—'}
                 </span>
@@ -2667,11 +2676,11 @@ function AnalysisTab() {
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
-                <span className="market-metric-label">Demand Ratio</span>
+                <span className="market-metric-label">{t('mkt.demandRatio')}</span>
                 <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.demandRatio, 2)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">State</span>
+                <span className="market-metric-label">{t('mkt.state')}</span>
                 <span className="market-metric-value">{analysis?.liquidityDetail.state ?? '—'}</span>
               </div>
               <div className="market-metric-card">
@@ -2679,22 +2688,22 @@ function AnalysisTab() {
                 <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Undercut Velocity</span>
+                <span className="market-metric-label">{t('mkt.undercutVelocity')}</span>
                 <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.undercutVelocity, 2)} / h</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Qty-Weighted Demand</span>
+                <span className="market-metric-label">{t('mkt.qtyWeightedDemand')}</span>
                 <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Liquidity</span>
+                <span className="market-metric-label">{t('mkt.liquidity')}</span>
                 <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.liquidityScore)}</span>
               </div>
             </div>
             <ConfidenceNote confidence={analysis?.liquidityDetail.confidenceSummary} />
             <div className="market-signal-board">
               <div className="market-signal-row">
-                <span className="market-signal-label">Demand Ratio</span>
+                <span className="market-signal-label">{t('mkt.demandRatio')}</span>
                 <div className="market-signal-track">
                   <div
                     className="market-signal-fill tone-blue"
@@ -2703,7 +2712,7 @@ function AnalysisTab() {
                 </div>
               </div>
               <div className="market-signal-row">
-                <span className="market-signal-label">Qty-Weighted Demand</span>
+                <span className="market-signal-label">{t('mkt.qtyWeightedDemand')}</span>
                 <div className="market-signal-track">
                   <div
                     className="market-signal-fill tone-green"
@@ -2712,7 +2721,7 @@ function AnalysisTab() {
                 </div>
               </div>
               <div className="market-signal-row">
-                <span className="market-signal-label">Liquidity Score</span>
+                <span className="market-signal-label">{t('mkt.liquidityScore')}</span>
                 <div className="market-signal-track">
                   <div
                     className="market-signal-fill tone-cyan"
@@ -2742,11 +2751,11 @@ function AnalysisTab() {
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
-                <span className="market-metric-label">Direction</span>
+                <span className="market-metric-label">{t('mkt.direction')}</span>
                 <span className="market-metric-value">{analysis?.trend.direction ?? '—'}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Confidence</span>
+                <span className="market-metric-label">{t('mkt.confidence')}</span>
                 <span className="market-metric-value">{formatPercent(analysis?.trend.confidence)}</span>
               </div>
               <div className="market-metric-card">
@@ -2785,7 +2794,7 @@ function AnalysisTab() {
               ))}
             </div>
             <div className="market-copy-block">
-              <span className="market-copy-title">Summary</span>
+              <span className="market-copy-title">{t('mkt.summary')}</span>
               <p>{analysis?.trend.summary ?? '—'}</p>
             </div>
             <ConfidenceNote confidence={analysis?.trend.confidenceSummary} />
@@ -2931,8 +2940,8 @@ function AnalysisTab() {
               </div>
             ) : (
               <div className="market-copy-block">
-                <span className="market-copy-title">No supply context</span>
-                <p>This item does not currently have set-component or catalog drop-source data available.</p>
+                <span className="market-copy-title">{t('mkt.noSupplyContext')}</span>
+                <p>{t('mkt.noSupplyBody')}</p>
               </div>
             )}
             <ConfidenceNote confidence={analysis?.supplyContext.confidenceSummary} />
@@ -2985,7 +2994,7 @@ function AnalysisTab() {
                 </div>
                 {effectiveItemDetails?.description ? (
                   <div className="market-copy-block">
-                    <span className="market-copy-title">Description</span>
+                    <span className="market-copy-title">{t('mkt.description')}</span>
                     <p>{effectiveItemDetails.description}</p>
                   </div>
                 ) : null}
@@ -3053,8 +3062,8 @@ function AnalysisTab() {
               </div>
             ) : (
               <div className="market-copy-block">
-                <span className="market-copy-title">No active context</span>
-                <p>No current worldstate rewards or live event hooks are matching this item right now.</p>
+                <span className="market-copy-title">{t('mkt.noActiveContext')}</span>
+                <p>{t('mkt.noActiveBody')}</p>
               </div>
             )}
             <ConfidenceNote confidence={eventContextConfidence} />
@@ -3079,21 +3088,21 @@ function AnalysisTab() {
           >
             <div className="market-metric-grid">
               <div className="market-metric-card">
-                <span className="market-metric-label">Risk Level</span>
+                <span className="market-metric-label">{t('mkt.riskLevel')}</span>
                 <span className="market-metric-value">{analysis?.manipulationRisk.riskLevel ?? '—'}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Active Signals</span>
+                <span className="market-metric-label">{t('mkt.activeSignals')}</span>
                 <span className="market-metric-value">{formatNumber(analysis?.manipulationRisk.activeSignals, 0)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Efficiency Penalty</span>
+                <span className="market-metric-label">{t('mkt.efficiencyPenalty')}</span>
                 <span className="market-metric-value">{formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)}</span>
               </div>
             </div>
             <div className="market-signal-board">
               <div className="market-signal-row">
-                <span className="market-signal-label">Penalty Applied</span>
+                <span className="market-signal-label">{t('mkt.penaltyApplied')}</span>
                 <div className="market-signal-track danger">
                   <div
                     className="market-signal-fill tone-red"
@@ -3111,7 +3120,7 @@ function AnalysisTab() {
                 >
                   <span className="market-copy-title">{signal.label}</span>
                   <span className="market-analysis-signal-state">
-                    {signal.active ? 'Active' : 'Clear'}
+                    {signal.active ? t('mkt.signal.active') : t('mkt.signal.clear')}
                   </span>
                   <p>{signal.detail}</p>
                 </div>
@@ -3138,7 +3147,7 @@ function AnalysisTab() {
             >
             <div className="market-pressure-row">
               <div>
-                <span className="market-copy-title">Best Windows Today</span>
+                <span className="market-copy-title">{t('mkt.bestWindowsToday')}</span>
                 <span>
                   {timeOfDayDisplay.todayBestLabels.length > 0
                     ? timeOfDayDisplay.todayBestLabels.join(' · ')
@@ -3146,11 +3155,11 @@ function AnalysisTab() {
                 </span>
               </div>
               <div>
-                <span className="market-copy-title">Strongest (all days)</span>
+                <span className="market-copy-title">{t('mkt.strongestAllDays')}</span>
                 <span>{timeOfDayDisplay.strongestWindowLabel ?? '—'}</span>
               </div>
               <div>
-                <span className="market-copy-title">Weakest (all days)</span>
+                <span className="market-copy-title">{t('mkt.weakestAllDays')}</span>
                 <span>{timeOfDayDisplay.weakestWindowLabel ?? '—'}</span>
               </div>
             </div>
@@ -3214,6 +3223,7 @@ function returnTone(value: number | null | undefined): string {
 }
 
 function CalibrationBucketCard({ stat }: { stat: BacktestBucketStats }) {
+  const { t } = useTranslation();
   const enough = stat.tradeCount >= MIN_TRADES_FOR_DISPLAY;
   const hitPct = stat.hitRate !== null ? Math.round(stat.hitRate * 100) : null;
 
@@ -3222,7 +3232,7 @@ function CalibrationBucketCard({ stat }: { stat: BacktestBucketStats }) {
       <div className="card-header">
         <div className="market-panel-header">
           <div className="market-panel-header-copy">
-            <span className="panel-title-eyebrow">Action</span>
+            <span className="panel-title-eyebrow">{t('mkt.action')}</span>
             <span className="card-label">{stat.label}</span>
           </div>
           {enough && hitPct !== null && (
@@ -3245,21 +3255,21 @@ function CalibrationBucketCard({ stat }: { stat: BacktestBucketStats }) {
           <>
             <div className="market-metric-grid">
               <div className="market-metric-card">
-                <span className="market-metric-label">Median Return</span>
+                <span className="market-metric-label">{t('mkt.medianReturn')}</span>
                 <span className={`market-metric-value${returnTone(stat.medianReturnPct)}`}>
                   {formatReturnPct(stat.medianReturnPct)}
                 </span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Hit Rate</span>
+                <span className="market-metric-label">{t('mkt.hitRate')}</span>
                 <span className="market-metric-value">{hitPct !== null ? `${hitPct}%` : '—'}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Trades</span>
+                <span className="market-metric-label">{t('mkt.trades')}</span>
                 <span className="market-metric-value">{stat.tradeCount}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Median Days Held</span>
+                <span className="market-metric-label">{t('mkt.medianDaysHeld')}</span>
                 <span className="market-metric-value">
                   {stat.medianDaysHeld !== null ? `${stat.medianDaysHeld?.toFixed(1)}d` : '—'}
                 </span>
@@ -3283,6 +3293,7 @@ function CalibrationBucketCard({ stat }: { stat: BacktestBucketStats }) {
 }
 
 function CalibrationTab() {
+  const { t } = useTranslation();
   const [summary, setSummary] = useState<BacktestSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3338,15 +3349,15 @@ function CalibrationTab() {
             ) : (
               <div className="market-pressure-row">
                 <div>
-                  <span className="market-copy-title">Graded</span>
+                  <span className="market-copy-title">{t('mkt.graded')}</span>
                   <span>{summary?.totalGraded ?? '—'}</span>
                 </div>
                 <div>
-                  <span className="market-copy-title">Pending</span>
+                  <span className="market-copy-title">{t('mkt.pending')}</span>
                   <span>{summary?.totalPending ?? '—'}</span>
                 </div>
                 <div>
-                  <span className="market-copy-title">Open Positions</span>
+                  <span className="market-copy-title">{t('mkt.openPositions')}</span>
                   <span>{summary?.totalOpen ?? '—'}</span>
                 </div>
               </div>
@@ -3389,7 +3400,7 @@ function CalibrationTab() {
             info="Describes the backtest trade model used to grade recommendations."
           >
             <div className="market-copy-block">
-              <span className="market-copy-title">Entry model</span>
+              <span className="market-copy-title">{t('mkt.entryModel')}</span>
               <p>
                 Each time analytics are computed for a tracked item, one recommendation is recorded
                 (at most once per 6 hours per item). Entry is considered triggered if the live floor
@@ -3397,21 +3408,21 @@ function CalibrationTab() {
               </p>
             </div>
             <div className="market-copy-block">
-              <span className="market-copy-title">Exit model</span>
+              <span className="market-copy-title">{t('mkt.exitModel')}</span>
               <p>
                 After entry, exit is triggered if the floor rises to the exit zone low within 7 days.
                 If no exit occurs, the trade is marked to market at the floor on day 7.
               </p>
             </div>
             <div className="market-copy-block">
-              <span className="market-copy-title">Realized return</span>
+              <span className="market-copy-title">{t('mkt.realizedReturn')}</span>
               <p>
                 (exit price − entry price) ÷ entry price. No transaction fee. Mark-to-market is
                 used when the exit zone is not reached, so stuck capital is counted against the score.
               </p>
             </div>
             <div className="market-copy-block">
-              <span className="market-copy-title">Limitations</span>
+              <span className="market-copy-title">{t('mkt.limitations')}</span>
               <p>
                 Floor price is used as a fill proxy — real fills depend on availability and
                 counterparty online status. The first several weeks of data will show low trade
@@ -3429,6 +3440,7 @@ function CalibrationTab() {
 export function MarketPage() {
   const marketSubTab = useAppStore((s) => s.marketSubTab);
   const setMarketSubTab = useAppStore((s) => s.setMarketSubTab);
+  const { t } = useTranslation();
 
   useEffect(() => {
     setMarketSubTab('analysis');
@@ -3438,12 +3450,12 @@ export function MarketPage() {
     <>
       <div className="subnav market-page-subnav">
         <div className="subnav-left">
-          <span className="page-title">Market</span>
+          <span className="page-title">{t('market.title')}</span>
           {([
-            ['analysis', 'Summary'],
-            ['analytics', 'Charts'],
-            ['calibration', 'Calibration'],
-          ] as const).map(([tab, label]) => (
+            ['analysis', 'market.tab.analysis'],
+            ['analytics', 'market.tab.analytics'],
+            ['calibration', 'market.tab.calibration'],
+          ] as const).map(([tab, labelKey]) => (
             <span
               key={tab}
               className={`subtab${marketSubTab === tab ? ' active' : ''}`}
@@ -3452,7 +3464,7 @@ export function MarketPage() {
               aria-selected={marketSubTab === tab}
               tabIndex={0}
             >
-              {label}
+              {t(labelKey)}
             </span>
           ))}
         </div>

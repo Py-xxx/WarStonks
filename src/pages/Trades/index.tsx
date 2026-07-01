@@ -25,6 +25,7 @@ import { ItemName } from '../../components/ItemName';
 import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
 import { wfmLangCode } from '../../lib/language';
+import { useTranslation } from '../../i18n';
 import type {
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
@@ -435,17 +436,18 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
   error: string | null;
   orderType: 'sell' | 'buy';
 }) {
+  const { t } = useTranslation();
   if (loading) {
     return (
       <div className="listing-analysis-panel">
         <div className="listing-analysis-panel-header">
-          <span className="card-label">Market Analysis</span>
+          <span className="card-label">{t('trades.analysis.title')}</span>
         </div>
         <div className="listing-analysis-loading">
           <span className="listing-analysis-loading-dot" />
           <span className="listing-analysis-loading-dot" />
           <span className="listing-analysis-loading-dot" />
-          <span className="listing-analysis-loading-text">Fetching market data…</span>
+          <span className="listing-analysis-loading-text">{t('trades.analysis.fetching')}</span>
         </div>
       </div>
     );
@@ -455,7 +457,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
     return (
       <div className="listing-analysis-panel">
         <div className="listing-analysis-panel-header">
-          <span className="card-label">Market Analysis</span>
+          <span className="card-label">{t('trades.analysis.title')}</span>
         </div>
         <div className="listing-analysis-error">{error}</div>
       </div>
@@ -466,10 +468,10 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
     return (
       <div className="listing-analysis-panel">
         <div className="listing-analysis-panel-header">
-          <span className="card-label">Market Analysis</span>
+          <span className="card-label">{t('trades.analysis.title')}</span>
         </div>
         <div className="listing-analysis-idle">
-          Select an item to see {orderType === 'buy' ? 'entry price' : 'exit price'} analysis
+          {t('trades.analysis.idle', { kind: t(orderType === 'buy' ? 'trades.analysis.entryPrice' : 'trades.analysis.exitPrice') })}
         </div>
       </div>
     );
@@ -484,14 +486,14 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
   return (
     <div className="listing-analysis-panel">
       <div className="listing-analysis-panel-header">
-        <span className="card-label">Market Analysis</span>
+        <span className="card-label">{t('trades.analysis.title')}</span>
         <span className="listing-analysis-freshness">{analysis.variantLabel}</span>
       </div>
 
       {/* Recommended entry / exit price */}
       <div className="listing-analysis-section listing-analysis-exit-hero">
         <div className="listing-analysis-exit-label">
-          {orderType === 'buy' ? 'Recommended entry' : 'Recommended exit'}
+          {orderType === 'buy' ? t('trades.analysis.recommendedEntry') : t('trades.analysis.recommendedExit')}
         </div>
         <div className="listing-analysis-exit-price">
           {heroPrice !== null
@@ -505,7 +507,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
 
       {/* Liquidity */}
       <div className="listing-analysis-section">
-        <div className="listing-analysis-section-title">Liquidity</div>
+        <div className="listing-analysis-section-title">{t('trades.analysis.liquidity')}</div>
         <div className="listing-analysis-row">
           <span className="listing-analysis-metric">
             {headline.liquidityScore !== null
@@ -524,16 +526,16 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
       {/* Market snapshot */}
       {(snapshot || pressure) && (
         <div className="listing-analysis-section">
-          <div className="listing-analysis-section-title">Market snapshot</div>
+          <div className="listing-analysis-section-title">{t('trades.analysis.snapshot')}</div>
           {snapshot?.lowestSell !== null && snapshot?.lowestSell !== undefined && (
             <div className="listing-analysis-kv">
-              <span className="listing-analysis-kv-label">Floor</span>
+              <span className="listing-analysis-kv-label">{t('trades.analysis.floor')}</span>
               <span className="listing-analysis-kv-value">{formatPlatinumValue(snapshot.lowestSell)}</span>
             </div>
           )}
           {pressure?.spread !== null && pressure?.spread !== undefined && (
             <div className="listing-analysis-kv">
-              <span className="listing-analysis-kv-label">Spread</span>
+              <span className="listing-analysis-kv-label">{t('trades.analysis.spread')}</span>
               <span className="listing-analysis-kv-value">
                 {formatPlatinumValue(pressure.spread)}
                 {pressure.spreadPct !== null ? ` (${pressure.spreadPct.toFixed(1)}%)` : ''}
@@ -542,7 +544,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
           )}
           {pressure?.pressureLabel && (
             <div className="listing-analysis-kv">
-              <span className="listing-analysis-kv-label">Pressure</span>
+              <span className="listing-analysis-kv-label">{t('trades.analysis.pressure')}</span>
               <span className="listing-analysis-kv-value">{pressure.pressureLabel}</span>
             </div>
           )}
@@ -554,7 +556,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
         zones?.entryZoneLow !== null && zones?.entryZoneLow !== undefined
           && zones?.entryZoneHigh !== null && zones?.entryZoneHigh !== undefined && (
           <div className="listing-analysis-section">
-            <div className="listing-analysis-section-title">Entry zone</div>
+            <div className="listing-analysis-section-title">{t('trades.analysis.entryZone')}</div>
             <div className="listing-analysis-zone-band">
               <span className="listing-analysis-zone-range">
                 {formatPlatinumValue(zones.entryZoneLow)} – {formatPlatinumValue(zones.entryZoneHigh)}
@@ -572,7 +574,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
         zones?.exitZoneLow !== null && zones?.exitZoneLow !== undefined
           && zones?.exitZoneHigh !== null && zones?.exitZoneHigh !== undefined && (
           <div className="listing-analysis-section">
-            <div className="listing-analysis-section-title">Exit zone</div>
+            <div className="listing-analysis-section-title">{t('trades.analysis.exitZone')}</div>
             <div className="listing-analysis-zone-band">
               <span className="listing-analysis-zone-range">
                 {formatPlatinumValue(zones.exitZoneLow)} – {formatPlatinumValue(zones.exitZoneHigh)}
@@ -590,7 +592,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
 
       {/* Trend */}
       <div className="listing-analysis-section">
-        <div className="listing-analysis-section-title">Trend</div>
+        <div className="listing-analysis-section-title">{t('trades.analysis.trend')}</div>
         <div className="listing-analysis-row">
           <span className={`listing-analysis-trend-dir ${getTrendClass(trend.direction)}`}>
             {getTrendArrow(trend.direction)} {trend.direction}
@@ -655,6 +657,7 @@ function ListingModal({
   onChange: (patch: Partial<ListingModalState>) => void;
   onSelectItem: (item: WfmAutocompleteItem) => void;
 }) {
+  const { t } = useTranslation();
   const modalRef = useModalA11y<HTMLDivElement>({ onClose });
   const rankApplicable = isRankApplicable(form.selectedItem);
   const bulkApplicable = isBulkTradable(form.selectedItem);
@@ -666,8 +669,8 @@ function ListingModal({
   const formContent = (
     <>
       <div className="listing-form-section listing-form-section-type">
-        <div className="listing-form-section-title">Order type</div>
-        <div className="trade-listing-type-tabs" role="tablist" aria-label="Listing type">
+        <div className="listing-form-section-title">{t('trades.modal.orderType')}</div>
+        <div className="trade-listing-type-tabs" role="tablist" aria-label={t('trades.modal.listingTypeAria')}>
           {(['sell', 'buy'] as TradeListingKind[]).map((type) => (
             <button
               key={type}
@@ -678,18 +681,16 @@ function ListingModal({
               disabled={typeLocked}
               onClick={() => onChange({ orderType: type })}
             >
-              {type === 'sell' ? 'Sell' : 'Buy'}
+              {type === 'sell' ? t('trades.modal.sell') : t('trades.modal.buy')}
             </button>
           ))}
         </div>
       </div>
 
       <div className="listing-form-section listing-form-section-item">
-        <div className="listing-form-section-title">Item</div>
+        <div className="listing-form-section-title">{t('trades.modal.itemSection')}</div>
         <div className="trade-listing-fieldset">
-          <label className="trade-listing-label" htmlFor="trade-listing-item">
-            Item name
-          </label>
+          <label className="trade-listing-label" htmlFor="trade-listing-item">{t('trades.modal.itemName')}</label>
           <input
             id="trade-listing-item"
             className="field-input"
@@ -697,13 +698,13 @@ function ListingModal({
             onChange={(event) =>
               onChange({ itemName: event.target.value, selectedItem: null, rank: '', perTrade: '' })
             }
-            placeholder="Search local WFM catalog…"
+            placeholder={t('trades.searchPlaceholder')}
             disabled={form.mode === 'edit'}
           />
           {form.mode === 'create' ? (
             <div className="trade-listing-autocomplete">
               {!autocompleteReady && !autocompleteError ? (
-                <div className="trade-listing-autocomplete-state">Loading catalog…</div>
+                <div className="trade-listing-autocomplete-state">{t('trades.modal.loadingCatalog')}</div>
               ) : null}
               {autocompleteError ? (
                 <div className="trade-listing-autocomplete-state error">{autocompleteError}</div>
@@ -727,7 +728,7 @@ function ListingModal({
                       <span className="trade-listing-autocomplete-copy">
                         <span className="trade-listing-autocomplete-name">{item.name}</span>
                         <span className="trade-listing-autocomplete-meta">
-                          {item.itemFamily ?? 'Item'}
+                          {item.itemFamily ?? t('trades.modal.itemFamilyFallback')}
                         </span>
                       </span>
                     </button>
@@ -740,12 +741,10 @@ function ListingModal({
       </div>
 
       <div className="listing-form-section listing-form-section-details">
-        <div className="listing-form-section-title">Listing details</div>
+        <div className="listing-form-section-title">{t('trades.modal.listingDetails')}</div>
         <div className="trade-listing-grid">
           <div className="trade-listing-fieldset">
-            <label className="trade-listing-label" htmlFor="trade-listing-price">
-              Price
-            </label>
+            <label className="trade-listing-label" htmlFor="trade-listing-price">{t('trades.modal.price')}</label>
             <input
               id="trade-listing-price"
               className="field-input"
@@ -754,13 +753,11 @@ function ListingModal({
               step={1}
               value={form.price}
               onChange={(event) => onChange({ price: event.target.value })}
-              placeholder="Price"
+              placeholder={t('trades.pricePlaceholder')}
             />
           </div>
           <div className="trade-listing-fieldset">
-            <label className="trade-listing-label" htmlFor="trade-listing-quantity">
-              Quantity
-            </label>
+            <label className="trade-listing-label" htmlFor="trade-listing-quantity">{t('trades.col.quantity')}</label>
             <input
               id="trade-listing-quantity"
               className="field-input"
@@ -781,14 +778,12 @@ function ListingModal({
                 const nextPerTrade = String(opts.includes(current) ? current : 1);
                 onChange({ quantity: nextQuantity, perTrade: nextPerTrade });
               }}
-              placeholder="Quantity"
+              placeholder={t('trades.quantityPlaceholder')}
             />
           </div>
           {rankApplicable ? (
             <div className="trade-listing-fieldset">
-              <label className="trade-listing-label" htmlFor="trade-listing-rank">
-                Rank
-              </label>
+              <label className="trade-listing-label" htmlFor="trade-listing-rank">{t('trades.modal.rank')}</label>
               <select
                 id="trade-listing-rank"
                 className="field-input"
@@ -805,9 +800,7 @@ function ListingModal({
           ) : null}
           {bulkApplicable ? (
             <div className="trade-listing-fieldset">
-              <label className="trade-listing-label" htmlFor="trade-listing-per-trade">
-                Per trade
-              </label>
+              <label className="trade-listing-label" htmlFor="trade-listing-per-trade">{t('trades.modal.perTrade')}</label>
               <select
                 id="trade-listing-per-trade"
                 className="field-input"
@@ -820,13 +813,11 @@ function ListingModal({
                   </option>
                 ))}
               </select>
-              <span className="trade-listing-hint">
-                Bulk trade: units exchanged per in-game trade (max 6, must divide quantity).
-              </span>
+              <span className="trade-listing-hint">{t('trades.modal.bulkHint')}</span>
             </div>
           ) : null}
           <div className="trade-listing-fieldset trade-listing-toggle-field">
-            <span className="trade-listing-label">Visibility</span>
+            <span className="trade-listing-label">{t('trades.modal.visibility')}</span>
             <button
               className={`trade-visibility-toggle${form.visible ? ' on' : ''}`}
               type="button"
@@ -834,7 +825,7 @@ function ListingModal({
             >
               <span className="trade-visibility-toggle-track" />
               <span className="trade-visibility-toggle-copy">
-                {form.visible ? 'On' : 'Off'}
+                {form.visible ? t('common.on') : t('common.off')}
               </span>
             </button>
           </div>
@@ -858,14 +849,14 @@ function ListingModal({
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Trades</span>
+            <span className="card-label">{t('trades.title')}</span>
             <h3 id="trade-listing-modal-title">
               {form.mode === 'create'
-                ? `Create ${form.orderType === 'sell' ? 'Sell' : 'Buy'} Listing`
-                : `Edit ${form.orderType === 'sell' ? 'Sell' : 'Buy'} Listing`}
+                ? t(form.orderType === 'sell' ? 'trades.modal.createSell' : 'trades.modal.createBuy')
+                : t(form.orderType === 'sell' ? 'trades.modal.editSell' : 'trades.modal.editBuy')}
             </h3>
           </div>
-          <button className="settings-close-btn" type="button" onClick={onClose} aria-label="Close listing modal">
+          <button className="settings-close-btn" type="button" onClick={onClose} aria-label={t('trades.modal.closeAria')}>
             ×
           </button>
         </div>
@@ -894,15 +885,13 @@ function ListingModal({
         )}
 
         <div className="settings-modal-actions">
-          <button className="act-btn" type="button" onClick={onClose}>
-            Cancel
-          </button>
+          <button className="act-btn" type="button" onClick={onClose}>{t('trades.modal.cancel')}</button>
           <button className="btn-primary" type="button" onClick={onSubmit} disabled={submitting}>
             {submitting
-              ? 'Saving…'
+              ? t('common.saving')
               : form.mode === 'create'
-                ? `Post ${form.orderType === 'sell' ? 'Sell' : 'Buy'} Order`
-                : 'Save Changes'}
+                ? t(form.orderType === 'sell' ? 'trades.modal.postSell' : 'trades.modal.postBuy')
+                : t('trades.modal.saveChanges')}
           </button>
         </div>
       </div>
@@ -912,6 +901,7 @@ function ListingModal({
 }
 
 function SignInPanel() {
+  const { t } = useTranslation();
   const tradeAccountLoading = useAppStore((s) => s.tradeAccountLoading);
   const tradeAccountError = useAppStore((s) => s.tradeAccountError);
   const signInTradeAccount = useAppStore((s) => s.signInTradeAccount);
@@ -945,16 +935,15 @@ function SignInPanel() {
   return (
     <div className="trade-auth-shell">
       <div className="trade-auth-card">
-        <span className="card-label">Warframe Market</span>
-        <h2 className="trade-auth-title">Sign in to manage your listings</h2>
+        <span className="card-label">{t('trades.auth.brand')}</span>
+        <h2 className="trade-auth-title">{t('trades.auth.title')}</h2>
         <p className="trade-auth-copy">
-          WarStonks uses Warframe Market V1 sign-in to load your profile and sell orders.
-          Once connected, this tab will let you create, edit, close, and remove listings.
+          {t('trades.auth.copy')}
         </p>
 
         <div className="trade-auth-grid">
           <label className="trade-listing-label" htmlFor="trade-signin-email">
-            Email
+            {t('trades.auth.email')}
           </label>
           <input
             id="trade-signin-email"
@@ -963,11 +952,11 @@ function SignInPanel() {
             autoComplete="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            placeholder="your@email.com"
+            placeholder={t('trades.auth.emailPlaceholder')}
           />
 
           <label className="trade-listing-label" htmlFor="trade-signin-password">
-            Password
+            {t('trades.auth.password')}
           </label>
           <input
             id="trade-signin-password"
@@ -976,7 +965,7 @@ function SignInPanel() {
             autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            placeholder="Warframe Market password"
+            placeholder={t('trades.auth.passwordPlaceholder')}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 void handleSubmit();
@@ -993,7 +982,7 @@ function SignInPanel() {
               aria-pressed={stayLoggedIn}
               onClick={() => setStayLoggedIn((current) => !current)}
             />
-            <span>Stay Logged In</span>
+            <span>{t('trades.auth.stayLoggedIn')}</span>
           </div>
         </div>
 
@@ -1003,7 +992,7 @@ function SignInPanel() {
 
         <div className="trade-auth-actions">
           <button className="btn-primary" type="button" onClick={() => void handleSubmit()} disabled={tradeAccountLoading}>
-            {tradeAccountLoading ? 'Connecting…' : 'Connect'}
+            {tradeAccountLoading ? t('trades.auth.connecting') : t('trades.auth.connect')}
           </button>
         </div>
       </div>
@@ -1012,6 +1001,7 @@ function SignInPanel() {
 }
 
 function HealthTab() {
+  const { t } = useTranslation();
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const syncWatchlistTradeOverview = useAppStore((s) => s.syncWatchlistTradeOverview);
@@ -1100,15 +1090,15 @@ function HealthTab() {
     <div className="trade-health-page">
       <div className="trade-health-summary-grid">
         <div className="info-card trade-health-summary-card">
-          <div className="info-card-label">Needs Action</div>
+          <div className="info-card-label">{t('trades.health.needsAction')}</div>
           <div className="info-card-val neutral">{actionNeededCount}</div>
         </div>
         <div className="info-card trade-health-summary-card">
-          <div className="info-card-label">Competitive</div>
+          <div className="info-card-label">{t('trades.health.competitive')}</div>
           <div className="info-card-val neutral">{competitiveCount}</div>
         </div>
         <div className="info-card trade-health-summary-card">
-          <div className="info-card-label">Likely Soon</div>
+          <div className="info-card-label">{t('trades.health.likelySoon')}</div>
           <div className="info-card-val neutral">{likelySoonCount}</div>
         </div>
       </div>
@@ -1118,17 +1108,17 @@ function HealthTab() {
       <div className="trade-health-list">
         {loading && !overview ? (
           <div className="trade-placeholder-card">
-            <span className="card-label">Trades</span>
-            <h3>Listing Health</h3>
-            <p>Building the current sell-order health view from your live listings.</p>
+            <span className="card-label">{t('trades.title')}</span>
+            <h3>{t('trades.col.listingHealth')}</h3>
+            <p>{t('trades.health.building')}</p>
           </div>
         ) : null}
 
         {!loading && sellOrders.length === 0 ? (
           <div className="trade-placeholder-card">
-            <span className="card-label">Trades</span>
-            <h3>No Sell Listings</h3>
-            <p>Create a sell order to start tracking how your listings are performing against the live market.</p>
+            <span className="card-label">{t('trades.title')}</span>
+            <h3>{t('trades.health.noListings')}</h3>
+            <p>{t('trades.health.noListingsHint')}</p>
           </div>
         ) : null}
 
@@ -1170,27 +1160,27 @@ function HealthTab() {
 
                   <div className="trade-health-metrics">
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">Your price</span>
+                      <span className="trade-health-metric-label">{t('trades.health.yourPrice')}</span>
                       <strong>{formatPlatinumValue(order.yourPrice)}</strong>
                     </div>
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">Market low</span>
+                      <span className="trade-health-metric-label">{t('trades.health.marketLow')}</span>
                       <strong>{formatPlatinumValue(health?.marketLow ?? order.marketLow ?? null)}</strong>
                     </div>
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">Queue</span>
+                      <span className="trade-health-metric-label">{t('trades.health.queue')}</span>
                       <strong>{health ? `${health.sellersAhead} ahead` : '—'}</strong>
                     </div>
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">Direction</span>
+                      <span className="trade-health-metric-label">{t('trades.health.direction')}</span>
                       <strong>{health?.marketDirection ?? 'Profiling'}</strong>
                     </div>
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">Outlook</span>
+                      <span className="trade-health-metric-label">{t('trades.health.outlook')}</span>
                       <strong>{health?.outlookLabel ?? 'Building'}</strong>
                     </div>
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">Suggested</span>
+                      <span className="trade-health-metric-label">{t('trades.health.suggested')}</span>
                       <strong>
                         {health?.recommendedPrice !== null && health?.recommendedPrice !== undefined
                           ? formatPlatinumValue(health.recommendedPrice)
@@ -1213,6 +1203,7 @@ function HealthTab() {
 }
 
 function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
+  const { t } = useTranslation();
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const pushToast = useAppStore((s) => s.pushToast);
@@ -1763,14 +1754,14 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
               </span>
             </div>
             <div className="trade-hero-meta">
-              <span>Last updated {formatShortLocalDateTime(overview?.lastUpdatedAt ?? tradeAccount.lastUpdatedAt)}</span>
-              <span>Seller filter {sellerMode === 'ingame-online' ? 'Ingame + Online' : 'Ingame'}</span>
+              <span>{t('trades.hero.lastUpdated')} {formatShortLocalDateTime(overview?.lastUpdatedAt ?? tradeAccount.lastUpdatedAt)}</span>
+              <span>{t('home.seller.filter')} {sellerMode === 'ingame-online' ? t('home.seller.ingameOnline') : t('home.seller.ingame')}</span>
             </div>
           </div>
         </div>
         <div className="trade-hero-actions">
           <button className="btn-primary" type="button" onClick={openCreateListing}>
-            Create {listingType === 'sell' ? 'Sell' : 'Buy'} Order
+            {t(listingType === 'sell' ? 'trades.hero.createSellOrder' : 'trades.hero.createBuyOrder')}
           </button>
           <div className="trade-visibility-toggle-wrap">
             <button
@@ -1788,26 +1779,26 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             </div>
           </div>
           <button className="btn-secondary" type="button" onClick={() => void handleDisconnect()}>
-            Disconnect
+            {t('trades.disconnect')}
           </button>
         </div>
       </div>
 
       <div className="stats-strip trade-stats-strip">
         <div className="stat-mini">
-          <div className="stat-mini-label">Active Trade Value</div>
+          <div className="stat-mini-label">{t('trades.stat.activeTradeValue')}</div>
           <div className="stat-mini-val neutral">
             {overview ? formatPlatinumValue(overview.activeTradeValue) : '—'}
           </div>
         </div>
         <div className="stat-mini">
-          <div className="stat-mini-label">Completed Trades</div>
+          <div className="stat-mini-label">{t('trades.stat.completedTrades')}</div>
           <div className="stat-mini-val neutral">
             {overview?.totalCompletedTrades ?? '—'}
           </div>
         </div>
         <div className="stat-mini">
-          <div className="stat-mini-label">Open Positions</div>
+          <div className="stat-mini-label">{t('trades.stat.openPositions')}</div>
           <div className="stat-mini-val neutral">
             {overview?.openPositions ?? '—'}
           </div>
@@ -1846,9 +1837,9 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         {overviewLoading && !overview ? (
           <div className="empty-state">
             <span className="empty-primary">
-              Loading {listingType === 'sell' ? 'sell' : 'buy'} orders…
+              {t(listingType === 'sell' ? 'trades.loadingSellOrders' : 'trades.loadingBuyOrders')}
             </span>
-            <span className="empty-sub">Warframe Market data is being synced for this account.</span>
+            <span className="empty-sub">{t('trades.syncingAccount')}</span>
           </div>
         ) : null}
 
@@ -1856,14 +1847,14 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           <table className="listing-table">
             <thead>
               <tr>
-                <th>Item</th>
-                <th>Visible</th>
-                <th>Your Price</th>
-                <th>Market Low</th>
-                <th>Price Gap</th>
-                <th>Listing Health</th>
-                <th>Quantity</th>
-                <th>Actions</th>
+                <th>{t('trades.col.item')}</th>
+                <th>{t('trades.col.visible')}</th>
+                <th>{t('trades.col.yourPrice')}</th>
+                <th>{t('trades.col.marketLow')}</th>
+                <th>{t('trades.col.priceGap')}</th>
+                <th>{t('trades.col.listingHealth')}</th>
+                <th>{t('trades.col.quantity')}</th>
+                <th>{t('trades.col.actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -1890,7 +1881,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                           {marketLowTimestamps[order.orderId]
                             ? formatMarketLowAge(marketLowTimestamps[order.orderId])
                             : listingType === 'sell'
-                              ? (staleHealthIds.includes(order.orderId) ? 'couldn’t refresh' : 'refreshing…')
+                              ? (staleHealthIds.includes(order.orderId) ? t('trades.row.cantRefresh') : t('trades.row.refreshing'))
                               : null}
                         </div>
                       </div>
@@ -1902,10 +1893,10 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                       className={`trade-row-visibility${order.visible ? ' on' : ' off'}`}
                       disabled={visibilityActionPending || isOrderPending(order.orderId)}
                       onClick={() => void handleToggleOrderVisibility(order)}
-                      title={order.visible ? 'Visible on warframe.market — click to hide' : 'Hidden from warframe.market — click to show'}
-                      aria-label={order.visible ? 'Hide this order' : 'Show this order'}
+                      title={order.visible ? t('trades.row.titleVisible') : t('trades.row.titleHidden')}
+                      aria-label={order.visible ? t('trades.row.ariaHide') : t('trades.row.ariaShow')}
                     >
-                      {order.visible ? 'Visible' : 'Hidden'}
+                      {order.visible ? t('trades.row.visible') : t('trades.row.hidden')}
                     </button>
                   </td>
                   <td>
@@ -1929,12 +1920,12 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                     {listingType === 'sell' ? (
                       <div className="trade-health-stack">
                         <span className={`market-panel-badge ${getTradeHealthToneClass(order.health?.tone ?? 'amber')}`}>
-                          {order.health?.label ?? 'Building'}
+                          {order.health?.label ?? t('trades.row.building')}
                         </span>
                         <span className="health-note">
                           {order.health
                             ? `${order.health.actionLabel} · ${order.health.outlookLabel}`
-                            : 'Refreshing live orderbook and market context.'}
+                            : t('trades.row.refreshingContext')}
                         </span>
                       </div>
                     ) : (
@@ -1953,7 +1944,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                             type="number"
                             min={1}
                             max={order.quantity}
-                            aria-label={`Quantity to mark sold for ${order.name}`}
+                            aria-label={t('trades.row.markSoldAria', { name: order.name })}
                             value={soldQuantities[order.orderId] ?? DEFAULT_MARK_SOLD_QTY}
                             onChange={(event) =>
                               setSoldQuantities((current) => ({
@@ -1968,7 +1959,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                             disabled={isOrderPending(order.orderId)}
                             onClick={() => void handleMarkAsSold(order)}
                           >
-                            {isOrderPending(order.orderId) ? 'Working…' : 'Mark as Sold'}
+                            {isOrderPending(order.orderId) ? t('trades.row.working') : t('trades.row.markSold')}
                           </button>
                         </div>
                       ) : null}
@@ -1977,17 +1968,13 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                         type="button"
                         disabled={isOrderPending(order.orderId)}
                         onClick={() => openEditListing(order)}
-                      >
-                        Edit
-                      </button>
+                      >{t('trades.row.edit')}</button>
                       <button
                         className="act-btn danger"
                         type="button"
                         disabled={isOrderPending(order.orderId)}
                         onClick={() => void handleDeleteOrder(order.orderId)}
-                      >
-                        Remove
-                      </button>
+                      >{t('trades.row.remove')}</button>
                     </div>
                   </td>
                 </tr>
@@ -1998,10 +1985,10 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                   <td colSpan={8}>
                     <div className="empty-state">
                       <span className="empty-primary">
-                        No {listingType === 'sell' ? 'sell' : 'buy'} orders
+                        {t(listingType === 'sell' ? 'trades.noSellOrders' : 'trades.noBuyOrders')}
                       </span>
                       <span className="empty-sub">
-                        Create a listing to start managing your live {listingType} orders.
+                        {t(listingType === 'sell' ? 'trades.createSellHint' : 'trades.createBuyHint')}
                       </span>
                     </div>
                   </td>
@@ -2025,8 +2012,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           >
             <div className="settings-modal-header">
               <div className="settings-modal-title">
-                <span className="card-label">Trades</span>
-                <h3 id="trade-session-expired-title">Session expired</h3>
+                <span className="card-label">{t('trades.title')}</span>
+                <h3 id="trade-session-expired-title">{t('trades.sessionExpired')}</h3>
               </div>
               <button
                 className="settings-close-btn"
@@ -2105,6 +2092,7 @@ export function TradesPage() {
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const tradesSubTab = useAppStore((s) => s.tradesSubTab);
   const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
+  const { t } = useTranslation();
 
   useEffect(() => {
     void loadTradeAccount();
@@ -2114,8 +2102,8 @@ export function TradesPage() {
     <>
       <div className="subnav trades-page-subnav">
         <div className="subnav-left">
-          <span className="page-title">Trades</span>
-          <div className="subnav-tabs" role="tablist" aria-label="Trades sections">
+          <span className="page-title">{t('trades.title')}</span>
+          <div className="subnav-tabs" role="tablist" aria-label={t('trades.sections')}>
             <button
               type="button"
               className={`subtab${tradesSubTab === 'sell-orders' ? ' active' : ''}`}
@@ -2123,7 +2111,7 @@ export function TradesPage() {
               role="tab"
               aria-selected={tradesSubTab === 'sell-orders'}
             >
-              Sell Orders
+              {t('trades.tab.sell')}
             </button>
             <button
               type="button"
@@ -2132,7 +2120,7 @@ export function TradesPage() {
               role="tab"
               aria-selected={tradesSubTab === 'buy-orders'}
             >
-              Buy Orders
+              {t('trades.tab.buy')}
             </button>
             <button
               type="button"
@@ -2141,14 +2129,14 @@ export function TradesPage() {
               role="tab"
               aria-selected={tradesSubTab === 'health'}
             >
-              Health
+              {t('trades.tab.health')}
             </button>
           </div>
         </div>
         {tradeAccount && (tradesSubTab === 'sell-orders' || tradesSubTab === 'buy-orders') ? (
           <div className="subnav-right">
             <span className="trade-subnav-hint">
-              Live WFM {tradesSubTab === 'sell-orders' ? 'sell' : 'buy'} orders
+              {t(tradesSubTab === 'sell-orders' ? 'trades.subnav.liveSell' : 'trades.subnav.liveBuy')}
             </span>
           </div>
         ) : null}

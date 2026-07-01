@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { formatShortLocalDateTime, getUserTimeZone } from '../../lib/dateTime';
 import { formatSettingsErrorMessage } from '../../lib/settingsErrorHandling';
 import { testAlecaframePublicLink } from '../../lib/tauriClient';
+import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import type { AlecaframeValidationResult } from '../../types';
@@ -34,6 +35,7 @@ export function AlecaframeModal() {
     (state) => state.saveAlecaframeConfiguration,
   );
   const clearSettingsError = useAppStore((state) => state.clearSettingsError);
+  const { t } = useTranslation();
 
   const [enabled, setEnabled] = useState(false);
   const [publicLink, setPublicLink] = useState('');
@@ -103,7 +105,7 @@ export function AlecaframeModal() {
     if (!input) {
       setValidationResult(null);
       setTestedInput('');
-      setLocalError('Enter an Alecaframe public link or public token.');
+      setLocalError(t('aleca.err.enterLink'));
       setTestState('error');
       return null;
     }
@@ -131,7 +133,7 @@ export function AlecaframeModal() {
     clearSettingsError();
 
     if (enabled && !trimmedPublicLink) {
-      setLocalError('Enter a valid Alecaframe public link before enabling the API.');
+      setLocalError(t('aleca.err.enterValidBeforeEnable'));
       return;
     }
 
@@ -162,14 +164,14 @@ export function AlecaframeModal() {
       <button
         className="modal-backdrop"
         type="button"
-        aria-label="Close Alecaframe settings"
+        aria-label={t('aleca.close')}
         onClick={closeModal}
       />
-      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Alecaframe API settings">
+      <div ref={modalRef} className="settings-modal" role="dialog" aria-modal="true" aria-label={t('aleca.subtitle')}>
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Alecaframe API</span>
-            <h3>Alecaframe API Integration</h3>
+            <span className="card-label">{t('settings.section.alecaframe.label')}</span>
+            <h3>{t('aleca.subtitle')}</h3>
           </div>
           <div className="settings-modal-actions">
             <button
@@ -184,12 +186,12 @@ export function AlecaframeModal() {
                 !appSettings.alecaframe.publicLink
               }
             >
-              {walletLoading ? 'Refreshing…' : 'Refresh'}
+              {walletLoading ? t('common.refreshing') : t('common.refresh')}
             </button>
             <button
               className="settings-close-btn"
               type="button"
-              aria-label="Close Alecaframe settings"
+              aria-label={t('aleca.close')}
               onClick={closeModal}
             >
               <CloseIcon />
@@ -201,9 +203,9 @@ export function AlecaframeModal() {
           <div className="settings-form-card">
             <label className="settings-switch-row">
               <span className="settings-field-copy">
-                <span className="settings-field-label">Enable Alecaframe API</span>
+                <span className="settings-field-label">{t('aleca.enable.label')}</span>
                 <span className="settings-field-help">
-                  Stored in app data outside the project so it works on both macOS and Windows.
+                  {t('aleca.enable.help')}
                 </span>
               </span>
               <button
@@ -216,12 +218,12 @@ export function AlecaframeModal() {
                 <span className="settings-toggle-track">
                   <span className="settings-toggle-thumb" />
                 </span>
-                <span className="settings-toggle-label">{enabled ? 'On' : 'Off'}</span>
+                <span className="settings-toggle-label">{enabled ? t('common.on') : t('common.off')}</span>
               </button>
             </label>
 
             <label className="settings-field">
-              <span className="settings-field-label">Public link or token</span>
+              <span className="settings-field-label">{t('aleca.linkLabel')}</span>
               <input
                 className="settings-input"
                 type="text"
@@ -247,7 +249,7 @@ export function AlecaframeModal() {
                 }}
                 disabled={!trimmedPublicLink || settingsLoading || testState === 'loading'}
               >
-                {testState === 'loading' ? 'Testing…' : 'Test link'}
+                {testState === 'loading' ? t('aleca.testing') : t('aleca.testLink')}
               </button>
               <button
                 className="settings-primary-btn"
@@ -257,14 +259,15 @@ export function AlecaframeModal() {
                 }}
                 disabled={settingsLoading}
               >
-                {settingsLoading ? 'Saving…' : 'Save'}
+                {settingsLoading ? t('common.saving') : t('common.save')}
               </button>
             </div>
 
             {testState === 'success' && validationResult ? (
               <div className="settings-inline-success">
-                Alecaframe link validated successfully for{' '}
-                {validationResult.usernameWhenPublic ?? 'the linked account'}.
+                {t('aleca.validatedSuccess', {
+                  name: validationResult.usernameWhenPublic ?? t('aleca.linkedAccount'),
+                })}
               </div>
             ) : null}
 
@@ -273,47 +276,47 @@ export function AlecaframeModal() {
           </div>
 
           <div className="settings-form-card">
-            <span className="settings-field-label settings-section-title">Validation preview</span>
-            <span className="settings-field-help">Times shown in {timeZone}.</span>
+            <span className="settings-field-label settings-section-title">{t('aleca.preview.title')}</span>
+            <span className="settings-field-help">{t('aleca.preview.times', { tz: timeZone })}</span>
             <div className="settings-preview-grid">
               <div className="settings-preview-card">
-                <span className="settings-meta-label">Public user</span>
+                <span className="settings-meta-label">{t('aleca.preview.publicUser')}</span>
                 <span className="settings-meta-value">
-                  {previewUsername ?? 'Not validated'}
+                  {previewUsername ?? t('aleca.preview.notValidated')}
                 </span>
               </div>
               <div className="settings-preview-card">
-                <span className="settings-meta-label">Last update</span>
+                <span className="settings-meta-label">{t('aleca.preview.lastUpdate')}</span>
                 <span className="settings-meta-value">
                   {formatShortLocalDateTime(previewLastUpdate)}
                 </span>
               </div>
               <div className="settings-preview-card">
-                <span className="settings-meta-label">Platinum</span>
+                <span className="settings-meta-label">{t('bal.platinum')}</span>
                 <span className="settings-meta-value">
                   {formatBalance(previewBalances?.platinum ?? null)}
                 </span>
               </div>
               <div className="settings-preview-card">
-                <span className="settings-meta-label">Credits</span>
+                <span className="settings-meta-label">{t('bal.credits')}</span>
                 <span className="settings-meta-value">
                   {formatBalance(previewBalances?.credits ?? null)}
                 </span>
               </div>
               <div className="settings-preview-card">
-                <span className="settings-meta-label">Endo</span>
+                <span className="settings-meta-label">{t('bal.endo')}</span>
                 <span className="settings-meta-value">
                   {formatBalance(previewBalances?.endo ?? null)}
                 </span>
               </div>
               <div className="settings-preview-card">
-                <span className="settings-meta-label">Ducats</span>
+                <span className="settings-meta-label">{t('bal.ducats')}</span>
                 <span className="settings-meta-value">
                   {formatBalance(previewBalances?.ducats ?? null)}
                 </span>
               </div>
               <div className="settings-preview-card">
-                <span className="settings-meta-label">Aya</span>
+                <span className="settings-meta-label">{t('bal.aya')}</span>
                 <span className="settings-meta-value">
                   {formatBalance(previewBalances?.aya ?? null)}
                 </span>
