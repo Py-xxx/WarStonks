@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore, type UnderpricedListingCard } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { copyWhisperMessage } from '../../lib/marketMessages';
@@ -240,6 +241,7 @@ function OpportunityCard({
   onUnpin: () => void;
   onDismiss: () => void;
 }) {
+  const { t } = useTranslation();
   const confidenceClass = `opp-conf-${opp.confidenceLabel.toLowerCase()}`;
   const imageUrl = resolveWfmAssetUrl(opp.imagePath);
   const urgent = opp.urgency === 'expiring';
@@ -257,7 +259,7 @@ function OpportunityCard({
         )}
         <div className="opp-card-titles">
           <h4 className="opp-card-title">
-            {urgent ? <span className="opp-urgent-tag">Live</span> : null}
+            {urgent ? <span className="opp-urgent-tag">{t('wl.live')}</span> : null}
             {opp.title}
           </h4>
           {opp.subtitle ? <p className="opp-card-subtitle">{opp.subtitle}</p> : null}
@@ -307,6 +309,7 @@ function OpportunityCard({
 }
 
 export function OpportunityBoard() {
+  const { t } = useTranslation();
   const opportunities = useAppStore((state) => state.opportunities);
   const underpricedListings = useAppStore((state) => state.underpricedListings);
   const loading = useAppStore((state) => state.opportunitiesLoading);
@@ -424,7 +427,7 @@ export function OpportunityBoard() {
           ))}
         </div>
         <label className="opp-budget">
-          <span>Budget</span>
+          <span>{t('wl.budget')}</span>
           <input
             type="number"
             min={0}
@@ -442,7 +445,7 @@ export function OpportunityBoard() {
 
       {pinnedList.length > 0 ? (
         <div className="opp-section">
-          <span className="opp-section-label">Accepted</span>
+          <span className="opp-section-label">{t('wl.accepted')}</span>
           <div className="opp-list">
             {pinnedList.map((opp) => (
               <OpportunityCard
@@ -468,7 +471,7 @@ export function OpportunityBoard() {
         </div>
       ) : unpinnedList.length > 0 ? (
         <div className="opp-section">
-          {pinnedList.length > 0 ? <span className="opp-section-label">More</span> : null}
+          {pinnedList.length > 0 ? <span className="opp-section-label">{t('wl.more')}</span> : null}
           <div className="opp-list">
             {unpinnedList.map((opp) => (
               <OpportunityCard

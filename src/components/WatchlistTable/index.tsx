@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ItemName } from '../ItemName';
 import { ModalPortal } from '../ModalPortal';
+import { useTranslation } from '../../i18n';
 import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { formatElapsedTime } from '../../lib/dateTime';
@@ -22,6 +23,7 @@ type WatchlistTableVariant = 'compact' | 'full';
  * error/success handling so fixes only have to happen in one place.
  */
 export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) {
+  const { t } = useTranslation();
   const watchlist = useAppStore((state) => state.watchlist);
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
   const setSelected = useAppStore((state) => state.setSelectedWatchlist);
@@ -103,7 +105,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
 
       {watchlist.length === 0 ? (
         <div className="empty-state">
-          <span className="empty-primary">No watchlist items yet</span>
+          <span className="empty-primary">{t('wl.noItems')}</span>
           <span className="empty-sub">
             Search for an item, set your desired price, and add it to start monitoring live
             sell orders.
@@ -115,23 +117,23 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             <thead>
               {variant === 'full' ? (
                 <tr>
-                  <th>Item</th>
-                  <th>Desired</th>
-                  <th>Lowest</th>
-                  <th>Seller</th>
-                  <th>Qty</th>
-                  <th>Rank</th>
-                  <th>Last Scan</th>
-                  <th>Status</th>
-                  <th>Actions</th>
+                  <th>{t('wl.item')}</th>
+                  <th>{t('wl.desired')}</th>
+                  <th>{t('wl.lowest')}</th>
+                  <th>{t('wl.seller')}</th>
+                  <th>{t('wl.qty')}</th>
+                  <th>{t('wl.rank')}</th>
+                  <th>{t('wl.lastScan')}</th>
+                  <th>{t('wl.status')}</th>
+                  <th>{t('wl.actions')}</th>
                 </tr>
               ) : (
                 <tr>
-                  <th>Item</th>
-                  <th>Target</th>
-                  <th>Current</th>
-                  <th>Status</th>
-                  <th>Actions</th>
+                  <th>{t('wl.item')}</th>
+                  <th>{t('wl.target')}</th>
+                  <th>{t('wl.current')}</th>
+                  <th>{t('wl.status')}</th>
+                  <th>{t('wl.actions')}</th>
                 </tr>
               )}
             </thead>
@@ -302,7 +304,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
           >
             <div className="settings-modal-header">
               <div className="settings-modal-title">
-                <span className="card-label">Watchlist</span>
+                <span className="card-label">{t('wl.watchlist')}</span>
                 <h3 id="watchlist-remove-title">Remove item?</h3>
               </div>
               <button

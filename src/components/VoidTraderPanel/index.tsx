@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from '../../i18n';
 import {
   formatWorldStateCountdown,
   formatWorldStateDateTime,
@@ -37,6 +38,7 @@ function buildInventoryGroups(items: VoidTraderInventoryItem[]) {
 }
 
 export function VoidTraderPanel() {
+  const { t } = useTranslation();
   const voidTrader = useAppStore((state) => state.worldStateVoidTrader);
   const loading = useAppStore((state) => state.worldStateVoidTraderLoading);
   const error = useAppStore((state) => state.worldStateVoidTraderError);
@@ -87,7 +89,7 @@ export function VoidTraderPanel() {
   return (
     <div className="card">
       <div className="card-header">
-        <span className="card-label">Void Trader</span>
+        <span className="card-label">{t('ws.voidTrader')}</span>
         <span className={`badge ${isActive ? 'badge-green' : 'badge-amber'}`}>
           {isActive ? 'Active' : 'Not active'}
         </span>
@@ -150,11 +152,11 @@ export function VoidTraderPanel() {
                   </span>
                 </div>
                 <div className="void-trader-meta-card">
-                  <span className="qv-stat-label">Countdown</span>
+                  <span className="qv-stat-label">{t('ws.countdown')}</span>
                   <span className="void-trader-meta-value">{nextCountdown}</span>
                 </div>
                 <div className="void-trader-meta-card">
-                  <span className="qv-stat-label">Inventory</span>
+                  <span className="qv-stat-label">{t('ws.inventory')}</span>
                   <span className="void-trader-meta-value">
                     {voidTrader.inventory.length} items
                   </span>
@@ -210,15 +212,15 @@ export function VoidTraderPanel() {
 
                         <div className="void-trader-cost-row">
                           <div className="void-trader-cost-pill">
-                            <span className="qv-stat-label">Ducats</span>
+                            <span className="qv-stat-label">{t('bal.ducats')}</span>
                             <span className="void-trader-cost-value">{item.ducats ?? '—'}</span>
                           </div>
                           <div className="void-trader-cost-pill">
-                            <span className="qv-stat-label">Credits</span>
+                            <span className="qv-stat-label">{t('bal.credits')}</span>
                             <span className="void-trader-cost-value">{item.credits ?? '—'}</span>
                           </div>
                           <div className="void-trader-cost-pill void-trader-cost-pill-exit">
-                            <span className="qv-stat-label">Exit</span>
+                            <span className="qv-stat-label">{t('ws.exit')}</span>
                             <span className="void-trader-cost-value">
                               {hasExitPrice
                                 ? `${exitPrice} pt`

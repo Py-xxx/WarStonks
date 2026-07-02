@@ -328,7 +328,7 @@ export function TopBar() {
             <div className="search-dropdown" id="global-search-results" role="listbox">
               {searchValue.trim() === '' && recentItems.length > 0 ? (
                 <>
-                  <div className="search-section-label">Recent</div>
+                  <div className="search-section-label">{t('topbar.recent')}</div>
                   {recentItems.map((item) => (
                     <button
                       key={`recent-${item.slug}`}
@@ -422,7 +422,7 @@ export function TopBar() {
 
         {showMarketVariantSelect ? (
           <div className="topbar-market-variant">
-            <span className="topbar-market-variant-label">Rank</span>
+            <span className="topbar-market-variant-label">{t('wl.rank')}</span>
             <select
               className="topbar-market-variant-select"
               value={selectedMarketVariantKey ?? ''}
@@ -449,7 +449,7 @@ export function TopBar() {
             <img src={walletIcons.platinum} alt="" />
           </div>
           <div className="currency-info">
-            <span className="currency-name">Platinum</span>
+            <span className="currency-name">{t('bal.platinum')}</span>
             <span className={`currency-val${walletSnapshot.balances.platinum === null ? ' no-data' : ''}`}>
               {formatCurrencyValue(walletSnapshot.balances.platinum, walletLoading)}
             </span>
@@ -460,7 +460,7 @@ export function TopBar() {
             <img src={walletIcons.credits} alt="" />
           </div>
           <div className="currency-info">
-            <span className="currency-name">Credits</span>
+            <span className="currency-name">{t('bal.credits')}</span>
             <span className={`currency-val${walletSnapshot.balances.credits === null ? ' no-data' : ''}`}>
               {formatCurrencyValue(walletSnapshot.balances.credits, walletLoading)}
             </span>
@@ -471,7 +471,7 @@ export function TopBar() {
             <img src={walletIcons.endo} alt="" />
           </div>
           <div className="currency-info">
-            <span className="currency-name">Endo</span>
+            <span className="currency-name">{t('bal.endo')}</span>
             <span className={`currency-val${walletSnapshot.balances.endo === null ? ' no-data' : ''}`}>
               {formatCurrencyValue(walletSnapshot.balances.endo, walletLoading)}
             </span>
@@ -482,7 +482,7 @@ export function TopBar() {
             <img src={walletIcons.ducats} alt="" />
           </div>
           <div className="currency-info">
-            <span className="currency-name">Ducats</span>
+            <span className="currency-name">{t('bal.ducats')}</span>
             <span className={`currency-val${walletSnapshot.balances.ducats === null ? ' no-data' : ''}`}>
               {formatCurrencyValue(walletSnapshot.balances.ducats, walletLoading)}
             </span>
@@ -493,7 +493,7 @@ export function TopBar() {
             <img src={walletIcons.aya} alt="" />
           </div>
           <div className="currency-info">
-            <span className="currency-name">Aya</span>
+            <span className="currency-name">{t('bal.aya')}</span>
             <span className={`currency-val${walletSnapshot.balances.aya === null ? ' no-data' : ''}`}>
               {formatCurrencyValue(walletSnapshot.balances.aya, walletLoading)}
             </span>
@@ -522,7 +522,7 @@ export function TopBar() {
           {notificationsOpen ? (
             <div className="notification-panel">
               <div className="notification-panel-header">
-                <span className="card-label">Notifications</span>
+                <span className="card-label">{t('settings.section.notifications.label')}</span>
                 <span
                   className={`badge ${notificationCount > 0 ? 'badge-green' : 'badge-muted'}`}
                 >

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from '../../i18n';
 import {
   formatWorldStateCountdown,
   formatWorldStateDateTime,
@@ -134,6 +135,7 @@ function SortieCard({
   nowMs: number;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const isActive =
     sortie &&
     !sortie.expired &&
@@ -143,11 +145,11 @@ function SortieCard({
   return (
     <section className="card activity-panel activity-panel-wide">
       <div className="card-header">
-        <span className="card-label">Sorties</span>
+        <span className="card-label">{t('ws.sorties')}</span>
         {sortie && isActive ? (
           <span className="badge badge-blue">{formatWorldStateCountdown(sortie.expiry, nowMs)}</span>
         ) : (
-          <span className="badge badge-muted">Unavailable</span>
+          <span className="badge badge-muted">{t('ws.unavailable')}</span>
         )}
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
@@ -224,6 +226,7 @@ function ArchonHuntCard({
   nowMs: number;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const isActive =
     archonHunt &&
     !archonHunt.expired &&
@@ -233,11 +236,11 @@ function ArchonHuntCard({
   return (
     <section className="card activity-panel activity-panel-wide">
       <div className="card-header">
-        <span className="card-label">Archon Hunts</span>
+        <span className="card-label">{t('ws.archonHunts')}</span>
         {archonHunt && isActive ? (
           <span className="badge badge-red">{formatWorldStateCountdown(archonHunt.expiry, nowMs)}</span>
         ) : (
-          <span className="badge badge-muted">Unavailable</span>
+          <span className="badge badge-muted">{t('ws.unavailable')}</span>
         )}
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
@@ -315,13 +318,14 @@ function AlertsCard({
   nowMs: number;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const activeAlerts = alerts.filter((alert) => !alert.expired && Date.parse(alert.expiry ?? '') > nowMs);
   const hasUsableAlerts = alerts.length > 0;
 
   return (
     <section className="card activity-panel">
       <div className="card-header">
-        <span className="card-label">Alerts</span>
+        <span className="card-label">{t('ws.alerts')}</span>
         <span className={`badge ${activeAlerts.length > 0 ? 'badge-green' : 'badge-muted'}`}>
           {activeAlerts.length} active
         </span>
@@ -400,6 +404,7 @@ function ArbitrationCard({
   nowMs: number;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const isActive =
     arbitration &&
     !arbitration.expired &&
@@ -409,11 +414,11 @@ function ArbitrationCard({
   return (
     <section className="card activity-panel">
       <div className="card-header">
-        <span className="card-label">Arbitrations</span>
+        <span className="card-label">{t('ws.arbitrations')}</span>
         {isActive ? (
           <span className="badge badge-amber">{formatWorldStateCountdown(arbitration?.expiry ?? null, nowMs)}</span>
         ) : (
-          <span className="badge badge-muted">Unavailable</span>
+          <span className="badge badge-muted">{t('ws.unavailable')}</span>
         )}
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
@@ -471,13 +476,14 @@ function InvasionsCard({
   lastUpdatedAt: string | null;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const activeInvasions = invasions.filter((invasion) => !invasion.completed);
   const hasUsableInvasions = invasions.length > 0;
 
   return (
     <section className="card activity-panel activity-panel-tall">
       <div className="card-header">
-        <span className="card-label">Invasions</span>
+        <span className="card-label">{t('ws.invasions')}</span>
         <span className={`badge ${activeInvasions.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
           {activeInvasions.length} active
         </span>
@@ -558,6 +564,7 @@ function SyndicateMissionsCard({
   nowMs: number;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const activeMissions = missions.filter(
     (mission) => !mission.expired && Date.parse(mission.expiry ?? '') > nowMs,
   );
@@ -590,7 +597,7 @@ function SyndicateMissionsCard({
   return (
     <section className="card activity-panel activity-panel-full">
       <div className="card-header">
-        <span className="card-label">Syndicate Missions</span>
+        <span className="card-label">{t('ws.syndicateMissions')}</span>
         <span className={`badge ${activeMissions.length > 0 ? 'badge-green' : 'badge-muted'}`}>
           {activeMissions.length} syndicates
         </span>
