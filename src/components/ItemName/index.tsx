@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { openExternalUrl } from '../../lib/tauriClient';
 import { copyTextToClipboard } from '../../lib/marketMessages';
 import { useAppStore } from '../../stores/useAppStore';
+import { resolveLocalizedName } from '../../lib/itemNames';
 import type { ItemQuickViewTarget } from '../../types';
 
 type ItemNameProps = ItemQuickViewTarget & {
@@ -27,6 +28,8 @@ function clampMenuPosition(x: number, y: number): { x: number; y: number } {
 export function ItemName({ className, children, ...target }: ItemNameProps) {
   const openItemInQuickView = useAppStore((state) => state.openItemInQuickView);
   const pushToast = useAppStore((state) => state.pushToast);
+  const itemNameMap = useAppStore((state) => state.itemNameMap);
+  const displayName = resolveLocalizedName(itemNameMap, target);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
 
@@ -87,7 +90,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
         className={`item-name-link${className ? ` ${className}` : ''}`}
         role="button"
         tabIndex={0}
-        title={`Open ${target.name} in Quick View`}
+        title={`Open ${displayName} in Quick View`}
         onClick={handleOpen}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -110,7 +113,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
           }
         }}
       >
-        {children ?? target.name}
+        {children ?? displayName}
       </span>
       {menu ? (
         <div

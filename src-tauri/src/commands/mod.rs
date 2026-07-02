@@ -25,7 +25,27 @@ const WFM_CROSSPLAY_HEADER: &str = "true";
 // website, never browser-disguised). Format: `ProjectName/version (+url)`.
 const WFM_USER_AGENT: &str =
     concat!("WarStonks/", env!("CARGO_PKG_VERSION"), " (+https://pyth.co.za)");
-const WFSTAT_LANGUAGE_QUERY: &str = "en";
+// Worldstate display language for warframestat.us fetches. Set at runtime from the frontend
+// (`set_worldstate_language`) so all WFStat fetch helpers localize without per-command threading.
+// Empty = default to English. wfstat's code differs from WFM's (e.g. `zh` vs `zh-hans`), so the
+// frontend maps before calling.
+static WFSTAT_LANGUAGE: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+pub(crate) fn wfstat_language() -> String {
+    WFSTAT_LANGUAGE
+        .read()
+        .ok()
+        .map(|value| value.clone())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "en".to_string())
+}
+
+#[tauri::command]
+pub fn set_worldstate_language(language: String) {
+    if let Ok(mut guard) = WFSTAT_LANGUAGE.write() {
+        *guard = language.trim().to_string();
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -353,7 +373,7 @@ fn fetch_wfstat_array(endpoint: &str, label: &str) -> Result<Vec<serde_json::Val
     let client = shared_wfstat_client()?;
     let response = client
         .get(format!("{WFSTAT_API_BASE_URL}{endpoint}"))
-        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
+        .query(&[("language", wfstat_language().as_str())])
         .header("User-Agent", WFM_USER_AGENT)
         .header("Accept", "application/json")
         .send()
@@ -373,7 +393,7 @@ fn fetch_wfstat_object(endpoint: &str, label: &str) -> Result<serde_json::Value,
     let client = shared_wfstat_client()?;
     let response = client
         .get(format!("{WFSTAT_API_BASE_URL}{endpoint}"))
-        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
+        .query(&[("language", wfstat_language().as_str())])
         .header("User-Agent", WFM_USER_AGENT)
         .header("Accept", "application/json")
         .send()
@@ -700,7 +720,7 @@ fn fetch_worldstate_void_trader_inner(app: tauri::AppHandle) -> Result<VoidTrade
     let client = shared_wfm_client().map_err(anyhow::Error::msg)?;
     let response = client
         .get(format!("{WFSTAT_API_BASE_URL}/pc/voidTrader"))
-        .query(&[("language", WFSTAT_LANGUAGE_QUERY)])
+        .query(&[("language", wfstat_language().as_str())])
         .header("User-Agent", WFM_USER_AGENT)
         .header("Accept", "application/json")
         .send()
@@ -1090,6 +1110,50 @@ pub async fn get_wfm_autocomplete_items(
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_language_pack_status(
+    app: tauri::AppHandle,
+    language: String,
+) -> Result<item_catalog::LanguagePackStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        item_catalog::get_language_pack_status(app, language)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn populate_language_item_names(
+    app: tauri::AppHandle,
+    language: String,
+) -> Result<item_catalog::LanguagePackImportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        item_catalog::populate_language_item_names(app, language)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_language_pack(
+    app: tauri::AppHandle,
+    language: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || item_catalog::export_language_pack(app, language))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_language_pack(
+    app: tauri::AppHandle,
+    pack: String,
+) -> Result<item_catalog::LanguagePackImportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || item_catalog::import_language_pack(app, pack))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

@@ -5,10 +5,12 @@ import {
   initializeAppCatalogOnce,
   isTauriRuntime,
   listenToStartupProgress,
+  setWorldstateLanguage,
   tryAutoSignInWfmTradeAccount,
   type StartupProgress,
   type StartupSummary,
 } from '../lib/tauriClient';
+import { wfstatLangCode } from '../lib/language';
 import { useAppStore } from '../stores/useAppStore';
 
 type StartupPhase = 'loading' | 'ready' | 'error';
@@ -109,6 +111,12 @@ export function useStartupInitialization(): StartupState {
         return;
       }
 
+      // Point WFStat worldstate fetches at the persisted language before any refresh runs,
+      // so the backend global isn't stuck at its "en" default on launch.
+      void setWorldstateLanguage(wfstatLangCode(useAppStore.getState().language)).catch(
+        () => undefined,
+      );
+
       try {
         setProgress({
           stageKey: 'startup-command',
@@ -150,6 +158,10 @@ export function useStartupInitialization(): StartupState {
         }
 
         setSummary(nextSummary);
+
+        // Build the localized item-name map now that the catalog exists (drives item names
+        // shown across the UI). Fire-and-forget; names fall back to English until it resolves.
+        void useAppStore.getState().loadLocalizedNames();
 
         const setMapProgress: StartupProgress = {
           stageKey: 'trade-set-map',

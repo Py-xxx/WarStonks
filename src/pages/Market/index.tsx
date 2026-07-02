@@ -16,9 +16,10 @@ import {
 } from '../../lib/watchlistAddFeedback';
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
-import { wfmLangCode } from '../../lib/language';
+import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
+import { resolveLocalizedName } from '../../lib/itemNames';
 import type { TranslationKey } from '../../i18n/en';
 import { translate } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
@@ -1796,6 +1797,7 @@ function AnalyticsTab() {
   const revealTimeoutsRef = useRef<number[]>([]);
   const analyticsIdentityRef = useRef<string | null>(null);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
+  const itemNameMap = useAppStore((state) => state.itemNameMap);
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
@@ -1998,7 +2000,7 @@ function AnalyticsTab() {
         </button>
       </div>
       <StaticAnalyticsChart
-        itemName={selectedItem.name}
+        itemName={resolveLocalizedName(itemNameMap, selectedItem)}
         analytics={analytics}
         loading={loading || marketVariantsLoading}
         revealed={revealedPanels.chart}
@@ -2263,6 +2265,7 @@ function AnalysisTab() {
   const pageContentRef = useRef<HTMLDivElement | null>(null);
   const revealTimeoutsRef = useRef<number[]>([]);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
+  const itemNameMap = useAppStore((state) => state.itemNameMap);
   const marketVariants = useAppStore((state) => state.marketVariants);
   const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
@@ -2295,7 +2298,7 @@ function AnalysisTab() {
 
   useEffect(() => {
     let isMounted = true;
-    void getWfmAutocompleteItems(wfmLangCode(useAppStore.getState().language))
+    void getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language))
       .then((items) => {
         if (!isMounted) {
           return;
@@ -2546,7 +2549,7 @@ function AnalysisTab() {
                     <ConfidenceBadge confidence={analysis?.headline.confidenceSummary} />
                   </div>
                 </div>
-                <span className="market-hero-item-name">{selectedItem.name}</span>
+                <span className="market-hero-item-name">{resolveLocalizedName(itemNameMap, selectedItem)}</span>
                 <p className="market-hero-note">{heroState.note}</p>
               </div>
               <div className="market-hero-meter-grid">
@@ -2859,7 +2862,7 @@ function AnalysisTab() {
                           <div className="market-component-image placeholder" />
                         )}
                         <div className="market-component-copy">
-                          <span className="market-copy-title">{component.name}</span>
+                          <span className="market-copy-title">{resolveLocalizedName(itemNameMap, component)}</span>
                           <span>Needed for set: {component.quantityInSet}x</span>
                           <span>Current lowest: {formatPrice(component.currentLowestPrice)}</span>
                           <span>Recommended entry: {formatPrice(component.recommendedEntryPrice)}</span>

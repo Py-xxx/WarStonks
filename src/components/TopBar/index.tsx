@@ -3,7 +3,7 @@ import type { KeyboardEvent } from 'react';
 import { AlertsPanel } from '../AlertsPanel';
 import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
-import { wfmLangCode } from '../../lib/language';
+import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
 import { formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
@@ -134,7 +134,7 @@ export function TopBar() {
       setAutocompleteError(null);
 
       try {
-        const items = await getWfmAutocompleteItems(wfmLangCode(language));
+        const items = await getWfmAutocompleteItems(wfstatLangCode(language));
         if (!isMounted) {
           return;
         }

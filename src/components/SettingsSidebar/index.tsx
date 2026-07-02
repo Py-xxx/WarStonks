@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from 'react';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
-import { LANGUAGES, type AppLanguage } from '../../lib/language';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import { useAppStore } from '../../stores/useAppStore';
@@ -18,6 +17,70 @@ const ChevronIcon = () => (
     <path d="m9 18 6-6-6-6" />
   </svg>
 );
+
+const iconProps = {
+  width: 20,
+  height: 20,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.8,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+};
+
+// Alecaframe API — wallet/sync: a wallet with a sync arc.
+const AlecaframeIcon = () => (
+  <svg {...iconProps}>
+    <rect x="3" y="6" width="18" height="13" rx="2" />
+    <path d="M3 10h18" />
+    <circle cx="16.5" cy="14.5" r="1.5" />
+  </svg>
+);
+
+// Discord webhook — outbound message/paper-plane through a portal.
+const DiscordWebhookIcon = () => (
+  <svg {...iconProps}>
+    <path d="m22 2-7 20-4-9-9-4Z" />
+    <path d="M22 2 11 13" />
+  </svg>
+);
+
+// Notifications — bell.
+const NotificationsIcon = () => (
+  <svg {...iconProps}>
+    <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+  </svg>
+);
+
+// Import & Export — box with up/down arrows.
+const ImportExportIcon = () => (
+  <svg {...iconProps}>
+    <path d="M21 8v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8" />
+    <path d="M3 8 12 3l9 5" />
+    <path d="M9 12h6" />
+    <path d="m12 9-3 3 3 3" />
+    <path d="m12 15 3-3-3-3" />
+  </svg>
+);
+
+// Language — globe.
+const LanguageIcon = () => (
+  <svg {...iconProps}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18" />
+    <path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" />
+  </svg>
+);
+
+const SECTION_ICONS: Record<SettingsSection, () => JSX.Element> = {
+  alecaframe: AlecaframeIcon,
+  'discord-webhook': DiscordWebhookIcon,
+  notifications: NotificationsIcon,
+  'import-export': ImportExportIcon,
+  language: LanguageIcon,
+};
 
 interface SectionConfig {
   id: SettingsSection;
@@ -46,6 +109,11 @@ const mainSections: SectionConfig[] = [
     labelKey: 'settings.section.importExport.label',
     descKey: 'settings.section.importExport.desc',
   },
+  {
+    id: 'language',
+    labelKey: 'langpanel.section.label',
+    descKey: 'langpanel.section.desc',
+  },
 ];
 
 const footerSections: SectionConfig[] = [];
@@ -58,8 +126,7 @@ export function SettingsSidebar() {
   const openDiscordWebhookModal = useAppStore((state) => state.openDiscordWebhookModal);
   const openNotificationsModal = useAppStore((state) => state.openNotificationsModal);
   const openImportExportModal = useAppStore((state) => state.openImportExportModal);
-  const language = useAppStore((state) => state.language);
-  const setLanguage = useAppStore((state) => state.setLanguage);
+  const openLanguageModal = useAppStore((state) => state.openLanguageModal);
   const { t } = useTranslation();
   const notificationSettings = useAppStore((state) => state.notificationSettings);
   const appSettings = useAppStore((state) => state.appSettings);
@@ -159,23 +226,6 @@ export function SettingsSidebar() {
           </button>
         </div>
 
-        <label className="settings-language-row">
-          <span className="settings-language-glyph" aria-hidden="true">🌐</span>
-          <span className="settings-language-label">{t('settings.language')}</span>
-          <select
-            className="settings-input settings-language-select"
-            value={language}
-            onChange={(event) => setLanguage(event.target.value as AppLanguage)}
-            aria-label={t('settings.language.aria')}
-          >
-            {LANGUAGES.map((option) => (
-              <option key={option.code} value={option.code}>
-                {option.flag} {option.native}
-              </option>
-            ))}
-          </select>
-        </label>
-
         <nav className="settings-nav" aria-label="Settings sections">
           {mainSections.map((section) => {
             const notificationsStatus: TranslationKey =
@@ -213,9 +263,17 @@ export function SettingsSidebar() {
                     openNotificationsModal();
                   } else if (section.id === 'import-export') {
                     openImportExportModal();
+                  } else if (section.id === 'language') {
+                    openLanguageModal();
                   }
                 }}
               >
+                <span className="settings-nav-icon" aria-hidden="true">
+                  {(() => {
+                    const SectionIcon = SECTION_ICONS[section.id];
+                    return <SectionIcon />;
+                  })()}
+                </span>
                 <span className="settings-nav-copy">
                   <span className="settings-nav-head">
                     <span className="settings-nav-label">{t(section.labelKey)}</span>

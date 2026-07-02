@@ -4242,8 +4242,26 @@ body {
   border-color: rgba(74, 158, 255, 0.32);
 }
 
+.settings-nav-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--color-blue);
+  background: rgba(74, 158, 255, 0.12);
+  border: 1px solid rgba(74, 158, 255, 0.22);
+}
+
+.settings-nav-item:hover .settings-nav-icon,
+.settings-nav-item.active .settings-nav-icon {
+  background: rgba(74, 158, 255, 0.2);
+}
+
 .settings-nav-copy {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 4px;

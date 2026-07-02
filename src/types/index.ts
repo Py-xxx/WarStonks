@@ -14,7 +14,7 @@ export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | '90d' | 'all';
 export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
-export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'notifications' | 'import-export';
+export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'notifications' | 'import-export' | 'language';
 export type WorldStateEndpointKey =
   | 'events'
   | 'alerts'

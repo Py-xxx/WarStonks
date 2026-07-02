@@ -29,8 +29,10 @@ import {
   WATCHLIST_ADD_SUCCESS_MESSAGE,
 } from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
-import { wfmLangCode } from '../../lib/language';
+import { wfstatLangCode } from '../../lib/language';
 import { useModalA11y } from '../../hooks/useModalA11y';
+import { useLocalizedName } from '../../hooks/useLocalizedName';
+import { useTranslation } from '../../i18n';
 import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerResponse,
@@ -576,6 +578,8 @@ function SetPlannerRow({
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
 }) {
+  const localizeName = useLocalizedName();
+  const { t } = useTranslation();
   const imageUrl = resolveWfmAssetUrl(planner.entry.imagePath);
   const isComplete =
     planner.totalComponentCount > 0 &&
@@ -591,7 +595,7 @@ function SetPlannerRow({
             {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{planner.entry.name.slice(0, 1)}</span>}
           </span>
           <div className="planner-set-copy">
-            <strong>{planner.entry.name}</strong>
+            <strong>{localizeName(planner.entry)}</strong>
             <span className="planner-set-note">
               {planner.ownedComponentCount}/{planner.totalComponentCount} components owned
             </span>
@@ -609,7 +613,7 @@ function SetPlannerRow({
           </div>
           <div className="planner-set-metrics">
             <div className="planner-set-metric">
-              <span className="planner-set-metric-label">Investment</span>
+              <span className="planner-set-metric-label">{t('opp.investment')}</span>
               <strong>{formatPlat(planner.remainingInvestment)}</strong>
             </div>
             <div className="planner-set-metric">
@@ -621,11 +625,11 @@ function SetPlannerRow({
               <strong>{formatPercent(planner.completionRoiPct)}</strong>
             </div>
             <div className="planner-set-metric">
-              <span className="planner-set-metric-label">Liquidity</span>
+              <span className="planner-set-metric-label">{t('opp.liquidity')}</span>
               <strong>{Math.round(planner.entry.liquidityScore)}%</strong>
             </div>
             <div className="planner-set-metric">
-              <span className="planner-set-metric-label">Confidence</span>
+              <span className="planner-set-metric-label">{t('opp.confidence')}</span>
               <strong>{planner.entry.confidenceSummary.label}</strong>
             </div>
           </div>
@@ -685,7 +689,7 @@ function SetPlannerRow({
                       </div>
                       <div className="planner-component-pills">
                         <span className="scanner-stat-pill scanner-stat-pill-highlight">
-                          <span className="scanner-stat-pill-label">Entry Zone</span>
+                          <span className="scanner-stat-pill-label">{t('opp.entryZone')}</span>
                           <span className="scanner-stat-pill-value">
                             {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
                           </span>
@@ -695,7 +699,7 @@ function SetPlannerRow({
                   </div>
                   {componentState.missingQuantity > 0 && relicHints.length > 0 ? (
                     <div className="planner-component-relics planner-component-relics-middle">
-                      <span className="planner-component-relics-label">Owned relics</span>
+                      <span className="planner-component-relics-label">{t('opp.ownedRelicsLower')}</span>
                       <div className="planner-component-relic-pill-list">
                         {relicHints.slice(0, 4).map((relic) => (
                           <span
@@ -789,6 +793,7 @@ function SetCompletionScreenshotImportModal({
   onQuantityChange: (rowId: string, value: string) => void;
   onConfirm: () => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const modalRef = useModalA11y<HTMLDivElement>({ onClose, active: open });
 
   if (!open) {
@@ -812,10 +817,10 @@ function SetCompletionScreenshotImportModal({
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Set Completion Import</span>
+            <span className="card-label">{t('opp.setCompletionImport')}</span>
             <h3>
               Import Prime Components Screenshot{' '}
-              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">Experimental</span>
+              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">{t('opp.experimental')}</span>
             </h3>
           </div>
           <div className="settings-modal-actions">
@@ -829,8 +834,8 @@ function SetCompletionScreenshotImportModal({
           <div className="settings-form-card screenshot-import-left">
             <div className="screenshot-import-example">
               <div className="screenshot-import-example-copy">
-                <span className="panel-title-eyebrow">Example Only</span>
-                <strong>Use this as a framing reference</strong>
+                <span className="panel-title-eyebrow">{t('opp.exampleOnly')}</span>
+                <strong>{t('opp.framingReference')}</strong>
                 <span>
                   Screenshot from the in-game inventory view with the grid fully visible and no
                   extra overlays. If your screenshot does not match this shape closely, the import
@@ -874,7 +879,7 @@ function SetCompletionScreenshotImportModal({
             </div>
 
             <p className="watchlist-form-note">
-              Use one or more screenshots from the in-game <strong>Prime Components</strong> tab.
+              Use one or more screenshots from the in-game <strong>{t('opp.primeComponents')}</strong> tab.
               Each screenshot is prepared independently and then merged into one review list.
             </p>
             <p className="watchlist-form-note">
@@ -923,15 +928,15 @@ function SetCompletionScreenshotImportModal({
           <div className="settings-form-card screenshot-import-right">
             <div className="screenshot-import-summary">
               <div>
-                <span className="card-label">Review Matches</span>
-                <h3>Detected Components</h3>
+                <span className="card-label">{t('opp.reviewMatches')}</span>
+                <h3>{t('opp.detectedComponents')}</h3>
               </div>
               <div className="scanner-run-summary">
                 <span className="scanner-run-pill scanner-run-pill-blue">
                   {reviewRows.length} rows
                 </span>
                 {hasReviewRows ? (
-                  <span className="scanner-run-pill scanner-run-pill-warning">Needs review</span>
+                  <span className="scanner-run-pill scanner-run-pill-warning">{t('opp.needsReview')}</span>
                 ) : null}
               </div>
             </div>
@@ -960,7 +965,7 @@ function SetCompletionScreenshotImportModal({
                         </span>
                         <div className="screenshot-import-row-editor">
                           <div className="screenshot-import-row-copy">
-                            <strong>Matched name</strong>
+                            <strong>{t('opp.matchedName')}</strong>
                             <span className="screenshot-import-row-source">
                               Screenshot {row.state.screenshotIndex + 1}: {row.state.screenshotFileName}
                             </span>
@@ -977,7 +982,7 @@ function SetCompletionScreenshotImportModal({
                             </span>
                           </div>
                           <div className="screenshot-import-qty-field">
-                            <span>Quantity</span>
+                            <span>{t('opp.quantity')}</span>
                             <input
                               className="screenshot-import-qty-input"
                               type="number"
@@ -1030,6 +1035,7 @@ function SetCompletionScreenshotImportWarningModal({
   onClose: () => void;
   onContinue: () => void;
 }) {
+  const { t } = useTranslation();
   if (!open) {
     return null;
   }
@@ -1050,10 +1056,10 @@ function SetCompletionScreenshotImportWarningModal({
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Set Completion Import</span>
+            <span className="card-label">{t('opp.setCompletionImport')}</span>
             <h3>
               Screenshot Import Guidance{' '}
-              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">Experimental</span>
+              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">{t('opp.experimental')}</span>
             </h3>
           </div>
           <div className="settings-modal-actions">
@@ -1096,6 +1102,8 @@ export function OpportunitiesPage({
   const [activeTab, setActiveTab] = useState<OppTab>(
     mode === 'inventory' ? 'set-planner' : 'opportunities',
   );
+  const localizeName = useLocalizedName();
+  const { t } = useTranslation();
 
   // Honour a subtab request from an opportunity action button (e.g. a "Farm" action → farm-now).
   const requestedOpportunitiesTab = useAppStore((state) => state.requestedOpportunitiesTab);
@@ -1203,7 +1211,7 @@ export function OpportunitiesPage({
         const [scannerState, owned, autocompleteItems, ownedPrices] = await Promise.all([
           getArbitrageScannerState(),
           getSetCompletionOwnedItems(),
-          getWfmAutocompleteItems(wfmLangCode(useAppStore.getState().language)),
+          getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language)),
           getSetCompletionOwnedItemPrices(),
         ]);
         if (cancelled) {
@@ -2224,7 +2232,7 @@ export function OpportunitiesPage({
     <>
       <div className="subnav">
         <div className="subnav-left">
-          <span className="page-title">{mode === 'inventory' ? 'Inventory' : 'Opportunities'}</span>
+          <span className="page-title">{mode === 'inventory' ? t('opp.inventory') : t('opp.opportunities')}</span>
           <div className="subnav-tabs" role="tablist" aria-label={mode === 'inventory' ? 'Inventory sections' : 'Opportunities sections'}>
             {tabs.map((tab) => (
               <button
@@ -2251,8 +2259,8 @@ export function OpportunitiesPage({
             <section className="market-panel set-planner-main-panel">
               <div className="set-planner-header">
                 <div>
-                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />Completion Opportunities</span>
-                  <h3>Set Completion Planner</h3>
+                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.completionOpportunities')}</span>
+                  <h3>{t('opp.setCompletionPlanner')}</h3>
                   <p>
                     Uses your owned prime parts plus the cached Arbitrage scan to estimate the remaining
                     investment and completion profit for one set at a time.
@@ -2294,8 +2302,8 @@ export function OpportunitiesPage({
               ) : noScanAvailable ? (
                 <div className="set-planner-empty">
                   <div>
-                    <span className="panel-title-eyebrow">Scanner Cache Required</span>
-                    <h3>Run an Arbitrage scan first</h3>
+                    <span className="panel-title-eyebrow">{t('opp.scannerCacheRequired')}</span>
+                    <h3>{t('opp.runArbitrageFirst')}</h3>
                     <p>
                       Set Completion Planner reuses the cached component pricing from Arbitrage. Run the
                       scan once, then come back here to plan missing parts and completion profit.
@@ -2312,8 +2320,8 @@ export function OpportunitiesPage({
               ) : plannerEntries.length === 0 ? (
                 <div className="set-planner-empty">
                   <div>
-                    <span className="panel-title-eyebrow">Owned Parts Needed</span>
-                    <h3>Add prime parts you already own</h3>
+                    <span className="panel-title-eyebrow">{t('opp.ownedPartsNeeded')}</span>
+                    <h3>{t('opp.addOwnedParts')}</h3>
                     <p>
                       Use the owned-parts drawer to add prime components. The planner will then show only
                       the sets where you already own at least one required piece.
@@ -2379,13 +2387,13 @@ export function OpportunitiesPage({
               <section className="market-panel inventory-catalog-panel">
                 <div className="inventory-panel-header">
                   <div>
-                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-blue" aria-hidden="true" />Prime Parts</span>
-                    <h3>Add to Inventory</h3>
+                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-blue" aria-hidden="true" />{t('opp.primeParts')}</span>
+                    <h3>{t('opp.addToInventory')}</h3>
                   </div>
                 </div>
 
                 {!plannerCatalog.length ? (
-                  <div className="inventory-empty">Component catalog is still loading.</div>
+                  <div className="inventory-empty">{t('opp.catalogLoading')}</div>
                 ) : filteredCatalog.length === 0 ? (
                   <div className="inventory-empty">No prime parts match “{componentQuery.trim()}”.</div>
                 ) : (
@@ -2402,7 +2410,7 @@ export function OpportunitiesPage({
                               <span>{item.name.slice(0, 1)}</span>
                             )}
                           </span>
-                          <span className="inventory-row-name" title={item.name}>{item.name}</span>
+                          <span className="inventory-row-name" title={localizeName(item)}>{localizeName(item)}</span>
                           {ownedQty > 0 ? (
                             <div className="inventory-stepper">
                               <button
@@ -2445,7 +2453,7 @@ export function OpportunitiesPage({
               <section className="market-panel inventory-owned-panel">
                 <div className="inventory-panel-header">
                   <div>
-                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />Owned Inventory</span>
+                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.ownedInventory')}</span>
                     <h3>
                       {ownedItems.length} {ownedItems.length === 1 ? 'part' : 'parts'}
                       {componentQuery.trim() ? ` · ${filteredOwnedItems.length} shown` : ''}
@@ -2490,7 +2498,7 @@ export function OpportunitiesPage({
 
                 {ownedItems.length > 0 ? (
                   <div className="inventory-owned-toolbar">
-                    <span className="inventory-sort-label">Sort by</span>
+                    <span className="inventory-sort-label">{t('opp.sortBy')}</span>
                     <div className="inventory-sort-group">
                       <button
                         type="button"
@@ -2511,7 +2519,7 @@ export function OpportunitiesPage({
                 ) : null}
 
                 {ownedItems.length === 0 ? (
-                  <div className="inventory-empty">No owned prime parts yet. Add parts from the left panel.</div>
+                  <div className="inventory-empty">{t('opp.noOwnedParts')}</div>
                 ) : filteredOwnedItems.length === 0 ? (
                   <div className="inventory-empty">No owned parts match “{componentQuery.trim()}”.</div>
                 ) : (
@@ -2527,7 +2535,7 @@ export function OpportunitiesPage({
                               <span>{item.name.slice(0, 1)}</span>
                             )}
                           </span>
-                          <span className="inventory-row-name" title={item.name}>{item.name}</span>
+                          <span className="inventory-row-name" title={localizeName(item)}>{localizeName(item)}</span>
                           <span
                             className={`inventory-row-value${ownedItemPrices[item.slug] == null ? ' unpriced' : ''}`}
                             title="Recommended exit price (per unit)"
@@ -2577,7 +2585,7 @@ export function OpportunitiesPage({
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <path d="m21 15-5-5L5 21" />
               </svg>
-              <span>Import Screenshot</span>
+              <span>{t('opp.importScreenshot')}</span>
               <span className="scanner-run-pill scanner-run-pill-warning inventory-import-fab-pill">Beta</span>
             </button>
           </div>
@@ -2586,8 +2594,8 @@ export function OpportunitiesPage({
             <section className="market-panel owned-relics-panel">
               <div className="owned-relics-header">
                 <div>
-                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />Owned Relics</span>
-                  <h3>Relic Inventory</h3>
+                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.ownedRelicsTitle')}</span>
+                  <h3>{t('opp.relicInventory')}</h3>
                   <p>
                     Pulls your Alecaframe relic inventory and breaks down counts by refinement.
                     Expand a relic to see its possible rewards and rarities.
@@ -2620,8 +2628,8 @@ export function OpportunitiesPage({
               ) : ownedRelics.length === 0 ? (
                 <div className="set-planner-empty">
                   <div>
-                    <span className="panel-title-eyebrow">No Relics Found</span>
-                    <h3>Inventory is empty</h3>
+                    <span className="panel-title-eyebrow">{t('opp.noRelicsFound')}</span>
+                    <h3>{t('opp.inventoryEmpty')}</h3>
                     <p>
                       Alecaframe did not report any relics for this account. Double-check your
                       public link in Settings and try again.
@@ -2654,14 +2662,14 @@ export function OpportunitiesPage({
                                 )}
                               </span>
                               <div className="farm-now-copy owned-relics-copy">
-                                <strong>{relic.name}</strong>
+                                <strong>{localizeName(relic)}</strong>
                                 <span className="farm-now-subtitle owned-relics-subtitle">
                                   {relic.tier} {relic.code}
                                 </span>
                               </div>
                             </div>
                             <span className="farm-now-cell owned-relics-cell-total">
-                              <span className="owned-relics-total-label">Total</span>
+                              <span className="owned-relics-total-label">{t('opp.total')}</span>
                               <strong>{relic.counts.total}</strong>
                             </span>
                             <div className="farm-now-cell owned-relics-refinement-pills">
@@ -2685,7 +2693,7 @@ export function OpportunitiesPage({
                         {expanded ? (
                           <div className="owned-relics-row-body">
                             {relic.drops.length === 0 ? (
-                              <div className="owned-relics-empty">No drop data available for this relic.</div>
+                              <div className="owned-relics-empty">{t('opp.noDropData')}</div>
                             ) : (
                               <div className="owned-relics-drop-grid">
                                 {relic.drops.map((drop) => {
@@ -2701,7 +2709,7 @@ export function OpportunitiesPage({
                                         )}
                                       </span>
                                       <div className="owned-relics-drop-copy">
-                                        <span className="owned-relics-drop-name">{drop.name}</span>
+                                        <span className="owned-relics-drop-name">{localizeName(drop)}</span>
                                         <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
                                           {drop.rarity ?? 'Unknown'}
                                         </span>
@@ -2725,7 +2733,7 @@ export function OpportunitiesPage({
             <section className="market-panel farm-now-panel">
               <div className="farm-now-header">
                 <div>
-                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />What To Farm Now</span>
+                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.whatToFarmNow')}</span>
                   <h3>
                     {farmNowTab === 'set-completion'
                       ? 'Relics For Set Completion'
@@ -2788,7 +2796,7 @@ export function OpportunitiesPage({
                     {farmNowLastScan ? (
                       <span>Last scan {formatShortLocalDateTime(farmNowLastScan)}</span>
                     ) : (
-                      <span>No scan data yet</span>
+                      <span>{t('opp.noScanData')}</span>
                     )}
                     {ownedRelicsRefreshing ? (
                       <span className="farm-now-refresh-indicator" title="Refreshing owned relic cache">
@@ -2813,7 +2821,7 @@ export function OpportunitiesPage({
                 <input
                   type="search"
                   className="settings-input farm-now-search-input"
-                  placeholder="Search relics or item drops…"
+                  placeholder={t('opp.searchRelicsPlaceholder')}
                   value={farmNowSearch}
                   onChange={(event) => setFarmNowSearch(event.target.value)}
                   spellCheck={false}
@@ -2833,7 +2841,7 @@ export function OpportunitiesPage({
                   onChange={(event) => setFarmNowEra(event.target.value)}
                   aria-label="Filter by relic era"
                 >
-                  <option value="all">All eras</option>
+                  <option value="all">{t('opp.allEras')}</option>
                   <option value="Lith">Lith</option>
                   <option value="Meso">Meso</option>
                   <option value="Neo">Neo</option>
@@ -2847,14 +2855,14 @@ export function OpportunitiesPage({
                 >
                   {farmNowTab === 'set-completion' ? (
                     <>
-                      <option value="default">Sort: completion priority</option>
-                      <option value="coverage">Sort: sets helped</option>
-                      <option value="owned">Sort: owned</option>
+                      <option value="default">{t('opp.sortCompletion')}</option>
+                      <option value="coverage">{t('opp.sortSetsHelped')}</option>
+                      <option value="owned">{t('opp.sortOwned')}</option>
                     </>
                   ) : (
                     <>
-                      <option value="default">Sort: plat / hour</option>
-                      <option value="owned">Sort: owned</option>
+                      <option value="default">{t('opp.sortPlatHour')}</option>
+                      <option value="owned">{t('opp.sortOwned')}</option>
                     </>
                   )}
                 </select>
@@ -2867,8 +2875,8 @@ export function OpportunitiesPage({
                   {farmNowTab === 'set-completion'
                     ? farmNowSetCompletionTopRelics.map((row) => (
                         <div key={row.relic.slug} className="farm-now-top-card">
-                          <span className="panel-title-eyebrow">Best coverage</span>
-                          <strong>{row.relic.name}</strong>
+                          <span className="panel-title-eyebrow">{t('opp.bestCoverage')}</span>
+                          <strong>{localizeName(row.relic)}</strong>
                           <span className="farm-now-top-meta">
                             {row.neededDropCount} needed drops · {row.coveredSetCount} sets helped · x
                             {row.ownedCount} owned
@@ -2877,8 +2885,8 @@ export function OpportunitiesPage({
                       ))
                     : farmNowTopRelics.map((row) => (
                         <div key={row.relic.slug} className="farm-now-top-card">
-                          <span className="panel-title-eyebrow">Top pick</span>
-                          <strong>{row.relic.name}</strong>
+                          <span className="panel-title-eyebrow">{t('opp.topPick')}</span>
+                          <strong>{localizeName(row.relic)}</strong>
                           <span className="farm-now-top-meta">
                             Run {row.guidance.bestLabel} · {formatPlatDecimal(row.platPerHour)}/hr ·
                             x{row.ownedCount}
@@ -2896,8 +2904,8 @@ export function OpportunitiesPage({
                 ) : noFarmScan ? (
                   <div className="set-planner-empty">
                     <div>
-                      <span className="panel-title-eyebrow">Scanner Cache Required</span>
-                      <h3>Run a Relic ROI scan first</h3>
+                      <span className="panel-title-eyebrow">{t('opp.scannerCacheRequired')}</span>
+                      <h3>{t('opp.runRelicScanFirst')}</h3>
                       <p>
                         This view uses the cached Relic ROI data from the Arbitrage scanner. Run a
                         scan in Scanners, then return here to rank relics for set completion.
@@ -2934,8 +2942,8 @@ export function OpportunitiesPage({
                 ) : ownedRelicsCacheLoaded && !ownedRelicsUpdatedAt ? (
                   <div className="set-planner-empty">
                     <div>
-                      <span className="panel-title-eyebrow">Owned Relics Required</span>
-                      <h3>Load relic inventory first</h3>
+                      <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
+                      <h3>{t('opp.loadRelicFirst')}</h3>
                       <p>
                         This view only ranks relics you already own. Open Owned Relics and press
                         Refresh to load your inventory, then return here.
@@ -2952,8 +2960,8 @@ export function OpportunitiesPage({
                 ) : ownedRelics.length === 0 ? (
                   <div className="set-planner-empty">
                     <div>
-                      <span className="panel-title-eyebrow">Owned Relics Required</span>
-                      <h3>No owned relics detected</h3>
+                      <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
+                      <h3>{t('opp.noOwnedRelicsDetected')}</h3>
                       <p>
                         Alecaframe returned an empty relic inventory. Make sure your public link is
                         correct, then refresh in Owned Relics.
@@ -2963,8 +2971,8 @@ export function OpportunitiesPage({
                 ) : ownedItems.length === 0 ? (
                   <div className="set-planner-empty">
                     <div>
-                      <span className="panel-title-eyebrow">Owned Inventory Required</span>
-                      <h3>Add your components first</h3>
+                      <span className="panel-title-eyebrow">{t('opp.ownedInventoryRequired')}</span>
+                      <h3>{t('opp.addComponentsFirst')}</h3>
                       <p>
                         This view needs your Set Completion Planner inventory so it can see which
                         components are still missing from partial sets.
@@ -2985,10 +2993,10 @@ export function OpportunitiesPage({
                 ) : (
                   <div className="farm-now-list farm-now-list-set-completion">
                     <div className="farm-now-header-row">
-                      <span className="farm-now-header-label">Relic</span>
-                      <span className="farm-now-header-label">Needed Drops</span>
-                      <span className="farm-now-header-label">Sets Helped</span>
-                      <span className="farm-now-header-label">Owned</span>
+                      <span className="farm-now-header-label">{t('opp.relic')}</span>
+                      <span className="farm-now-header-label">{t('opp.neededDrops')}</span>
+                      <span className="farm-now-header-label">{t('opp.setsHelped')}</span>
+                      <span className="farm-now-header-label">{t('opp.owned')}</span>
                       <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                     </div>
 
@@ -3022,7 +3030,7 @@ export function OpportunitiesPage({
                                   )}
                                 </span>
                                 <div className="farm-now-copy">
-                                  <strong>{row.relic.name}</strong>
+                                  <strong>{localizeName(row.relic)}</strong>
                                   <span className="farm-now-subtitle">
                                     {row.bestSetProgress
                                       ? `Closest: ${row.bestSetProgress.name} ${row.bestSetProgress.owned}/${row.bestSetProgress.total}`
@@ -3063,14 +3071,14 @@ export function OpportunitiesPage({
                                         )}
                                       </span>
                                       <div className="farm-now-drop-copy">
-                                        <span className="farm-now-drop-name">{entry.drop.name}</span>
+                                        <span className="farm-now-drop-name">{localizeName(entry.drop)}</span>
                                         <div className="farm-now-drop-meta">
                                           <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
                                             {entry.drop.rarity ?? 'Unknown'}
                                           </span>
                                           {entry.isNeeded ? (
                                             <>
-                                              <span className="market-panel-badge tone-green">Needed</span>
+                                              <span className="market-panel-badge tone-green">{t('opp.needed')}</span>
                                               <span className="farm-now-drop-stat">
                                                 Missing {entry.missingQuantity}
                                               </span>
@@ -3102,8 +3110,8 @@ export function OpportunitiesPage({
               ) : noFarmScan ? (
                 <div className="set-planner-empty">
                   <div>
-                    <span className="panel-title-eyebrow">Scanner Cache Required</span>
-                    <h3>Run a Relic ROI scan first</h3>
+                    <span className="panel-title-eyebrow">{t('opp.scannerCacheRequired')}</span>
+                    <h3>{t('opp.runRelicScanFirst')}</h3>
                     <p>
                       This view uses the cached Relic ROI data from the Arbitrage scanner. Run a scan
                       in Scanners, then return here to see refinement-level profit.
@@ -3140,8 +3148,8 @@ export function OpportunitiesPage({
               ) : ownedRelicsCacheLoaded && !ownedRelicsUpdatedAt ? (
                 <div className="set-planner-empty">
                   <div>
-                    <span className="panel-title-eyebrow">Owned Relics Required</span>
-                    <h3>Load relic inventory first</h3>
+                    <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
+                    <h3>{t('opp.loadRelicFirst')}</h3>
                     <p>
                       This view requires a cached relic inventory. Open Owned Relics and press Refresh
                       to load your inventory, then return here.
@@ -3158,8 +3166,8 @@ export function OpportunitiesPage({
               ) : ownedRelics.length === 0 ? (
                 <div className="set-planner-empty">
                   <div>
-                    <span className="panel-title-eyebrow">Owned Relics Required</span>
-                    <h3>No owned relics detected</h3>
+                    <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
+                    <h3>{t('opp.noOwnedRelicsDetected')}</h3>
                     <p>
                       Alecaframe returned an empty relic inventory. Make sure your public link is
                       correct, then refresh in Owned Relics.
@@ -3167,15 +3175,15 @@ export function OpportunitiesPage({
                   </div>
                 </div>
               ) : farmNowRelics.length === 0 ? (
-                <div className="opportunities-placeholder">No owned relic refinements available.</div>
+                <div className="opportunities-placeholder">{t('opp.noOwnedRefinements')}</div>
               ) : (
                 <div className="farm-now-list">
                   <div className="farm-now-header-row">
-                    <span className="farm-now-header-label">Relic</span>
-                    <span className="farm-now-header-label">Refinement</span>
-                    <span className="farm-now-header-label">Owned</span>
-                    <span className="farm-now-header-label farm-now-header-value">Profit / Relic</span>
-                    <span className="farm-now-header-label farm-now-header-value">Plat / Hour</span>
+                    <span className="farm-now-header-label">{t('opp.relic')}</span>
+                    <span className="farm-now-header-label">{t('opp.refinement')}</span>
+                    <span className="farm-now-header-label">{t('opp.owned')}</span>
+                    <span className="farm-now-header-label farm-now-header-value">{t('opp.profitRelic')}</span>
+                    <span className="farm-now-header-label farm-now-header-value">{t('opp.platHour')}</span>
                     <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                   </div>
 
@@ -3209,7 +3217,7 @@ export function OpportunitiesPage({
                                 )}
                               </span>
                               <div className="farm-now-copy">
-                                <strong>{row.relic.name}</strong>
+                                <strong>{localizeName(row.relic)}</strong>
                                 <span className="farm-now-subtitle">{row.relic.dropCount} drops</span>
                               </div>
                             </div>
@@ -3256,7 +3264,7 @@ export function OpportunitiesPage({
                                       )}
                                     </span>
                                     <div className="farm-now-drop-copy">
-                                      <span className="farm-now-drop-name">{drop.name}</span>
+                                      <span className="farm-now-drop-name">{localizeName(drop)}</span>
                                       <div className="farm-now-drop-meta">
                                         <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
                                           {drop.rarity ?? 'Unknown'}
@@ -3268,7 +3276,7 @@ export function OpportunitiesPage({
                                           Exit {formatPlat(drop.recommendedExitPrice)}
                                         </span>
                                         {isBest ? (
-                                          <span className="market-panel-badge tone-green">Top pick</span>
+                                          <span className="market-panel-badge tone-green">{t('opp.topPick')}</span>
                                         ) : null}
                                       </div>
                                     </div>

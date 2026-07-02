@@ -49,3 +49,40 @@ export function saveLanguage(language: AppLanguage): void {
 export function wfmLangCode(language: AppLanguage): string {
   return LANGUAGES.find((option) => option.code === language)?.wfm ?? 'en';
 }
+
+/**
+ * warframestat.us language code — differs from WFM's for Chinese (wfstat uses `zh`, WFM uses
+ * `zh-hans`). Used for worldstate localization and the item-name catalog / language packs.
+ */
+export function wfstatLangCode(language: AppLanguage): string {
+  return language === 'zh-hans' ? 'zh' : language;
+}
+
+/**
+ * Localized word for "Set". WFM set items (slug ending `_set`) show "… Set" in English, but the
+ * localized name from WFStat often maps to the base item and drops it — so we re-append this.
+ */
+const SET_NAME_SUFFIX: Record<AppLanguage, string> = {
+  en: 'Set',
+  'zh-hans': '套装',
+  pt: 'Conjunto',
+  es: 'Conjunto',
+  fr: 'Ensemble',
+  de: 'Set',
+};
+
+/**
+ * Ensures a set item's display name carries the localized "Set" suffix. No-op when the name
+ * already contains that word (e.g. WFStat already included it) or isn't a set.
+ */
+export function applySetSuffix(language: AppLanguage, slug: string | null | undefined, name: string): string {
+  if (!slug || !slug.endsWith('_set')) {
+    return name;
+  }
+  const suffix = SET_NAME_SUFFIX[language];
+  const lower = name.toLowerCase();
+  if (lower.includes(suffix.toLowerCase()) || lower.endsWith(' set')) {
+    return name;
+  }
+  return `${name} ${suffix}`;
+}

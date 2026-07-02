@@ -271,6 +271,14 @@ export async function getWorldStateCache(): Promise<
   return invoke<Record<string, PersistedWorldStateCacheEntry>>('get_worldstate_cache');
 }
 
+/** Sets the language warframestat.us worldstate fetches use (wfstat code, e.g. "zh"). */
+export async function setWorldstateLanguage(language: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    return;
+  }
+  await invoke('set_worldstate_language', { language });
+}
+
 export async function saveWorldStateCacheEntry(
   endpoint: string,
   entry: PersistedWorldStateCacheEntry,
@@ -294,6 +302,51 @@ export async function getWfmAutocompleteItems(
   }
 
   return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items', { language });
+}
+
+export interface LanguagePackStatus {
+  langCode: string;
+  populated: boolean;
+  itemCount: number;
+  builtVersion: string | null;
+  currentVersion: string | null;
+  wfstatReachable: boolean;
+  upToDate: boolean;
+}
+
+export interface LanguagePackImportResult {
+  langCode: string;
+  itemCount: number;
+}
+
+/** Downloads + installs localized item names for a language from WFStat. Throws if WFStat is unreachable. */
+export async function populateLanguageItemNames(language: string): Promise<LanguagePackImportResult> {
+  if (!isTauriRuntime()) {
+    return { langCode: language, itemCount: 0 };
+  }
+  return invoke<LanguagePackImportResult>('populate_language_item_names', { language });
+}
+
+export async function getLanguagePackStatus(language: string): Promise<LanguagePackStatus | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+  return invoke<LanguagePackStatus>('get_language_pack_status', { language });
+}
+
+/** Returns the pack JSON string (guarded backend-side); throws with a LANGPACK_* code on failure. */
+export async function exportLanguagePack(language: string): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error('LANGPACK_OFFLINE');
+  }
+  return invoke<string>('export_language_pack', { language });
+}
+
+export async function importLanguagePack(pack: string): Promise<LanguagePackImportResult> {
+  if (!isTauriRuntime()) {
+    throw new Error('LANGPACK_BADFORMAT');
+  }
+  return invoke<LanguagePackImportResult>('import_language_pack', { pack });
 }
 
 export async function getWfmTradeSessionState(): Promise<TradeSessionState> {

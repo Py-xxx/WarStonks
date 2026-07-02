@@ -8,6 +8,7 @@ import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { buildWatchlistMarketSignals } from '../../lib/watchlistMarketSignals';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { copyWhisperMessage } from '../../lib/marketMessages';
+import { resolveLocalizedName } from '../../lib/itemNames';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useDocumentVisibility } from '../../hooks/useDocumentVisibility';
 import { useModalA11y } from '../../hooks/useModalA11y';
@@ -309,6 +310,8 @@ function QuickViewCard() {
   const [viewAllOpen, setViewAllOpen] = useState(false);
 
   const selectedItem = quickView.selectedItem;
+  const itemNameMap = useAppStore((s) => s.itemNameMap);
+  const selectedItemName = selectedItem ? resolveLocalizedName(itemNameMap, selectedItem) : '';
   const viewAllRef = useModalA11y<HTMLDivElement>({
     onClose: () => setViewAllOpen(false),
     active: viewAllOpen && Boolean(selectedItem),
@@ -403,7 +406,7 @@ function QuickViewCard() {
         {selectedItem && quickView.loading ? (
           <div className="empty-state">
             <span className="empty-primary">Loading top sell orders…</span>
-            <span className="empty-sub">Fetching the live sell orders for {selectedItem.name}.</span>
+            <span className="empty-sub">Fetching the live sell orders for {selectedItemName}.</span>
           </div>
         ) : null}
 
@@ -426,7 +429,7 @@ function QuickViewCard() {
         {selectedItem && !quickView.loading && !quickView.errorMessage && !mainOrder ? (
           <div className="empty-state">
             <span className="empty-primary">No online sell orders found</span>
-            <span className="empty-sub">{selectedItem.name} currently has no top sell orders returned by warframe.market.</span>
+            <span className="empty-sub">{selectedItemName} currently has no top sell orders returned by warframe.market.</span>
           </div>
         ) : null}
 
@@ -443,7 +446,7 @@ function QuickViewCard() {
                 </span>
                 <div>
                   <div className="qv-stat-label">Selected Item</div>
-                  <div className="qv-focus-item-name">{selectedItem.name}</div>
+                  <div className="qv-focus-item-name">{selectedItemName}</div>
                 </div>
               </div>
               <div>
@@ -544,7 +547,7 @@ function QuickViewCard() {
             <div className="qv-viewall-header">
               <div>
                 <span className="card-label">All Sell Orders</span>
-                <h3>{selectedItem.name}</h3>
+                <h3>{selectedItemName}</h3>
                 <span className="qv-viewall-count">
                   {allOrders.length} {allOrders.length === 1 ? 'listing' : 'listings'} · cheapest first
                 </span>
