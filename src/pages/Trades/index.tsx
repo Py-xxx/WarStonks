@@ -24,8 +24,9 @@ import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
 import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
-import { wfmLangCode } from '../../lib/language';
+import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
+import { tHealth } from '../../lib/healthLabels';
 import type {
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
@@ -515,7 +516,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
               : '—'}
           </span>
           <span className={`listing-analysis-badge ${getLiquidityBadgeClass(headline.liquidityLabel)}`}>
-            {headline.liquidityLabel}
+            {tHealth(t, headline.liquidityLabel)}
           </span>
         </div>
         {liquidityDetail.state && (
@@ -545,7 +546,7 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
           {pressure?.pressureLabel && (
             <div className="listing-analysis-kv">
               <span className="listing-analysis-kv-label">{t('trades.analysis.pressure')}</span>
-              <span className="listing-analysis-kv-value">{pressure.pressureLabel}</span>
+              <span className="listing-analysis-kv-value">{tHealth(t, pressure.pressureLabel)}</span>
             </div>
           )}
         </div>
@@ -1150,10 +1151,10 @@ function HealthTab() {
                     </div>
                     <div className="trade-health-badges">
                       <span className={`market-panel-badge ${getTradeHealthToneClass(health?.tone ?? 'amber')}`}>
-                        {health?.label ?? 'Building'}
+                        {tHealth(t, health?.label) || t('trades.row.building')}
                       </span>
                       <span className={`market-panel-badge ${getTradeHealthToneClass(health?.actionTone ?? 'blue')}`}>
-                        {health?.actionLabel ?? 'Profiling'}
+                        {tHealth(t, health?.actionLabel) || t('trades.row.building')}
                       </span>
                     </div>
                   </div>
@@ -1173,18 +1174,18 @@ function HealthTab() {
                     </div>
                     <div className="trade-health-metric">
                       <span className="trade-health-metric-label">{t('trades.health.direction')}</span>
-                      <strong>{health?.marketDirection ?? 'Profiling'}</strong>
+                      <strong>{tHealth(t, health?.marketDirection) || t('trades.row.building')}</strong>
                     </div>
                     <div className="trade-health-metric">
                       <span className="trade-health-metric-label">{t('trades.health.outlook')}</span>
-                      <strong>{health?.outlookLabel ?? 'Building'}</strong>
+                      <strong>{tHealth(t, health?.outlookLabel) || t('trades.row.building')}</strong>
                     </div>
                     <div className="trade-health-metric">
                       <span className="trade-health-metric-label">{t('trades.health.suggested')}</span>
                       <strong>
                         {health?.recommendedPrice !== null && health?.recommendedPrice !== undefined
                           ? formatPlatinumValue(health.recommendedPrice)
-                          : health?.actionLabel ?? '—'}
+                          : tHealth(t, health?.actionLabel) || '—'}
                       </strong>
                     </div>
                   </div>
@@ -1343,7 +1344,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       setAutocompleteLoading(true);
       setAutocompleteError(null);
       try {
-        const items = await getWfmAutocompleteItems(wfmLangCode(useAppStore.getState().language));
+        const items = await getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language));
         if (!cancelled) {
           setAutocompleteItems(items);
         }
@@ -1537,7 +1538,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     void (async () => {
       let item: WfmAutocompleteItem | null = null;
       try {
-        const catalog = await getWfmAutocompleteItems(wfmLangCode(useAppStore.getState().language));
+        const catalog = await getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language));
         item =
           catalog.find((entry) => entry.slug === request.slug) ??
           catalog.find((entry) => entry.name === request.name) ??
@@ -1920,11 +1921,11 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                     {listingType === 'sell' ? (
                       <div className="trade-health-stack">
                         <span className={`market-panel-badge ${getTradeHealthToneClass(order.health?.tone ?? 'amber')}`}>
-                          {order.health?.label ?? t('trades.row.building')}
+                          {order.health ? tHealth(t, order.health.label) : t('trades.row.building')}
                         </span>
                         <span className="health-note">
                           {order.health
-                            ? `${order.health.actionLabel} · ${order.health.outlookLabel}`
+                            ? `${tHealth(t, order.health.actionLabel)} · ${tHealth(t, order.health.outlookLabel)}`
                             : t('trades.row.refreshingContext')}
                         </span>
                       </div>

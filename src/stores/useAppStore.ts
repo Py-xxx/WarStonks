@@ -35,6 +35,7 @@ import {
   getWorldStateSteelPath,
   getWorldStateNightwave,
   getWorldStateVaultTrader,
+  setWorldstateLanguage,
   type RealtimeWatchlistOrder,
   type UnderpricedListing,
   type Opportunity,
@@ -139,7 +140,7 @@ import {
   loadNotificationSettings,
   saveNotificationSettings,
 } from '../lib/notifications';
-import { type AppLanguage, loadLanguage, saveLanguage, wfmLangCode } from '../lib/language';
+import { applySetSuffix, type AppLanguage, loadLanguage, saveLanguage, wfmLangCode, wfstatLangCode } from '../lib/language';
 import {
   loadPinnedOpportunities,
   savePinnedOpportunities,
@@ -1336,6 +1337,7 @@ interface AppStore {
   discordWebhookModalOpen: boolean;
   notificationsModalOpen: boolean;
   importExportModalOpen: boolean;
+  languageModalOpen: boolean;
   // While true (during an import/export), background scans/polls pause so nothing writes
   // to the databases mid-operation.
   dataMaintenanceActive: boolean;
@@ -1343,6 +1345,11 @@ interface AppStore {
   // Display language (Phase 1: localizes item names via the catalog's per-language data).
   language: AppLanguage;
   setLanguage: (language: AppLanguage) => void;
+  /** Bumped when the language changes so worldstate hooks refetch localized data immediately. */
+  worldstateEpoch: number;
+  /** Localized item names keyed by wfmId and slug, for display across the UI. */
+  itemNameMap: Record<string, string>;
+  loadLocalizedNames: () => Promise<void>;
   /** True when WFStat data (item catalog enrichment and/or live worldstate) is being served
    * from cache because warframestat.us was unreachable at startup. Drives a dismissible banner;
    * resolves itself once WFStat is back online. */
@@ -1423,6 +1430,8 @@ interface AppStore {
   closeNotificationsModal: () => void;
   openImportExportModal: () => void;
   closeImportExportModal: () => void;
+  openLanguageModal: () => void;
+  closeLanguageModal: () => void;
   setWfstatDataStale: (stale: boolean) => void;
   setNotificationSettings: (settings: NotificationSettings) => void;
   clearSettingsError: () => void;
@@ -1703,6 +1712,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   discordWebhookModalOpen: false,
   notificationsModalOpen: false,
   importExportModalOpen: false,
+  languageModalOpen: false,
   dataMaintenanceActive: false,
   setDataMaintenanceActive: (active) => set({ dataMaintenanceActive: active }),
   language: loadLanguage(),
@@ -1711,7 +1721,36 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // Invalidate the cached item catalog so search/quick-view re-fetch localized names.
     autocompleteCatalogPromise = null;
     autocompleteCatalogLang = null;
-    set({ language });
+    // Point warframestat.us worldstate fetches at the new language, then bump the epoch so the
+    // worldstate hooks refetch immediately (rather than waiting for their next poll).
+    void setWorldstateLanguage(wfstatLangCode(language)).catch(() => undefined);
+    set((state) => ({ language, worldstateEpoch: state.worldstateEpoch + 1 }));
+    void useAppStore.getState().loadLocalizedNames();
+  },
+  worldstateEpoch: 0,
+  itemNameMap: {},
+  loadLocalizedNames: async () => {
+    try {
+      const language = useAppStore.getState().language;
+      const items = await getWfmAutocompleteItems(wfstatLangCode(language));
+      const map: Record<string, string> = {};
+      for (const item of items) {
+        if (!item.name) {
+          continue;
+        }
+        // Re-append the localized "Set" suffix for set items whose localized name dropped it.
+        const name = applySetSuffix(language, item.slug, item.name);
+        if (item.wfmId) {
+          map[item.wfmId] = name;
+        }
+        if (item.slug) {
+          map[item.slug] = name;
+        }
+      }
+      set({ itemNameMap: map });
+    } catch {
+      // Keep the previous map on failure; names fall back to English per-row.
+    }
   },
   wfstatDataStale: false,
   notificationSettings: loadNotificationSettings(),
@@ -1885,6 +1924,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
       settingsError: null,
     }),
   closeImportExportModal: () => set({ importExportModalOpen: false }),
+  openLanguageModal: () =>
+    set({
+      settingsSidebarOpen: true,
+      alecaframeModalOpen: false,
+      discordWebhookModalOpen: false,
+      notificationsModalOpen: false,
+      importExportModalOpen: false,
+      languageModalOpen: true,
+      settingsError: null,
+    }),
+  closeLanguageModal: () => set({ languageModalOpen: false }),
   setWfstatDataStale: (stale) => set({ wfstatDataStale: stale }),
   setNotificationSettings: (settings) => {
     saveNotificationSettings(settings);

@@ -16,6 +16,7 @@ import { AlecaframeModal } from './components/AlecaframeModal';
 import { DiscordWebhookModal } from './components/DiscordWebhookModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { ImportExportModal } from './components/ImportExportModal';
+import { LanguageModal } from './components/LanguageModal';
 import { ToastHost } from './components/ToastHost';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
@@ -131,6 +132,7 @@ function AppShell() {
       <DiscordWebhookModal />
       <NotificationsModal />
       <ImportExportModal />
+      <LanguageModal />
       <ToastHost />
     </>
   );

@@ -33,7 +33,7 @@ export interface BaddieBundle {
 
 // ---------- gzip helpers (feature-detected; falls back to plain text) ----------
 
-async function maybeGzip(text: string): Promise<Blob> {
+export async function maybeGzip(text: string): Promise<Blob> {
   if (typeof CompressionStream !== 'undefined') {
     const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
     return new Response(stream).blob();
@@ -41,7 +41,7 @@ async function maybeGzip(text: string): Promise<Blob> {
   return new Blob([text]);
 }
 
-async function maybeGunzip(file: File): Promise<string> {
+export async function maybeGunzip(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const isGzip = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
   if (!isGzip) {
@@ -54,7 +54,7 @@ async function maybeGunzip(file: File): Promise<string> {
   return new Response(stream).text();
 }
 
-function downloadBlob(blob: Blob, filename: string): void {
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

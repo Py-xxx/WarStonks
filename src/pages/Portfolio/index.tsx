@@ -13,6 +13,7 @@ import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 import type {
   PortfolioPnlSummary,
   PortfolioTradeLogEntry,
@@ -197,6 +198,7 @@ function buildLineChartGeometry(
 }
 
 function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
+  const { t } = useTranslation();
   const width = 520;
   const height = 220;
   const padding = { top: 18, right: 18, bottom: 34, left: 54 };
@@ -224,11 +226,11 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
       />
       <div className="chart-body portfolio-chart-body">
         {summary.cumulativeProfitPoints.length === 0 ? (
-          <div className="portfolio-chart-empty">No closed trades in this period yet.</div>
+          <div className="portfolio-chart-empty">{t('pf.noClosedTrades')}</div>
         ) : (
           <div className="portfolio-chart-shell">
             <div className="portfolio-chart-callout">
-              <span className="portfolio-chart-callout-label">Active Point</span>
+              <span className="portfolio-chart-callout-label">{t('pf.activePoint')}</span>
               <div className="portfolio-chart-callout-value">
                 {activeData ? formatSignedPlatinumValue(activeData.cumulativeProfit) : '—'}
               </div>
@@ -348,6 +350,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
 }
 
 function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
+  const { t } = useTranslation();
   const width = 420;
   const height = 220;
   const padding = { top: 18, right: 16, bottom: 34, left: 50 };
@@ -374,11 +377,11 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
       />
       <div className="chart-body portfolio-chart-body">
         {points.length === 0 ? (
-          <div className="portfolio-chart-empty">Profit bars will appear after your first completed sells.</div>
+          <div className="portfolio-chart-empty">{t('pf.profitBarsHint')}</div>
         ) : (
           <div className="portfolio-chart-shell">
             <div className="portfolio-chart-callout">
-              <span className="portfolio-chart-callout-label">Active Trade</span>
+              <span className="portfolio-chart-callout-label">{t('pf.activeTrade')}</span>
               <div className={`portfolio-chart-callout-value${activeTrade && activeTrade.profit < 0 ? ' negative' : ''}`}>
                 {activeTrade ? formatSignedPlatinumValue(activeTrade.profit) : '—'}
               </div>
@@ -685,6 +688,7 @@ function PortfolioPanelHeader({
 }
 
 function TradeLogTab({ username }: { username: string | null }) {
+  const { t } = useTranslation();
   const appSettings = useAppStore((state) => state.appSettings);
   const [entries, setEntries] = useState<PortfolioTradeLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1019,7 +1023,7 @@ function TradeLogTab({ username }: { username: string | null }) {
   return (
     <>
       <div className="period-bar">
-        <label>Trade Log</label>
+        <label>{t('pf.tradeLog')}</label>
         <div className="period-right portfolio-log-toolbar">
           {lastUpdatedAt ? (
             <span className="portfolio-log-updated">Last updated {formatShortLocalDateTime(lastUpdatedAt)}</span>
@@ -1070,8 +1074,8 @@ function TradeLogTab({ username }: { username: string | null }) {
 
       {!username ? (
         <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">Connect your Warframe Market account first</span>
-          <span className="empty-sub">Trade Log uses your public WFM profile statistics.</span>
+          <span className="empty-primary">{t('pf.connectFirst')}</span>
+          <span className="empty-sub">{t('pf.tradeLogHint')}</span>
         </div>
       ) : entries.length === 0 ? (
         <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
@@ -1091,17 +1095,17 @@ function TradeLogTab({ username }: { username: string | null }) {
             />
             <div className="portfolio-log-filters">
               <label className="portfolio-filter-field">
-                <span>Search</span>
+                <span>{t('pf.search')}</span>
                 <input
                   className="settings-text-input"
                   type="text"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Item name or slug"
+                  placeholder={t('pf.searchPlaceholder')}
                 />
               </label>
               <label className="portfolio-filter-field">
-                <span>Type</span>
+                <span>{t('pf.type')}</span>
                 <select
                   className="settings-text-input"
                   value={orderTypeFilter}
@@ -1109,11 +1113,11 @@ function TradeLogTab({ username }: { username: string | null }) {
                 >
                   <option value="all">All</option>
                   <option value="buy">Buy</option>
-                  <option value="sell">Sell</option>
+                  <option value="sell">{t('pf.sell')}</option>
                 </select>
               </label>
               <label className="portfolio-filter-field">
-                <span>Status</span>
+                <span>{t('pf.status')}</span>
                 <select
                   className="settings-text-input"
                   value={statusFilter}
@@ -1122,15 +1126,15 @@ function TradeLogTab({ username }: { username: string | null }) {
                   }
                 >
                   <option value="all">All</option>
-                  <option value="Flip">Flip</option>
-                  <option value="Sold As Set">Sold As Set</option>
-                  <option value="Open">Open</option>
-                  <option value="Kept">Kept</option>
-                  <option value="none">No Status</option>
+                  <option value="Flip">{t('pf.flip')}</option>
+                  <option value="Sold As Set">{t('pf.soldAsSet')}</option>
+                  <option value="Open">{t('pf.open')}</option>
+                  <option value="Kept">{t('pf.kept')}</option>
+                  <option value="none">{t('pf.noStatus')}</option>
                 </select>
               </label>
               <label className="portfolio-filter-field">
-                <span>Source</span>
+                <span>{t('pf.source')}</span>
                 <select
                   className="settings-text-input"
                   value={sourceFilter}
@@ -1138,11 +1142,11 @@ function TradeLogTab({ username }: { username: string | null }) {
                 >
                   <option value="all">All</option>
                   <option value="wfm">warframe.market</option>
-                  <option value="alecaframe">Alecaframe</option>
+                  <option value="alecaframe">{t('pf.alecaframe')}</option>
                 </select>
               </label>
               <label className="portfolio-filter-field">
-                <span>From</span>
+                <span>{t('pf.from')}</span>
                 <input className="settings-text-input" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
               </label>
               <label className="portfolio-filter-field">
@@ -1159,21 +1163,21 @@ function TradeLogTab({ username }: { username: string | null }) {
             />
             <div className="portfolio-log-scroll">
             <div className="portfolio-log-header">
-              <span>Item</span>
-              <span>Type</span>
-              <span>Price</span>
+              <span>{t('pf.item')}</span>
+              <span>{t('pf.type')}</span>
+              <span>{t('pf.price')}</span>
               <span>Qty</span>
-              <span>Rank</span>
-              <span>Profit</span>
-              <span>Margin</span>
-              <span>Status</span>
-              <span>Closed</span>
-              <span>Action</span>
+              <span>{t('pf.rank')}</span>
+              <span>{t('pf.profit')}</span>
+              <span>{t('pf.margin')}</span>
+              <span>{t('pf.status')}</span>
+              <span>{t('pf.closed')}</span>
+              <span>{t('pf.action')}</span>
             </div>
 
             <div className="portfolio-log-list">
               {displayRows.length === 0 ? (
-                <div className="portfolio-breakdown-empty">No trades match the current filters.</div>
+                <div className="portfolio-breakdown-empty">{t('pf.noTradesFilter')}</div>
               ) : (
                 displayRows.map((row) =>
                   row.kind === 'single' ? (
@@ -1220,7 +1224,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                                 aria-label={`Keep ${row.entry.itemName}`}
                                 onClick={() => handleToggleKeepItem(row.entry)}
                               />
-                              <span>Keep Item</span>
+                              <span>{t('pf.keepItem')}</span>
                             </label>
                           ) : (
                             <span className="portfolio-log-value">—</span>
@@ -1266,7 +1270,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                         <span className="portfolio-log-value">—</span>
                         <span className="portfolio-log-value">—</span>
                         <span className="portfolio-log-value">—</span>
-                        <span className="portfolio-log-value">Grouped</span>
+                        <span className="portfolio-log-value">{t('pf.grouped')}</span>
                         <span className="portfolio-log-date">{formatShortLocalDateTime(row.closedAt)}</span>
                         <span className="portfolio-log-actions portfolio-log-actions-parent">
                           <button className="act-btn portfolio-secondary-btn" type="button" onClick={() => handleOpenAllocationModal(row)}>
@@ -1319,7 +1323,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                                         aria-label={`Keep ${child.itemName}`}
                                         onClick={() => handleToggleKeepItem(child)}
                                       />
-                                      <span>Keep Item</span>
+                                      <span>{t('pf.keepItem')}</span>
                                     </label>
                                   ) : (
                                     <span className="portfolio-log-value">—</span>
@@ -1351,8 +1355,8 @@ function TradeLogTab({ username }: { username: string | null }) {
           >
             <div className="settings-modal-header">
               <div className="settings-modal-title">
-                <span className="card-label">Trade Log</span>
-                <h3>Migrate Alecaframe Trades</h3>
+                <span className="card-label">{t('pf.tradeLog')}</span>
+                <h3>{t('pf.migrateAleca')}</h3>
               </div>
               <button
                 className="modal-close"
@@ -1366,13 +1370,13 @@ function TradeLogTab({ username }: { username: string | null }) {
             <div className="settings-modal-body">
               <div className="settings-preview-grid">
                 <article className="settings-preview-card">
-                  <span className="settings-field-label">Purpose</span>
+                  <span className="settings-field-label">{t('pf.purpose')}</span>
                   <p className="settings-preview-value">
                     Import missing buy and sell trades from Alecaframe without duplicating existing log rows.
                   </p>
                 </article>
                 <article className="settings-preview-card">
-                  <span className="settings-field-label">Baseline Date</span>
+                  <span className="settings-field-label">{t('pf.baselineDate')}</span>
                   <input
                     className="settings-text-input"
                     type="date"
@@ -1415,8 +1419,8 @@ function TradeLogTab({ username }: { username: string | null }) {
           >
             <div className="settings-modal-header">
               <div className="settings-modal-title">
-                <span className="card-label">Trade Log</span>
-                <h3>Adjust Amounts</h3>
+                <span className="card-label">{t('pf.tradeLog')}</span>
+                <h3>{t('pf.adjustAmounts')}</h3>
               </div>
               <button
                 className="modal-close"
@@ -1429,7 +1433,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             </div>
             <div className="settings-modal-body">
               <div className="portfolio-allocation-summary">
-                <span>Total trade value</span>
+                <span>{t('pf.totalTradeValue')}</span>
                 <strong>{formatPlatinumValue(allocationExpectedTotal)}</strong>
               </div>
               <div className="portfolio-allocation-list">
@@ -1461,7 +1465,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                 ))}
               </div>
               <div className={`portfolio-allocation-summary${allocationMatches ? '' : ' error'}`}>
-                <span>Allocated total</span>
+                <span>{t('pf.allocatedTotal')}</span>
                 <strong>
                   {formatPlatinumValue(allocationTotal)} / {formatPlatinumValue(allocationExpectedTotal)}
                 </strong>
@@ -1548,6 +1552,7 @@ function PnlSummaryTab({
   period: '7d' | '30d' | '90d' | 'all';
   onRefreshTrades: () => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const setTradePeriod = useAppStore((state) => state.setTradePeriod);
   const [summary, setSummary] = useState<PortfolioPnlSummary | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1684,7 +1689,7 @@ function PnlSummaryTab({
   return (
     <>
       <div className="period-bar">
-        <label>Period:</label>
+        <label>{t('pf.period')}</label>
         {(['7d', '30d', '90d', 'all'] as const).map((nextPeriod) => (
           <button
             key={nextPeriod}
@@ -1720,7 +1725,7 @@ function PnlSummaryTab({
 
       {!username ? (
         <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">Connect your Warframe Market account first</span>
+          <span className="empty-primary">{t('pf.connectFirst')}</span>
           <span className="empty-sub">
             P&amp;L Summary uses your permanent local trade ledger and cached market history.
           </span>
@@ -1798,23 +1803,23 @@ function PnlSummaryTab({
 
           <div className="perf-grid portfolio-perf-grid">
             <div className="perf-card">
-              <div className="perf-label">Closed Trades <InfoHint text="Number of sells you completed in this period." /></div>
+              <div className="perf-label">{t('pf.closedTrades')} <InfoHint text="Number of sells you completed in this period." /></div>
               <div className="perf-val">{bodySummary.closedTrades}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Win Rate <InfoHint text="Share of your closed sells that made a profit." /></div>
+              <div className="perf-label">{t('pf.winRate')} <InfoHint text="Share of your closed sells that made a profit." /></div>
               <div className="perf-val blue">{formatPercentValue(bodySummary.winRate)}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Avg Margin <InfoHint text="Average profit as a percentage of cost, across sells where the buy cost is known." /></div>
+              <div className="perf-label">{t('pf.avgMargin')} <InfoHint text="Average profit as a percentage of cost, across sells where the buy cost is known." /></div>
               <div className="perf-val blue">{formatPercentValue(bodySummary.averageMargin)}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Avg Hold <InfoHint text="Average time you held an item between buying it and selling it." /></div>
+              <div className="perf-label">{t('pf.avgHold')} <InfoHint text="Average time you held an item between buying it and selling it." /></div>
               <div className="perf-val">{formatHoursValue(bodySummary.averageHoldHours)}</div>
             </div>
             <div className="perf-card">
-              <div className="perf-label">Avg Profit / Trade <InfoHint text="Average realized profit per closed sell." /></div>
+              <div className="perf-label">{t('pf.avgProfitTrade')} <InfoHint text="Average realized profit per closed sell." /></div>
               <div className="perf-val green">{formatPlatinumValue(Math.round(bodySummary.averageProfitPerTrade))}</div>
             </div>
           </div>
@@ -1832,7 +1837,7 @@ function PnlSummaryTab({
               />
               <div className="portfolio-breakdown-list">
                 {bodySummary.sourceBreakdown.length === 0 ? (
-                  <div className="portfolio-breakdown-empty">No closed sell trades in this period yet.</div>
+                  <div className="portfolio-breakdown-empty">{t('pf.noClosedSell')}</div>
                 ) : (
                   bodySummary.sourceBreakdown.map((row) => (
                     <div key={row.label} className="portfolio-breakdown-row">
@@ -1854,7 +1859,7 @@ function PnlSummaryTab({
               />
               <div className="portfolio-breakdown-list">
                 {bodySummary.categoryBreakdown.length === 0 ? (
-                  <div className="portfolio-breakdown-empty">No category profit data is available yet.</div>
+                  <div className="portfolio-breakdown-empty">{t('pf.noCategoryProfit')}</div>
                 ) : (
                   bodySummary.categoryBreakdown.map((row) => (
                     <div key={row.label} className="portfolio-breakdown-row">
@@ -1872,13 +1877,13 @@ function PnlSummaryTab({
 
           <div className="portfolio-insight-grid">
             <div className="info-card">
-              <div className="info-card-label">Best Trade <InfoHint text="Your most profitable single sell in this period." /></div>
+              <div className="info-card-label">{t('pf.bestTrade')} <InfoHint text="Your most profitable single sell in this period." /></div>
               <div className="info-card-val neutral portfolio-inline-stat">
                 {bodySummary.bestTradeItem ? `${bodySummary.bestTradeItem} · ${formatSignedPlatinumValue(bodySummary.bestTradeProfit ?? 0)}` : '—'}
               </div>
             </div>
             <div className="info-card">
-              <div className="info-card-label">Worst Trade <InfoHint text="Your least profitable single sell in this period (your biggest loss, if any)." /></div>
+              <div className="info-card-label">{t('pf.worstTrade')} <InfoHint text="Your least profitable single sell in this period (your biggest loss, if any)." /></div>
               <div className="info-card-val neutral portfolio-inline-stat">
                 {bodySummary.worstTradeItem ? `${bodySummary.worstTradeItem} · ${formatSignedPlatinumValue(bodySummary.worstTradeProfit ?? 0)}` : '—'}
               </div>
@@ -1893,13 +1898,13 @@ function PnlSummaryTab({
             />
             <div className="portfolio-confidence-row">
               <span className="portfolio-confidence-stat">
-                <span className="portfolio-confidence-stat-label">Profit basis</span>
+                <span className="portfolio-confidence-stat-label">{t('pf.profitBasis')}</span>
                 <span className={`market-panel-badge tone-${portfolioCoverageTone(bodySummary.costBasisCoveragePct)}`}>
                   {formatPercentValue(bodySummary.costBasisCoveragePct)}
                 </span>
               </span>
               <span className="portfolio-confidence-stat">
-                <span className="portfolio-confidence-stat-label">Inventory value</span>
+                <span className="portfolio-confidence-stat-label">{t('pf.inventoryValue')}</span>
                 <span className={`market-panel-badge tone-${portfolioCoverageTone(bodySummary.currentValueCoveragePct)}`}>
                   {formatPercentValue(bodySummary.currentValueCoveragePct)}
                 </span>
@@ -1922,6 +1927,7 @@ function PnlSummaryTab({
 }
 
 export function PortfolioPage() {
+  const { t } = useTranslation();
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const tradePeriod = useAppStore((s) => s.tradePeriod);
   const [portfolioTab, setPortfolioTab] = useState<'pnl' | 'log'>('pnl');
@@ -1938,9 +1944,9 @@ export function PortfolioPage() {
     <>
       <div className="subnav portfolio-page-subnav">
         <div className="subnav-left">
-          <span className="page-title">Portfolio</span>
+          <span className="page-title">{t('pf.title')}</span>
           <span className={`subtab${portfolioTab === 'pnl' ? ' active' : ''}`} onClick={() => setPortfolioTab('pnl')} role="tab" tabIndex={0}>P&amp;L Summary</span>
-          <span className={`subtab${portfolioTab === 'log' ? ' active' : ''}`} onClick={() => setPortfolioTab('log')} role="tab" tabIndex={0}>Trade Log</span>
+          <span className={`subtab${portfolioTab === 'log' ? ' active' : ''}`} onClick={() => setPortfolioTab('log')} role="tab" tabIndex={0}>{t('pf.tradeLog')}</span>
         </div>
       </div>
       <div className="page-content portfolio-page-content">

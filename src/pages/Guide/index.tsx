@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 import { GUIDE_SECTIONS, type GuideBlock, type GuideSection } from './guideContent';
 
 /** Lowercased haystack of every searchable string in a section. */
@@ -107,6 +108,7 @@ function GuideBlockView({ block }: { block: GuideBlock }) {
 }
 
 export function GuidePage() {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [activeSectionId, setActiveSectionId] = useState<string>(GUIDE_SECTIONS[0]?.id ?? '');
 
@@ -131,7 +133,7 @@ export function GuidePage() {
     <>
       <div className="subnav guide-subnav">
         <div className="subnav-left">
-          <span className="page-title">Guide</span>
+          <span className="page-title">{t('guide.title')}</span>
           {!normalizedQuery
             ? GUIDE_SECTIONS.map((section) => (
                 <span
@@ -152,26 +154,21 @@ export function GuidePage() {
           <input
             type="search"
             className="guide-search"
-            placeholder="Search the guide…"
+            placeholder={t('guide.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search the guide"
+            aria-label={t('guide.searchAria')}
           />
         </div>
       </div>
 
       <div className="page-content guide-page-content">
-        <div className="guide-intro">
-          Everything you need to know about WarStonks — how each tab works, a typical trading
-          workflow, what the analytics mean, and a glossary of common terms.
-        </div>
+        <div className="guide-intro">{t('guide.intro')}</div>
 
         {visibleSections.length === 0 ? (
           <div className="empty-state" style={{ marginTop: 32, minHeight: 160 }}>
-            <span className="empty-primary">No matches</span>
-            <span className="empty-sub">
-              Nothing in the guide matches “{query}”. Try a different word.
-            </span>
+            <span className="empty-primary">{t('guide.noMatches')}</span>
+            <span className="empty-sub">{t('guide.noMatchesSub', { query })}</span>
           </div>
         ) : (
           visibleSections.map((section) => (

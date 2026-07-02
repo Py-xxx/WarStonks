@@ -3401,18 +3401,46 @@ fn fetch_wfstat_catalog_version() -> Result<Option<String>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
-    let response = client
-        .head(WFSTAT_ITEMS_URL)
-        .send()?
-        .error_for_status()?;
-    let headers = response.headers();
-    let tag = headers
-        .get("etag")
-        .or_else(|| headers.get("last-modified"))
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    Ok(tag)
+    // warframestat.us sits behind Cloudflare and rejects User-Agent-less requests (and its
+    // API rules require an identifying UA anyway), so always send one. A missing UA here made
+    // the version/reachability probe fail even when WFStat was online.
+    let build = |method_head: bool| {
+        let request = if method_head {
+            client.head(WFSTAT_ITEMS_URL)
+        } else {
+            client.get(WFSTAT_ITEMS_URL)
+        };
+        request
+            .header("User-Agent", WFM_USER_AGENT)
+            .header("Accept", "application/json")
+    };
+    let extract_tag = |response: reqwest::blocking::Response| {
+        response
+            .headers()
+            .get("etag")
+            .or_else(|| response.headers().get("last-modified"))
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    // Prefer a cheap HEAD; if the CDN refuses HEAD (405/501), fall back to a GET and read the
+    // validator headers off it without consuming the (large) body.
+    match build(true).send()?.error_for_status() {
+        Ok(response) => Ok(extract_tag(response)),
+        Err(head_error) => {
+            let status = head_error.status();
+            let head_disallowed = matches!(
+                status,
+                Some(code) if code == reqwest::StatusCode::METHOD_NOT_ALLOWED
+                    || code == reqwest::StatusCode::NOT_IMPLEMENTED
+            );
+            if !head_disallowed {
+                return Err(head_error.into());
+            }
+            let response = build(false).send()?.error_for_status()?;
+            Ok(extract_tag(response))
+        }
+    }
 }
 
 /// Freshness check that uses the items-collection hash (from /v2/versions) instead of the
@@ -3925,6 +3953,345 @@ fn get_bool_as_i64(value: &Value, key: &str) -> Option<i64> {
         },
         _ => None,
     })
+}
+
+// ===================== Language packs =====================
+//
+// A language pack is a portable snapshot of one language's item-name translations
+// (the `wfm_item_i18n` rows) plus the WFStat catalog version they were built from.
+// Users can export a pack when their catalog is current and share/download it via
+// Discord, then import it on a machine where WFStat was unreachable at catalog-build
+// time (so those translations never got populated locally).
+
+const LANGUAGE_PACK_FORMAT: &str = "warstonks-language-pack";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguagePackStatus {
+    pub lang_code: String,
+    pub populated: bool,
+    pub item_count: i64,
+    pub built_version: Option<String>,
+    pub current_version: Option<String>,
+    pub wfstat_reachable: bool,
+    pub up_to_date: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LanguagePackRow {
+    wfm_id: String,
+    name: Option<String>,
+    icon: Option<String>,
+    thumb: Option<String>,
+    sub_icon: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguagePack {
+    pub format: String,
+    pub lang_code: String,
+    pub wfstat_catalog_version: Option<String>,
+    pub item_count: i64,
+    pub exported_at: String,
+    rows: Vec<LanguagePackRow>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguagePackImportResult {
+    pub lang_code: String,
+    pub item_count: i64,
+}
+
+/// Fetches localized item names from WFStat for one language, keyed by `uniqueName`.
+/// The bulk `/items/` response carries no per-language `i18n` object, so localization must
+/// come from the `?language=` param (which localizes the top-level `name` field).
+fn fetch_wfstat_item_names(lang_code: &str) -> Result<HashMap<String, String>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()?;
+    let url = format!("{WFSTAT_ITEMS_URL}?language={lang_code}&only=name,uniqueName");
+    let items: Vec<Value> = client
+        .get(url)
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Accept", "application/json")
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let mut map = HashMap::with_capacity(items.len());
+    for item in items {
+        if let (Some(unique), Some(name)) = (
+            item.get("uniqueName").and_then(Value::as_str),
+            item.get("name").and_then(Value::as_str),
+        ) {
+            if !unique.is_empty() && !name.is_empty() {
+                map.insert(unique.to_string(), name.to_string());
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Downloads and installs localized item names for one language from WFStat, matching on the
+/// stored `primary_wfstat_unique_name`. This is how `wfm_item_i18n` actually gets populated —
+/// the bulk catalog has no i18n object. Errors (e.g. WFStat offline) bubble up so the UI can
+/// show the fallback + language-pack path.
+pub fn populate_language_item_names(
+    app: AppHandle,
+    lang_code: String,
+) -> std::result::Result<LanguagePackImportResult, String> {
+    (|| -> Result<LanguagePackImportResult> {
+        // English is the catalog's native `name_en`; nothing to localize.
+        if lang_code.is_empty() || lang_code == "en" {
+            return Ok(LanguagePackImportResult {
+                lang_code,
+                item_count: 0,
+            });
+        }
+        let names = fetch_wfstat_item_names(&lang_code)?;
+        let paths = resolve_app_paths(&app)?;
+        let mut connection = open_database(&paths.db_path)?;
+        ensure_language_pack_meta_table(&connection)?;
+        // Map every WFM item to its matched WFStat uniqueName so we can attach the localized name.
+        let pairs: Vec<(String, String)> = {
+            let mut statement = connection.prepare(
+                "SELECT w.wfm_id, i.primary_wfstat_unique_name
+                 FROM wfm_items w
+                 JOIN items i ON i.item_id = w.item_id
+                 WHERE i.primary_wfstat_unique_name IS NOT NULL
+                   AND i.primary_wfstat_unique_name <> ''",
+            )?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<(String, String)>>>()?;
+            rows
+        };
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM wfm_item_i18n WHERE lang_code = ?1", [&lang_code])?;
+        let mut inserted: i64 = 0;
+        {
+            let mut insert = tx.prepare(
+                "INSERT OR REPLACE INTO wfm_item_i18n (wfm_id, lang_code, name) VALUES (?1, ?2, ?3)",
+            )?;
+            for (wfm_id, unique_name) in &pairs {
+                if let Some(name) = names.get(unique_name) {
+                    insert.execute(params![wfm_id, lang_code, name])?;
+                    inserted += 1;
+                }
+            }
+        }
+        let version = fetch_wfstat_catalog_version().ok().flatten();
+        tx.execute(
+            "INSERT INTO language_pack_meta (lang_code, wfstat_version, item_count, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(lang_code) DO UPDATE SET
+                wfstat_version = excluded.wfstat_version,
+                item_count = excluded.item_count,
+                updated_at = excluded.updated_at",
+            params![lang_code, version, inserted, iso_timestamp_now()],
+        )?;
+        tx.commit()?;
+        Ok(LanguagePackImportResult {
+            lang_code,
+            item_count: inserted,
+        })
+    })()
+    .map_err(|error| error.to_string())
+}
+
+fn ensure_language_pack_meta_table(connection: &Connection) -> Result<()> {
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS language_pack_meta (
+            lang_code TEXT PRIMARY KEY,
+            wfstat_version TEXT,
+            item_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+fn i18n_row_count(connection: &Connection, lang_code: &str) -> Result<i64> {
+    Ok(connection.query_row(
+        "SELECT COUNT(*) FROM wfm_item_i18n
+         WHERE lang_code = ?1 AND name IS NOT NULL AND name <> ''",
+        [lang_code],
+        |row| row.get(0),
+    )?)
+}
+
+/// The WFStat version a language's translations were built from: an imported pack's
+/// recorded version wins; otherwise a natively-built language inherits the catalog version.
+fn language_built_version(connection: &Connection, lang_code: &str) -> Result<Option<String>> {
+    ensure_language_pack_meta_table(connection)?;
+    let imported: Option<String> = connection
+        .query_row(
+            "SELECT wfstat_version FROM language_pack_meta WHERE lang_code = ?1",
+            [lang_code],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(imported.or_else(|| stored_wfstat_catalog_version(connection)))
+}
+
+pub fn get_language_pack_status(
+    app: AppHandle,
+    lang_code: String,
+) -> std::result::Result<LanguagePackStatus, String> {
+    (|| -> Result<LanguagePackStatus> {
+        let paths = resolve_app_paths(&app)?;
+        let connection = open_database(&paths.db_path)?;
+        ensure_language_pack_meta_table(&connection)?;
+        let item_count = i18n_row_count(&connection, &lang_code)?;
+        let built_version = language_built_version(&connection, &lang_code)?;
+        // A HEAD probe doubles as the reachability + currency check.
+        let (wfstat_reachable, current_version) = match fetch_wfstat_catalog_version() {
+            Ok(version) => (true, version),
+            Err(_) => (false, None),
+        };
+        // Up to date when versions match, or when WFStat is reachable but we simply never
+        // recorded a build version (can't disprove currency → treat as current).
+        let up_to_date = match (&built_version, &current_version) {
+            (Some(b), Some(c)) => b == c,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        Ok(LanguagePackStatus {
+            lang_code,
+            populated: item_count > 0,
+            item_count,
+            built_version,
+            current_version,
+            wfstat_reachable,
+            up_to_date,
+        })
+    })()
+    .map_err(|error| error.to_string())
+}
+
+/// Serializes a language's translations into a pack (as JSON). Guarded: the language must be
+/// populated AND current with WFStat (which requires WFStat to be reachable to confirm).
+/// Returns machine-readable error codes the UI maps to localized messages.
+pub fn export_language_pack(
+    app: AppHandle,
+    lang_code: String,
+) -> std::result::Result<String, String> {
+    (|| -> Result<String> {
+        let paths = resolve_app_paths(&app)?;
+        let connection = open_database(&paths.db_path)?;
+        ensure_language_pack_meta_table(&connection)?;
+        if i18n_row_count(&connection, &lang_code)? == 0 {
+            anyhow::bail!("LANGPACK_EMPTY");
+        }
+        let current_version =
+            fetch_wfstat_catalog_version().map_err(|_| anyhow!("LANGPACK_OFFLINE"))?;
+        let built_version = language_built_version(&connection, &lang_code)?;
+        match (&built_version, &current_version) {
+            // Reachable but no validator header → can't stamp a version, don't guess.
+            (_, None) => anyhow::bail!("LANGPACK_OFFLINE"),
+            // We have both and they genuinely differ → local data is out of date.
+            (Some(built), Some(current)) if built != current => anyhow::bail!("LANGPACK_STALE"),
+            // Equal, or no recorded build version (WFStat reachable) → allow, stamped with current.
+            _ => {}
+        }
+        let mut statement = connection.prepare(
+            "SELECT wfm_id, name, icon, thumb, sub_icon FROM wfm_item_i18n
+             WHERE lang_code = ?1 AND name IS NOT NULL AND name <> ''
+             ORDER BY wfm_id",
+        )?;
+        let rows: Vec<LanguagePackRow> = statement
+            .query_map([&lang_code], |row| {
+                Ok(LanguagePackRow {
+                    wfm_id: row.get(0)?,
+                    name: row.get(1)?,
+                    icon: row.get(2)?,
+                    thumb: row.get(3)?,
+                    sub_icon: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let pack = LanguagePack {
+            format: LANGUAGE_PACK_FORMAT.to_string(),
+            lang_code: lang_code.clone(),
+            wfstat_catalog_version: current_version,
+            item_count: rows.len() as i64,
+            exported_at: iso_timestamp_now(),
+            rows,
+        };
+        Ok(serde_json::to_string(&pack)?)
+    })()
+    .map_err(|error| error.to_string())
+}
+
+/// Applies a parsed language pack (REPLACE semantics for that language). Rows referencing
+/// items not present in this catalog are skipped (FK-safe). Records the pack version so the
+/// language's currency can be judged later. Returns the language + count actually inserted.
+pub fn import_language_pack(
+    app: AppHandle,
+    pack_json: String,
+) -> std::result::Result<LanguagePackImportResult, String> {
+    (|| -> Result<LanguagePackImportResult> {
+        let pack: LanguagePack =
+            serde_json::from_str(&pack_json).context("invalid language pack file")?;
+        if pack.format != LANGUAGE_PACK_FORMAT {
+            anyhow::bail!("LANGPACK_BADFORMAT");
+        }
+        if pack.lang_code.trim().is_empty() {
+            anyhow::bail!("LANGPACK_BADFORMAT");
+        }
+        let paths = resolve_app_paths(&app)?;
+        let mut connection = open_database(&paths.db_path)?;
+        ensure_language_pack_meta_table(&connection)?;
+        let tx = connection.transaction()?;
+        tx.execute(
+            "DELETE FROM wfm_item_i18n WHERE lang_code = ?1",
+            [&pack.lang_code],
+        )?;
+        let mut inserted: i64 = 0;
+        {
+            // Insert only for items that exist locally, so a pack from a newer/larger catalog
+            // never trips the wfm_items foreign key.
+            let mut insert = tx.prepare(
+                "INSERT INTO wfm_item_i18n (wfm_id, lang_code, name, icon, thumb, sub_icon)
+                 SELECT ?1, ?2, ?3, ?4, ?5, ?6
+                 WHERE EXISTS (SELECT 1 FROM wfm_items WHERE wfm_id = ?1)",
+            )?;
+            for row in &pack.rows {
+                inserted += insert.execute(params![
+                    row.wfm_id,
+                    pack.lang_code,
+                    row.name,
+                    row.icon,
+                    row.thumb,
+                    row.sub_icon,
+                ])? as i64;
+            }
+        }
+        tx.execute(
+            "INSERT INTO language_pack_meta (lang_code, wfstat_version, item_count, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(lang_code) DO UPDATE SET
+                wfstat_version = excluded.wfstat_version,
+                item_count = excluded.item_count,
+                updated_at = excluded.updated_at",
+            params![
+                pack.lang_code,
+                pack.wfstat_catalog_version,
+                inserted,
+                iso_timestamp_now()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(LanguagePackImportResult {
+            lang_code: pack.lang_code,
+            item_count: inserted,
+        })
+    })()
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

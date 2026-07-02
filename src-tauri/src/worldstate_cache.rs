@@ -109,13 +109,29 @@ fn save_worldstate_cache_entry_inner(
 
     let path = build_worldstate_cache_path(app)?;
     let mut cache = load_cache_from_path(&path)?;
-    cache.insert(trimmed_endpoint.to_string(), entry);
+    // Key entries by worldstate language so each language keeps its own cached snapshots
+    // (WFStat data is localized). Legacy unprefixed entries are treated as English on read.
+    let lang = crate::commands::wfstat_language();
+    cache.insert(format!("{lang}::{trimmed_endpoint}"), entry);
     save_cache_to_path(&path, &cache)
 }
 
 #[tauri::command]
 pub fn get_worldstate_cache(app: tauri::AppHandle) -> Result<WorldStateCacheMap, String> {
-    load_worldstate_cache_inner(&app).map_err(|error| error.to_string())
+    let raw = load_worldstate_cache_inner(&app).map_err(|error| error.to_string())?;
+    // Return only the active language's entries, keyed by plain endpoint (prefix stripped).
+    let lang = crate::commands::wfstat_language();
+    let prefix = format!("{lang}::");
+    let mut result = WorldStateCacheMap::new();
+    for (key, entry) in raw {
+        if let Some(endpoint) = key.strip_prefix(&prefix) {
+            result.insert(endpoint.to_string(), entry);
+        } else if lang == "en" && !key.contains("::") {
+            // Pre-language cache entries were English; surface them only for English.
+            result.insert(key, entry);
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]

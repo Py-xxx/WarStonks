@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { WORLDSTATE_RETRY_DELAY_MS } from '../lib/worldState';
 import { useAppStore } from '../stores/useAppStore';
 import { useDocumentVisibility } from './useDocumentVisibility';
@@ -16,6 +16,21 @@ export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
   const isVisible = useDocumentVisibility();
   // Pause refreshes while a data import/export is running.
   const maintenance = useAppStore((state) => state.dataMaintenanceActive);
+  // Force an immediate refetch when the display language changes (worldstate is localized
+  // server-side, so cached data is stale in the new language).
+  const worldstateEpoch = useAppStore((state) => state.worldstateEpoch);
+  const lastEpochRef = useRef(worldstateEpoch);
+
+  useEffect(() => {
+    if (lastEpochRef.current === worldstateEpoch) {
+      return;
+    }
+    lastEpochRef.current = worldstateEpoch;
+    if (maintenance) {
+      return;
+    }
+    void refresh();
+  }, [worldstateEpoch, maintenance, refresh]);
 
   useEffect(() => {
     if (maintenance || !isVisible || lastUpdatedAt || nextRefreshAt || error || loading) {

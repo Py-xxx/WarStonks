@@ -7,6 +7,8 @@ import {
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { ItemName } from '../../components/ItemName';
+import { useLocalizedName } from '../../hooks/useLocalizedName';
+import { useTranslation } from '../../i18n';
 import {
   formatScannerErrorMessage,
   type ScannerErrorContext,
@@ -209,6 +211,7 @@ function ArbitrageComponentRow({
   onTargetChange: (value: string) => void;
   onAdd: () => void;
 }) {
+  const { t } = useTranslation();
   const imageUrl = resolveWfmAssetUrl(component.imagePath);
   const isDisabled = !component.itemId || !targetValue.trim();
 
@@ -235,7 +238,7 @@ function ArbitrageComponentRow({
           </div>
           <div className="scanner-component-pill-row">
             <span className="scanner-stat-pill scanner-stat-pill-highlight">
-              <span className="scanner-stat-pill-label">Entry Zone</span>
+              <span className="scanner-stat-pill-label">{t('scan.entryZone')}</span>
               <span className="scanner-stat-pill-value">
                 {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
               </span>
@@ -289,6 +292,7 @@ function ArbitrageRow({
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
 }) {
+  const { t } = useTranslation();
   const imageUrl = resolveWfmAssetUrl(entry.imagePath);
 
   return (
@@ -320,17 +324,17 @@ function ArbitrageRow({
             </div>
           </div>
           <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">Entry</span>
+            <span className="scanner-farm-cell-label">{t('scan.entry')}</span>
             <strong className="scanner-farm-cell-value">{formatPlat(entry.basketEntryCost)}</strong>
           </span>
           <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">Exit Zone</span>
+            <span className="scanner-farm-cell-label">{t('scan.exitZone')}</span>
             <strong className="scanner-farm-cell-value">
               {formatPlat(entry.setExitLow)} - {formatPlat(entry.setExitHigh)}
             </strong>
           </span>
           <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">Margin</span>
+            <span className="scanner-farm-cell-label">{t('scan.margin')}</span>
             <strong className="scanner-farm-cell-value">{formatPlat(entry.grossMargin)}</strong>
           </span>
           <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
@@ -345,26 +349,26 @@ function ArbitrageRow({
         <div className="farm-now-row-body scanner-farm-row-body">
           <div className="scanner-row-summary-grid">
             <div className="market-metric-card">
-              <span className="info-card-label">Set Exit</span>
+              <span className="info-card-label">{t('scan.setExit')}</span>
               <strong>{formatPlat(entry.recommendedSetExitPrice)}</strong>
             </div>
             <div className="market-metric-card">
-              <span className="info-card-label">Liquidity</span>
+              <span className="info-card-label">{t('scan.liquidity')}</span>
               <strong>{Math.round(entry.liquidityScore)}%</strong>
             </div>
             <div className="market-metric-card">
-              <span className="info-card-label">Confidence</span>
+              <span className="info-card-label">{t('scan.confidence')}</span>
               <strong>{entry.confidenceSummary.label}</strong>
             </div>
             <div className="market-metric-card">
-              <span className="info-card-label">Components</span>
+              <span className="info-card-label">{t('scan.components')}</span>
               <strong>{entry.componentCount}</strong>
             </div>
           </div>
 
           <div className="scanner-components-panel">
             <div className="scanner-components-header">
-              <span className="card-label">Component Basket</span>
+              <span className="card-label">{t('scan.componentBasket')}</span>
               <span className="scanner-components-meta">{entry.componentCount} components</span>
             </div>
             <div className="scanner-components-list">
@@ -393,6 +397,8 @@ function RelicDropRow({
   drop: RelicRoiDropEntry;
   refinementKey: RelicRefinementKey;
 }) {
+  const { t } = useTranslation();
+  const localizeName = useLocalizedName();
   const imageUrl = resolveWfmAssetUrl(drop.imagePath);
   const chance = chanceForRefinement(drop.chanceProfile, refinementKey);
   const normalizedChance = normalizeRelicChance(chance);
@@ -414,7 +420,7 @@ function RelicDropRow({
         </span>
         <div className="scanner-component-copy">
           <div className="scanner-component-name-row">
-            <span className="scanner-component-name">{drop.name}</span>
+            <span className="scanner-component-name">{localizeName(drop)}</span>
             {drop.rarity ? <span className="market-panel-badge tone-blue">{drop.rarity}</span> : null}
             <span className={`market-panel-badge tone-${confidenceTone(drop.confidenceSummary.level)}`}>
               {drop.confidenceSummary.label}
@@ -422,11 +428,11 @@ function RelicDropRow({
           </div>
           <div className="scanner-component-pill-row">
             <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Chance</span>
+              <span className="scanner-stat-pill-label">{t('scan.chance')}</span>
               <span className="scanner-stat-pill-value">{formatChance(chance)}</span>
             </span>
             <span className="scanner-stat-pill scanner-stat-pill-highlight">
-              <span className="scanner-stat-pill-label">Optimal Exit</span>
+              <span className="scanner-stat-pill-label">{t('scan.optimalExit')}</span>
               <span className="scanner-stat-pill-value">
                 {formatPlat(drop.recommendedExitLow)} - {formatPlat(drop.recommendedExitHigh)}
               </span>
@@ -455,6 +461,7 @@ function RelicRoiRow({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
   const imageUrl = resolveWfmAssetUrl(entry.imagePath);
   const summary = getRelicRefinementSummary(entry, refinementKey);
 
@@ -479,9 +486,9 @@ function RelicRoiRow({
               </strong>
               <div className="scanner-farm-badge-row">
                 {entry.isUnvaulted ? (
-                  <span className="market-panel-badge tone-green">Unvaulted</span>
+                  <span className="market-panel-badge tone-green">{t('scan.unvaulted')}</span>
                 ) : (
-                  <span className="market-panel-badge tone-amber">Vaulted</span>
+                  <span className="market-panel-badge tone-amber">{t('scan.vaulted')}</span>
                 )}
                 <span className={`market-panel-badge tone-${confidenceTone(summary?.confidenceSummary.level ?? 'low')}`}>
                   {summary?.confidenceSummary.label ?? entry.confidenceSummary.label}
@@ -493,15 +500,15 @@ function RelicRoiRow({
             <span className="market-panel-badge tone-blue">{summary?.refinementLabel ?? '—'}</span>
           </span>
           <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">Run Value</span>
+            <span className="scanner-farm-cell-label">{t('scan.runValue')}</span>
             <strong className="scanner-farm-cell-value">{formatPlatPrecise(summary?.runValue ?? null)}</strong>
           </span>
           <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">Liquidity</span>
+            <span className="scanner-farm-cell-label">{t('scan.liquidity')}</span>
             <strong className="scanner-farm-cell-value">{Math.round(summary?.liquidityScore ?? 0)}%</strong>
           </span>
           <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">Score</span>
+            <span className="scanner-farm-cell-label">{t('scan.score')}</span>
             <strong className="scanner-farm-cell-value">{Math.round(summary?.relicRoiScore ?? 0)}</strong>
           </span>
           <span className="farm-now-cell farm-now-cell-action scanner-farm-cell-action">{expanded ? '−' : '+'}</span>
@@ -512,26 +519,26 @@ function RelicRoiRow({
         <div className="farm-now-row-body scanner-farm-row-body">
           <div className="scanner-inline-summary">
             <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Refinement</span>
+              <span className="scanner-stat-pill-label">{t('scan.refinement')}</span>
               <span className="scanner-stat-pill-value">{summary?.refinementLabel ?? '—'}</span>
             </span>
             <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Run Value</span>
+              <span className="scanner-stat-pill-label">{t('scan.runValue')}</span>
               <span className="scanner-stat-pill-value">{formatPlatPrecise(summary?.runValue ?? null)}</span>
             </span>
             <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Liquidity</span>
+              <span className="scanner-stat-pill-label">{t('scan.liquidity')}</span>
               <span className="scanner-stat-pill-value">{Math.round(summary?.liquidityScore ?? 0)}%</span>
             </span>
             <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">Drops</span>
+              <span className="scanner-stat-pill-label">{t('scan.drops')}</span>
               <span className="scanner-stat-pill-value">{entry.dropCount}</span>
             </span>
           </div>
 
           <div className="scanner-components-panel">
             <div className="scanner-components-header">
-              <span className="card-label">Prime Rewards</span>
+              <span className="card-label">{t('scan.primeRewards')}</span>
               <span className="scanner-components-meta">
                 {summary?.refinementLabel ?? 'Selected'} rates applied
               </span>
@@ -553,6 +560,7 @@ function RelicRoiRow({
 }
 
 export function ScannersPage() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ScannerTab>('arbitrage');
   const [arbitrage, setArbitrage] = useState<ArbitrageScannerResponse | null>(null);
   const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
@@ -757,7 +765,7 @@ export function ScannersPage() {
 
   const isRunning = progress?.status === 'running';
   const hasSavedScan = Boolean(arbitrage);
-  const actionLabel = hasSavedScan ? 'Rescan' : 'Start Scan';
+  const actionLabel = hasSavedScan ? t('scan.rescan') : t('scan.startScan');
   const normalizedArbitrageSearch = arbitrageSearch.trim().toLowerCase();
   const normalizedRelicSearch = relicSearch.trim().toLowerCase();
   const arbitrageResults = useMemo(() => {
@@ -890,14 +898,14 @@ export function ScannersPage() {
     <>
       <div className="subnav">
         <div className="subnav-left">
-          <span className="page-title">Scanners</span>
+          <span className="page-title">{t('scan.title')}</span>
           <span
             className={`subtab${activeTab === 'arbitrage' ? ' active' : ''}`}
             onClick={() => setActiveTab('arbitrage')}
             role="tab"
             tabIndex={0}
           >
-            Arbitrage
+            {t('scan.arbitrage')}
           </span>
           <span
             className={`subtab${activeTab === 'relic-roi' ? ' active' : ''}`}
@@ -905,7 +913,7 @@ export function ScannersPage() {
             role="tab"
             tabIndex={0}
           >
-            Relic ROI
+            {t('scan.tab.relicRoi')}
           </span>
         </div>
         {(activeTab === 'arbitrage' || activeTab === 'relic-roi') ? (
@@ -921,7 +929,7 @@ export function ScannersPage() {
                 void runArbitrageScan();
               }}
             >
-              {isRunning ? 'Stop Scan' : actionLabel}
+              {isRunning ? t('scan.stopScan') : actionLabel}
             </button>
           </div>
         ) : null}
@@ -959,7 +967,7 @@ export function ScannersPage() {
               <div className="scanner-progress-layout">
                 <div className="scanner-progress-block">
                   <div className="scanner-progress-meta">
-                    <span>{progress?.stageLabel ?? 'Ready'}</span>
+                    <span>{progress?.stageLabel ?? t('scan.ready')}</span>
                     <span>{Math.round(progress?.progressValue ?? 0)}%</span>
                   </div>
                   <div className="scanner-progress-track">
@@ -1007,7 +1015,7 @@ export function ScannersPage() {
 
             {activeTab === 'arbitrage' && arbitrage ? (
               <div className="scanner-results-list">
-                <div className="panel-section-header">Set Arbitrage</div>
+                <div className="panel-section-header">{t('scan.tab.arbitrage')}</div>
                 <div className="scanner-results-toolbar">
                   <div className="scanner-search-shell" role="search">
                     <span className="scanner-search-icon" aria-hidden="true">⌕</span>
@@ -1016,15 +1024,15 @@ export function ScannersPage() {
                       type="search"
                       value={arbitrageSearch}
                       onChange={(event) => setArbitrageSearch(event.target.value)}
-                      placeholder="Search set"
+                      placeholder={t('scan.searchSet')}
                     />
                   </div>
                 </div>
                 <div className="farm-now-header-row scanner-farm-header-row scanner-farm-header-row-arbitrage">
                   <span className="farm-now-header-label">Set</span>
-                  <span className="farm-now-header-label">Entry</span>
-                  <span className="farm-now-header-label">Exit Zone</span>
-                  <span className="farm-now-header-label farm-now-header-value">Margin</span>
+                  <span className="farm-now-header-label">{t('scan.entry')}</span>
+                  <span className="farm-now-header-label">{t('scan.exitZone')}</span>
+                  <span className="farm-now-header-label farm-now-header-value">{t('scan.margin')}</span>
                   <span className="farm-now-header-label farm-now-header-value">ROI</span>
                   <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                 </div>
@@ -1046,7 +1054,7 @@ export function ScannersPage() {
                   ))
                 ) : (
                   <div className="empty-state scanners-empty-state scanner-results-empty-state">
-                    <span className="empty-primary">No sets match that search.</span>
+                    <span className="empty-primary">{t('scan.noSets')}</span>
                     <span className="empty-sub">
                       Try another set name or clear the search to see all saved scanner results.
                     </span>
@@ -1056,7 +1064,7 @@ export function ScannersPage() {
             ) : activeTab === 'relic-roi' && arbitrage ? (
               relicResults.length > 0 ? (
                 <div className="scanner-results-list">
-                  <div className="panel-section-header">Relic ROI</div>
+                  <div className="panel-section-header">{t('scan.tab.relicRoi')}</div>
                   <div className="scanner-results-toolbar scanner-results-toolbar-split">
                     <div className="scanner-search-shell" role="search">
                       <span className="scanner-search-icon" aria-hidden="true">⌕</span>
@@ -1065,12 +1073,12 @@ export function ScannersPage() {
                         type="search"
                         value={relicSearch}
                         onChange={(event) => setRelicSearch(event.target.value)}
-                        placeholder="Search relic or drop item"
+                        placeholder={t('scan.searchRelic')}
                       />
                     </div>
                     <div className="scanner-results-toolbar-actions">
                       <label className="toggle-wrap" htmlFor="relic-unvaulted-toggle">
-                        <span>Unvaulted Only</span>
+                        <span>{t('scan.unvaultedOnly')}</span>
                         <button
                           id="relic-unvaulted-toggle"
                           className={`toggle${showOnlyUnvaulted ? ' on' : ''}`}
@@ -1093,11 +1101,11 @@ export function ScannersPage() {
                     </div>
                   </div>
                   <div className="farm-now-header-row scanner-farm-header-row scanner-farm-header-row-relic">
-                    <span className="farm-now-header-label">Relic</span>
-                    <span className="farm-now-header-label">Refinement</span>
-                    <span className="farm-now-header-label farm-now-header-value">Run Value</span>
-                    <span className="farm-now-header-label farm-now-header-value">Liquidity</span>
-                    <span className="farm-now-header-label farm-now-header-value">Score</span>
+                    <span className="farm-now-header-label">{t('scan.relic')}</span>
+                    <span className="farm-now-header-label">{t('scan.refinement')}</span>
+                    <span className="farm-now-header-label farm-now-header-value">{t('scan.runValue')}</span>
+                    <span className="farm-now-header-label farm-now-header-value">{t('scan.liquidity')}</span>
+                    <span className="farm-now-header-label farm-now-header-value">{t('scan.score')}</span>
                     <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
                   </div>
                   {relicResults.map((entry, index) => (
@@ -1126,7 +1134,7 @@ export function ScannersPage() {
                     {normalizedRelicSearch
                       ? 'Try another relic name or drop item search to inspect the saved relic ROI scan.'
                       : showOnlyUnvaulted
-                        ? 'Turn off the Unvaulted Only filter or run a fresh scan if you expect more relic results.'
+                        ? t('scan.unvaultedHint')
                         : 'Run a fresh scan if you want to rebuild the saved relic ROI snapshot.'}
                   </span>
                 </div>
