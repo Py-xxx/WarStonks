@@ -5,6 +5,7 @@ import {
   type UnderpricedListingCard,
 } from '../../stores/useAppStore';
 import { getRadarStats, verifyMarketListing, type RadarStats } from '../../lib/tauriClient';
+import { useTranslation } from '../../i18n';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { OpportunityBoard } from '../OpportunityBoard';
 
@@ -16,6 +17,7 @@ function formatCountdown(remainingMs: number): string {
 }
 
 function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: number }) {
+  const { t } = useTranslation();
   const updateListing = useAppStore((state) => state.updateUnderpricedListing);
   const removeListing = useAppStore((state) => state.removeUnderpricedListing);
   const pushToast = useAppStore((state) => state.pushToast);
@@ -104,14 +106,14 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
         <span className="radar-card-listed">{buyPrice}p</span>
         <span className="radar-card-pct">−{Math.round(card.pctBelow)}%</span>
         <span className="radar-card-rec">
-          <span className="radar-card-rec-label">Usual Entry</span>
+          <span className="radar-card-rec-label">{t('wl.usualEntry')}</span>
           <span className="radar-card-rec-value">{Math.round(card.recommendedPrice)}p</span>
         </span>
       </div>
 
       <div className="radar-card-actions">
         {card.status === 'gone' ? (
-          <span className="radar-card-gone">No longer listed</span>
+          <span className="radar-card-gone">{t('wl.noLongerListed')}</span>
         ) : card.status === 'verified' ? (
           <button className="act-btn" type="button" onClick={() => void handleCopyAgain()}>
             Copy Message

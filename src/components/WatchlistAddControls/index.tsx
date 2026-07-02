@@ -1,10 +1,12 @@
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 
 interface WatchlistAddControlsProps {
   compact?: boolean;
 }
 
 export function WatchlistAddControls({ compact = false }: WatchlistAddControlsProps) {
+  const { t } = useTranslation();
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const marketVariants = useAppStore((state) => state.marketVariants);
   const selectedVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
@@ -21,7 +23,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
   return (
     <div className={`watchlist-add${compact ? ' compact' : ''}`}>
       <div className="watchlist-add-copy">
-        <span className="watchlist-add-label">Watch Target</span>
+        <span className="watchlist-add-label">{t('wl.watchTarget')}</span>
         <span className="watchlist-add-selected">
           {selectedItem ? selectedItem.name : 'Search an item first'}
         </span>
@@ -37,7 +39,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
             }}
             aria-label="Select rank variant"
           >
-            <option value="">Select Variant</option>
+            <option value="">{t('wl.selectVariant')}</option>
             {marketVariants.map((variant) => (
               <option key={variant.key} value={variant.key}>
                 {variant.label}

@@ -1,4 +1,5 @@
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 
 type SteelPathOffering = { name: string; cost: number | null };
@@ -31,6 +32,7 @@ function parseOfferings(value: unknown): SteelPathOffering[] {
 }
 
 export function SteelPathPanel() {
+  const { t } = useTranslation();
   const entry = useAppStore((state) => state.worldStateExtra['steel-path']);
   const payload = (entry.payload ?? null) as Record<string, unknown> | null;
 
@@ -68,7 +70,7 @@ export function SteelPathPanel() {
 
       {rotation.length > 0 ? (
         <div className="steel-path-block">
-          <span className="farm-now-header-label">Upcoming rotation</span>
+          <span className="farm-now-header-label">{t('ws.upcomingRotation')}</span>
           <div className="steel-path-list">
             {rotation.map((offer, index) => (
               <div key={`rotation-${index}`} className="steel-path-row">

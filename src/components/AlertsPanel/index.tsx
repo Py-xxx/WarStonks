@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from '../../i18n';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { WORLDSTATE_ENDPOINT_LABELS } from '../../lib/worldState';
@@ -28,6 +29,7 @@ function formatAlertTimestamp(isoTimestamp: string): string {
 }
 
 export function AlertsPanel({ compact = false }: AlertsPanelProps) {
+  const { t } = useTranslation();
   const alerts = useAppStore((state) => state.alerts);
   const watchlist = useAppStore((state) => state.watchlist);
   const systemAlerts = useAppStore((state) => state.systemAlerts);
@@ -59,7 +61,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
         {actionError ? <div className="settings-inline-error">{actionError}</div> : null}
         <div className="empty-state">
-          <span className="empty-primary">No active alerts</span>
+          <span className="empty-primary">{t('al.noActiveAlerts')}</span>
           <span className="empty-sub">
             Alerts appear when a watchlist item reaches your target price or a worldstate feed fails.
           </span>
@@ -80,7 +82,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         <div className="alerts-section alerts-section-card">
           <div className="alerts-section-header">
             <div className="alerts-section-title-wrap">
-              <span className="alerts-section-title">Underpriced Radar</span>
+              <span className="alerts-section-title">{t('al.underpricedRadar')}</span>
               <span className={`badge badge-${underpricedAlert.listing.tier === 'red' ? 'red' : underpricedAlert.listing.tier === 'yellow' ? 'amber' : 'green'}`}>
                 {Math.round(underpricedAlert.listing.pctBelow)}% below
               </span>
@@ -143,7 +145,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         <div className="alerts-section alerts-section-card">
           <div className="alerts-section-header">
             <div className="alerts-section-title-wrap">
-              <span className="alerts-section-title">System</span>
+              <span className="alerts-section-title">{t('al.system')}</span>
               <span className="badge badge-amber">{visibleSystemAlerts.length}</span>
             </div>
             {!compact ? (
@@ -185,7 +187,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                           {alert.updateVersion ?? 'Update'}
                         </span>
                       ) : (
-                        <span className="badge badge-amber">Stale</span>
+                        <span className="badge badge-amber">{t('al.stale')}</span>
                       )}
                     </div>
                     <div className="alert-meta">
@@ -259,7 +261,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         <div className="alerts-section alerts-section-card">
           <div className="alerts-section-header">
             <div className="alerts-section-title-wrap">
-              <span className="alerts-section-title">Market</span>
+              <span className="alerts-section-title">{t('nav.market')}</span>
               <span className="badge badge-green">{visibleAlerts.length}</span>
             </div>
             {!compact ? (

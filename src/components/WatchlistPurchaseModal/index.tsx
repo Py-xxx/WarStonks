@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from '../../i18n';
 import { createPortal } from 'react-dom';
 import { useModalA11y } from '../../hooks/useModalA11y';
 
@@ -19,6 +20,7 @@ export function WatchlistPurchaseModal({
   onClose,
   onSubmit,
 }: WatchlistPurchaseModalProps) {
+  const { t } = useTranslation();
   const [priceInput, setPriceInput] = useState(String(Math.max(1, Math.round(defaultPrice))));
 
   useEffect(() => {
@@ -49,8 +51,8 @@ export function WatchlistPurchaseModal({
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">Watchlist</span>
-            <h3 id="watchlist-purchase-modal-title">Mark as bought</h3>
+            <span className="card-label">{t('wl.watchlist')}</span>
+            <h3 id="watchlist-purchase-modal-title">{t('wl.markAsBought')}</h3>
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from '../../i18n';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { getRelicTierIcons } from '../../lib/tauriClient';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -107,6 +108,7 @@ function FissureTierIcon({ tier, imagePath }: { tier: string; imagePath: string 
 }
 
 export function FissuresPanel() {
+  const { t } = useTranslation();
   const fissures = useAppStore((state) => state.worldStateFissures);
   const loading = useAppStore((state) => state.worldStateFissuresLoading);
   const error = useAppStore((state) => state.worldStateFissuresError);
@@ -170,7 +172,7 @@ export function FissuresPanel() {
   return (
     <div className="card">
       <div className="card-header">
-        <span className="card-label">Fissures</span>
+        <span className="card-label">{t('ws.fissures')}</span>
         <span className={`badge ${filteredFissures.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
           {filteredFissures.length} active
         </span>

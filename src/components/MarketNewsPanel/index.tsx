@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from '../../i18n';
 import {
   formatWorldStateCountdown,
   formatWorldStateDateTime,
@@ -60,6 +61,7 @@ function sortFlashSales(left: WfstatFlashSale, right: WfstatFlashSale): number {
 }
 
 export function MarketNewsPanel() {
+  const { t } = useTranslation();
   const news = useAppStore((state) => state.worldStateNews);
   const flashSales = useAppStore((state) => state.worldStateFlashSales);
   const loading = useAppStore((state) => state.worldStateMarketNewsLoading);
@@ -123,7 +125,7 @@ export function MarketNewsPanel() {
       <div className="market-news-layout">
         <section className="card market-news-card">
           <div className="card-header">
-            <span className="card-label">News</span>
+            <span className="card-label">{t('ws.news')}</span>
             <span className={`badge ${sortedNews.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
               {sortedNews.length} stories
             </span>
@@ -182,7 +184,7 @@ export function MarketNewsPanel() {
 
                         <div className="market-news-item-meta">
                           {publishedAt ? <span>{publishedAt}</span> : null}
-                          {item.mobileOnly ? <span>Mobile</span> : null}
+                          {item.mobileOnly ? <span>{t('ws.mobile')}</span> : null}
                           {item.link ? (
                             <a href={item.link} target="_blank" rel="noreferrer">
                               Open source
@@ -200,7 +202,7 @@ export function MarketNewsPanel() {
 
         <section className="card market-news-card">
           <div className="card-header">
-            <span className="card-label">Flash Sales</span>
+            <span className="card-label">{t('ws.flashSales')}</span>
             <span className={`badge ${visibleFlashSales.length > 0 ? 'badge-green' : 'badge-muted'}`}>
               {visibleFlashSales.length} tracked
             </span>
@@ -256,19 +258,19 @@ export function MarketNewsPanel() {
                           <span className="flash-sale-stat-value">{countdown}</span>
                         </div>
                         <div className="flash-sale-stat">
-                          <span className="qv-stat-label">Discount</span>
+                          <span className="qv-stat-label">{t('ws.discount')}</span>
                           <span className="flash-sale-stat-value">
                             {sale.discount !== null ? `${sale.discount}%` : '—'}
                           </span>
                         </div>
                         <div className="flash-sale-stat">
-                          <span className="qv-stat-label">Plat</span>
+                          <span className="qv-stat-label">{t('ws.plat')}</span>
                           <span className="flash-sale-stat-value">
                             {sale.premiumOverride ?? '—'}
                           </span>
                         </div>
                         <div className="flash-sale-stat">
-                          <span className="qv-stat-label">Credit</span>
+                          <span className="qv-stat-label">{t('ws.credit')}</span>
                           <span className="flash-sale-stat-value">
                             {sale.regularOverride ?? '—'}
                           </span>

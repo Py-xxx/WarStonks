@@ -1,4 +1,5 @@
 import type { StartupProgress, StartupSummary } from '../../lib/tauriClient';
+import { useTranslation } from '../../i18n';
 
 interface StartupScreenProps {
   progress: StartupProgress;
@@ -61,6 +62,7 @@ export function StartupScreen({
   errorMessage,
   onRetry,
 }: StartupScreenProps) {
+  const { t } = useTranslation();
   const progressPercent = Math.max(0, Math.min(progress.progressValue, 1)) * 100;
   const stats = summary?.stats;
   const friendlyStatusText = formatStartupStatusText(progress);
@@ -74,8 +76,8 @@ export function StartupScreen({
       <div className="startup-panel">
         <div className="startup-header">
           <div className="startup-header-copy">
-            <p className="startup-eyebrow">Starting Up</p>
-            <h1 className="startup-title">Getting WarStonks ready</h1>
+            <p className="startup-eyebrow">{t('su.startingUp')}</p>
+            <h1 className="startup-title">{t('su.gettingReady')}</h1>
             <p className="startup-subtitle">
               Loading your market tools, local data, and live signals.
             </p>
@@ -103,25 +105,25 @@ export function StartupScreen({
 
         <div className="startup-grid">
           <div className="startup-info-card">
-            <span className="startup-info-label">Catalog</span>
+            <span className="startup-info-label">{t('su.catalog')}</span>
             <span className="startup-info-value">
               {summary ? 'Local market database ready' : 'Preparing local market data'}
             </span>
           </div>
           <div className="startup-info-card">
-            <span className="startup-info-label">Live Data</span>
+            <span className="startup-info-label">{t('su.liveData')}</span>
             <span className="startup-info-value">
               {summary?.currentWfmApiVersion ? `WFM ${summary.currentWfmApiVersion}` : 'Checking live sources'}
             </span>
           </div>
           <div className="startup-info-card">
-            <span className="startup-info-label">Items Indexed</span>
+            <span className="startup-info-label">{t('su.itemsIndexed')}</span>
             <span className="startup-info-value">
               {indexedItemsCount}
             </span>
           </div>
           <div className="startup-info-card">
-            <span className="startup-info-label">Ready For</span>
+            <span className="startup-info-label">{t('su.readyFor')}</span>
             <span className="startup-info-value">
               Analysis, scanners, watchlists, and events
             </span>
@@ -130,7 +132,7 @@ export function StartupScreen({
 
         {errorMessage ? (
           <div className="startup-error-card" role="alert">
-            <p className="startup-error-title">Startup needs another try</p>
+            <p className="startup-error-title">{t('su.needsRetry')}</p>
             <p className="startup-error-body">{friendlyErrorMessage}</p>
             <button className="startup-retry-button" onClick={onRetry} type="button">
               Retry startup

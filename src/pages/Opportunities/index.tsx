@@ -617,7 +617,7 @@ function SetPlannerRow({
               <strong>{formatPlat(planner.remainingInvestment)}</strong>
             </div>
             <div className="planner-set-metric">
-              <span className="planner-set-metric-label">Exit</span>
+              <span className="planner-set-metric-label">{t('mkt.exit')}</span>
               <strong>{formatPlat(planner.entry.recommendedSetExitPrice)}</strong>
             </div>
             <div className="planner-set-metric">
@@ -884,7 +884,7 @@ function SetCompletionScreenshotImportModal({
             </p>
             <p className="watchlist-form-note">
               Workflow: choose the screenshots and the detector will immediately extract the fixed
-              palette and isolate the OCR crops for each one. Then press <strong>Scan</strong> to OCR
+              palette and isolate the OCR crops for each one. Then press <strong>{t('opp.scan')}</strong> to OCR
               each screenshot separately, match the rows against the set map, review any flagged rows,
               and confirm them into the planner.
             </p>
@@ -2245,7 +2245,7 @@ export function OpportunitiesPage({
               >
                 {tab.label}
                 {tab.id === 'opportunities' ? (
-                  <span className="subtab-beta-badge">Beta</span>
+                  <span className="subtab-beta-badge">{t('opp.beta')}</span>
                 ) : null}
               </button>
             ))}
@@ -2586,7 +2586,7 @@ export function OpportunitiesPage({
                 <path d="m21 15-5-5L5 21" />
               </svg>
               <span>{t('opp.importScreenshot')}</span>
-              <span className="scanner-run-pill scanner-run-pill-warning inventory-import-fab-pill">Beta</span>
+              <span className="scanner-run-pill scanner-run-pill-warning inventory-import-fab-pill">{t('opp.beta')}</span>
             </button>
           </div>
         ) : activeTab === 'owned-relics' ? (

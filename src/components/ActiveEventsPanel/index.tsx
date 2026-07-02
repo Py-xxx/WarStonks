@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from '../../i18n';
 import {
   formatWorldStateCountdown,
   formatWorldStateDateTime,
@@ -37,6 +38,7 @@ function formatEventScore(event: WfstatWorldStateEvent): string {
 }
 
 export function ActiveEventsPanel() {
+  const { t } = useTranslation();
   const events = useAppStore((state) => state.worldStateEvents);
   const loading = useAppStore((state) => state.worldStateEventsLoading);
   const error = useAppStore((state) => state.worldStateEventsError);
@@ -67,7 +69,7 @@ export function ActiveEventsPanel() {
   return (
     <div className="card">
       <div className="card-header">
-        <span className="card-label">Active Events</span>
+        <span className="card-label">{t('ws.activeEvents')}</span>
         <span className={`badge ${events.length > 0 ? 'badge-purple' : 'badge-muted'}`}>
           {events.length} active
         </span>
@@ -152,35 +154,35 @@ export function ActiveEventsPanel() {
                           {formatWorldStateCountdown(event.expiry, nowMs)}
                         </span>
                         {event.isCommunity ? (
-                          <span className="badge badge-blue">Community</span>
+                          <span className="badge badge-blue">{t('ov.community')}</span>
                         ) : null}
                         {event.isPersonal ? (
-                          <span className="badge badge-purple">Personal</span>
+                          <span className="badge badge-purple">{t('ov.personal')}</span>
                         ) : null}
                       </div>
                     </div>
 
                     <div className="world-event-meta-grid">
                       <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">Node</span>
+                        <span className="world-event-meta-label">{t('ws.node')}</span>
                         <span className="world-event-meta-value">
                           {event.node ?? 'Unknown'}
                         </span>
                       </div>
                       <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">Activation</span>
+                        <span className="world-event-meta-label">{t('ws.activation')}</span>
                         <span className="world-event-meta-value">
                           {formatWorldStateDateTime(event.activation)}
                         </span>
                       </div>
                       <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">Expiry</span>
+                        <span className="world-event-meta-label">{t('ws.expiry')}</span>
                         <span className="world-event-meta-value">
                           {formatWorldStateDateTime(event.expiry)}
                         </span>
                       </div>
                       <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">Progress</span>
+                        <span className="world-event-meta-label">{t('ws.progress')}</span>
                         <span className="world-event-meta-value">
                           {formatEventScore(event)}
                         </span>
@@ -209,7 +211,7 @@ export function ActiveEventsPanel() {
                     <div className="world-event-expanded">
                       {event.rewards.length > 0 ? (
                         <div className="world-event-expanded-block">
-                          <span className="card-label">Rewards</span>
+                          <span className="card-label">{t('ws.rewards')}</span>
                           <div className="world-event-tag-list">
                             {event.rewards.map((reward, index) => (
                               <span key={`${event.id}-reward-${index}`} className="world-event-tag">
@@ -222,7 +224,7 @@ export function ActiveEventsPanel() {
 
                       {event.interimSteps.length > 0 ? (
                         <div className="world-event-expanded-block">
-                          <span className="card-label">Interim Steps</span>
+                          <span className="card-label">{t('ws.interimSteps')}</span>
                           <div className="world-event-step-list">
                             {event.interimSteps.map((step, index) => (
                               <div key={`${event.id}-step-${index}`} className="world-event-step">
@@ -240,7 +242,7 @@ export function ActiveEventsPanel() {
 
                       {event.concurrentNodes.length > 0 ? (
                         <div className="world-event-expanded-block">
-                          <span className="card-label">Concurrent Nodes</span>
+                          <span className="card-label">{t('ws.concurrentNodes')}</span>
                           <div className="world-event-tag-list">
                             {event.concurrentNodes.map((node) => (
                               <span key={`${event.id}-${node}`} className="world-event-tag">
