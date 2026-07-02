@@ -104,14 +104,14 @@ export function ActiveEventsPanel() {
 
         {loading && events.length === 0 ? (
           <EventsPanelEmpty
-            title="Loading live worldstate events…"
+            title={t('a11y.loadingEvents')}
             detail="Checking the latest active events from the live worldstate."
           />
         ) : null}
 
         {!loading && events.length === 0 && error ? (
           <EventsPanelEmpty
-            title="Active events couldn’t load"
+            title={t('a11y.activeEventsFailed')}
             detail={error}
             actionLabel="Retry"
             onAction={() => {
@@ -122,7 +122,7 @@ export function ActiveEventsPanel() {
 
         {!loading && events.length === 0 && !error ? (
           <EventsPanelEmpty
-            title="No active events right now"
+            title={t('a11y.noActiveEvents')}
             detail="Active event data will appear here as soon as the live worldstate reports an event."
           />
         ) : null}

@@ -37,7 +37,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
             onChange={(event) => {
               void setSelectedMarketVariantKey(event.target.value || null);
             }}
-            aria-label="Select rank variant"
+            aria-label={t('a11y.selectRankVariant')}
           >
             <option value="">{t('wl.selectVariant')}</option>
             {marketVariants.map((variant) => (
@@ -56,7 +56,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
           inputMode="numeric"
           pattern="[0-9]*"
           placeholder="0"
-          title="Desired price"
+          title={t('a11y.desiredPrice')}
           value={targetInput}
           onChange={(event) => setTargetInput(event.target.value)}
         />

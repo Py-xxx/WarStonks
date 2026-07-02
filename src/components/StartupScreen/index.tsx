@@ -94,7 +94,7 @@ export function StartupScreen({
           <div
             className="startup-progress-track"
             role="progressbar"
-            aria-label="Startup progress"
+            aria-label={t('a11y.startupProgress')}
             aria-valuenow={Math.round(progressPercent)}
             aria-valuemin={0}
             aria-valuemax={100}

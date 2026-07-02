@@ -311,7 +311,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                 className="settings-close-btn"
                 type="button"
                 onClick={() => setRemoveItemId(null)}
-                aria-label="Cancel remove"
+                aria-label={t('a11y.cancelRemove')}
               >
                 ×
               </button>

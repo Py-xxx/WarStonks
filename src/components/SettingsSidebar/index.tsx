@@ -210,7 +210,7 @@ export function SettingsSidebar() {
         aria-label={t('settings.close')}
         onClick={closeSidebar}
       />
-      <aside className="settings-drawer" aria-label="Settings">
+      <aside className="settings-drawer" aria-label={t('settings.title')}>
         <div className="settings-drawer-header">
           <div>
             <span className="card-label">{t('settings.title')}</span>
@@ -226,7 +226,7 @@ export function SettingsSidebar() {
           </button>
         </div>
 
-        <nav className="settings-nav" aria-label="Settings sections">
+        <nav className="settings-nav" aria-label={t('a11y.settingsSections')}>
           {mainSections.map((section) => {
             const notificationsStatus: TranslationKey =
               notificationSettings.desktopEnabled || notificationSettings.soundEnabled

@@ -88,7 +88,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
           {card.itemName}
           {card.rank !== null ? <span className="radar-card-rank"> · R{card.rank}</span> : null}
         </span>
-        <span className="radar-card-timer" aria-label="Time remaining">
+        <span className="radar-card-timer" aria-label={t('a11y.timeRemaining')}>
           {formatCountdown(remainingMs)}
         </span>
       </div>
@@ -131,7 +131,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
         <button
           className="act-btn radar-card-dismiss"
           type="button"
-          aria-label="Dismiss listing"
+          aria-label={t('a11y.dismissListing')}
           onClick={() => removeListing(card.orderId)}
         >
           ×
@@ -142,6 +142,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
 }
 
 export function UnderpricedListingsPanel() {
+  const { t } = useTranslation();
   const listings = useAppStore((state) => state.underpricedListings);
   const [now, setNow] = useState(() => Date.now());
   const [stats, setStats] = useState<RadarStats>({ scannedCount: 0, trackedItems: 0 });
@@ -182,7 +183,7 @@ export function UnderpricedListingsPanel() {
       <div className="radar-main">
         <OpportunityBoard />
       </div>
-      <aside className="radar-side" aria-label="Underpriced market listings">
+      <aside className="radar-side" aria-label={t('a11y.underpricedListings')}>
         <div className="radar-side-header">
           <span className="panel-title-eyebrow">
             <span className="panel-dot panel-dot-green" aria-hidden="true" />

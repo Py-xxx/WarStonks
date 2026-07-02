@@ -143,7 +143,7 @@ export function Sidebar() {
   }, []);
 
   return (
-    <nav className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`} aria-label="Main navigation">
+    <nav className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`} aria-label={t('a11y.mainNav')}>
       {NAV_ITEMS.map((item) => {
         const label = t(`nav.${item.id}` as TranslationKey);
         return (

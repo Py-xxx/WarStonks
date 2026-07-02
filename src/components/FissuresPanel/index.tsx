@@ -176,7 +176,7 @@ export function FissuresPanel() {
         <span className={`badge ${filteredFissures.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
           {filteredFissures.length} active
         </span>
-        <div className="card-actions fissure-mode-toggle" role="tablist" aria-label="Fissure mode">
+        <div className="card-actions fissure-mode-toggle" role="tablist" aria-label={t('a11y.fissureMode')}>
           <button
             className={`fissure-mode-btn${mode === 'normal' ? ' active' : ''}`}
             type="button"
@@ -229,14 +229,14 @@ export function FissuresPanel() {
 
         {loading && fissures.length === 0 ? (
           <EventsPanelEmpty
-            title="Loading live fissures…"
+            title={t('a11y.loadingFissures')}
             detail="Checking the latest fissure rotations from the live worldstate."
           />
         ) : null}
 
         {!loading && groupedFissures.length === 0 && error && !hasUsableFissures ? (
           <EventsPanelEmpty
-            title="Fissures couldn’t load"
+            title={t('a11y.fissuresFailed')}
             detail={error}
             actionLabel="Retry"
             onAction={() => {

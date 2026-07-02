@@ -134,14 +134,14 @@ export function MarketNewsPanel() {
           <div className="card-body">
             {loading && sortedNews.length === 0 ? (
               <EventsPanelEmpty
-                title="Loading Warframe news…"
+                title={t('a11y.loadingNews')}
                 detail="Pulling the latest official notices from the live worldstate."
               />
             ) : null}
 
             {!loading && sortedNews.length === 0 && error && !hasUsableData ? (
               <EventsPanelEmpty
-                title="News couldn’t load"
+                title={t('a11y.newsFailed')}
                 detail={error}
                 actionLabel="Retry"
                 onAction={() => {
@@ -152,7 +152,7 @@ export function MarketNewsPanel() {
 
             {!loading && sortedNews.length === 0 && (!error || hasUsableData) ? (
               <EventsPanelEmpty
-                title="No news items available"
+                title={t('a11y.noNews')}
                 detail="The current worldstate snapshot did not include any visible news entries."
               />
             ) : null}
@@ -211,14 +211,14 @@ export function MarketNewsPanel() {
           <div className="card-body">
             {loading && visibleFlashSales.length === 0 ? (
               <EventsPanelEmpty
-                title="Loading flash sales…"
+                title={t('a11y.loadingFlashSales')}
                 detail="Checking the live market state for active and upcoming sale windows."
               />
             ) : null}
 
             {!loading && visibleFlashSales.length === 0 && error && !hasUsableData ? (
               <EventsPanelEmpty
-                title="Flash sales couldn’t load"
+                title={t('a11y.flashSalesFailed')}
                 detail={error}
                 actionLabel="Retry"
                 onAction={() => {
@@ -229,7 +229,7 @@ export function MarketNewsPanel() {
 
             {!loading && visibleFlashSales.length === 0 && (!error || hasUsableData) ? (
               <EventsPanelEmpty
-                title="No flash sales available"
+                title={t('a11y.noFlashSales')}
                 detail="There are no active or upcoming flash sales in the current snapshot."
               />
             ) : null}

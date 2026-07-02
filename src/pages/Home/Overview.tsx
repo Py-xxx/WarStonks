@@ -10,6 +10,8 @@ import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/w
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { resolveLocalizedName } from '../../lib/itemNames';
 import { useTranslation } from '../../i18n';
+import type { TranslateFn } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useDocumentVisibility } from '../../hooks/useDocumentVisibility';
 import { useModalA11y } from '../../hooks/useModalA11y';
@@ -74,10 +76,10 @@ function calculateSpreadMetrics(orders: WfmTopSellOrder[]) {
   };
 }
 
-function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
+function formatSpreadLabel(orders: WfmTopSellOrder[], t: TranslateFn): string {
   const spreadMetrics = calculateSpreadMetrics(orders);
   if (!spreadMetrics) {
-    return 'Waiting for 5 sell orders';
+    return t('ov.waiting5');
   }
 
   if (spreadMetrics.spreadPercent === null) {
@@ -87,7 +89,7 @@ function formatSpreadLabel(orders: WfmTopSellOrder[]): string {
   return `${spreadMetrics.spreadPlatinum} pt (${spreadMetrics.spreadPercent.toFixed(1)}%)`;
 }
 
-function buildDashboardEventDetail(node: string | null, expiry: string | null): string {
+function buildDashboardEventDetail(node: string | null, expiry: string | null, t: TranslateFn): string {
   const detailParts = [];
 
   if (node) {
@@ -95,7 +97,7 @@ function buildDashboardEventDetail(node: string | null, expiry: string | null): 
   }
 
   if (expiry) {
-    detailParts.push(`Ends ${formatWorldStateDateTime(expiry)}`);
+    detailParts.push(t('ov.ends', { time: formatWorldStateDateTime(expiry) }));
   }
 
   return detailParts.join(' • ');
@@ -121,20 +123,20 @@ function getAnalysisPreviewTone(analysis: ItemAnalysisResponse | null): 'green' 
   return 'amber';
 }
 
-function buildAnalysisPreviewLabel(analysis: ItemAnalysisResponse | null): string {
+function buildAnalysisPreviewLabel(analysis: ItemAnalysisResponse | null): TranslationKey {
   if (!analysis) {
-    return 'Building';
+    return 'health.building';
   }
   if (analysis.manipulationRisk.riskLevel.toLowerCase().includes('high')) {
-    return 'Caution';
+    return 'ov.caution';
   }
   if ((analysis.headline.netMargin ?? 0) > 0 && analysis.headline.confidenceSummary.level === 'high') {
-    return 'Buy Bias';
+    return 'mkt.hero.buyBias';
   }
   if ((analysis.headline.netMargin ?? 0) > 0) {
-    return 'Selective';
+    return 'mkt.hero.selective';
   }
-  return 'Wait';
+  return 'mkt.hero.wait';
 }
 
 function WatchlistCard() {
@@ -234,7 +236,7 @@ function EventsCard() {
                       {event.isPersonal ? (
                         <span className="badge badge-purple">{t('ov.personal')}</span>
                       ) : null}
-                      <span>{buildDashboardEventDetail(event.node, event.expiry) || 'No node data'}</span>
+                      <span>{buildDashboardEventDetail(event.node, event.expiry, t) || t('ov.noNodeData')}</span>
                     </span>
                   </span>
                   <span className="watchlist-alert-summary-item-price">
@@ -328,7 +330,7 @@ function QuickViewCard() {
   );
   const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath);
   const sparklinePath = buildSparklinePath(quickView.sparklinePoints);
-  const spreadLabel = formatSpreadLabel(quickView.sellOrders);
+  const spreadLabel = formatSpreadLabel(quickView.sellOrders, t);
   // Use the same recommended exit the Market analysis computes for this item; it's the
   // adaptive exit price from the shared analysis pipeline, not a placeholder.
   const exitPrice = analysis?.headline.exitPrice ?? null;
@@ -539,11 +541,11 @@ function QuickViewCard() {
       </div>
 
       {viewAllOpen && selectedItem ? createPortal(
-        <div className="qv-viewall-root" role="dialog" aria-modal="true" aria-label="All sell orders">
+        <div className="qv-viewall-root" role="dialog" aria-modal="true" aria-label={t('a11y.allSellOrders')}>
           <button
             type="button"
             className="modal-backdrop"
-            aria-label="Close all sell orders"
+            aria-label={t('a11y.closeAllSellOrders')}
             onClick={() => setViewAllOpen(false)}
           />
           <div ref={viewAllRef} className="qv-viewall-modal">
@@ -558,7 +560,7 @@ function QuickViewCard() {
               <button
                 type="button"
                 className="modal-close"
-                aria-label="Close"
+                aria-label={t('a11y.close')}
                 onClick={() => setViewAllOpen(false)}
               >
                 ✕
@@ -626,7 +628,7 @@ function AnalysisCard() {
   };
 
   const previewTone = getAnalysisPreviewTone(analysis);
-  const previewLabel = buildAnalysisPreviewLabel(analysis);
+  const previewLabel = t(buildAnalysisPreviewLabel(analysis));
 
   return (
     <div className="card accent-blue">
