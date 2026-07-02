@@ -294,7 +294,7 @@ export function TopBar() {
       <div className="logo">WarStonks</div>
 
       {navigationBack ? (
-        <button className="topbar-back-btn" type="button" onClick={goBack} title="Go back">
+        <button className="topbar-back-btn" type="button" onClick={goBack} title={t('a11y.goBack')}>
           ← Back
         </button>
       ) : null}
@@ -414,7 +414,7 @@ export function TopBar() {
             void handleRefreshSelectedItem();
           }}
           disabled={!selectedQuickViewItem || quickViewLoading}
-          aria-label="Refresh selected item"
+          aria-label={t('a11y.refreshSelectedItem')}
           title={selectedQuickViewItem ? 'Refresh selected item' : 'Search and select an item first'}
         >
           <RefreshIcon />
@@ -429,7 +429,7 @@ export function TopBar() {
               onChange={(event) => {
                 void setSelectedMarketVariantKey(event.target.value || null);
               }}
-              aria-label="Select rank market"
+              aria-label={t('a11y.selectRankMarket')}
             >
               {marketVariants.map((variant) => (
                 <option key={variant.key} value={variant.key}>
@@ -443,7 +443,7 @@ export function TopBar() {
 
       {/* role="group" (not "status"): balances update on every poll, and a live region would
           re-announce all of them on each refresh. */}
-      <div className="currency-strip" role="group" aria-label="Currency balances">
+      <div className="currency-strip" role="group" aria-label={t('a11y.currencyBalances')}>
         <div className="currency-item ci-platinum">
           <div className="currency-icon">
             <img src={walletIcons.platinum} alt="" />
@@ -502,14 +502,14 @@ export function TopBar() {
       </div>
 
       <div className="topbar-right">
-        <div className="strategy-pill" title="Strategy configuration">
+        <div className="strategy-pill" title={t('a11y.strategyConfig')}>
           CUSTOM · H:VERY SHORT · C:{autoProfile ? 'AUTO' : 'BALANCED'}
         </div>
         <div ref={notificationsRef} className="notification-wrap">
         <button
           className={`notification-btn${notificationsOpen ? ' open' : ''}`}
             type="button"
-            aria-label="Open notifications"
+            aria-label={t('a11y.openNotifications')}
             aria-expanded={notificationsOpen}
             onClick={() => setNotificationsOpen((current) => !current)}
           >
@@ -536,7 +536,7 @@ export function TopBar() {
         {!tradeAccount ? (
           <button
             className="btn-connect"
-            aria-label="Open trades"
+            aria-label={t('a11y.openTrades')}
             onClick={handleOpenTrades}
           >
             <ArrowIcon />
@@ -546,7 +546,7 @@ export function TopBar() {
           <div ref={tradeMenuRef} className="trade-menu-wrap">
             <button
               className="btn-connect trade-connected"
-              aria-label="Open trade account menu"
+              aria-label={t('a11y.openTradeMenu')}
               aria-expanded={tradeMenuOpen}
               onClick={() => setTradeMenuOpen((value) => !value)}
             >
@@ -559,7 +559,7 @@ export function TopBar() {
             </button>
 
             {tradeMenuOpen ? (
-              <div className="trade-menu-dropdown" role="listbox" aria-label="Presence">
+              <div className="trade-menu-dropdown" role="listbox" aria-label={t('a11y.presence')}>
                 {([
                   { value: 'online', label: 'Online' },
                   { value: 'ingame', label: 'In Game' },
@@ -592,8 +592,8 @@ export function TopBar() {
         )}
         <button
           className="settings-btn"
-          title="Settings"
-          aria-label="Open settings"
+          title={t('settings.title')}
+          aria-label={t('a11y.openSettings')}
           onClick={() => openSettingsSidebar('alecaframe')}
         >
           <GearIcon />

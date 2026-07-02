@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
 
 type CycleConfig = {
@@ -86,6 +87,7 @@ function formatCountdown(expiry: string | null, now: number): string {
 }
 
 export function WorldClockPanel() {
+  const { t } = useTranslation();
   const entry = useAppStore((state) => state.worldStateExtra.cycles);
   const [now, setNow] = useState(() => Date.now());
 
@@ -109,7 +111,7 @@ export function WorldClockPanel() {
   }
 
   return (
-    <div className="world-clock" aria-label="Open-world cycles">
+    <div className="world-clock" aria-label={t('a11y.openWorldCycles')}>
       {cycles.map(({ config, data }) => {
         const display = config.tone(data!.state);
         return (

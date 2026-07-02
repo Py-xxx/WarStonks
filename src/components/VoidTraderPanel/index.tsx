@@ -124,7 +124,7 @@ export function VoidTraderPanel() {
 
         {loading && !voidTrader ? (
           <EventsPanelEmpty
-            title="Loading Void Trader worldstate…"
+            title={t('a11y.loadingVoidTrader')}
             detail="Checking the latest Void Trader state and inventory."
           />
         ) : null}
@@ -166,14 +166,14 @@ export function VoidTraderPanel() {
 
             {!isActive ? (
               <EventsPanelEmpty
-                title="Baro Ki&apos;Teer is not in relay yet"
+                title={t('a11y.baroNotInRelay')}
                 detail="The countdown above tracks his next visit. Inventory will appear here as soon as the worldstate flips active."
               />
             ) : null}
 
             {isActive && inventoryGroups.length > 0 ? (
               <>
-                <div className="void-trader-tabs" role="tablist" aria-label="Void trader categories">
+                <div className="void-trader-tabs" role="tablist" aria-label={t('a11y.voidTraderCategories')}>
                   {inventoryCategories.map((category) => (
                     <button
                       key={category}
@@ -239,7 +239,7 @@ export function VoidTraderPanel() {
 
             {isActive && inventoryGroups.length === 0 ? (
               <EventsPanelEmpty
-                title="Void Trader inventory is currently unavailable"
+                title={t('a11y.voidTraderInvUnavailable')}
                 detail="The feed shows Baro as active, but no inventory entries were returned yet."
               />
             ) : null}
@@ -248,7 +248,7 @@ export function VoidTraderPanel() {
 
         {!loading && !voidTrader && error ? (
           <EventsPanelEmpty
-            title="Void Trader couldn’t load"
+            title={t('a11y.voidTraderFailed')}
             detail={error}
             actionLabel="Retry"
             onAction={() => {
@@ -259,7 +259,7 @@ export function VoidTraderPanel() {
 
         {!loading && !voidTrader && !error ? (
           <EventsPanelEmpty
-            title="Void Trader data is unavailable"
+            title={t('a11y.voidTraderUnavailableData')}
             detail="The first worldstate snapshot did not return Void Trader information."
           />
         ) : null}

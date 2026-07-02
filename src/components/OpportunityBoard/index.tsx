@@ -187,13 +187,14 @@ function ActionButton({ action }: { action: OpportunityAction }) {
 }
 
 function DismissButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
       className="opp-dismiss"
       onClick={onClick}
-      title="Not interested — hide for this session"
-      aria-label="Dismiss opportunity"
+      title={t('a11y.notInterested')}
+      aria-label={t('a11y.dismissOpportunity')}
     >
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
         <path d="M18 6 6 18" />
@@ -292,7 +293,7 @@ function OpportunityCard({
           </span>
           {opp.cost > 0 ? <span className="opp-card-cost">{opp.cost}p in</span> : null}
           {opp.pricedAt ? (
-            <span className="opp-card-priced" title="When these prices were last computed">
+            <span className="opp-card-priced" title={t('a11y.thesePricesLastComputed')}>
               priced {formatElapsedTime(opp.pricedAt)}
             </span>
           ) : null}
@@ -396,7 +397,7 @@ export function OpportunityBoard() {
         </div>
         <div className="opp-board-header-right">
           {pricedAt ? (
-            <span className="opp-freshness" title="When the market prices were last computed">
+            <span className="opp-freshness" title={t('a11y.pricesLastComputed')}>
               Prices {formatElapsedTime(pricedAt)}
             </span>
           ) : null}
@@ -412,7 +413,7 @@ export function OpportunityBoard() {
       </div>
 
       <div className="opp-controls">
-        <div className="opp-filters" role="tablist" aria-label="Filter opportunities">
+        <div className="opp-filters" role="tablist" aria-label={t('a11y.filterOpportunities')}>
           {filters.map((filter) => (
             <button
               key={filter.id}
@@ -433,7 +434,7 @@ export function OpportunityBoard() {
             min={0}
             inputMode="numeric"
             className="settings-input opp-budget-input"
-            placeholder="Any"
+            placeholder={t('a11y.any')}
             value={budget}
             onChange={(event) => setBudget(event.target.value)}
           />

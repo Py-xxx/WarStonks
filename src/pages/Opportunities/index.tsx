@@ -805,7 +805,7 @@ function SetCompletionScreenshotImportModal({
       <button
         className="modal-backdrop"
         type="button"
-        aria-label="Close screenshot import"
+        aria-label={t('a11y.closeImport')}
         onClick={onClose}
       />
       <div
@@ -813,7 +813,7 @@ function SetCompletionScreenshotImportModal({
         className="settings-modal screenshot-import-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Import prime components from screenshot"
+        aria-label={t('a11y.importPrimeComponents')}
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
@@ -824,7 +824,7 @@ function SetCompletionScreenshotImportModal({
             </h3>
           </div>
           <div className="settings-modal-actions">
-            <button className="settings-close-btn" type="button" aria-label="Close" onClick={onClose}>
+            <button className="settings-close-btn" type="button" aria-label={t('a11y.close')} onClick={onClose}>
               ✕
             </button>
           </div>
@@ -1045,14 +1045,14 @@ function SetCompletionScreenshotImportWarningModal({
       <button
         className="modal-backdrop"
         type="button"
-        aria-label="Close screenshot import guidance"
+        aria-label={t('a11y.closeImportGuidance')}
         onClick={onClose}
       />
       <div
         className="settings-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Screenshot import requirements"
+        aria-label={t('a11y.importRequirements')}
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
@@ -1063,7 +1063,7 @@ function SetCompletionScreenshotImportWarningModal({
             </h3>
           </div>
           <div className="settings-modal-actions">
-            <button className="settings-close-btn" type="button" aria-label="Close" onClick={onClose}>
+            <button className="settings-close-btn" type="button" aria-label={t('a11y.close')} onClick={onClose}>
               ✕
             </button>
           </div>
@@ -2373,7 +2373,7 @@ export function OpportunitiesPage({
                     type="button"
                     className="inventory-search-clear"
                     onClick={() => setComponentQuery('')}
-                    aria-label="Clear search"
+                    aria-label={t('a11y.clearSearch')}
                   >
                     ✕
                   </button>
@@ -2538,7 +2538,7 @@ export function OpportunitiesPage({
                           <span className="inventory-row-name" title={localizeName(item)}>{localizeName(item)}</span>
                           <span
                             className={`inventory-row-value${ownedItemPrices[item.slug] == null ? ' unpriced' : ''}`}
-                            title="Recommended exit price (per unit)"
+                            title={t('a11y.recommendedExitPerUnit')}
                           >
                             {ownedItemPrices[item.slug] != null
                               ? `${Math.round(ownedItemPrices[item.slug] as number)} pt`
@@ -2578,7 +2578,7 @@ export function OpportunitiesPage({
               className="inventory-import-fab"
               onClick={() => setScreenshotImportGuidanceOpen(true)}
               disabled={!plannerCatalog.length}
-              title="Import your inventory from a screenshot"
+              title={t('a11y.importFromScreenshot')}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -2612,7 +2612,7 @@ export function OpportunitiesPage({
                     className="market-refresh-button"
                     onClick={() => { void refreshOwnedRelics(true); }}
                     disabled={ownedRelicsLoading}
-                    aria-label="Refresh owned relic inventory"
+                    aria-label={t('a11y.refreshRelicInventory')}
                   >
                     ↻
                   </button>
@@ -2799,7 +2799,7 @@ export function OpportunitiesPage({
                       <span>{t('opp.noScanData')}</span>
                     )}
                     {ownedRelicsRefreshing ? (
-                      <span className="farm-now-refresh-indicator" title="Refreshing owned relic cache">
+                      <span className="farm-now-refresh-indicator" title={t('a11y.refreshingRelicCache')}>
                         <span className="farm-now-refresh-spinner" aria-hidden="true" />
                         Refreshing relics
                       </span>
@@ -2839,7 +2839,7 @@ export function OpportunitiesPage({
                   className="settings-input farm-now-select"
                   value={farmNowEra}
                   onChange={(event) => setFarmNowEra(event.target.value)}
-                  aria-label="Filter by relic era"
+                  aria-label={t('a11y.filterByEra')}
                 >
                   <option value="all">{t('opp.allEras')}</option>
                   <option value="Lith">Lith</option>
@@ -2851,7 +2851,7 @@ export function OpportunitiesPage({
                   className="settings-input farm-now-select"
                   value={farmNowSort}
                   onChange={(event) => setFarmNowSort(event.target.value)}
-                  aria-label="Sort relics"
+                  aria-label={t('a11y.sortRelics')}
                 >
                   {farmNowTab === 'set-completion' ? (
                     <>
@@ -3224,7 +3224,7 @@ export function OpportunitiesPage({
                             <span className="farm-now-cell farm-now-cell-refinement">
                               <span
                                 className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(row.guidance.bestKey)}`}
-                                title="Best refinement to run"
+                                title={t('a11y.bestRefinement')}
                               >
                                 Run {row.guidance.bestLabel}
                               </span>

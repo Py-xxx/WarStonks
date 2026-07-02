@@ -221,7 +221,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
   return (
     <div className="chart-card">
       <PortfolioPanelHeader
-        title="Cumulative Profit Curve"
+        title={t('a11y.cumulativeProfit')}
         info="Running realized profit over time for the selected period. This only uses closed sell rows."
       />
       <div className="chart-body portfolio-chart-body">
@@ -371,7 +371,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
   return (
     <div className="chart-card">
       <PortfolioPanelHeader
-        title="Profit Per Trade"
+        title={t('a11y.profitPerTrade')}
         info="Each bar is one closed sell row. Positive values are green, negative values are red."
         infoPlacement="left"
       />
@@ -1090,7 +1090,7 @@ function TradeLogTab({ username }: { username: string | null }) {
         <div className="portfolio-log-stack">
           <div className="portfolio-log-card portfolio-filter-card">
             <PortfolioPanelHeader
-              title="Filters"
+              title={t('a11y.filters')}
               info="Filter the permanent local trade ledger by type, status, source, item name, and close date range."
             />
             <div className="portfolio-log-filters">
@@ -1158,7 +1158,7 @@ function TradeLogTab({ username }: { username: string | null }) {
 
           <div className="portfolio-log-card">
             <PortfolioPanelHeader
-              title="Trade Log Ledger"
+              title={t('a11y.tradeLogLedger')}
               info="Permanent local trade ledger built from warframe.market history, Alecaframe imports, and local reconciliation rules."
             />
             <div className="portfolio-log-scroll">
@@ -1350,7 +1350,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             className="settings-modal portfolio-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="Migrate Alecaframe trades"
+            aria-label={t('a11y.migrateTrades')}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="settings-modal-header">
@@ -1361,7 +1361,7 @@ function TradeLogTab({ username }: { username: string | null }) {
               <button
                 className="modal-close"
                 type="button"
-                aria-label="Close migrate trades dialog"
+                aria-label={t('a11y.closeMigrate')}
                 onClick={() => setMigrateModalOpen(false)}
               >
                 ×
@@ -1414,7 +1414,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             className="settings-modal portfolio-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="Adjust grouped trade amounts"
+            aria-label={t('a11y.adjustGroupedAmounts')}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="settings-modal-header">
@@ -1425,7 +1425,7 @@ function TradeLogTab({ username }: { username: string | null }) {
               <button
                 className="modal-close"
                 type="button"
-                aria-label="Close adjust amounts dialog"
+                aria-label={t('a11y.closeAdjustAmounts')}
                 onClick={() => setAllocationGroupId(null)}
               >
                 ×
@@ -1832,7 +1832,7 @@ function PnlSummaryTab({
           <div className="portfolio-breakdown-grid">
             <div className="chart-card">
               <PortfolioPanelHeader
-                title="Trade Breakdown"
+                title={t('a11y.tradeBreakdown')}
                 info="Breakdown of realized profit by trade closure style: direct flip, sold as set, or unmatched sell."
               />
               <div className="portfolio-breakdown-list">
@@ -1853,7 +1853,7 @@ function PnlSummaryTab({
             </div>
             <div className="chart-card">
               <PortfolioPanelHeader
-                title="Category Breakdown"
+                title={t('a11y.categoryBreakdown')}
                 info="Realized profit grouped by item family using the local item catalog classification."
                 infoPlacement="left"
               />
@@ -1892,7 +1892,7 @@ function PnlSummaryTab({
 
           <div className="chart-card portfolio-notes-card">
             <PortfolioPanelHeader
-              title="Data Confidence"
+              title={t('a11y.dataConfidence')}
               info="How complete the data behind these numbers is. Profit basis = the share of your sell revenue that has a matched local buy cost behind it (the rest is estimated). Inventory value = the share of held items that have a cached market price. Lower percentages mean the figures above are rougher estimates."
               infoPlacement="left"
             />

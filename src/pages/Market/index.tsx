@@ -1939,7 +1939,7 @@ function AnalyticsTab() {
     return (
       <div className="page-content">
         <EmptyAnalyticsState
-          title="Analytics couldn’t load"
+          title={t('a11y.analyticsFailed')}
           body={marketVariantsError}
           actionLabel="Retry"
           onAction={() => {
@@ -1966,7 +1966,7 @@ function AnalyticsTab() {
       ) : null}
       {errorMessage && !analytics && !loading ? (
         <EmptyAnalyticsState
-          title="Analytics couldn’t load"
+          title={t('a11y.analyticsFailed')}
           body={errorMessage}
           actionLabel="Retry"
           onAction={() => setRefreshNonce((value) => value + 1)}
@@ -2012,7 +2012,7 @@ function AnalyticsTab() {
       />
       <div className="market-analytics-grid">
             <AnalyticsPanel
-              title="Entry / Exit Zone Overview"
+              title={t('a11y.entryExitOverview')}
               eyebrow="Market State"
               info="Current fair value, entry zone, exit zone, and zone quality derived from the latest analytics snapshot."
               infoPlacement="below"
@@ -2059,7 +2059,7 @@ function AnalyticsTab() {
             </AnalyticsPanel>
 
             <AnalyticsPanel
-              title="Orderbook Pressure"
+              title={t('a11y.orderbookPressure')}
               eyebrow="Execution"
               info="Live cheapest sell, highest buy, spread, and visible depth showing whether execution currently favors entry or exit."
               infoPlacement="below"
@@ -2106,7 +2106,7 @@ function AnalyticsTab() {
             </AnalyticsPanel>
 
             <AnalyticsPanel
-              title="Trend Quality Breakdown"
+              title={t('a11y.trendQualityBreakdown')}
               eyebrow="Structure"
               info="Short-term trend structure across multiple price views, including slope, confidence, stability, volatility, and reversal context."
               loading={!revealedPanels.trend && !analyticsPanelError}
@@ -2175,7 +2175,7 @@ function AnalyticsTab() {
             </AnalyticsPanel>
 
             <AnalyticsPanel
-              title="Action Card"
+              title={t('a11y.actionCard')}
               eyebrow="Readout"
               info="Condensed analytics recommendation that combines zone quality, adjusted edge, spread, and book bias into one suggested action."
               loading={!revealedPanels.action && !analyticsPanelError}
@@ -2441,7 +2441,7 @@ function AnalysisTab() {
     return (
       <div className="page-content">
         <EmptyAnalyticsState
-          title="Analysis couldn’t load"
+          title={t('a11y.analysisFailed')}
           body={marketVariantsError}
           actionLabel="Retry"
           onAction={() => {
@@ -2490,7 +2490,7 @@ function AnalysisTab() {
     <div ref={pageContentRef} className="page-content market-page-content">
       {analysisError && !analysis && !analysisLoading ? (
         <EmptyAnalyticsState
-          title="Analysis couldn’t load"
+          title={t('a11y.analysisFailed')}
           body={analysisError}
           actionLabel="Retry"
           onAction={() => {
@@ -2617,7 +2617,7 @@ function AnalysisTab() {
           </div>
 
           <AnalyticsPanel
-            title="Flip Analysis"
+            title={t('a11y.flipAnalysis')}
             eyebrow="Execution Model"
             info="Execution-focused pricing and margin view for a simple buy-then-sell flip at the current market posture."
             loading={!revealedPanels.flip && !analysisError}
@@ -2661,7 +2661,7 @@ function AnalysisTab() {
           </AnalyticsPanel>
 
           <AnalyticsPanel
-            title="Liquidity Detail"
+            title={t('a11y.liquidityDetail')}
             eyebrow="Market Structure"
             info="Live orderbook depth, undercut behavior, and demand pressure showing how easy this market is to enter and exit."
             loading={!revealedPanels.liquidity && !analysisError}
@@ -2736,7 +2736,7 @@ function AnalysisTab() {
           </AnalyticsPanel>
 
           <AnalyticsPanel
-            title="Trend"
+            title={t('trades.analysis.trend')}
             eyebrow="Analytics Carryover"
             info="Recent direction, slope, and confidence signals derived from the latest analytics history."
             loading={!revealedPanels.trend && !analysisError}
@@ -2954,7 +2954,7 @@ function AnalysisTab() {
         <div className="market-analysis-column market-analysis-column-side">
           <div className="market-analysis-item-details">
               <AnalyticsPanel
-                title="Item Details"
+                title={t('a11y.itemDetails')}
                 eyebrow="Reference"
                 info="Reference data from the local catalog, including description, rank scaling, and item metadata."
                 loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
@@ -3038,7 +3038,7 @@ function AnalysisTab() {
           </div>
 
           <AnalyticsPanel
-            title="Event Context"
+            title={t('a11y.eventContext')}
             eyebrow="World State"
             info="Current worldstate hooks and event signals that may be affecting demand, supply, or timing for this item."
             loading={!revealedPanels.eventContext && !analysisError}
@@ -3073,7 +3073,7 @@ function AnalysisTab() {
           </AnalyticsPanel>
 
           <AnalyticsPanel
-            title="Manipulation Risk"
+            title={t('a11y.manipulationRisk')}
             eyebrow="Safety"
             info="Risk signals for spoofing, shallow books, and other market behavior that can distort apparent edge."
             loading={!revealedPanels.manipulation && !analysisError}
@@ -3132,7 +3132,7 @@ function AnalysisTab() {
           </AnalyticsPanel>
 
           <AnalyticsPanel
-            title="Time of Day Liquidity"
+            title={t('a11y.timeOfDayLiquidity')}
             eyebrow="Observatory Tape"
             info="When this market is historically most active, by day of week and 2-hour block (UTC). Brighter cells = stronger liquidity + volume. Use it to time buys and sells."
             loading={!revealedPanels.timeOfDay && !analysisError}
@@ -3341,7 +3341,7 @@ function CalibrationTab() {
         <div className="market-analytics-grid">
 
           <AnalyticsPanel
-            title="Backtest Status"
+            title={t('a11y.backtestStatus')}
             eyebrow="Track Record"
             info="Live counts of how many recommendations have been graded (holding window elapsed) vs. still open. Grading runs automatically each time you open this tab."
             loading={loading}
@@ -3380,7 +3380,7 @@ function CalibrationTab() {
           </AnalyticsPanel>
 
           <AnalyticsPanel
-            title="Buy Trade Calibration"
+            title={t('a11y.buyCalibration')}
             eyebrow="Buy / Hold / Caution / Wait"
             info="For each suggested action, shows the realized median return, hit rate (exit zone reached within 7 days), and interquartile return range across all graded buy trades. Needs at least 5 graded trades per label to display."
             loading={loading}
@@ -3398,7 +3398,7 @@ function CalibrationTab() {
           </AnalyticsPanel>
 
           <AnalyticsPanel
-            title="How This Works"
+            title={t('a11y.howThisWorks')}
             eyebrow="Methodology"
             info="Describes the backtest trade model used to grade recommendations."
           >

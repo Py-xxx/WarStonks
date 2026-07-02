@@ -2020,7 +2020,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                 className="settings-close-btn"
                 type="button"
                 onClick={() => setSessionExpiredPopupOpen(false)}
-                aria-label="Close session expired popup"
+                aria-label={t('a11y.closeSessionExpired')}
               >
                 ×
               </button>
