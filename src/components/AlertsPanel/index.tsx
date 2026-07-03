@@ -104,10 +104,10 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                   </div>
                   <div className="alert-meta">
                     <span>{underpricedAlert.listing.username}</span>
-                    <span>Qty {underpricedAlert.listing.quantity}</span>
-                    <span>Rec {underpricedAlert.listing.recommendedPrice} pt</span>
+                    <span>{t('wl.qty')} {underpricedAlert.listing.quantity}</span>
+                    <span>{t('al.rec')} {underpricedAlert.listing.recommendedPrice} pt</span>
                     {underpricedAlert.listing.rank !== null && underpricedAlert.listing.rank !== undefined ? (
-                      <span>Rank {underpricedAlert.listing.rank}</span>
+                      <span>{t('wl.rank')} {underpricedAlert.listing.rank}</span>
                     ) : null}
                   </div>
                 </div>
@@ -163,7 +163,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                   <button
                     className="alert-clear-btn alert-clear-btn-floating"
                     type="button"
-                    aria-label={`Clear system alert for ${alert.title}`}
+                    aria-label={t('al.clearSystemAria', { title: alert.title })}
                     onClick={() => dismissSystemAlert(alert.id)}
                   >
                     ×
@@ -175,7 +175,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                     <div className="alert-topline">
                       <span className="alert-item-name">{alert.title}</span>
                       {alert.kind === 'worldstate-offline' ? (
-                        <span className="badge badge-amber">{alert.sourceKeys?.length ?? 0} feeds</span>
+                        <span className="badge badge-amber">{t('al.feeds', { count: alert.sourceKeys?.length ?? 0 })}</span>
                       ) : alert.kind === 'app-update' ? (
                         <span className={`badge ${
                           alert.installState === 'error'
@@ -184,7 +184,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                               ? 'badge-blue'
                               : 'badge-green'
                         }`}>
-                          {alert.updateVersion ?? 'Update'}
+                          {alert.updateVersion ?? t('al.update')}
                         </span>
                       ) : (
                         <span className="badge badge-amber">{t('al.stale')}</span>
@@ -236,10 +236,10 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       }}
                     >
                       {alert.installState === 'downloading'
-                        ? `Downloading${alert.progressPercent !== null && alert.progressPercent !== undefined ? ` ${alert.progressPercent}%` : ''}`
+                        ? `${t('al.downloading')}${alert.progressPercent !== null && alert.progressPercent !== undefined ? ` ${alert.progressPercent}%` : ''}`
                         : alert.installState === 'installing'
-                          ? 'Installing…'
-                          : 'Update Now'}
+                          ? t('al.installing')
+                          : t('al.updateNow')}
                     </button>
                     <button
                       className="act-btn"
@@ -281,7 +281,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                   <button
                     className="alert-clear-btn alert-clear-btn-floating"
                     type="button"
-                    aria-label={`Clear alert for ${alert.itemName}`}
+                    aria-label={t('al.clearAria', { name: alert.itemName })}
                     onClick={() => dismissAlert(alert.id)}
                   >
                     ×

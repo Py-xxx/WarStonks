@@ -25,7 +25,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
       <div className="watchlist-add-copy">
         <span className="watchlist-add-label">{t('wl.watchTarget')}</span>
         <span className="watchlist-add-selected">
-          {selectedItem ? selectedItem.name : 'Search an item first'}
+          {selectedItem ? selectedItem.name : t('hm.searchFirst')}
         </span>
       </div>
 
@@ -71,7 +71,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
       </div>
 
       {selectedItem && marketVariantsLoading ? (
-        <div className="watchlist-form-note">Loading market variants…</div>
+        <div className="watchlist-form-note">{t('hm.loadingVariants')}</div>
       ) : null}
       {selectedItem && marketVariantsError ? (
         <div className="watchlist-form-error">{marketVariantsError}</div>

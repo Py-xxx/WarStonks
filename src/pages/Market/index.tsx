@@ -1976,9 +1976,9 @@ function AnalyticsTab() {
         <>
       <div className="market-header-actions">
         <div className="market-item-freshness">
-          <span>Snapshot {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
-          <span>Stats {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
-          <span>Computed {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
+          <span>{t('mkt.fresh.snapshot')} {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
+          <span>{t('mkt.fresh.stats')} {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
+          <span>{t('mkt.fresh.computed')} {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
         </div>
         <button
           className="market-refresh-button"
@@ -2013,7 +2013,7 @@ function AnalyticsTab() {
       <div className="market-analytics-grid">
             <AnalyticsPanel
               title={t('a11y.entryExitOverview')}
-              eyebrow="Market State"
+              eyebrow={t('mkteb.marketState')}
               info="Current fair value, entry zone, exit zone, and zone quality derived from the latest analytics snapshot."
               infoPlacement="below"
               loading={!revealedPanels.overview && !analyticsPanelError}
@@ -2060,7 +2060,7 @@ function AnalyticsTab() {
 
             <AnalyticsPanel
               title={t('a11y.orderbookPressure')}
-              eyebrow="Execution"
+              eyebrow={t('mkteb.execution')}
               info="Live cheapest sell, highest buy, spread, and visible depth showing whether execution currently favors entry or exit."
               infoPlacement="below"
               loading={!revealedPanels.pressure && !analyticsPanelError}
@@ -2107,7 +2107,7 @@ function AnalyticsTab() {
 
             <AnalyticsPanel
               title={t('a11y.trendQualityBreakdown')}
-              eyebrow="Structure"
+              eyebrow={t('mkteb.structure')}
               info="Short-term trend structure across multiple price views, including slope, confidence, stability, volatility, and reversal context."
               loading={!revealedPanels.trend && !analyticsPanelError}
               errorMessage={!revealedPanels.trend ? analyticsPanelError : null}
@@ -2176,7 +2176,7 @@ function AnalyticsTab() {
 
             <AnalyticsPanel
               title={t('a11y.actionCard')}
-              eyebrow="Readout"
+              eyebrow={t('mkteb.readout')}
               info="Condensed analytics recommendation that combines zone quality, adjusted edge, spread, and book bias into one suggested action."
               loading={!revealedPanels.action && !analyticsPanelError}
               errorMessage={!revealedPanels.action ? analyticsPanelError : null}
@@ -2508,9 +2508,9 @@ function AnalysisTab() {
       ) : null}
       <div className="market-header-actions">
         <div className="market-item-freshness">
-          <span>Snapshot {formatRelativeTimestamp(analysis?.sourceSnapshotAt ?? null)}</span>
-          <span>Stats {formatRelativeTimestamp(analysis?.sourceStatsFetchedAt ?? null)}</span>
-          <span>Computed {formatRelativeTimestamp(analysis?.computedAt ?? null)}</span>
+          <span>{t('mkt.fresh.snapshot')} {formatRelativeTimestamp(analysis?.sourceSnapshotAt ?? null)}</span>
+          <span>{t('mkt.fresh.stats')} {formatRelativeTimestamp(analysis?.sourceStatsFetchedAt ?? null)}</span>
+          <span>{t('mkt.fresh.computed')} {formatRelativeTimestamp(analysis?.computedAt ?? null)}</span>
         </div>
         <button
           className="market-refresh-button"
@@ -2618,7 +2618,7 @@ function AnalysisTab() {
 
           <AnalyticsPanel
             title={t('a11y.flipAnalysis')}
-            eyebrow="Execution Model"
+            eyebrow={t('mkteb.executionModel')}
             info="Execution-focused pricing and margin view for a simple buy-then-sell flip at the current market posture."
             loading={!revealedPanels.flip && !analysisError}
             errorMessage={!revealedPanels.flip ? analysisError : null}
@@ -2662,7 +2662,7 @@ function AnalysisTab() {
 
           <AnalyticsPanel
             title={t('a11y.liquidityDetail')}
-            eyebrow="Market Structure"
+            eyebrow={t('mkteb.marketStructure')}
             info="Live orderbook depth, undercut behavior, and demand pressure showing how easy this market is to enter and exit."
             loading={!revealedPanels.liquidity && !analysisError}
             errorMessage={!revealedPanels.liquidity ? analysisError : null}
@@ -2737,7 +2737,7 @@ function AnalysisTab() {
 
           <AnalyticsPanel
             title={t('trades.analysis.trend')}
-            eyebrow="Analytics Carryover"
+            eyebrow={t('mkteb.analyticsCarryover')}
             info="Recent direction, slope, and confidence signals derived from the latest analytics history."
             loading={!revealedPanels.trend && !analysisError}
             errorMessage={!revealedPanels.trend ? analysisError : null}
@@ -2811,7 +2811,7 @@ function AnalysisTab() {
                   ? 'Drop Sources'
                   : 'Drop Sources / Set Components'
             }
-            eyebrow="Supply Context"
+            eyebrow={t('mkteb.supplyContext')}
             info="Local item-catalog context explaining how this item is supplied, either through set components or drop sources."
             loading={!revealedPanels.supply && !analysisError}
             errorMessage={!revealedPanels.supply ? analysisError : null}
@@ -2955,7 +2955,7 @@ function AnalysisTab() {
           <div className="market-analysis-item-details">
               <AnalyticsPanel
                 title={t('a11y.itemDetails')}
-                eyebrow="Reference"
+                eyebrow={t('mkteb.reference')}
                 info="Reference data from the local catalog, including description, rank scaling, and item metadata."
                 loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
                 errorMessage={effectiveItemDetails ? null : itemDetailsError}
@@ -3039,7 +3039,7 @@ function AnalysisTab() {
 
           <AnalyticsPanel
             title={t('a11y.eventContext')}
-            eyebrow="World State"
+            eyebrow={t('mkteb.worldState')}
             info="Current worldstate hooks and event signals that may be affecting demand, supply, or timing for this item."
             loading={!revealedPanels.eventContext && !analysisError}
             errorMessage={!revealedPanels.eventContext ? analysisError : null}
@@ -3074,7 +3074,7 @@ function AnalysisTab() {
 
           <AnalyticsPanel
             title={t('a11y.manipulationRisk')}
-            eyebrow="Safety"
+            eyebrow={t('mkteb.safety')}
             info="Risk signals for spoofing, shallow books, and other market behavior that can distort apparent edge."
             loading={!revealedPanels.manipulation && !analysisError}
             errorMessage={!revealedPanels.manipulation ? analysisError : null}
@@ -3133,7 +3133,7 @@ function AnalysisTab() {
 
           <AnalyticsPanel
             title={t('a11y.timeOfDayLiquidity')}
-            eyebrow="Observatory Tape"
+            eyebrow={t('mkteb.observatoryTape')}
             info="When this market is historically most active, by day of week and 2-hour block (UTC). Brighter cells = stronger liquidity + volume. Use it to time buys and sells."
             loading={!revealedPanels.timeOfDay && !analysisError}
             errorMessage={!revealedPanels.timeOfDay ? analysisError : null}
@@ -3342,7 +3342,7 @@ function CalibrationTab() {
 
           <AnalyticsPanel
             title={t('a11y.backtestStatus')}
-            eyebrow="Track Record"
+            eyebrow={t('mkteb.trackRecord')}
             info="Live counts of how many recommendations have been graded (holding window elapsed) vs. still open. Grading runs automatically each time you open this tab."
             loading={loading}
             loadingLabel="Loading backtest data"
@@ -3381,7 +3381,7 @@ function CalibrationTab() {
 
           <AnalyticsPanel
             title={t('a11y.buyCalibration')}
-            eyebrow="Buy / Hold / Caution / Wait"
+            eyebrow={t('mkteb.buyHold')}
             info="For each suggested action, shows the realized median return, hit rate (exit zone reached within 7 days), and interquartile return range across all graded buy trades. Needs at least 5 graded trades per label to display."
             loading={loading}
             loadingLabel="Loading calibration data"
@@ -3399,7 +3399,7 @@ function CalibrationTab() {
 
           <AnalyticsPanel
             title={t('a11y.howThisWorks')}
-            eyebrow="Methodology"
+            eyebrow={t('mkteb.methodology')}
             info="Describes the backtest trade model used to grade recommendations."
           >
             <div className="market-copy-block">

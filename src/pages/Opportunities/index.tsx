@@ -80,6 +80,8 @@ type RefinementGuidance = {
   bestKey: string;
   bestLabel: string;
   hint: string;
+  /** Set when the user owns none of the recommended refinement but some of another. */
+  ownedNote: { count: number; label: string } | null;
 };
 
 type FarmNowRelicRow = {
@@ -90,6 +92,8 @@ type FarmNowRelicRow = {
   platPerHour: number | null;
   guidance: RefinementGuidance;
   bestDropSlug: string | null;
+  /** Set when the search query targeted a specific drop item (item-targeted refinement mode). */
+  targetedDropName?: string;
   drops: Array<{
     drop: RelicRoiDropEntry;
     chance: number | null;
@@ -409,6 +413,7 @@ const REFINEMENT_ORDER: { key: string; label: string }[] = [
 function buildRefinementGuidance(
   metrics: RefinementMetric[],
   unit: 'plat' | 'pct',
+  subject = 'a needed part',
 ): RefinementGuidance {
   const best = metrics
     .filter((metric) => metric.value !== null)
@@ -424,7 +429,7 @@ function buildRefinementGuidance(
       hint =
         unit === 'plat'
           ? 'Intact is fine — refining adds little.'
-          : `Intact gives ${formatChance(best.value)} at a needed part.`;
+          : `Intact gives ${formatChance(best.value)} at ${subject}.`;
     } else {
       const delta = (best.value ?? 0) - intactValue;
       const worthRefining =
@@ -435,10 +440,25 @@ function buildRefinementGuidance(
             ? `Refine to ${best.label}: +${Math.round(delta)}p/run over Intact.`
             : `Refine to ${best.label}: ${formatChance(best.value)} vs ${formatChance(
                 intactValue,
-              )} at a needed part.`;
+              )} at ${subject}.`;
       } else {
         hint = 'Intact is fine — refining barely helps here.';
       }
+    }
+  }
+
+  // If the user owns none of the recommended refinement but does own another, surface it —
+  // running what you already have often beats farming/refining fresh copies.
+  let ownedNote: RefinementGuidance['ownedNote'] = null;
+  if (best && (best.owned ?? 0) === 0) {
+    const fallback = metrics
+      .filter((metric) => metric.owned > 0 && metric.value !== null)
+      .reduce<RefinementMetric | null>(
+        (acc, metric) => (acc === null || (metric.value ?? 0) > (acc.value ?? 0) ? metric : acc),
+        null,
+      );
+    if (fallback) {
+      ownedNote = { count: fallback.owned, label: fallback.label };
     }
   }
 
@@ -447,6 +467,7 @@ function buildRefinementGuidance(
     bestKey: best?.key ?? 'intact',
     bestLabel: best?.label ?? 'Intact',
     hint,
+    ownedNote,
   };
 }
 
@@ -462,15 +483,23 @@ function formatChance(value: number | null): string {
 function RefinementGuidancePanel({
   guidance,
   unit,
+  heading,
 }: {
   guidance: RefinementGuidance;
   unit: 'plat' | 'pct';
+  heading?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="farm-now-refine">
       <div className="farm-now-refine-hint">
-        {unit === 'plat' ? 'Best plat per run' : 'Chance at a needed part'} — {guidance.hint}
+        {heading ?? (unit === 'plat' ? 'Best plat per run' : 'Chance at a needed part')} — {guidance.hint}
       </div>
+      {guidance.ownedNote ? (
+        <div className="farm-now-refine-owned-note">
+          {t('opp.youOwnRefine', { count: guidance.ownedNote.count, label: guidance.ownedNote.label })}
+        </div>
+      ) : null}
       <div className="farm-now-refine-grid">
         {guidance.metrics.map((metric) => (
           <div
@@ -1603,6 +1632,50 @@ export function OpportunitiesPage({
           row.relic.name.toLowerCase().includes(query) ||
           row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
       );
+      // Item-targeted mode: when the query matches a DROP (and not the relic's own name),
+      // re-aim the refinement suggestion at that item — best refinement = highest chance of
+      // pulling the searched part, not best overall plat per run. Searching a relic name
+      // keeps the normal plat-per-run guidance.
+      rows = rows.map((row) => {
+        if (row.relic.name.toLowerCase().includes(query)) {
+          return row;
+        }
+        const matchedDrops = row.drops.filter((entry) =>
+          entry.drop.name.toLowerCase().includes(query),
+        );
+        if (matchedDrops.length === 0) {
+          return row;
+        }
+        const metrics: RefinementMetric[] = REFINEMENT_ORDER.map((refinement) => {
+          let value: number | null = null;
+          for (const entry of matchedDrops) {
+            const chance = chanceForRefinement(entry.drop.chanceProfile, refinement.key);
+            if (chance !== null) {
+              value = (value ?? 0) + chance;
+            }
+          }
+          const owned =
+            row.guidance.metrics.find((metric) => metric.key === refinement.key)?.owned ?? 0;
+          return {
+            key: refinement.key,
+            label: refinement.label,
+            value: value === null ? null : Math.round(value * 10) / 10,
+            owned,
+          };
+        });
+        const targetName = localizeName(matchedDrops[0].drop);
+        const guidance = buildRefinementGuidance(metrics, 'pct', `“${targetName}”`);
+        let bestDropSlug = row.bestDropSlug;
+        let bestChance = -1;
+        for (const entry of matchedDrops) {
+          const chance = chanceForRefinement(entry.drop.chanceProfile, guidance.bestKey);
+          if (chance !== null && chance > bestChance) {
+            bestChance = chance;
+            bestDropSlug = entry.drop.slug;
+          }
+        }
+        return { ...row, guidance, bestDropSlug, targetedDropName: targetName };
+      });
     }
     if (farmNowEra !== 'all') {
       rows = rows.filter((row) => row.tier === farmNowEra);
@@ -1621,7 +1694,7 @@ export function OpportunitiesPage({
       return left.relic.name.localeCompare(right.relic.name);
     });
     return sorted;
-  }, [farmNowRelics, farmNowSearch, farmNowEra, farmNowSort]);
+  }, [farmNowRelics, farmNowSearch, farmNowEra, farmNowSort, localizeName]);
 
   const farmNowTopRelics = useMemo(
     () => displayedFarmNowRelics.slice(0, 3),
@@ -2230,7 +2303,7 @@ export function OpportunitiesPage({
 
   return (
     <>
-      <div className="subnav">
+      <div className="subnav opp-page-subnav">
         <div className="subnav-left">
           <span className="page-title">{mode === 'inventory' ? t('opp.inventory') : t('opp.opportunities')}</span>
           <div className="subnav-tabs" role="tablist" aria-label={mode === 'inventory' ? 'Inventory sections' : 'Opportunities sections'}>
@@ -3244,7 +3317,15 @@ export function OpportunitiesPage({
 
                         {expanded ? (
                           <div className="farm-now-row-body">
-                            <RefinementGuidancePanel guidance={row.guidance} unit="plat" />
+                            <RefinementGuidancePanel
+                              guidance={row.guidance}
+                              unit={row.targetedDropName ? 'pct' : 'plat'}
+                              heading={
+                                row.targetedDropName
+                                  ? t('opp.chanceAt', { item: row.targetedDropName })
+                                  : undefined
+                              }
+                            />
                             <div className="farm-now-drop-grid">
                               {row.drops.map((entry) => {
                                 const drop = entry.drop;

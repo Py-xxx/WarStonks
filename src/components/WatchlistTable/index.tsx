@@ -226,7 +226,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                               handleCopy(item);
                             }}
                           >
-                            {copiedWatchlistId === item.id ? 'Copied' : 'Copy Message'}
+                            {copiedWatchlistId === item.id ? t('common.copied') : t('hm.copyMessage')}
                           </button>
                         ) : null}
                         <button
@@ -247,7 +247,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             </tbody>
           </table>
           <div className="wl-footer">
-            <span>Adaptive scans · min 10s per item</span>
+            <span>{t('hm.adaptiveScans')}</span>
             {variant === 'compact' && selectedId ? (
               <span className="selected">
                 Selected:{' '}
@@ -305,7 +305,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             <div className="settings-modal-header">
               <div className="settings-modal-title">
                 <span className="card-label">{t('wl.watchlist')}</span>
-                <h3 id="watchlist-remove-title">Remove item?</h3>
+                <h3 id="watchlist-remove-title">{t('wl.removeTitle')}</h3>
               </div>
               <button
                 className="settings-close-btn"
@@ -318,15 +318,22 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             </div>
             <div className="settings-modal-body">
               <p>
-                Remove <strong>{removeTarget.displayName}</strong> from your watchlist?
-                {removeTarget.linkedBuyOrderId
-                  ? ' This will also cancel its linked Warframe.Market buy order.'
-                  : ''}
+                {(() => {
+                  const [before, after] = t('wl.removeBody', { name: '\u0000' }).split('\u0000');
+                  return (
+                    <>
+                      {before}
+                      <strong>{removeTarget.displayName}</strong>
+                      {after}
+                    </>
+                  );
+                })()}
+                {removeTarget.linkedBuyOrderId ? ` ${t('wl.removeLinked')}` : ''}
               </p>
             </div>
             <div className="settings-modal-actions">
               <button type="button" className="btn-secondary" onClick={() => setRemoveItemId(null)}>
-                Cancel
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -336,7 +343,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                   setRemoveItemId(null);
                 }}
               >
-                Remove
+                {t('trades.row.remove')}
               </button>
             </div>
           </div>

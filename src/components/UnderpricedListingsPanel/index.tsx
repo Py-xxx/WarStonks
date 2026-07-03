@@ -34,7 +34,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
 
   const handleVerify = async () => {
     if (!card.userSlug) {
-      pushToast('This listing has no seller handle to verify.', 'error');
+      pushToast(t('up.noHandle'), 'error');
       return;
     }
     updateListing(card.orderId, { status: 'verifying' });
@@ -57,23 +57,23 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
           },
           card.itemName,
         );
-        pushToast('Market listing still active. Message copied to clipboard.', 'success');
+        pushToast(t('up.stillActive'), 'success');
       } else {
         updateListing(card.orderId, { status: 'gone' });
-        pushToast('That listing is no longer available.', 'info');
+        pushToast(t('up.unavailable'), 'info');
       }
     } catch (error) {
       updateListing(card.orderId, { status: 'new' });
-      pushToast(error instanceof Error ? error.message : 'Couldn’t verify the listing.', 'error');
+      pushToast(error instanceof Error ? error.message : t('up.verifyFailed'), 'error');
     }
   };
 
   const handleCopyAgain = async () => {
     try {
       await copyWhisper();
-      pushToast('Message copied to clipboard.', 'success');
+      pushToast(t('up.msgCopied'), 'success');
     } catch {
-      pushToast('Couldn’t copy the message.', 'error');
+      pushToast(t('up.copyFailed'), 'error');
     }
   };
 
@@ -94,7 +94,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
       </div>
 
       {card.completesSet ? (
-        <div className="radar-card-completes-badge" title={`You own ${card.completesSet.ownedDistinct}/${card.completesSet.neededDistinct} parts`}>
+        <div className="radar-card-completes-badge" title={t('up.ownParts', { owned: card.completesSet.ownedDistinct, needed: card.completesSet.neededDistinct })}>
           ⭐ Completes your {card.completesSet.setName} ({card.completesSet.ownedDistinct}/
           {card.completesSet.neededDistinct})
         </div>
@@ -125,7 +125,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
             disabled={card.status === 'verifying' || !card.userSlug}
             onClick={() => void handleVerify()}
           >
-            {card.status === 'verifying' ? 'Verifying…' : 'Verify'}
+            {card.status === 'verifying' ? t('up.verifying') : t('up.verify')}
           </button>
         )}
         <button

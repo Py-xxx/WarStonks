@@ -8787,7 +8787,55 @@ fn load_relic_reward_profiles(
         }
     }
 
-    Ok(reward_map.into_values().collect())
+    let mut drops: Vec<RelicRoiDropEntry> = reward_map.into_values().collect();
+    for drop in &mut drops {
+        if let Some(derived) = relic_rarity_from_chances(&drop.chance_profile) {
+            drop.rarity = Some(derived.to_string());
+        }
+    }
+    drops.sort_by(|left, right| {
+        relic_rarity_rank(left.rarity.as_deref())
+            .cmp(&relic_rarity_rank(right.rarity.as_deref()))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(drops)
+}
+
+/// Canonical relic reward chance brackets per refinement (percent). The rarity strings in the
+/// source drop data are unreliable across refinement variants (a Radiant "common" at 16.67%
+/// sits BELOW a Radiant "uncommon" at 20%, and whichever variant was processed first used to
+/// win), so we classify by nearest canonical chance instead — deterministic Common/Uncommon/Rare.
+fn relic_rarity_from_chances(profile: &RelicRefinementChanceProfile) -> Option<&'static str> {
+    let candidates: [(Option<f64>, (f64, f64, f64)); 4] = [
+        (profile.intact, (25.33, 11.0, 2.0)),
+        (profile.exceptional, (23.33, 13.0, 4.0)),
+        (profile.flawless, (20.0, 17.0, 6.0)),
+        (profile.radiant, (16.67, 20.0, 10.0)),
+    ];
+    for (chance, (common, uncommon, rare)) in candidates {
+        if let Some(value) = chance {
+            let d_common = (value - common).abs();
+            let d_uncommon = (value - uncommon).abs();
+            let d_rare = (value - rare).abs();
+            return Some(if d_common <= d_uncommon && d_common <= d_rare {
+                "Common"
+            } else if d_uncommon <= d_rare {
+                "Uncommon"
+            } else {
+                "Rare"
+            });
+        }
+    }
+    None
+}
+
+fn relic_rarity_rank(rarity: Option<&str>) -> u8 {
+    match rarity {
+        Some("Common") => 0,
+        Some("Uncommon") => 1,
+        Some("Rare") => 2,
+        _ => 3,
+    }
 }
 
 fn resolve_relic_catalog_entry(

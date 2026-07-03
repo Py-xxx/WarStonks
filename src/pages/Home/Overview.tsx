@@ -147,7 +147,7 @@ function WatchlistCard() {
     <div className="card accent-green">
       <div className="card-header">
         <span className="card-label">{t('ov.watchlist')}</span>
-        <span className="badge badge-blue">{watchlistCount} items</span>
+        <span className="badge badge-blue">{t('hm.itemsCount', { count: watchlistCount })}</span>
       </div>
 
       <div className="card-body card-body-compact">
@@ -195,7 +195,7 @@ function EventsCard() {
         <span
           className={`badge ${worldStateEvents.length > 0 ? 'badge-blue' : 'badge-muted'}`}
         >
-          {worldStateEvents.length} active
+          {t('hm.activeCount', { count: worldStateEvents.length })}
         </span>
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={openActiveEventsPage}>
@@ -249,7 +249,7 @@ function EventsCard() {
 
           {!worldStateEventsError && worldStateEventsLoading && worldStateEvents.length === 0 ? (
             <button className="watchlist-alert-summary-empty" type="button" onClick={openActiveEventsPage}>
-              Loading active worldstate events for the dashboard.
+              {t('hm.loadingEvents')}
             </button>
           ) : null}
 
@@ -259,7 +259,7 @@ function EventsCard() {
               type="button"
               onClick={openActiveEventsPage}
             >
-              No active worldstate events right now. Click here to open the Events page.
+              {t('hm.noEvents')}
             </button>
           ) : null}
         </div>
@@ -273,16 +273,54 @@ function EventsCard() {
 }
 
 function MetricsRow() {
+  const { t } = useTranslation();
   const watchlist = useAppStore((state) => state.watchlist);
   const signals = useMemo(() => buildWatchlistMarketSignals(watchlist), [watchlist]);
+
+  // The signals lib emits English strings (labels, tone words, templated subtitles, tooltips);
+  // translate the known closed set here, falling back to the raw string for anything new.
+  const SIG_MAP: Record<string, TranslationKey> = {
+    Momentum: 'sig.momentum',
+    'Spread Quality': 'sig.spreadQuality',
+    Volatility: 'sig.volatility',
+    Bullish: 'sig.bullish',
+    Weak: 'sig.weak',
+    Stable: 'sig.stable',
+    'Not enough fresh watchlist data': 'sig.notEnough',
+    'Weighted trimmed score from fresh watchlist items, combining 24h change (70%) with current price position inside the entry and exit zone (30%).':
+      'sig.momentumTip',
+    'Weighted trimmed quality score using exit headroom (55%), current alignment versus entry (25%), and watchlist liquidity from item volume (20%).':
+      'sig.spreadTip',
+    'Weighted trimmed 24h absolute move across fresh watchlist items. Lower means calmer pricing; higher means more unstable movement.':
+      'sig.volTip',
+  };
+  const tSig = (value: string): string => {
+    const key = SIG_MAP[value];
+    if (key) {
+      return t(key);
+    }
+    let match = value.match(/^Score (.+) · (\d+) items$/);
+    if (match) {
+      return t('sig.momentumSub', { score: match[1], count: match[2] });
+    }
+    match = value.match(/^(\d+) tradable items$/);
+    if (match) {
+      return t('sig.spreadSub', { count: match[1] });
+    }
+    match = value.match(/^24h absolute move · (\d+) items$/);
+    if (match) {
+      return t('sig.volSub', { count: match[1] });
+    }
+    return value;
+  };
 
   return (
     <div className="metrics-row">
       {signals.map((signal) => (
-        <div key={signal.key} className="card metric-card" title={signal.tooltip}>
-          <div className="card-label">{signal.label}</div>
-          <div className="metric-value">{signal.valueText}</div>
-          <div className="metric-sub">{signal.subtitle}</div>
+        <div key={signal.key} className="card metric-card" title={tSig(signal.tooltip)}>
+          <div className="card-label">{tSig(signal.label)}</div>
+          <div className="metric-value">{tSig(signal.valueText)}</div>
+          <div className="metric-sub">{tSig(signal.subtitle)}</div>
           <div className="metric-bar">
             <div
               className="metric-bar-fill"
@@ -336,18 +374,18 @@ function QuickViewCard() {
   const exitPrice = analysis?.headline.exitPrice ?? null;
   const mainStats = [
     {
-      label: 'Entry Price',
+      label: t('mkt.entryPrice'),
       value: `${mainOrder?.platinum ?? 0} pt`,
       accent: 'var(--accent-green)',
     },
     {
-      label: 'Exit Price',
-      value: exitPrice !== null ? `${Math.round(exitPrice)} pt` : analysisLoading ? 'Building…' : '—',
+      label: t('mkt.exitPrice'),
+      value: exitPrice !== null ? `${Math.round(exitPrice)} pt` : analysisLoading ? t('hm.building') : '—',
       pending: exitPrice === null,
       accent: exitPrice !== null ? 'var(--accent-blue)' : undefined,
     },
     {
-      label: 'Quantity',
+      label: t('trades.col.quantity'),
       value: `${mainOrder?.quantity ?? 0}`,
     },
     ...(mainOrder?.rank !== null && mainOrder?.rank !== undefined
@@ -410,7 +448,7 @@ function QuickViewCard() {
 
         {selectedItem && quickView.loading ? (
           <div className="empty-state">
-            <span className="empty-primary">Loading top sell orders…</span>
+            <span className="empty-primary">{t('hm.loadingTopOrders')}</span>
             <span className="empty-sub">Fetching the live sell orders for {selectedItemName}.</span>
           </div>
         ) : null}
@@ -457,10 +495,10 @@ function QuickViewCard() {
               <div>
                 <div className="qv-stat-label">{t('ov.cheapestSeller')}</div>
                 <div className="qv-focus-user">{mainOrder.username}</div>
-                <div className="qv-focus-status">{mainOrder.status ?? 'Unknown'}</div>
+                <div className="qv-focus-status">{mainOrder.status ?? t('hm.unknown')}</div>
               </div>
               <button className="btn-sm" onClick={() => void handleCopy(mainOrder)}>
-                {copiedOrderId === mainOrder.orderId ? 'Copied' : 'Copy Message'}
+                {copiedOrderId === mainOrder.orderId ? t('common.copied') : t('hm.copyMessage')}
               </button>
             </div>
 
@@ -536,7 +574,7 @@ function QuickViewCard() {
         ) : null}
         <CardLoadingOverlay
           visible={Boolean(selectedItem && quickView.loading)}
-          label={`Loading quick view for ${selectedItem?.name ?? 'item'}`}
+          label={t('hm.loadingQv', { item: selectedItemName || '…' })}
         />
       </div>
 
@@ -570,7 +608,7 @@ function QuickViewCard() {
             <div className="qv-viewall-list">
               <div className="qv-viewall-row qv-viewall-row-head">
                 <span>{t('ov.price')}</span>
-                <span>Qty</span>
+                <span>{t('wl.qty')}</span>
                 <span>{t('ov.seller')}</span>
                 <span />
               </div>
@@ -587,7 +625,7 @@ function QuickViewCard() {
                     className={`btn-sm qv-viewall-copy${copiedOrderId === order.orderId ? ' copied' : ''}`}
                     onClick={() => void handleCopy(order)}
                   >
-                    {copiedOrderId === order.orderId ? 'Copied' : 'Copy Message'}
+                    {copiedOrderId === order.orderId ? t('common.copied') : t('hm.copyMessage')}
                   </button>
                 </div>
               ))}
@@ -683,7 +721,7 @@ function AnalysisCard() {
                 </div>
               </div>
               <div className="analysis-preview-meta">
-                <span>{selectedMarketVariantLabel ?? 'Base Market'}</span>
+                <span>{selectedMarketVariantLabel ?? t('hm.baseMarket')}</span>
                 <span>{analysis.headline.confidenceSummary.label}</span>
               </div>
             </div>
@@ -724,15 +762,15 @@ function AnalysisCard() {
             </div>
 
             <div className="analysis-preview-foot">
-              <span>{analysis.supplyContext.mode === 'set-components' ? 'Set breakdown ready' : analysis.supplyContext.mode === 'drop-sources' ? 'Drop sources ready' : 'No source context'}</span>
-              <span>{analysis.computedAt ? `Computed ${formatShortLocalDateTime(analysis.computedAt)}` : ''}</span>
+              <span>{analysis.supplyContext.mode === 'set-components' ? t('hm.setBreakdownReady') : analysis.supplyContext.mode === 'drop-sources' ? t('hm.dropSourcesReady') : t('hm.noSourceContext')}</span>
+              <span>{analysis.computedAt ? t('hm.computedAt', { time: formatShortLocalDateTime(analysis.computedAt) }) : ''}</span>
             </div>
           </div>
         ) : null}
 
         <CardLoadingOverlay
           visible={Boolean(selectedItem && selectedMarketVariantKey && analysisLoading)}
-          label={`Building analysis for ${selectedItem?.name ?? 'item'}`}
+          label={t('hm.buildingAnalysis', { item: selectedItem?.name ?? '…' })}
         />
       </div>
     </div>

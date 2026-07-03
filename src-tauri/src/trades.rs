@@ -356,6 +356,8 @@ pub struct PortfolioPnlSummary {
     pub best_trade_profit: Option<i64>,
     pub worst_trade_item: Option<String>,
     pub worst_trade_profit: Option<i64>,
+    pub previous_realized_profit: Option<i64>,
+    pub item_breakdown: Vec<PortfolioBreakdownRow>,
     pub inventory_rows: Vec<PortfolioInventoryRow>,
     pub audit_rows: Vec<PortfolioAuditRow>,
     pub category_breakdown: Vec<PortfolioBreakdownRow>,
@@ -5865,6 +5867,10 @@ fn build_portfolio_pnl_summary_inner(
     let mut best_trade: Option<(String, i64)> = None;
     let mut worst_trade: Option<(String, i64)> = None;
     let mut category_breakdown_map = HashMap::<String, (i64, i64)>::new();
+    let mut item_breakdown_map = HashMap::<String, (i64, i64)>::new();
+    let mut previous_realized_profit = 0_i64;
+    // Previous window of the same length as the selected period, for the hero delta.
+    let previous_window = cutoff.map(|cut| (cut - (now_utc() - cut), cut));
     let mut source_breakdown_map = HashMap::<String, (i64, i64)>::new();
     let mut cumulative_bucket_map = std::collections::BTreeMap::<String, i64>::new();
     let mut profit_points = Vec::<PortfolioTradeProfitPoint>::new();
@@ -5956,6 +5962,14 @@ fn build_portfolio_pnl_summary_inner(
             continue;
         }
 
+        if let Some((previous_start, previous_end)) = previous_window {
+            if let Some(closed_ts) = parse_timestamp(&record.closed_at) {
+                if closed_ts >= previous_start && closed_ts < previous_end {
+                    previous_realized_profit += derived_entry.profit.unwrap_or(0);
+                }
+            }
+        }
+
         if !record_matches_cutoff(record, cutoff) {
             continue;
         }
@@ -5967,6 +5981,13 @@ fn build_portfolio_pnl_summary_inner(
 
         let profit = derived_entry.profit.unwrap_or(0);
         realized_profit += profit;
+        {
+            let entry = item_breakdown_map
+                .entry(record.item_name.clone())
+                .or_insert((0, 0));
+            entry.0 += profit;
+            entry.1 += 1;
+        }
         if profit > 0 {
             win_count += 1;
         }
@@ -6230,6 +6251,8 @@ fn build_portfolio_pnl_summary_inner(
         worst_trade_profit: worst_trade.as_ref().map(|value| value.1),
         inventory_rows,
         audit_rows,
+        previous_realized_profit: cutoff.map(|_| previous_realized_profit),
+        item_breakdown: breakdown_rows_from_map(item_breakdown_map, 8),
         category_breakdown: breakdown_rows_from_map(category_breakdown_map, 6),
         source_breakdown: breakdown_rows_from_map(source_breakdown_map, 6),
         cumulative_profit_points,

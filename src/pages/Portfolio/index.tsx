@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   forceWfmTradeLogResync,
   getCachedWfmProfileTradeLog,
@@ -20,6 +21,7 @@ import type {
   SetCompletionInventoryValue,
 } from '../../types';
 import { ModalPortal } from '../../components/ModalPortal';
+import { ItemName } from '../../components/ItemName';
 
 // Safe error → message: never surfaces "[object Object]" from a non-Error throw, and falls
 // back to friendly copy when there's no usable message.
@@ -40,10 +42,15 @@ const RefreshIcon = () => (
   </svg>
 );
 
-const PORTFOLIO_TOOLTIP_TOP_CLEARANCE_PX = 120;
-
 type InfoHintPlacement = 'auto' | 'bottom' | 'left';
 
+const INFO_TOOLTIP_WIDTH_PX = 260;
+
+/**
+ * Portal-based tooltip: rendered into document.body with fixed, viewport-clamped
+ * coordinates, so it can never be clipped by card overflow, out-paint sibling panels,
+ * or flicker when a hover-lift transform moves the trigger under the cursor.
+ */
 function InfoHint({
   text,
   placement = 'auto',
@@ -52,28 +59,36 @@ function InfoHint({
   placement?: InfoHintPlacement;
 }) {
   const hintRef = useRef<HTMLSpanElement | null>(null);
-  const tooltipRef = useRef<HTMLSpanElement | null>(null);
-  const [expandDownward, setExpandDownward] = useState(false);
+  const [pos, setPos] = useState<{ x: number; y: number; below: boolean } | null>(null);
 
-  const updatePlacement = () => {
-    if (placement !== 'auto') {
-      setExpandDownward(placement === 'bottom');
+  const show = () => {
+    const rect = hintRef.current?.getBoundingClientRect();
+    if (!rect) {
       return;
     }
-
-    const hintRect = hintRef.current?.getBoundingClientRect();
-    const tooltipRect = tooltipRef.current?.getBoundingClientRect();
-    if (!hintRect || !tooltipRect) {
-      return;
-    }
-
-    const topClearance = hintRect.top;
-    const requiredClearance = Math.max(
-      tooltipRect.height + 20,
-      PORTFOLIO_TOOLTIP_TOP_CLEARANCE_PX,
+    const below = placement === 'bottom' ? true : rect.top < 150;
+    const x = Math.min(
+      Math.max(8, rect.left + rect.width / 2 - INFO_TOOLTIP_WIDTH_PX / 2),
+      window.innerWidth - INFO_TOOLTIP_WIDTH_PX - 8,
     );
-    setExpandDownward(topClearance < requiredClearance);
+    const y = below ? rect.bottom + 8 : rect.top - 8;
+    setPos({ x, y, below });
   };
+  const hide = () => setPos(null);
+
+  // Any scroll/resize invalidates the fixed coordinates — just dismiss.
+  useEffect(() => {
+    if (!pos) {
+      return undefined;
+    }
+    const close = () => setPos(null);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [pos]);
 
   return (
     <span
@@ -81,16 +96,28 @@ function InfoHint({
       className="info-hint"
       tabIndex={0}
       aria-label={text}
-      onMouseEnter={updatePlacement}
-      onFocus={updatePlacement}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
     >
       <span className="info-hint-glyph" aria-hidden="true">i</span>
-      <span
-        ref={tooltipRef}
-        className={`info-hint-tooltip${placement === 'left' ? ' left' : expandDownward ? ' bottom' : ''}`}
-      >
-        {text}
-      </span>
+      {pos
+        ? createPortal(
+            <span
+              className={`info-hint-tooltip info-hint-tooltip-floating${pos.below ? ' is-below' : ''}`}
+              role="tooltip"
+              style={
+                pos.below
+                  ? { left: pos.x, top: pos.y }
+                  : { left: pos.x, bottom: window.innerHeight - pos.y }
+              }
+            >
+              {text}
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }
@@ -1026,7 +1053,7 @@ function TradeLogTab({ username }: { username: string | null }) {
         <label>{t('pf.tradeLog')}</label>
         <div className="period-right portfolio-log-toolbar">
           {lastUpdatedAt ? (
-            <span className="portfolio-log-updated">Last updated {formatShortLocalDateTime(lastUpdatedAt)}</span>
+            <span className="portfolio-log-updated">{t('pf.lastUpdated')} {formatShortLocalDateTime(lastUpdatedAt)}</span>
           ) : null}
           {appSettings.alecaframe.enabled && username ? (
             <button
@@ -1524,6 +1551,8 @@ const PLACEHOLDER_PNL_SUMMARY: PortfolioPnlSummary = {
   bestTradeProfit: null,
   worstTradeItem: null,
   worstTradeProfit: null,
+  previousRealizedProfit: null,
+  itemBreakdown: [],
   inventoryRows: [],
   auditRows: [],
   categoryBreakdown: [],
@@ -1685,42 +1714,17 @@ function PnlSummaryTab({
   // The full layout renders immediately using a zeroed placeholder while the real summary
   // loads (under an overlay), then populates in place.
   const bodySummary = summary ?? PLACEHOLDER_PNL_SUMMARY;
+  const sourceBarMax = Math.max(1, ...bodySummary.sourceBreakdown.map((row) => Math.abs(row.value)));
+  const categoryBarMax = Math.max(1, ...bodySummary.categoryBreakdown.map((row) => Math.abs(row.value)));
+  const itemBarMax = Math.max(1, ...bodySummary.itemBreakdown.map((row) => Math.abs(row.value)));
+  const openPositions = [...bodySummary.inventoryRows].sort((a, b) => b.unrealizedPnl - a.unrealizedPnl);
+  const previousDelta =
+    bodySummary.previousRealizedProfit === null || bodySummary.previousRealizedProfit === undefined
+      ? null
+      : bodySummary.realizedProfit - bodySummary.previousRealizedProfit;
 
   return (
     <>
-      <div className="period-bar">
-        <label>{t('pf.period')}</label>
-        {(['7d', '30d', '90d', 'all'] as const).map((nextPeriod) => (
-          <button
-            key={nextPeriod}
-            className={`period-btn${period === nextPeriod ? ' active' : ''}`}
-            onClick={() => {
-              // Clear any stale error from the previous period before switching.
-              setErrorMessage(null);
-              setTradePeriod(nextPeriod);
-            }}
-          >
-            {nextPeriod === 'all' ? 'All Time' : nextPeriod}
-          </button>
-        ))}
-        <div className="period-right portfolio-log-toolbar">
-          {summary?.lastUpdatedAt ? (
-            <span className="portfolio-log-updated">
-              Last updated {formatShortLocalDateTime(summary.lastUpdatedAt)}
-            </span>
-          ) : null}
-          <button
-            className="act-btn portfolio-refresh-btn"
-            type="button"
-            onClick={() => void handleRefresh()}
-            disabled={loading || refreshingTrades || !username}
-          >
-            <RefreshIcon />
-            {refreshingTrades ? 'Refreshing…' : 'Refresh Trades'}
-          </button>
-        </div>
-      </div>
-
       {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
 
       {!username ? (
@@ -1734,91 +1738,119 @@ function PnlSummaryTab({
         <div className="portfolio-summary-body portfolio-summary-loadable">
           {!summary ? <PortfolioLoadingOverlay label="Loading portfolio summary…" /> : null}
 
-          <div className="plat-grid portfolio-summary-grid">
-            <div className="info-card">
-              <div className="info-card-label">
-                Realized Profit
-                <InfoHint
-                  text="Profit you've actually locked in this period: what your closed sells earned, minus the cost of the buys behind them."
-                  placement="bottom"
-                />
-              </div>
-              <div className={`info-card-val${bodySummary.realizedProfit >= 0 ? '' : ' negative'}`}>
-                {formatSignedPlatinumValue(bodySummary.realizedProfit)}
-              </div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">
-                Estimated Total P&amp;L
-                <InfoHint
-                  text="Realized profit plus the estimated gain/loss on inventory you still hold. 'Estimated' because unsold items are valued at cached market prices, not actual sales."
-                  placement="bottom"
-                />
-              </div>
-              <div className={`info-card-val${bodySummary.totalPnl >= 0 ? '' : ' negative'}`}>
-                {formatSignedPlatinumValue(bodySummary.totalPnl)}
-              </div>
-            </div>
-            <div className="info-card portfolio-summary-loadable">
-              {/* Don't show the loading overlay when the load failed — otherwise the card spins
-                  forever. The error state below offers a retry instead. */}
-              {(inventoryLoading || !inventory) && !inventoryError ? <PortfolioLoadingOverlay /> : null}
-              <div className="info-card-label">
-                Inventory Value
-                <InfoHint
-                  text="What your owned prime parts are worth — taken from your Set Completion Planner inventory (last scan), valued at each part's recommended exit price. When you own a complete set, it's valued at the higher of the full-set price or the sum of its parts. Unrelated to trade history."
-                  placement="bottom"
-                />
-              </div>
-              <div className="info-card-val neutral">{formatPlatinumValue(inventory?.totalValue ?? 0)}</div>
-              {inventoryError ? (
-                <div className="info-card-subnote portfolio-inventory-error">
-                  <span>{inventoryError}</span>
+          <div className={`card pf-hero ${bodySummary.realizedProfit >= 0 ? 'tone-pos' : 'tone-neg'}`}>
+            <div className="pf-hero-top">
+              <span className="pf-hero-kicker">{t('pf.netPosition')}</span>
+              <div className="pf-period-group" role="tablist" aria-label={t('pf.period')}>
+                {(['7d', '30d', '90d', 'all'] as const).map((nextPeriod) => (
                   <button
-                    type="button"
-                    className="act-btn"
-                    onClick={() => void reloadInventory()}
-                    disabled={inventoryLoading}
+                    key={nextPeriod}
+                    className={`pf-period-btn${period === nextPeriod ? ' active' : ''}`}
+                    role="tab"
+                    aria-selected={period === nextPeriod}
+                    onClick={() => {
+                      // Clear any stale error from the previous period before switching.
+                      setErrorMessage(null);
+                      setTradePeriod(nextPeriod);
+                    }}
                   >
-                    {inventoryLoading ? 'Retrying…' : 'Retry'}
+                    {nextPeriod === 'all' ? t('pf.allTime') : nextPeriod}
                   </button>
-                </div>
-              ) : inventory && inventory.unpricedCount > 0 ? (
-                <div className="info-card-subnote">
-                  {inventory.unpricedCount} part{inventory.unpricedCount === 1 ? '' : 's'} not yet priced
-                </div>
-              ) : null}
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">
-                Open Buys
-                <InfoHint
-                  text="Platinum you've spent on buys you haven't sold yet — your capital still tied up in inventory."
-                  placement="bottom"
-                />
+                ))}
               </div>
-              <div className="info-card-val neutral">{formatPlatinumValue(bodySummary.openExposure)}</div>
+              <div className="pf-hero-toolbar">
+                {summary?.lastUpdatedAt ? (
+                  <span className="portfolio-log-updated">
+                    {t('pf.lastUpdated')} {formatShortLocalDateTime(summary.lastUpdatedAt)}
+                  </span>
+                ) : null}
+                <button
+                  className="act-btn portfolio-refresh-btn"
+                  type="button"
+                  onClick={() => void handleRefresh()}
+                  disabled={loading || refreshingTrades || !username}
+                >
+                  <RefreshIcon />
+                  {refreshingTrades ? t('pf.refreshing') : t('pf.refreshTrades')}
+                </button>
+              </div>
+            </div>
+            <div className="pf-hero-body">
+              <div className="pf-hero-main">
+                <div className="info-card-label pf-hero-label">
+                  {t('pf.realizedProfit')}
+                  <InfoHint
+                    text="Profit you've actually locked in this period: what your closed sells earned, minus the cost of the buys behind them."
+                    placement="bottom"
+                  />
+                </div>
+                <div className={`pf-hero-value${bodySummary.realizedProfit >= 0 ? '' : ' negative'}`}>
+                  {formatSignedPlatinumValue(bodySummary.realizedProfit)}
+                </div>
+                {previousDelta !== null ? (
+                  <span className={`pf-hero-delta ${previousDelta > 0 ? 'pos' : previousDelta < 0 ? 'neg' : 'flat'}`}>
+                    {previousDelta > 0 ? '▲' : previousDelta < 0 ? '▼' : '•'}{' '}
+                    {formatSignedPlatinumValue(previousDelta)} {t('pf.vsPrior', { period })}
+                  </span>
+                ) : null}
+              </div>
+              <div className="pf-hero-substats">
+                <div className="pf-substat">
+                  <div className="info-card-label">
+                    {t('pf.totalPnl')}
+                    <InfoHint
+                      text="Realized profit plus the estimated gain/loss on inventory you still hold. 'Estimated' because unsold items are valued at cached market prices, not actual sales."
+                      placement="bottom"
+                    />
+                  </div>
+                  <div className={`info-card-val${bodySummary.totalPnl >= 0 ? '' : ' negative'}`}>
+                    {formatSignedPlatinumValue(bodySummary.totalPnl)}
+                  </div>
+                </div>
+                <div className="pf-substat">
+                  <div className="info-card-label">
+                    {t('pf.unrealizedPnl')}
+                    <InfoHint
+                      text="The estimated gain or loss on tracked buys you still hold: current market estimate minus what you paid. Realized + Unrealized = Estimated Total P&L."
+                      placement="bottom"
+                    />
+                  </div>
+                  <div className={`info-card-val${bodySummary.unrealizedPnl >= 0 ? '' : ' negative'}`}>
+                    {formatSignedPlatinumValue(bodySummary.unrealizedPnl)}
+                  </div>
+                </div>
+                <div className="pf-substat">
+                  <div className="info-card-label">
+                    {t('pf.openBuys')}
+                    <InfoHint
+                      text="Platinum you've spent on buys you haven't sold yet — your capital still tied up in inventory."
+                      placement="bottom"
+                    />
+                  </div>
+                  <div className="info-card-val neutral">{formatPlatinumValue(bodySummary.openExposure)}</div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="perf-grid portfolio-perf-grid">
-            <div className="perf-card">
+          <div className="card pf-perf-strip">
+            <div className="pf-perf-cell">
               <div className="perf-label">{t('pf.closedTrades')} <InfoHint text="Number of sells you completed in this period." /></div>
               <div className="perf-val">{bodySummary.closedTrades}</div>
             </div>
-            <div className="perf-card">
+            <div className="pf-perf-cell">
               <div className="perf-label">{t('pf.winRate')} <InfoHint text="Share of your closed sells that made a profit." /></div>
-              <div className="perf-val blue">{formatPercentValue(bodySummary.winRate)}</div>
+              <div className={`perf-val ${bodySummary.winRate >= 50 ? 'green' : bodySummary.winRate >= 35 ? 'blue' : 'red'}`}>{formatPercentValue(bodySummary.winRate)}</div>
             </div>
-            <div className="perf-card">
+            <div className="pf-perf-cell">
               <div className="perf-label">{t('pf.avgMargin')} <InfoHint text="Average profit as a percentage of cost, across sells where the buy cost is known." /></div>
               <div className="perf-val blue">{formatPercentValue(bodySummary.averageMargin)}</div>
             </div>
-            <div className="perf-card">
+            <div className="pf-perf-cell">
               <div className="perf-label">{t('pf.avgHold')} <InfoHint text="Average time you held an item between buying it and selling it." /></div>
               <div className="perf-val">{formatHoursValue(bodySummary.averageHoldHours)}</div>
             </div>
-            <div className="perf-card">
+            <div className="pf-perf-cell">
               <div className="perf-label">{t('pf.avgProfitTrade')} <InfoHint text="Average realized profit per closed sell." /></div>
               <div className="perf-val green">{formatPlatinumValue(Math.round(bodySummary.averageProfitPerTrade))}</div>
             </div>
@@ -1827,6 +1859,60 @@ function PnlSummaryTab({
           <div className="chart-grid portfolio-chart-grid">
             <CumulativeProfitChart summary={bodySummary} />
             <ProfitPerTradeChart summary={bodySummary} />
+          </div>
+
+          <div className="chart-card pf-positions-card">
+            <PortfolioPanelHeader
+              title={t('pf.positionsTitle')}
+              info="Every tracked buy you still hold (Open or Kept): what you paid, what it's worth at the latest cached market estimate, and the unrealized gain/loss. Sorted by biggest winner first."
+            />
+            {openPositions.length === 0 ? (
+              <div className="portfolio-breakdown-empty">{t('pf.noPositions')}</div>
+            ) : (
+              <div className="pf-positions-table-wrap">
+                <table className="pf-positions-table">
+                  <thead>
+                    <tr>
+                      <th>{t('wl.item')}</th>
+                      <th>{t('wl.qty')}</th>
+                      <th>{t('pf.cost')}</th>
+                      <th>{t('pf.currentValue')}</th>
+                      <th>{t('pf.unrealizedPnl')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openPositions.map((row) => (
+                      <tr key={row.id}>
+                        <td>
+                          <div className="pf-position-item">
+                            <span className="pf-position-thumb">
+                              {resolveWfmAssetUrl(row.imagePath) ? (
+                                <img src={resolveWfmAssetUrl(row.imagePath) ?? undefined} alt="" loading="lazy" />
+                              ) : (
+                                <span>{row.itemName.slice(0, 1)}</span>
+                              )}
+                            </span>
+                            <div className="pf-position-copy">
+                              <ItemName name={row.itemName} slug={row.slug} imagePath={row.imagePath} />
+                              <span className="pf-position-meta">
+                                {row.status === 'kept' ? t('pf.kept') : t('pf.open')}
+                                {row.rank !== null ? ` · R${row.rank}` : ''}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td>{row.quantity}</td>
+                        <td>{formatPlatinumValue(row.costBasis)}</td>
+                        <td>{formatPlatinumValue(row.estimatedValue)}</td>
+                        <td className={row.unrealizedPnl >= 0 ? 'pf-pos' : 'pf-neg'}>
+                          {formatSignedPlatinumValue(row.unrealizedPnl)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="portfolio-breakdown-grid">
@@ -1843,9 +1929,15 @@ function PnlSummaryTab({
                     <div key={row.label} className="portfolio-breakdown-row">
                       <div className="portfolio-breakdown-copy">
                         <span className="portfolio-breakdown-name">{row.label}</span>
-                        <span className="portfolio-breakdown-meta">{row.tradeCount} trades</span>
+                        <span className="portfolio-breakdown-meta">{t('pf.tradesCount', { count: row.tradeCount })}</span>
                       </div>
-                      <span className="portfolio-breakdown-value">{formatSignedPlatinumValue(row.value)}</span>
+                      <span className={`portfolio-breakdown-value ${row.value >= 0 ? 'pos' : 'neg'}`}>{formatSignedPlatinumValue(row.value)}</span>
+                      <div className="pf-bar-track" aria-hidden="true">
+                        <div
+                          className={`pf-bar-fill ${row.value >= 0 ? 'pos' : 'neg'}`}
+                          style={{ width: `${Math.max(4, Math.round((Math.abs(row.value) / sourceBarMax) * 100))}%` }}
+                        />
+                      </div>
                     </div>
                   ))
                 )}
@@ -1865,9 +1957,15 @@ function PnlSummaryTab({
                     <div key={row.label} className="portfolio-breakdown-row">
                       <div className="portfolio-breakdown-copy">
                         <span className="portfolio-breakdown-name">{row.label}</span>
-                        <span className="portfolio-breakdown-meta">{row.tradeCount} trades</span>
+                        <span className="portfolio-breakdown-meta">{t('pf.tradesCount', { count: row.tradeCount })}</span>
                       </div>
-                      <span className="portfolio-breakdown-value">{formatSignedPlatinumValue(row.value)}</span>
+                      <span className={`portfolio-breakdown-value ${row.value >= 0 ? 'pos' : 'neg'}`}>{formatSignedPlatinumValue(row.value)}</span>
+                      <div className="pf-bar-track" aria-hidden="true">
+                        <div
+                          className={`pf-bar-fill ${row.value >= 0 ? 'pos' : 'neg'}`}
+                          style={{ width: `${Math.max(4, Math.round((Math.abs(row.value) / categoryBarMax) * 100))}%` }}
+                        />
+                      </div>
                     </div>
                   ))
                 )}
@@ -1875,21 +1973,35 @@ function PnlSummaryTab({
             </div>
           </div>
 
-          <div className="portfolio-insight-grid">
-            <div className="info-card">
-              <div className="info-card-label">{t('pf.bestTrade')} <InfoHint text="Your most profitable single sell in this period." /></div>
-              <div className="info-card-val neutral portfolio-inline-stat">
-                {bodySummary.bestTradeItem ? `${bodySummary.bestTradeItem} · ${formatSignedPlatinumValue(bodySummary.bestTradeProfit ?? 0)}` : '—'}
-              </div>
-            </div>
-            <div className="info-card">
-              <div className="info-card-label">{t('pf.worstTrade')} <InfoHint text="Your least profitable single sell in this period (your biggest loss, if any)." /></div>
-              <div className="info-card-val neutral portfolio-inline-stat">
-                {bodySummary.worstTradeItem ? `${bodySummary.worstTradeItem} · ${formatSignedPlatinumValue(bodySummary.worstTradeProfit ?? 0)}` : '—'}
-              </div>
+          <div className="chart-card pf-top-items-card">
+            <PortfolioPanelHeader
+              title={t('pf.topItems')}
+              info="Items ranked by their total realized profit impact this period (wins and losses both count). Your best repeat-flip candidates live at the top."
+            />
+            <div className="portfolio-breakdown-list">
+              {bodySummary.itemBreakdown.length === 0 ? (
+                <div className="portfolio-breakdown-empty">{t('pf.noItemProfit')}</div>
+              ) : (
+                bodySummary.itemBreakdown.map((row) => (
+                  <div key={row.label} className="portfolio-breakdown-row">
+                    <div className="portfolio-breakdown-copy">
+                      <span className="portfolio-breakdown-name">{row.label}</span>
+                      <span className="portfolio-breakdown-meta">{t('pf.tradesCount', { count: row.tradeCount })}</span>
+                    </div>
+                    <span className={`portfolio-breakdown-value ${row.value >= 0 ? 'pos' : 'neg'}`}>{formatSignedPlatinumValue(row.value)}</span>
+                    <div className="pf-bar-track" aria-hidden="true">
+                      <div
+                        className={`pf-bar-fill ${row.value >= 0 ? 'pos' : 'neg'}`}
+                        style={{ width: `${Math.max(4, Math.round((Math.abs(row.value) / itemBarMax) * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
+          <div className="pf-footer-grid">
           <div className="chart-card portfolio-notes-card">
             <PortfolioPanelHeader
               title={t('a11y.dataConfidence')}
@@ -1920,6 +2032,35 @@ function PnlSummaryTab({
               </div>
             ) : null}
           </div>
+          <div className="chart-card pf-planner-card portfolio-summary-loadable">
+            {(inventoryLoading || !inventory) && !inventoryError ? <PortfolioLoadingOverlay /> : null}
+            <PortfolioPanelHeader
+              title={t('pf.plannerInventory')}
+              info="What your owned prime parts are worth — taken from your Set Completion Planner inventory (last scan), valued at each part's recommended exit price. When you own a complete set, it's valued at the higher of the full-set price or the sum of its parts. Unrelated to trade history and not part of Total P&L."
+              infoPlacement="left"
+            />
+            <div className="pf-planner-body">
+              <div className="info-card-val neutral">{formatPlatinumValue(inventory?.totalValue ?? 0)}</div>
+              {inventoryError ? (
+                <div className="info-card-subnote portfolio-inventory-error">
+                  <span>{inventoryError}</span>
+                  <button
+                    type="button"
+                    className="act-btn"
+                    onClick={() => void reloadInventory()}
+                    disabled={inventoryLoading}
+                  >
+                    {inventoryLoading ? 'Retrying…' : t('common.retry')}
+                  </button>
+                </div>
+              ) : inventory && inventory.unpricedCount > 0 ? (
+                <div className="info-card-subnote">
+                  {inventory.unpricedCount} part{inventory.unpricedCount === 1 ? '' : 's'} not yet priced
+                </div>
+              ) : null}
+            </div>
+          </div>
+          </div>
         </div>
       )}
     </>
@@ -1945,7 +2086,7 @@ export function PortfolioPage() {
       <div className="subnav portfolio-page-subnav">
         <div className="subnav-left">
           <span className="page-title">{t('pf.title')}</span>
-          <span className={`subtab${portfolioTab === 'pnl' ? ' active' : ''}`} onClick={() => setPortfolioTab('pnl')} role="tab" tabIndex={0}>P&amp;L Summary</span>
+          <span className={`subtab${portfolioTab === 'pnl' ? ' active' : ''}`} onClick={() => setPortfolioTab('pnl')} role="tab" tabIndex={0}>{t('pf.pnlSummary')}</span>
           <span className={`subtab${portfolioTab === 'log' ? ' active' : ''}`} onClick={() => setPortfolioTab('log')} role="tab" tabIndex={0}>{t('pf.tradeLog')}</span>
         </div>
       </div>
