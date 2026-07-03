@@ -149,11 +149,12 @@ export function Sidebar() {
         return (
         <div
           key={item.id}
-          className={`nav-item${activePage === item.id ? ' active' : ''}`}
+          className={`nav-item nav-${item.id}${activePage === item.id ? ' active' : ''}`}
           onClick={() => setActivePage(item.id)}
           role="button"
           tabIndex={0}
           aria-label={label}
+          title={sidebarCollapsed ? label : undefined}
           aria-current={activePage === item.id ? 'page' : undefined}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {

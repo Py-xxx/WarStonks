@@ -277,6 +277,9 @@ export function SettingsSidebar() {
                 <span className="settings-nav-copy">
                   <span className="settings-nav-head">
                     <span className="settings-nav-label">{t(section.labelKey)}</span>
+                    {section.id === 'language' ? (
+                      <span className="badge settings-beta-badge">{t('opp.beta')}</span>
+                    ) : null}
                     {statusKey ? (
                       <span className={`badge ${statusClassName}`}>{t(statusKey)}</span>
                     ) : null}

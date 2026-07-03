@@ -27,7 +27,7 @@ export function EventsPage() {
 
   return (
     <>
-      <div className="subnav">
+      <div className="subnav events-page-subnav">
         <div className="subnav-left">
           <span className="page-title">{t('events.title')}</span>
           {TABS.map((tab) => (

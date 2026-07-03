@@ -353,6 +353,8 @@ export interface PortfolioPnlSummary {
   bestTradeProfit: number | null;
   worstTradeItem: string | null;
   worstTradeProfit: number | null;
+  previousRealizedProfit: number | null;
+  itemBreakdown: PortfolioBreakdownRow[];
   inventoryRows: PortfolioInventoryRow[];
   auditRows: PortfolioAuditRow[];
   categoryBreakdown: PortfolioBreakdownRow[];

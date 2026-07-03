@@ -896,7 +896,7 @@ export function ScannersPage() {
 
   return (
     <>
-      <div className="subnav">
+      <div className="subnav scanners-page-subnav">
         <div className="subnav-left">
           <span className="page-title">{t('scan.title')}</span>
           <span

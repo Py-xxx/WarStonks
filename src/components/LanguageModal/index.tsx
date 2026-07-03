@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
-import { useTranslation } from '../../i18n';
+import { translate, useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import { LANGUAGES, type AppLanguage, wfstatLangCode } from '../../lib/language';
 import {
@@ -47,6 +47,9 @@ export function LanguageModal() {
 
   const [status, setStatus] = useState<LanguagePackStatus | null>(null);
   const [busy, setBusy] = useState<'idle' | 'export' | 'import' | 'download' | 'switching'>('idle');
+  // When set, a full-screen overlay covers the app until the reload lands. The overlay's
+  // text renders in the TARGET language as a first taste of the switch.
+  const [switchTarget, setSwitchTarget] = useState<AppLanguage | null>(null);
 
   const nativeName = LANGUAGES.find((o) => o.code === language)?.native ?? language;
 
@@ -64,6 +67,7 @@ export function LanguageModal() {
   const handleSwitchLanguage = useCallback(
     async (next: AppLanguage) => {
       setBusy('switching');
+      setSwitchTarget(next);
       setLanguage(next);
       try {
         if (next !== 'en') {
@@ -82,10 +86,12 @@ export function LanguageModal() {
 
   const handleDownload = useCallback(async () => {
     setBusy('download');
+    setSwitchTarget(language);
     try {
       await populateLanguageItemNames(wfstatLangCode(language));
       window.location.reload();
     } catch {
+      setSwitchTarget(null);
       pushToast(t('langpanel.err.downloadFailed'), 'error');
       await refreshStatus();
       setBusy('idle');
@@ -120,12 +126,14 @@ export function LanguageModal() {
     try {
       const result = await importLanguagePackFile(file);
       const applied = appLanguageForWfstat(result.langCode);
+      setSwitchTarget(applied ?? language);
       if (applied) {
         setLanguage(applied);
       }
       // Full reload so the imported language applies everywhere.
       window.location.reload();
     } catch (error) {
+      setSwitchTarget(null);
       pushToast(t(packErrorKey(error)), 'error');
       setBusy('idle');
       if (fileInputRef.current) {
@@ -146,8 +154,30 @@ export function LanguageModal() {
         ? 'langpanel.status.upToDate'
         : 'langpanel.status.stale';
 
+  const overlay = switchTarget ? (
+    <div className="lang-switch-overlay" role="status" aria-live="polite">
+      <div className="lang-switch-globe" aria-hidden="true">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18" />
+          <path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" />
+        </svg>
+        <span className="lang-switch-ring" />
+      </div>
+      <span className="lang-switch-label">
+        {translate(switchTarget, 'langpanel.switching', {
+          lang: LANGUAGES.find((option) => option.code === switchTarget)?.native ?? switchTarget,
+        })}
+      </span>
+      <span className="lang-switch-sub">
+        {busy === 'import' ? translate(switchTarget, 'langpanel.applyingPack') : null}
+      </span>
+    </div>
+  ) : null;
+
   return (
     <>
+      {overlay}
       <button
         className="modal-backdrop"
         type="button"
@@ -164,7 +194,10 @@ export function LanguageModal() {
         <div className="settings-modal-header">
           <div className="settings-modal-title">
             <span className="card-label">{t('langpanel.section.label')}</span>
-            <h3>{t('langpanel.subtitle')}</h3>
+            <h3>
+              {t('langpanel.subtitle')}{' '}
+              <span className="badge settings-beta-badge">{t('opp.beta')}</span>
+            </h3>
           </div>
           <div className="settings-modal-actions">
             <button
@@ -197,6 +230,7 @@ export function LanguageModal() {
                 ))}
               </select>
             </label>
+            <div className="langpanel-beta-note">{t('langpanel.betaNote')}</div>
           </div>
 
           <div className="settings-form-card">
