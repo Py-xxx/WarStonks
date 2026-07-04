@@ -29,8 +29,12 @@ pub struct Opportunity {
     /// Pins track this, so a pinned "complete set" auto-becomes "sell set" once you own the parts.
     pub subject_key: String,
     pub category: String,
-    pub title: String,
-    pub subtitle: Option<String>,
+    /// i18n key for the title; the frontend interpolates `title_params` into it. Kept as a key
+    /// instead of a pre-formatted English string so the UI can render it in any app language.
+    pub title_key: String,
+    pub title_params: HashMap<String, String>,
+    pub subtitle_key: Option<String>,
+    pub subtitle_params: HashMap<String, String>,
     pub set_slug: Option<String>,
     pub image_path: Option<String>,
     /// Estimated plat you gain by acting (meaning depends on `value_basis`).
@@ -59,7 +63,8 @@ pub struct Opportunity {
 pub struct OpportunityReason {
     /// Semantic icon key the frontend maps to a glyph (`inventory` | `market` | `relics` | `math`).
     pub icon: String,
-    pub text: String,
+    pub text_key: String,
+    pub text_params: HashMap<String, String>,
     pub source: String,
 }
 
@@ -68,7 +73,8 @@ pub struct OpportunityReason {
 pub struct OpportunityAction {
     /// `buyPart` | `sellPart` | `sellSet` | `farmRelic` | `openWfm`.
     pub kind: String,
-    pub label: String,
+    pub label_key: String,
+    pub label_params: HashMap<String, String>,
     pub item_slug: Option<String>,
     pub item_name: Option<String>,
     /// Suggested whisper / list price in plat, when applicable.
@@ -194,8 +200,10 @@ pub fn evaluate_reprice(
         id: format!("reprice:{}", order.order_id),
         subject_key: format!("order:{}", order.order_id),
         category: "reprice".into(),
-        title: format!("Reprice {}", order.name),
-        subtitle: Some("Overpriced — it won't sell".into()),
+        title_key: "opp.repriceTitle".into(),
+        title_params: params(&[("name", order.name.clone())]),
+        subtitle_key: Some("opp.repriceSubtitle".into()),
+        subtitle_params: HashMap::new(),
         set_slug: None,
         image_path: order.image_path.clone(),
         est_value: recommended_exit,
@@ -208,21 +216,24 @@ pub fn evaluate_reprice(
         reasons: vec![
             OpportunityReason {
                 icon: "market".into(),
-                text: format!(
-                    "Listed at {}p, but it sells around ~{}p",
-                    order.your_price, recommended_exit
-                ),
+                text_key: "opp.reasonListedVsSells".into(),
+                text_params: params(&[
+                    ("price", order.your_price.to_string()),
+                    ("exit", recommended_exit.to_string()),
+                ]),
                 source: "market".into(),
             },
             OpportunityReason {
                 icon: "math".into(),
-                text: format!("~{}p over — lower it to move the sale", gap),
+                text_key: "opp.reasonOverByGap".into(),
+                text_params: params(&[("gap", gap.to_string())]),
                 source: "market".into(),
             },
         ],
         actions: vec![OpportunityAction {
             kind: "editOrder".into(),
-            label: "Edit your listing".into(),
+            label_key: "opp.actionEditListing".into(),
+            label_params: HashMap::new(),
             item_slug: Some(order.slug.clone()),
             item_name: Some(order.name.clone()),
             price: Some(recommended_exit),
@@ -271,8 +282,10 @@ pub fn evaluate_set_flip(flip: &FlipInput, config: &EvalConfig) -> Option<Opport
         id: format!("set-flip:{}", flip.set_slug),
         subject_key: format!("set:{}", flip.set_slug),
         category: "flip".into(),
-        title: format!("Flip {}", flip.set_name),
-        subtitle: Some(format!("Buy {} parts, build & sell", flip.component_count)),
+        title_key: "opp.flipTitle".into(),
+        title_params: params(&[("name", flip.set_name.clone())]),
+        subtitle_key: Some("opp.flipSubtitle".into()),
+        subtitle_params: params(&[("n", flip.component_count.to_string())]),
         set_slug: Some(flip.set_slug.clone()),
         image_path: flip.image_path.clone(),
         est_value,
@@ -285,23 +298,25 @@ pub fn evaluate_set_flip(flip: &FlipInput, config: &EvalConfig) -> Option<Opport
         reasons: vec![
             OpportunityReason {
                 icon: "math".into(),
-                text: format!(
-                    "Parts cost ~{}p, set sells ~{}p ({}% ROI)",
-                    round_plat(cost),
-                    round_plat(sell),
-                    (roi * 100.0).round() as i64
-                ),
+                text_key: "opp.reasonPartsCostVsSell".into(),
+                text_params: params(&[
+                    ("cost", round_plat(cost).to_string()),
+                    ("sell", round_plat(sell).to_string()),
+                    ("roi", ((roi * 100.0).round() as i64).to_string()),
+                ]),
                 source: "market".into(),
             },
             OpportunityReason {
                 icon: "market".into(),
-                text: "Speculative — you'd buy every part yourself".into(),
+                text_key: "opp.reasonSpeculative".into(),
+                text_params: HashMap::new(),
                 source: "market".into(),
             },
         ],
         actions: vec![OpportunityAction {
             kind: "viewItem".into(),
-            label: "View set analysis".into(),
+            label_key: "opp.actionViewSetAnalysis".into(),
+            label_params: HashMap::new(),
             item_slug: Some(flip.set_slug.clone()),
             item_name: Some(flip.set_name.clone()),
             price: Some(round_plat(sell)),
@@ -350,8 +365,10 @@ pub fn evaluate_holding(holding: &HoldingInput, config: &EvalConfig) -> Option<O
         id: format!("sell-holding:{}", holding.id),
         subject_key: format!("holding:{}", holding.id),
         category: "sellInventory".into(),
-        title: format!("Sell {}", holding.item_name),
-        subtitle: Some(format!("You're up {pct_label}%")),
+        title_key: "opp.sellTitle".into(),
+        title_params: params(&[("name", holding.item_name.clone())]),
+        subtitle_key: Some("opp.upPctSubtitle".into()),
+        subtitle_params: params(&[("pct", pct_label.to_string())]),
         set_slug: None,
         image_path: holding.image_path.clone(),
         est_value: profit,
@@ -364,24 +381,28 @@ pub fn evaluate_holding(holding: &HoldingInput, config: &EvalConfig) -> Option<O
         reasons: vec![
             OpportunityReason {
                 icon: "inventory".into(),
-                text: format!(
-                    "You hold {}× bought for ~{}p",
-                    holding.quantity, holding.cost_basis
-                ),
+                text_key: "opp.reasonHoldBoughtFor".into(),
+                text_params: params(&[
+                    ("qty", holding.quantity.to_string()),
+                    ("cost", holding.cost_basis.to_string()),
+                ]),
                 source: "history".into(),
             },
             OpportunityReason {
                 icon: "math".into(),
-                text: format!(
-                    "Now worth ~{}p — up {}p ({}%)",
-                    holding.estimated_value, profit, pct_label
-                ),
+                text_key: "opp.reasonNowWorthUp".into(),
+                text_params: params(&[
+                    ("value", holding.estimated_value.to_string()),
+                    ("profit", profit.to_string()),
+                    ("pct", pct_label.to_string()),
+                ]),
                 source: "market".into(),
             },
         ],
         actions: vec![OpportunityAction {
             kind: "sellPart".into(),
-            label: format!("Sell {}", holding.item_name),
+            label_key: "opp.actionSell".into(),
+            label_params: params(&[("name", holding.item_name.clone())]),
             item_slug: Some(holding.slug.clone()),
             item_name: Some(holding.item_name.clone()),
             price: Some(unit_price),
@@ -424,8 +445,10 @@ pub fn evaluate_stale_hold(hold: &StaleHoldInput, config: &EvalConfig) -> Option
         id: format!("stale-hold:{}", hold.id),
         subject_key: format!("holding:{}", hold.id),
         category: "sellInventory".into(),
-        title: format!("List {}", hold.item_name),
-        subtitle: Some(format!("Held {} days, not listed", hold.days_held)),
+        title_key: "opp.listTitle".into(),
+        title_params: params(&[("name", hold.item_name.clone())]),
+        subtitle_key: Some("opp.heldDaysSubtitle".into()),
+        subtitle_params: params(&[("days", hold.days_held.to_string())]),
         set_slug: None,
         image_path: hold.image_path.clone(),
         est_value: hold.estimated_value,
@@ -438,21 +461,24 @@ pub fn evaluate_stale_hold(hold: &StaleHoldInput, config: &EvalConfig) -> Option
         reasons: vec![
             OpportunityReason {
                 icon: "inventory".into(),
-                text: format!(
-                    "You've held {}× for {} days and it isn't listed",
-                    hold.quantity, hold.days_held
-                ),
+                text_key: "opp.reasonHeldNotListed".into(),
+                text_params: params(&[
+                    ("qty", hold.quantity.to_string()),
+                    ("days", hold.days_held.to_string()),
+                ]),
                 source: "history".into(),
             },
             OpportunityReason {
                 icon: "market".into(),
-                text: format!("Worth ~{}p sitting idle — put it up for sale", hold.estimated_value),
+                text_key: "opp.reasonWorthIdle".into(),
+                text_params: params(&[("value", hold.estimated_value.to_string())]),
                 source: "market".into(),
             },
         ],
         actions: vec![OpportunityAction {
             kind: "sellPart".into(),
-            label: format!("List {}", hold.item_name),
+            label_key: "opp.actionList".into(),
+            label_params: params(&[("name", hold.item_name.clone())]),
             item_slug: Some(hold.slug.clone()),
             item_name: Some(hold.item_name.clone()),
             price: Some(unit_price),
@@ -566,6 +592,16 @@ fn parts_liquidation_value(components: &[SetComponentInput]) -> (f64, bool) {
     (value, fully_priced)
 }
 
+/// Builds a param map for an i18n key from `(name, value)` pairs — used for `title_params`,
+/// `subtitle_params`, `text_params`, and `label_params` so the frontend can interpolate the
+/// English-language key into the user's chosen app language.
+fn params(pairs: &[(&str, String)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.clone()))
+        .collect()
+}
+
 fn confidence_label(confidence: f64) -> &'static str {
     if confidence >= 0.75 {
         "High"
@@ -656,10 +692,12 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
 
         let mut reasons = vec![OpportunityReason {
             icon: "inventory".into(),
-            text: format!(
-                "You own {}/{} parts of {}",
-                owned_distinct, needed_distinct, input.set_name
-            ),
+            text_key: "opp.reasonOwnPartsOf".into(),
+            text_params: params(&[
+                ("owned", owned_distinct.to_string()),
+                ("needed", needed_distinct.to_string()),
+                ("set", input.set_name.clone()),
+            ]),
             source: "inventory".into(),
         }];
         if plan.has_farmable {
@@ -671,7 +709,8 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
                 .collect();
             reasons.push(OpportunityReason {
                 icon: "relics".into(),
-                text: format!("You own relics that drop {}", farm_names.join(", ")),
+                text_key: "opp.reasonOwnRelicsThatDrop".into(),
+                text_params: params(&[("names", farm_names.join(", "))]),
                 source: "relics".into(),
             });
         }
@@ -684,25 +723,30 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
         if !buy_names.is_empty() {
             reasons.push(OpportunityReason {
                 icon: "market".into(),
-                text: format!("Still need: {}", buy_names.join(", ")),
+                text_key: "opp.reasonStillNeed".into(),
+                text_params: params(&[("names", buy_names.join(", "))]),
                 source: "market".into(),
             });
         }
-        reasons.push(OpportunityReason {
-            icon: "math".into(),
-            text: match edge {
-                Some(b_edge) => format!(
-                    "Completing nets ~{}p vs ~{}p selling your parts",
-                    round_plat(a),
-                    round_plat(a - b_edge)
-                ),
-                None => format!(
-                    "Completed set sells ~{}p (parts cost ~{}p)",
-                    round_plat(input.set_sell_price.unwrap()),
-                    round_plat(plan.completion_cost)
-                ),
+        reasons.push(match edge {
+            Some(b_edge) => OpportunityReason {
+                icon: "math".into(),
+                text_key: "opp.reasonCompletingNetsVs".into(),
+                text_params: params(&[
+                    ("a", round_plat(a).to_string()),
+                    ("b", round_plat(a - b_edge).to_string()),
+                ]),
+                source: "market".into(),
             },
-            source: "market".into(),
+            None => OpportunityReason {
+                icon: "math".into(),
+                text_key: "opp.reasonCompletedSetSells".into(),
+                text_params: params(&[
+                    ("price", round_plat(input.set_sell_price.unwrap()).to_string()),
+                    ("cost", round_plat(plan.completion_cost).to_string()),
+                ]),
+                source: "market".into(),
+            },
         });
 
         let mut actions: Vec<OpportunityAction> = plan
@@ -712,7 +756,8 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
                 if m.farmable {
                     OpportunityAction {
                         kind: "farmRelic".into(),
-                        label: format!("Farm {}", m.name),
+                        label_key: "opp.actionFarm".into(),
+                        label_params: params(&[("name", m.name.clone())]),
                         item_slug: Some(m.slug.clone()),
                         item_name: Some(m.name.clone()),
                         price: None,
@@ -720,7 +765,8 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
                 } else {
                     OpportunityAction {
                         kind: "buyPart".into(),
-                        label: format!("Buy {}", m.name),
+                        label_key: "opp.actionBuy".into(),
+                        label_params: params(&[("name", m.name.clone())]),
                         item_slug: Some(m.slug.clone()),
                         item_name: Some(m.name.clone()),
                         price: Some(round_plat(m.unit_cost)),
@@ -730,7 +776,8 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
             .collect();
         actions.push(OpportunityAction {
             kind: "sellSet".into(),
-            label: "Sell completed set".into(),
+            label_key: "opp.actionSellCompletedSet".into(),
+            label_params: HashMap::new(),
             item_slug: Some(input.set_slug.clone()),
             item_name: Some(input.set_name.clone()),
             price: input.set_sell_price.map(round_plat),
@@ -743,20 +790,22 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
             id: format!("set-complete:{}", input.set_slug),
             subject_key: format!("set:{}", input.set_slug),
             category: "setCompletion".into(),
-            title: if owns_full_set {
-                format!("Sell completed {}", input.set_name)
+            title_key: if owns_full_set {
+                "opp.sellCompletedTitle".into()
             } else {
-                format!("Complete {}", input.set_name)
+                "opp.completeTitle".into()
             },
-            subtitle: Some(if owns_full_set {
-                "You own the full set — build & sell".into()
+            title_params: params(&[("name", input.set_name.clone())]),
+            subtitle_key: Some(if owns_full_set {
+                "opp.ownFullSetSubtitle".into()
             } else {
-                format!(
-                    "Buy {} more part{} to finish",
-                    missing_distinct,
-                    if missing_distinct == 1 { "" } else { "s" }
-                )
+                "opp.buyMorePartsSubtitle".into()
             }),
+            subtitle_params: if owns_full_set {
+                HashMap::new()
+            } else {
+                params(&[("n", missing_distinct.to_string())])
+            },
             set_slug: Some(input.set_slug.clone()),
             image_path: input.image_path.clone(),
             est_value,
@@ -789,34 +838,38 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
 
     let mut reasons = vec![OpportunityReason {
         icon: "inventory".into(),
-        text: format!(
-            "You hold {}/{} parts of {}",
-            owned_distinct, needed_distinct, input.set_name
-        ),
+        text_key: "opp.reasonOwnPartsOf".into(),
+        text_params: params(&[
+            ("owned", owned_distinct.to_string()),
+            ("needed", needed_distinct.to_string()),
+            ("set", input.set_name.clone()),
+        ]),
         source: "inventory".into(),
     }];
     if let Some(set_price) = input.set_sell_price {
         if missing_distinct <= config.max_missing_distinct && plan.fully_priced {
             reasons.push(OpportunityReason {
                 icon: "math".into(),
-                text: format!(
-                    "Finishing the set nets only ~{}p — selling your parts gets ~{}p",
-                    round_plat(set_price - plan.completion_cost),
-                    round_plat(b)
-                ),
+                text_key: "opp.reasonFinishingNetsOnly".into(),
+                text_params: params(&[
+                    ("a", round_plat(set_price - plan.completion_cost).to_string()),
+                    ("b", round_plat(b).to_string()),
+                ]),
                 source: "math".into(),
             });
         } else {
             reasons.push(OpportunityReason {
                 icon: "market".into(),
-                text: format!("Your parts are worth ~{}p to sell now", round_plat(b)),
+                text_key: "opp.reasonPartsWorthNow".into(),
+                text_params: params(&[("b", round_plat(b).to_string())]),
                 source: "market".into(),
             });
         }
     } else {
         reasons.push(OpportunityReason {
             icon: "market".into(),
-            text: format!("Your parts are worth ~{}p to sell now", round_plat(b)),
+            text_key: "opp.reasonPartsWorthNow".into(),
+            text_params: params(&[("b", round_plat(b).to_string())]),
             source: "market".into(),
         });
     }
@@ -825,7 +878,8 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
         .iter()
         .map(|c| OpportunityAction {
             kind: "sellPart".into(),
-            label: format!("Sell {}", c.name),
+            label_key: "opp.actionSell".into(),
+            label_params: params(&[("name", c.name.clone())]),
             item_slug: Some(c.slug.clone()),
             item_name: Some(c.name.clone()),
             price: c.sell_price.map(round_plat),
@@ -837,8 +891,10 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
         id: format!("set-sell-parts:{}", input.set_slug),
         subject_key: format!("set:{}", input.set_slug),
         category: "sellInventory".into(),
-        title: format!("Sell your {} parts", input.set_name),
-        subtitle: Some("Completing the set isn't worth it".into()),
+        title_key: "opp.sellYourPartsTitle".into(),
+        title_params: params(&[("name", input.set_name.clone())]),
+        subtitle_key: Some("opp.notWorthCompletingSubtitle".into()),
+        subtitle_params: HashMap::new(),
         set_slug: Some(input.set_slug.clone()),
         image_path: input.image_path.clone(),
         est_value,
@@ -1286,7 +1342,7 @@ mod tests {
         let opp = evaluate_set(&input, &EvalConfig::default()).expect("should produce a play");
         assert_eq!(opp.category, "setCompletion"); // sell the set, NOT "sell parts"
         assert_eq!(opp.est_value, 85);
-        assert!(opp.title.starts_with("Sell completed"));
+        assert_eq!(opp.title_key, "opp.sellCompletedTitle");
     }
 
     #[test]
@@ -1377,8 +1433,10 @@ mod tests {
             id: format!("{category}:{score}"),
             subject_key: format!("{category}:{score}"),
             category: category.into(),
-            title: String::new(),
-            subtitle: None,
+            title_key: String::new(),
+            title_params: HashMap::new(),
+            subtitle_key: None,
+            subtitle_params: HashMap::new(),
             set_slug: None,
             image_path: None,
             est_value: score as i64,

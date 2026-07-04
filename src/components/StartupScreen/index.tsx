@@ -69,7 +69,7 @@ export function StartupScreen({
   const friendlyErrorMessage = errorMessage ? formatStartupErrorMessage(errorMessage) : null;
   const indexedItemsCount = stats
     ? (stats.totalWfmItems + stats.totalWfstatItems).toLocaleString()
-    : 'Preparing';
+    : t('su.preparing');
 
   return (
     <div className="startup-shell">
@@ -79,7 +79,7 @@ export function StartupScreen({
             <p className="startup-eyebrow">{t('su.startingUp')}</p>
             <h1 className="startup-title">{t('su.gettingReady')}</h1>
             <p className="startup-subtitle">
-              Loading your market tools, local data, and live signals.
+              {t('su.loadingSub')}
             </p>
           </div>
           <div className="startup-progress-chip">{formatPercent(progress.progressValue)}</div>
@@ -88,7 +88,7 @@ export function StartupScreen({
         <div className="startup-stage-card">
           <div className="startup-stage-meta">
             <span className="startup-stage-label">{progress.stageLabel}</span>
-            <span className="startup-stage-state">{errorMessage ? 'Error' : 'In progress'}</span>
+            <span className="startup-stage-state">{errorMessage ? t('su.error') : t('su.inProgress')}</span>
           </div>
           <p className="startup-status-text">{friendlyErrorMessage ?? friendlyStatusText}</p>
           <div
@@ -107,13 +107,13 @@ export function StartupScreen({
           <div className="startup-info-card">
             <span className="startup-info-label">{t('su.catalog')}</span>
             <span className="startup-info-value">
-              {summary ? 'Local market database ready' : 'Preparing local market data'}
+              {summary ? t('su.dbReady') : t('su.dbPreparing')}
             </span>
           </div>
           <div className="startup-info-card">
             <span className="startup-info-label">{t('su.liveData')}</span>
             <span className="startup-info-value">
-              {summary?.currentWfmApiVersion ? `WFM ${summary.currentWfmApiVersion}` : 'Checking live sources'}
+              {summary?.currentWfmApiVersion ? `WFM ${summary.currentWfmApiVersion}` : t('su.checkingSources')}
             </span>
           </div>
           <div className="startup-info-card">
@@ -125,7 +125,7 @@ export function StartupScreen({
           <div className="startup-info-card">
             <span className="startup-info-label">{t('su.readyFor')}</span>
             <span className="startup-info-value">
-              Analysis, scanners, watchlists, and events
+              {t('su.readyList')}
             </span>
           </div>
         </div>
@@ -135,7 +135,7 @@ export function StartupScreen({
             <p className="startup-error-title">{t('su.needsRetry')}</p>
             <p className="startup-error-body">{friendlyErrorMessage}</p>
             <button className="startup-retry-button" onClick={onRetry} type="button">
-              Retry startup
+              {t('su.retry')}
             </button>
           </div>
         ) : null}

@@ -14,7 +14,9 @@ import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import { useTranslation } from '../../i18n';
+import { intlLocaleCode } from '../../lib/language';
+import { tActive, useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import type {
   PortfolioPnlSummary,
   PortfolioTradeLogEntry,
@@ -32,7 +34,7 @@ function formatPortfolioError(error: unknown): string {
   if (typeof error === 'string' && error.trim()) {
     return error.trim();
   }
-  return 'Something went wrong with your portfolio data. Please try again. If it keeps happening, report it in Discord.';
+  return tActive('pf.somethingWentWrong');
 }
 
 const RefreshIcon = () => (
@@ -226,6 +228,7 @@ function buildLineChartGeometry(
 
 function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
   const { t } = useTranslation();
+  const language = useAppStore((s) => s.language);
   const width = 520;
   const height = 220;
   const padding = { top: 18, right: 18, bottom: 34, left: 54 };
@@ -249,7 +252,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
     <div className="chart-card">
       <PortfolioPanelHeader
         title={t('a11y.cumulativeProfit')}
-        info="Running realized profit over time for the selected period. This only uses closed sell rows."
+        info={t('pf.cumulativeProfitInfo')}
       />
       <div className="chart-body portfolio-chart-body">
         {summary.cumulativeProfitPoints.length === 0 ? (
@@ -262,7 +265,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
                 {activeData ? formatSignedPlatinumValue(activeData.cumulativeProfit) : '—'}
               </div>
               <span className="portfolio-chart-callout-meta">
-                {activeData ? formatChartDateLabel(activeData.bucketAt) : 'Move across the curve'}
+                {activeData ? formatChartDateLabel(activeData.bucketAt) : t('pf.moveAcrossCurve')}
               </span>
             </div>
             <svg width="100%" height="220" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
@@ -362,7 +365,10 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
                         fontSize="9"
                         fontFamily="JetBrains Mono"
                       >
-                        {label.label}
+                        {new Date(label.bucketAt).toLocaleDateString(intlLocaleCode(language), {
+                          day: '2-digit',
+                          month: 'short',
+                        })}
                       </text>
                     ) : null}
                   </g>
@@ -378,6 +384,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
 
 function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
   const { t } = useTranslation();
+  const language = useAppStore((s) => s.language);
   const width = 420;
   const height = 220;
   const padding = { top: 18, right: 16, bottom: 34, left: 50 };
@@ -399,7 +406,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
     <div className="chart-card">
       <PortfolioPanelHeader
         title={t('a11y.profitPerTrade')}
-        info="Each bar is one closed sell row. Positive values are green, negative values are red."
+        info={t('pf.profitPerTradeInfo')}
         infoPlacement="left"
       />
       <div className="chart-body portfolio-chart-body">
@@ -413,7 +420,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
                 {activeTrade ? formatSignedPlatinumValue(activeTrade.profit) : '—'}
               </div>
               <span className="portfolio-chart-callout-meta">
-                {activeTrade ? `${activeTrade.itemName} · ${formatChartDateLabel(activeTrade.closedAt)}` : 'Hover a bar'}
+                {activeTrade ? `${activeTrade.itemName} · ${formatChartDateLabel(activeTrade.closedAt)}` : t('pf.hoverABar')}
               </span>
             </div>
             <svg width="100%" height="220" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
@@ -497,7 +504,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
                         fontSize="9"
                         fontFamily="JetBrains Mono"
                       >
-                        {new Date(point.closedAt).toLocaleDateString('en-GB', {
+                        {new Date(point.closedAt).toLocaleDateString(intlLocaleCode(language), {
                           day: '2-digit',
                           month: 'short',
                         })}
@@ -515,7 +522,22 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
 }
 
 function renderTradeType(orderType: PortfolioTradeLogEntry['orderType']): string {
-  return orderType === 'buy' ? 'Buy' : 'Sell';
+  return orderType === 'buy' ? tActive('pf.buy') : tActive('pf.sell');
+}
+
+const TRADE_STATUS_LABEL_KEYS: Record<string, TranslationKey> = {
+  Flip: 'pf.flip',
+  'Sold As Set': 'pf.soldAsSet',
+  Kept: 'pf.kept',
+  Open: 'pf.open',
+};
+
+function renderTradeStatus(status: string | null): string {
+  if (!status) {
+    return '';
+  }
+  const labelKey = TRADE_STATUS_LABEL_KEYS[status];
+  return labelKey ? tActive(labelKey) : status;
 }
 
 function buildTradeTypeClassName(orderType: PortfolioTradeLogEntry['orderType']): string {
@@ -669,7 +691,7 @@ function buildTradeLogDisplayRows(entries: PortfolioTradeLogEntry[]): TradeLogDi
     rows.push({
       kind: 'group',
       groupId: entry.groupId,
-      label: entry.groupLabel ?? 'Multiple Item Trade',
+      label: entry.groupLabel ?? tActive('pf.multipleItemTrade'),
       totalPlatinum:
         entry.groupTotalPlatinum ??
         children.reduce(
@@ -689,7 +711,7 @@ function buildTradeLogDisplayRows(entries: PortfolioTradeLogEntry[]): TradeLogDi
 
 function buildTradeGroupSummary(children: PortfolioTradeLogEntry[]): string {
   if (children.length === 0) {
-    return 'No items in this trade';
+    return tActive('pf.noItemsInTrade');
   }
 
   const names = children.slice(0, 2).map((child) => child.itemName);
@@ -808,7 +830,7 @@ function TradeLogTab({ username }: { username: string | null }) {
 
   const handleRefresh = async () => {
     if (!username) {
-      setErrorMessage('Connect your Warframe Market account in Trades first.');
+      setErrorMessage(t('pf.connectFirst2'));
       return;
     }
 
@@ -903,7 +925,7 @@ function TradeLogTab({ username }: { username: string | null }) {
 
   const handleMigrate = async () => {
     if (!username) {
-      setErrorMessage('Connect your Warframe Market account in Trades first.');
+      setErrorMessage(t('pf.connectFirst2'));
       return;
     }
 
@@ -925,7 +947,7 @@ function TradeLogTab({ username }: { username: string | null }) {
 
   const handleForceResync = async () => {
     if (!username) {
-      setErrorMessage('Connect your Warframe Market account in Trades first.');
+      setErrorMessage(t('pf.connectFirst2'));
       return;
     }
 
@@ -948,7 +970,7 @@ function TradeLogTab({ username }: { username: string | null }) {
     }
 
     if (!allocationMatches) {
-      setErrorMessage(`Adjusted totals must add up to ${formatPlatinumValue(allocationExpectedTotal)}.`);
+      setErrorMessage(t('pf.adjustedTotalsMustMatch', { total: formatPlatinumValue(allocationExpectedTotal) }));
       return;
     }
 
@@ -1064,7 +1086,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                 setMigrateModalOpen(true);
               }}
             >
-              Migrate
+              {t('pf.migrate')}
             </button>
           ) : null}
           {username ? (
@@ -1074,7 +1096,7 @@ function TradeLogTab({ username }: { username: string | null }) {
               onClick={() => void handleForceResync()}
               disabled={resyncing || loading}
             >
-              {resyncing ? 'Resyncing…' : 'Force Resync'}
+              {resyncing ? t('pf.resyncing') : t('pf.forceResync')}
             </button>
           ) : null}
           <button
@@ -1083,7 +1105,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             onClick={() => downloadTradeLogCsv(filteredEntries)}
             disabled={filteredEntries.length === 0}
           >
-            Export CSV
+            {t('pf.exportCsv')}
           </button>
           <button
             className="act-btn portfolio-refresh-btn"
@@ -1092,7 +1114,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             disabled={loading || resyncing}
           >
             <RefreshIcon />
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -1106,11 +1128,11 @@ function TradeLogTab({ username }: { username: string | null }) {
         </div>
       ) : entries.length === 0 ? (
         <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">{loading ? 'Loading trade history…' : 'No trade history loaded yet'}</span>
+          <span className="empty-primary">{loading ? t('pf.loadingTradeHistory') : t('pf.noTradeHistoryYet')}</span>
           <span className="empty-sub">
             {loading
-              ? 'Loading your cached trade log and updating it from Warframe Market.'
-              : 'Open the tab or press Refresh to load your last 90 days of buy and sell orders.'}
+              ? t('pf.loadingCachedTradeLog')
+              : t('pf.openTabOrRefresh')}
           </span>
         </div>
       ) : (
@@ -1118,7 +1140,7 @@ function TradeLogTab({ username }: { username: string | null }) {
           <div className="portfolio-log-card portfolio-filter-card">
             <PortfolioPanelHeader
               title={t('a11y.filters')}
-              info="Filter the permanent local trade ledger by type, status, source, item name, and close date range."
+              info={t('pf.filterLedgerInfo')}
             />
             <div className="portfolio-log-filters">
               <label className="portfolio-filter-field">
@@ -1138,8 +1160,8 @@ function TradeLogTab({ username }: { username: string | null }) {
                   value={orderTypeFilter}
                   onChange={(event) => setOrderTypeFilter(event.target.value as 'all' | 'buy' | 'sell')}
                 >
-                  <option value="all">All</option>
-                  <option value="buy">Buy</option>
+                  <option value="all">{t('oppf.all')}</option>
+                  <option value="buy">{t('pf.buy')}</option>
                   <option value="sell">{t('pf.sell')}</option>
                 </select>
               </label>
@@ -1152,7 +1174,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                     setStatusFilter(event.target.value as 'all' | 'Flip' | 'Sold As Set' | 'Open' | 'Kept' | 'none')
                   }
                 >
-                  <option value="all">All</option>
+                  <option value="all">{t('oppf.all')}</option>
                   <option value="Flip">{t('pf.flip')}</option>
                   <option value="Sold As Set">{t('pf.soldAsSet')}</option>
                   <option value="Open">{t('pf.open')}</option>
@@ -1167,7 +1189,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                   value={sourceFilter}
                   onChange={(event) => setSourceFilter(event.target.value as 'all' | 'wfm' | 'alecaframe')}
                 >
-                  <option value="all">All</option>
+                  <option value="all">{t('oppf.all')}</option>
                   <option value="wfm">warframe.market</option>
                   <option value="alecaframe">{t('pf.alecaframe')}</option>
                 </select>
@@ -1177,7 +1199,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                 <input className="settings-text-input" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
               </label>
               <label className="portfolio-filter-field">
-                <span>To</span>
+                <span>{t('pf.to')}</span>
                 <input className="settings-text-input" type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
               </label>
             </div>
@@ -1186,14 +1208,14 @@ function TradeLogTab({ username }: { username: string | null }) {
           <div className="portfolio-log-card">
             <PortfolioPanelHeader
               title={t('a11y.tradeLogLedger')}
-              info="Permanent local trade ledger built from warframe.market history, Alecaframe imports, and local reconciliation rules."
+              info={t('pf.tradeLedgerInfo')}
             />
             <div className="portfolio-log-scroll">
             <div className="portfolio-log-header">
               <span>{t('pf.item')}</span>
               <span>{t('pf.type')}</span>
               <span>{t('pf.price')}</span>
-              <span>Qty</span>
+              <span>{t('pf.qty')}</span>
               <span>{t('pf.rank')}</span>
               <span>{t('pf.profit')}</span>
               <span>{t('pf.margin')}</span>
@@ -1234,7 +1256,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                         <span className="portfolio-log-value">{formatMarginValue(row.entry.margin)}</span>
                         <span>
                           {row.entry.status ? (
-                            <span className={`badge ${buildTradeStatusClassName(row.entry.status)}`}>{row.entry.status}</span>
+                            <span className={`badge ${buildTradeStatusClassName(row.entry.status)}`}>{renderTradeStatus(row.entry.status)}</span>
                           ) : (
                             <span className="portfolio-log-value">—</span>
                           )}
@@ -1248,7 +1270,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                                 type="button"
                                 role="switch"
                                 aria-checked={keepOverrides[row.entry.id] ?? row.entry.keepItem}
-                                aria-label={`Keep ${row.entry.itemName}`}
+                                aria-label={t('pf.keepAriaLabel', { name: row.entry.itemName })}
                                 onClick={() => handleToggleKeepItem(row.entry)}
                               />
                               <span>{t('pf.keepItem')}</span>
@@ -1266,7 +1288,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                           <button
                             className="portfolio-log-expand-btn"
                             type="button"
-                            aria-label={expandedGroupIds.includes(row.groupId) ? `Collapse ${row.label}` : `Expand ${row.label}`}
+                            aria-label={expandedGroupIds.includes(row.groupId) ? t('pf.collapseAriaLabel', { label: row.label }) : t('pf.expandAriaLabel', { label: row.label })}
                             onClick={() => handleToggleGroupExpanded(row.groupId)}
                           >
                             {expandedGroupIds.includes(row.groupId) ? '−' : '+'}
@@ -1281,12 +1303,12 @@ function TradeLogTab({ username }: { username: string | null }) {
                           <div className="portfolio-log-item-copy">
                             <span className="portfolio-log-item-name">{row.label}</span>
                             <span className="portfolio-log-item-slug">
-                              {buildTradeGroupSummary(row.children)} · {row.itemCount} item{row.itemCount === 1 ? '' : 's'}
+                              {buildTradeGroupSummary(row.children)} · {t('pf.itemsCount', { n: row.itemCount })}
                             </span>
                             <div className="portfolio-row-badges">
                               <span className="badge">{row.children[0]?.source === 'wfm' ? 'WFM' : 'Alecaframe'}</span>
                               <span className="badge">
-                                {row.children.some((child) => child.allocationMode === 'manual') ? 'Manual Split' : 'Auto Split'}
+                                {row.children.some((child) => child.allocationMode === 'manual') ? t('pf.manualSplit') : t('pf.autoSplit')}
                               </span>
                             </div>
                           </div>
@@ -1301,7 +1323,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                         <span className="portfolio-log-date">{formatShortLocalDateTime(row.closedAt)}</span>
                         <span className="portfolio-log-actions portfolio-log-actions-parent">
                           <button className="act-btn portfolio-secondary-btn" type="button" onClick={() => handleOpenAllocationModal(row)}>
-                            Adjust Amounts
+                            {t('pf.adjustAmounts')}
                           </button>
                         </span>
                       </div>
@@ -1321,7 +1343,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                                     <span className="portfolio-log-item-name">{child.itemName}</span>
                                     <span className="portfolio-log-item-slug">{child.slug}</span>
                                     <div className="portfolio-row-badges">
-                                      {child.allocationMode ? <span className="badge">{child.allocationMode === 'manual' ? 'Manual' : 'Auto'}</span> : null}
+                                      {child.allocationMode ? <span className="badge">{child.allocationMode === 'manual' ? t('pf.manual') : t('pf.auto')}</span> : null}
                                     </div>
                                   </div>
                                 </div>
@@ -1333,7 +1355,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                                 <span className="portfolio-log-value">{formatMarginValue(child.margin)}</span>
                                 <span>
                                   {child.status ? (
-                                    <span className={`badge ${buildTradeStatusClassName(child.status)}`}>{child.status}</span>
+                                    <span className={`badge ${buildTradeStatusClassName(child.status)}`}>{renderTradeStatus(child.status)}</span>
                                   ) : (
                                     <span className="portfolio-log-value">—</span>
                                   )}
@@ -1347,7 +1369,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                                         type="button"
                                         role="switch"
                                         aria-checked={keepOverrides[child.id] ?? child.keepItem}
-                                        aria-label={`Keep ${child.itemName}`}
+                                        aria-label={t('pf.keepAriaLabel', { name: child.itemName })}
                                         onClick={() => handleToggleKeepItem(child)}
                                       />
                                       <span>{t('pf.keepItem')}</span>
@@ -1399,7 +1421,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                 <article className="settings-preview-card">
                   <span className="settings-field-label">{t('pf.purpose')}</span>
                   <p className="settings-preview-value">
-                    Import missing buy and sell trades from Alecaframe without duplicating existing log rows.
+                    {t('pf.migrateHint')}
                   </p>
                 </article>
                 <article className="settings-preview-card">
@@ -1413,12 +1435,12 @@ function TradeLogTab({ username }: { username: string | null }) {
                 </article>
               </div>
               <p className="portfolio-modal-note">
-                Only trades from this day forward will be migrated. Existing rows with the same item, quantity, and a timestamp within one minute will be skipped.
+                {t('pf.migrateFromHint')}
               </p>
             </div>
             <div className="settings-modal-actions">
               <button className="period-btn" type="button" onClick={() => setMigrateModalOpen(false)}>
-                Cancel
+                {t('common.cancel')}
               </button>
               <button
                 className="act-btn"
@@ -1426,7 +1448,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                 onClick={() => void handleMigrate()}
                 disabled={migrating || !migrationBaselineDate}
               >
-                {migrating ? 'Migrating…' : 'Migrate'}
+                {migrating ? t('pf.migrating') : t('pf.migrate')}
               </button>
             </div>
           </div>
@@ -1469,7 +1491,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                     <div className="portfolio-allocation-copy">
                       <span className="portfolio-allocation-name">{child.itemName}</span>
                       <span className="portfolio-allocation-meta">
-                        Qty {child.quantity}{child.rank != null ? ` · Rank ${child.rank}` : ''}
+                        {t('pf.qtyValue', { n: child.quantity })}{child.rank != null ? t('pf.rankValue', { n: child.rank }) : ''}
                       </span>
                     </div>
                     <div className="portfolio-allocation-input-wrap">
@@ -1500,7 +1522,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             </div>
             <div className="settings-modal-actions">
               <button className="period-btn" type="button" onClick={() => setAllocationGroupId(null)}>
-                Cancel
+                {t('common.cancel')}
               </button>
               <button
                 className="act-btn"
@@ -1508,7 +1530,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                 onClick={() => void handleSaveAllocations()}
                 disabled={savingAllocations || !allocationMatches}
               >
-                {savingAllocations ? 'Saving…' : 'Save Amounts'}
+                {savingAllocations ? t('pf.saving') : t('pf.saveAmounts')}
               </button>
             </div>
           </div>
@@ -1635,12 +1657,12 @@ function PnlSummaryTab({
   const formatInventoryError = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
     if (/session expired|sign in/i.test(message)) {
-      return 'Your Warframe.Market session expired — sign in again to value your inventory.';
+      return t('pf.sessionExpiredInventory');
     }
     if (/network|timed out|timeout|reach|connection|fetch/i.test(message)) {
-      return 'Couldn’t reach Warframe.Market to value your inventory. Check your connection and retry.';
+      return t('pf.couldNotReachInventory');
     }
-    return 'Couldn’t load your inventory value right now. Please retry.';
+    return t('pf.couldNotLoadInventory');
   };
 
   // Retry-able inventory value load, shared by the manual refresh and the retry button so a
@@ -1736,7 +1758,7 @@ function PnlSummaryTab({
         </div>
       ) : (
         <div className="portfolio-summary-body portfolio-summary-loadable">
-          {!summary ? <PortfolioLoadingOverlay label="Loading portfolio summary…" /> : null}
+          {!summary ? <PortfolioLoadingOverlay label={t('pf.loadingPortfolioSummary')} /> : null}
 
           <div className={`card pf-hero ${bodySummary.realizedProfit >= 0 ? 'tone-pos' : 'tone-neg'}`}>
             <div className="pf-hero-top">
@@ -1780,7 +1802,7 @@ function PnlSummaryTab({
                 <div className="info-card-label pf-hero-label">
                   {t('pf.realizedProfit')}
                   <InfoHint
-                    text="Profit you've actually locked in this period: what your closed sells earned, minus the cost of the buys behind them."
+                    text={t('pf.realizedProfitInfo')}
                     placement="bottom"
                   />
                 </div>
@@ -1799,7 +1821,7 @@ function PnlSummaryTab({
                   <div className="info-card-label">
                     {t('pf.totalPnl')}
                     <InfoHint
-                      text="Realized profit plus the estimated gain/loss on inventory you still hold. 'Estimated' because unsold items are valued at cached market prices, not actual sales."
+                      text={t('pf.totalPnlInfo')}
                       placement="bottom"
                     />
                   </div>
@@ -1811,7 +1833,7 @@ function PnlSummaryTab({
                   <div className="info-card-label">
                     {t('pf.unrealizedPnl')}
                     <InfoHint
-                      text="The estimated gain or loss on tracked buys you still hold: current market estimate minus what you paid. Realized + Unrealized = Estimated Total P&L."
+                      text={t('pf.unrealizedPnlInfo')}
                       placement="bottom"
                     />
                   </div>
@@ -1823,7 +1845,7 @@ function PnlSummaryTab({
                   <div className="info-card-label">
                     {t('pf.openBuys')}
                     <InfoHint
-                      text="Platinum you've spent on buys you haven't sold yet — your capital still tied up in inventory."
+                      text={t('pf.openBuysInfo')}
                       placement="bottom"
                     />
                   </div>
@@ -1835,23 +1857,23 @@ function PnlSummaryTab({
 
           <div className="card pf-perf-strip">
             <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.closedTrades')} <InfoHint text="Number of sells you completed in this period." /></div>
+              <div className="perf-label">{t('pf.closedTrades')} <InfoHint text={t('pf.closedTradesInfo')} /></div>
               <div className="perf-val">{bodySummary.closedTrades}</div>
             </div>
             <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.winRate')} <InfoHint text="Share of your closed sells that made a profit." /></div>
+              <div className="perf-label">{t('pf.winRate')} <InfoHint text={t('pf.winRateInfo')} /></div>
               <div className={`perf-val ${bodySummary.winRate >= 50 ? 'green' : bodySummary.winRate >= 35 ? 'blue' : 'red'}`}>{formatPercentValue(bodySummary.winRate)}</div>
             </div>
             <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.avgMargin')} <InfoHint text="Average profit as a percentage of cost, across sells where the buy cost is known." /></div>
+              <div className="perf-label">{t('pf.avgMargin')} <InfoHint text={t('pf.avgMarginInfo')} /></div>
               <div className="perf-val blue">{formatPercentValue(bodySummary.averageMargin)}</div>
             </div>
             <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.avgHold')} <InfoHint text="Average time you held an item between buying it and selling it." /></div>
+              <div className="perf-label">{t('pf.avgHold')} <InfoHint text={t('pf.avgHoldInfo')} /></div>
               <div className="perf-val">{formatHoursValue(bodySummary.averageHoldHours)}</div>
             </div>
             <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.avgProfitTrade')} <InfoHint text="Average realized profit per closed sell." /></div>
+              <div className="perf-label">{t('pf.avgProfitTrade')} <InfoHint text={t('pf.avgProfitTradeInfo')} /></div>
               <div className="perf-val green">{formatPlatinumValue(Math.round(bodySummary.averageProfitPerTrade))}</div>
             </div>
           </div>
@@ -1946,7 +1968,7 @@ function PnlSummaryTab({
             <div className="chart-card">
               <PortfolioPanelHeader
                 title={t('a11y.categoryBreakdown')}
-                info="Realized profit grouped by item family using the local item catalog classification."
+                info={t('pf.categoryBreakdownInfo')}
                 infoPlacement="left"
               />
               <div className="portfolio-breakdown-list">
@@ -1976,7 +1998,7 @@ function PnlSummaryTab({
           <div className="chart-card pf-top-items-card">
             <PortfolioPanelHeader
               title={t('pf.topItems')}
-              info="Items ranked by their total realized profit impact this period (wins and losses both count). Your best repeat-flip candidates live at the top."
+              info={t('pf.topItemsInfo')}
             />
             <div className="portfolio-breakdown-list">
               {bodySummary.itemBreakdown.length === 0 ? (
@@ -2005,7 +2027,7 @@ function PnlSummaryTab({
           <div className="chart-card portfolio-notes-card">
             <PortfolioPanelHeader
               title={t('a11y.dataConfidence')}
-              info="How complete the data behind these numbers is. Profit basis = the share of your sell revenue that has a matched local buy cost behind it (the rest is estimated). Inventory value = the share of held items that have a cached market price. Lower percentages mean the figures above are rougher estimates."
+              info={t('pf.dataConfidenceInfo')}
               infoPlacement="left"
             />
             <div className="portfolio-confidence-row">
@@ -2036,7 +2058,7 @@ function PnlSummaryTab({
             {(inventoryLoading || !inventory) && !inventoryError ? <PortfolioLoadingOverlay /> : null}
             <PortfolioPanelHeader
               title={t('pf.plannerInventory')}
-              info="What your owned prime parts are worth — taken from your Set Completion Planner inventory (last scan), valued at each part's recommended exit price. When you own a complete set, it's valued at the higher of the full-set price or the sum of its parts. Unrelated to trade history and not part of Total P&L."
+              info={t('pf.plannerInventoryInfo')}
               infoPlacement="left"
             />
             <div className="pf-planner-body">
@@ -2050,12 +2072,12 @@ function PnlSummaryTab({
                     onClick={() => void reloadInventory()}
                     disabled={inventoryLoading}
                   >
-                    {inventoryLoading ? 'Retrying…' : t('common.retry')}
+                    {inventoryLoading ? t('pf.retrying') : t('common.retry')}
                   </button>
                 </div>
               ) : inventory && inventory.unpricedCount > 0 ? (
                 <div className="info-card-subnote">
-                  {inventory.unpricedCount} part{inventory.unpricedCount === 1 ? '' : 's'} not yet priced
+                  {t('pf.partsNotYetPriced', { n: inventory.unpricedCount })}
                 </div>
               ) : null}
             </div>

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore, type UnderpricedListingCard } from '../../stores/useAppStore';
-import { useTranslation } from '../../i18n';
+import { tActive, useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { formatElapsedTime } from '../../lib/dateTime';
+import { tHealth } from '../../lib/healthLabels';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import type { Opportunity, OpportunityAction } from '../../lib/tauriClient';
 
@@ -29,10 +31,12 @@ function snipeToOpportunity(card: UnderpricedListingCard): Opportunity {
     id: `snipe:${card.orderId}`,
     subjectKey: `snipe:${card.orderId}`,
     category: 'snipe',
-    title: `Snipe: ${card.itemName}`,
-    subtitle: completes
-      ? `Completes your ${completes.setName} (${completes.ownedDistinct}/${completes.neededDistinct})`
-      : 'Underpriced part you need',
+    titleKey: 'opp.snipeTitle',
+    titleParams: { name: card.itemName },
+    subtitleKey: completes ? 'opp.completesYour' : 'opp.underpricedNeed',
+    subtitleParams: completes
+      ? { set: completes.setName, owned: String(completes.ownedDistinct), needed: String(completes.neededDistinct) }
+      : {},
     setSlug: completes?.setSlug ?? null,
     imagePath: null,
     estValue: savings,
@@ -45,23 +49,29 @@ function snipeToOpportunity(card: UnderpricedListingCard): Opportunity {
     reasons: [
       {
         icon: 'inventory',
-        text: completes
-          ? `You own ${completes.ownedDistinct}/${completes.neededDistinct} parts of ${completes.setName}`
-          : 'Part you need',
+        textKey: completes ? 'opp.youOwnPartsOf' : 'opp.partYouNeed',
+        textParams: completes
+          ? { owned: String(completes.ownedDistinct), needed: String(completes.neededDistinct), set: completes.setName }
+          : {},
         source: 'inventory',
       },
       {
         icon: 'market',
-        text: `${card.username} listed it at ${Math.round(card.listedPrice)}p (${Math.round(
-          card.pctBelow,
-        )}% below ~${Math.round(card.recommendedPrice)}p)`,
+        textKey: 'opp.listedAt',
+        textParams: {
+          user: card.username,
+          price: String(Math.round(card.listedPrice)),
+          pct: String(Math.round(card.pctBelow)),
+          rec: String(Math.round(card.recommendedPrice)),
+        },
         source: 'market',
       },
     ],
     actions: [
       {
         kind: 'copyWhisper',
-        label: `Buy from ${card.username}`,
+        labelKey: 'opp.buyFrom',
+        labelParams: { user: card.username },
         itemSlug: card.slug,
         itemName: card.itemName,
         price: Math.round(card.listedPrice),
@@ -120,8 +130,8 @@ function ReasonIcon({ kind }: { kind: string }) {
 }
 
 function valueBasisLabel(basis: string): string {
-  if (basis === 'profit') return 'profit';
-  if (basis === 'liquidation') return 'to sell';
+  if (basis === 'profit') return tActive('opp.basisProfit');
+  if (basis === 'liquidation') return tActive('opp.basisToSell');
   return basis;
 }
 
@@ -161,8 +171,8 @@ function ActionButton({ action }: { action: OpportunityAction }) {
             { username: action.username, platinum: action.price ?? 0, rank: null },
             action.itemName,
           )
-            .then(() => pushToast('Whisper copied to clipboard.', 'success'))
-            .catch(() => pushToast("Couldn't copy the whisper.", 'error'));
+            .then(() => pushToast(tActive('opp.whisperCopied'), 'success'))
+            .catch(() => pushToast(tActive('opp.whisperCopyFailed'), 'error'));
         }
         break;
       case 'farmRelic':
@@ -180,7 +190,7 @@ function ActionButton({ action }: { action: OpportunityAction }) {
 
   return (
     <button type="button" className="opp-action" onClick={handle}>
-      {action.label}
+      {tActive(action.labelKey as TranslationKey, action.labelParams)}
       {action.price !== null ? <span className="opp-action-price">{action.price}p</span> : null}
     </button>
   );
@@ -210,8 +220,8 @@ function PinButton({ pinned, onClick }: { pinned: boolean; onClick: () => void }
       type="button"
       className={`opp-pin${pinned ? ' is-pinned' : ''}`}
       onClick={onClick}
-      title={pinned ? 'Unpin — drop this quest' : 'Accept — pin to the top'}
-      aria-label={pinned ? 'Unpin opportunity' : 'Accept opportunity'}
+      title={pinned ? tActive('opp.unpin') : tActive('opp.accept')}
+      aria-label={pinned ? tActive('opp.unpinAria') : tActive('opp.acceptAria')}
     >
       <svg
         width="13"
@@ -224,7 +234,7 @@ function PinButton({ pinned, onClick }: { pinned: boolean; onClick: () => void }
       >
         <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z" />
       </svg>
-      {pinned ? 'Accepted' : 'Accept'}
+      {pinned ? tActive('opp.accepted') : tActive('opp.accept')}
     </button>
   );
 }
@@ -261,9 +271,11 @@ function OpportunityCard({
         <div className="opp-card-titles">
           <h4 className="opp-card-title">
             {urgent ? <span className="opp-urgent-tag">{t('wl.live')}</span> : null}
-            {opp.title}
+            {t(opp.titleKey as TranslationKey, opp.titleParams)}
           </h4>
-          {opp.subtitle ? <p className="opp-card-subtitle">{opp.subtitle}</p> : null}
+          {opp.subtitleKey ? (
+            <p className="opp-card-subtitle">{t(opp.subtitleKey as TranslationKey, opp.subtitleParams)}</p>
+          ) : null}
         </div>
         <div className="opp-card-value">
           <span className="opp-card-value-num">+{opp.estValue}p</span>
@@ -278,7 +290,7 @@ function OpportunityCard({
             <span className="opp-reason-icon" aria-hidden="true">
               <ReasonIcon kind={reason.icon} />
             </span>
-            {reason.text}
+            {t(reason.textKey as TranslationKey, reason.textParams)}
           </li>
         ))}
       </ul>
@@ -287,14 +299,14 @@ function OpportunityCard({
         <span className="opp-card-meta">
           <span
             className={`opp-conf ${confidenceClass}`}
-            title={`Confidence: ${opp.confidenceLabel}`}
+            title={t('opp.confidenceWithColon', { label: tHealth(t, opp.confidenceLabel) })}
           >
-            {opp.confidenceLabel} confidence
+            {t('opp.confidenceSuffix', { label: tHealth(t, opp.confidenceLabel) })}
           </span>
-          {opp.cost > 0 ? <span className="opp-card-cost">{opp.cost}p in</span> : null}
+          {opp.cost > 0 ? <span className="opp-card-cost">{t('opp.costIn', { cost: opp.cost })}</span> : null}
           {opp.pricedAt ? (
             <span className="opp-card-priced" title={t('a11y.thesePricesLastComputed')}>
-              priced {formatElapsedTime(opp.pricedAt)}
+              {t('opp.pricedElapsed', { time: formatElapsedTime(opp.pricedAt) })}
             </span>
           ) : null}
         </span>
@@ -388,17 +400,16 @@ export function OpportunityBoard() {
         <div>
           <span className="panel-title-eyebrow">
             <span className="panel-dot panel-dot-purple" aria-hidden="true" />
-            What To Do Now
+            {t('opp.whatToDoNow')}
           </span>
           <p className="opp-board-sub">
-            Your best moves right now — completing sets, selling parts, and snipes — ranked by
-            value and explained.
+            {t('opp.boardSubtitle')}
           </p>
         </div>
         <div className="opp-board-header-right">
           {pricedAt ? (
             <span className="opp-freshness" title={t('a11y.pricesLastComputed')}>
-              Prices {formatElapsedTime(pricedAt)}
+              {t('opp.pricesElapsed', { time: formatElapsedTime(pricedAt) })}
             </span>
           ) : null}
           <button
@@ -407,7 +418,7 @@ export function OpportunityBoard() {
             onClick={() => void refresh()}
             disabled={loading}
           >
-            {loading ? 'Scanning…' : 'Refresh'}
+            {loading ? t('opp.scanning') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -423,7 +434,7 @@ export function OpportunityBoard() {
               className={`opp-filter-pill${activeFilter === filter.id ? ' is-active' : ''}`}
               onClick={() => setActiveFilter(filter.id)}
             >
-              {filter.label}
+              {t(`oppf.${filter.id}` as TranslationKey)}
             </button>
           ))}
         </div>
@@ -465,10 +476,10 @@ export function OpportunityBoard() {
       {unpinnedList.length === 0 && pinnedList.length === 0 ? (
         <div className="opp-board-empty">
           {loading && loadedAt === null
-            ? 'Looking for opportunities…'
+            ? t('opp.lookingForOpportunities')
             : activeFilter !== 'all' || budgetNum !== null
-              ? 'Nothing matches your filters right now.'
-              : 'No standout moves right now. Run a market scan and add your owned parts in the Set Completion Planner so the engine can see what you’re close to.'}
+              ? t('opp.nothingMatchesFilters')
+              : t('opp.noStandoutMoves')}
         </div>
       ) : unpinnedList.length > 0 ? (
         <div className="opp-section">

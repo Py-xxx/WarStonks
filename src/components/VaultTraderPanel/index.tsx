@@ -1,4 +1,5 @@
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 
 type VaultItem = { name: string; ducats: number | null; credits: number | null };
@@ -28,15 +29,16 @@ function parseInventory(value: unknown): VaultItem[] {
 }
 
 export function VaultTraderPanel() {
+  const { t } = useTranslation();
   const entry = useAppStore((state) => state.worldStateExtra['vault-trader']);
   const payload = (entry.payload ?? null) as Record<string, unknown> | null;
 
   if (!payload && entry.loading) {
-    return <div className="opportunities-placeholder">Loading Prime Resurgence…</div>;
+    return <div className="opportunities-placeholder">{t('evt.loadingVaultTrader')}</div>;
   }
   if (!payload) {
     return (
-      <div className="opportunities-placeholder">Prime Resurgence data unavailable right now.</div>
+      <div className="opportunities-placeholder">{t('evt.vaultTraderUnavailable')}</div>
     );
   }
 
@@ -51,20 +53,20 @@ export function VaultTraderPanel() {
       <div className="events-section-header">
         <span className="panel-title-eyebrow">
           <span className="panel-dot panel-dot-purple" aria-hidden="true" />
-          Prime Resurgence · Varzia
+          {t('evt.primeResurgenceVarziaLabel')}
         </span>
         <h3>
-          {active ? 'Vaulted relics available' : 'Away'}
+          {active ? t('evt.vaultedRelicsAvailable') : t('evt.away')}
           {location ? ` · ${location}` : ''}
         </h3>
         <p className="text-dim">
           {active
             ? expiry
-              ? `Leaves ${formatShortLocalDateTime(expiry)}`
-              : 'Currently in Maroo’s Bazaar'
+              ? t('evt.leavesAt', { date: formatShortLocalDateTime(expiry) })
+              : t('evt.currentlyInBazaar')
             : activation
-              ? `Returns ${formatShortLocalDateTime(activation)}`
-              : 'Rotation between cycles'}
+              ? t('evt.returnsAt', { date: formatShortLocalDateTime(activation) })
+              : t('evt.rotationBetweenCycles')}
         </p>
       </div>
 
@@ -74,7 +76,7 @@ export function VaultTraderPanel() {
             <div key={index} className="vault-trader-card">
               <span className="vault-trader-name">{item.name}</span>
               <div className="vault-trader-cost">
-                {item.ducats !== null ? <span>{item.ducats} ducats</span> : null}
+                {item.ducats !== null ? <span>{t('evt.ducatsSuffix', { n: item.ducats })}</span> : null}
                 {item.credits !== null ? (
                   <span className="text-dim">{item.credits.toLocaleString()} cr</span>
                 ) : null}
@@ -83,10 +85,10 @@ export function VaultTraderPanel() {
           ))}
         </div>
       ) : active ? (
-        <div className="opportunities-placeholder">Inventory not listed yet.</div>
+        <div className="opportunities-placeholder">{t('evt.inventoryNotListed')}</div>
       ) : (
         <div className="opportunities-placeholder">
-          Varzia rotates vaulted Prime relics for Aya / Regal Aya. Check back when she’s in.
+          {t('ws.varziaHint')}
         </div>
       )}
     </div>

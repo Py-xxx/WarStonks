@@ -18,15 +18,18 @@ import type {
   WfstatSyndicateMission,
 } from '../../types';
 
-function buildRewardLabel(reward: WfstatEventReward | null): string {
+function buildRewardLabel(
+  reward: WfstatEventReward | null,
+  labels: { noRewardData: string; creditsSuffix: (n: string) => string },
+): string {
   if (!reward) {
-    return 'No reward data';
+    return labels.noRewardData;
   }
 
   const itemParts = reward.items;
   const countedParts = reward.countedItems.map((entry) => `${entry.count}x ${entry.type}`);
   const creditParts =
-    reward.credits && reward.credits > 0 ? [`${reward.credits.toLocaleString()} Credits`] : [];
+    reward.credits && reward.credits > 0 ? [labels.creditsSuffix(reward.credits.toLocaleString())] : [];
 
   return [...itemParts, ...countedParts, ...creditParts].join(', ');
 }
@@ -43,13 +46,13 @@ function buildLevelLabel(minLevel: number | null, maxLevel: number | null): stri
   return `${minLevel ?? maxLevel}`;
 }
 
-function formatStandingTotal(stages: number[]): string | null {
+function formatStandingTotal(stages: number[], standingTotalLabel: (n: string) => string): string | null {
   if (stages.length === 0) {
     return null;
   }
 
   const total = stages.reduce((sum, value) => sum + value, 0);
-  return `${total.toLocaleString()} Standing`;
+  return standingTotalLabel(total.toLocaleString());
 }
 
 function buildJobRewardPreview(job: WfstatSyndicateJob): string {
@@ -66,9 +69,12 @@ function buildJobRewardPreview(job: WfstatSyndicateJob): string {
   return job.rewardPool.slice(0, 3).join(' • ');
 }
 
-function buildInvasionRewardLabel(invasion: WfstatInvasion): string {
-  const attackerReward = buildRewardLabel(invasion.attacker.reward);
-  const defenderReward = buildRewardLabel(invasion.defender.reward);
+function buildInvasionRewardLabel(
+  invasion: WfstatInvasion,
+  labels: { noRewardData: string; creditsSuffix: (n: string) => string },
+): string {
+  const attackerReward = buildRewardLabel(invasion.attacker.reward, labels);
+  const defenderReward = buildRewardLabel(invasion.defender.reward, labels);
 
   if (invasion.vsInfestation) {
     return defenderReward;
@@ -153,7 +159,7 @@ function SortieCard({
         )}
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -161,43 +167,43 @@ function SortieCard({
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
         <PanelError error={error} tone={hasUsableSortie ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {!sortie || !isActive ? (
           <PanelEmpty
-            title={!sortie && error ? 'Sortie couldn’t load' : 'No active sortie'}
+            title={!sortie && error ? t('evt.sortieCouldNotLoad') : t('evt.noActiveSortie')}
             detail={!sortie && error
               ? error
-              : 'The sortie panel will populate as soon as the live worldstate reports a sortie.'}
-            actionLabel={!sortie && error ? 'Retry' : null}
+              : t('evt.sortieHint')}
+            actionLabel={!sortie && error ? t('common.retry') : null}
             onAction={!sortie && error ? onRefresh : null}
           />
         ) : (
           <div className="activity-stack">
             <div className="activity-hero">
               <div>
-                <div className="activity-title">{sortie.boss ?? 'Daily Sortie'}</div>
+                <div className="activity-title">{sortie.boss ?? t('evt.dailySortie')}</div>
                 <div className="activity-subtitle">
-                  {sortie.faction ?? 'Unknown faction'} • {sortie.rewardPool ?? 'Reward pool unavailable'}
+                  {sortie.faction ?? t('evt.unknownFaction')} • {sortie.rewardPool ?? t('evt.rewardPoolUnavailable')}
                 </div>
               </div>
               <div className="activity-meta-grid">
-                <PanelMeta label="Starts" value={formatWorldStateDateTime(sortie.activation)} />
-                <PanelMeta label="Ends In" value={formatWorldStateCountdown(sortie.expiry, nowMs)} />
+                <PanelMeta label={t('evt.starts')} value={formatWorldStateDateTime(sortie.activation)} />
+                <PanelMeta label={t('evt.endsIn')} value={formatWorldStateCountdown(sortie.expiry, nowMs)} />
               </div>
             </div>
 
             <div className="activity-step-list">
               {sortie.variants.map((variant, index) => (
                 <article key={`${sortie.id}-${index}`} className="activity-step-card">
-                  <div className="activity-step-index">Mission {index + 1}</div>
+                  <div className="activity-step-index">{t('evt.mission', { n: index + 1 })}</div>
                   <div className="activity-step-title">
-                    {variant.missionType ?? 'Unknown mission'} • {variant.node ?? 'Unknown node'}
+                    {variant.missionType ?? t('evt.unknownMission')} • {variant.node ?? t('mkt.unknownNode')}
                   </div>
-                  <div className="activity-step-detail">{variant.modifier ?? 'No modifier data'}</div>
+                  <div className="activity-step-detail">{variant.modifier ?? t('evt.noModifierData')}</div>
                   {variant.modifierDescription ? (
                     <div className="activity-step-copy">{variant.modifierDescription}</div>
                   ) : null}
@@ -244,7 +250,7 @@ function ArchonHuntCard({
         )}
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -252,41 +258,41 @@ function ArchonHuntCard({
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
         <PanelError error={error} tone={hasUsableArchonHunt ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {!archonHunt || !isActive ? (
           <PanelEmpty
-            title={!archonHunt && error ? 'Archon Hunt couldn’t load' : 'No active archon hunt'}
+            title={!archonHunt && error ? t('evt.archonCouldNotLoad') : t('evt.noActiveArchon')}
             detail={!archonHunt && error
               ? error
-              : 'The weekly Archon Hunt will appear here when the live worldstate reports an active window.'}
-            actionLabel={!archonHunt && error ? 'Retry' : null}
+              : t('evt.archonHint')}
+            actionLabel={!archonHunt && error ? t('common.retry') : null}
             onAction={!archonHunt && error ? onRefresh : null}
           />
         ) : (
           <div className="activity-stack">
             <div className="activity-hero">
               <div>
-                <div className="activity-title">{archonHunt.boss ?? 'Archon Hunt'}</div>
+                <div className="activity-title">{archonHunt.boss ?? t('evt.archonHuntLabel')}</div>
                 <div className="activity-subtitle">
-                  {archonHunt.faction ?? 'Unknown faction'} • {archonHunt.rewardPool ?? 'Reward pool unavailable'}
+                  {archonHunt.faction ?? t('evt.unknownFaction')} • {archonHunt.rewardPool ?? t('evt.rewardPoolUnavailable')}
                 </div>
               </div>
               <div className="activity-meta-grid">
-                <PanelMeta label="Starts" value={formatWorldStateDateTime(archonHunt.activation)} />
-                <PanelMeta label="Ends In" value={formatWorldStateCountdown(archonHunt.expiry, nowMs)} />
+                <PanelMeta label={t('evt.starts')} value={formatWorldStateDateTime(archonHunt.activation)} />
+                <PanelMeta label={t('evt.endsIn')} value={formatWorldStateCountdown(archonHunt.expiry, nowMs)} />
               </div>
             </div>
 
             <div className="activity-step-list">
               {archonHunt.missions.map((mission, index) => (
                 <article key={`${archonHunt.id}-${index}`} className="activity-step-card">
-                  <div className="activity-step-index">Stage {index + 1}</div>
+                  <div className="activity-step-index">{t('evt.stage', { n: index + 1 })}</div>
                   <div className="activity-step-title">
-                    {mission.type ?? 'Unknown mission'} • {mission.node ?? 'Unknown node'}
+                    {mission.type ?? t('evt.unknownMission')} • {mission.node ?? t('mkt.unknownNode')}
                   </div>
                   <div className="activity-flag-row">
                     {mission.archwingRequired ? <span className="badge badge-purple">Archwing</span> : null}
@@ -321,17 +327,18 @@ function AlertsCard({
   const { t } = useTranslation();
   const activeAlerts = alerts.filter((alert) => !alert.expired && Date.parse(alert.expiry ?? '') > nowMs);
   const hasUsableAlerts = alerts.length > 0;
+  const rewardLabels = { noRewardData: t('evt.noRewardData'), creditsSuffix: (n: string) => t('evt.creditsSuffix', { n }) };
 
   return (
     <section className="card activity-panel">
       <div className="card-header">
         <span className="card-label">{t('ws.alerts')}</span>
         <span className={`badge ${activeAlerts.length > 0 ? 'badge-green' : 'badge-muted'}`}>
-          {activeAlerts.length} active
+          {t('evt.activeCount', { n: activeAlerts.length })}
         </span>
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -339,18 +346,18 @@ function AlertsCard({
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
         <PanelError error={error} tone={hasUsableAlerts ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {activeAlerts.length === 0 ? (
           <PanelEmpty
-            title={error && !hasUsableAlerts ? 'Alerts couldn’t load' : 'No active alerts'}
+            title={error && !hasUsableAlerts ? t('evt.alertsCouldNotLoad') : t('evt.noActiveAlerts')}
             detail={error && !hasUsableAlerts
               ? error
-              : 'The live worldstate is not reporting any alert missions right now.'}
-            actionLabel={error && !hasUsableAlerts ? 'Retry' : null}
+              : t('evt.alertsHint')}
+            actionLabel={error && !hasUsableAlerts ? t('common.retry') : null}
             onAction={error && !hasUsableAlerts ? onRefresh : null}
           />
         ) : (
@@ -360,22 +367,22 @@ function AlertsCard({
                 <div className="activity-list-top">
                   <div>
                     <div className="activity-list-title">
-                      {alert.mission?.description ?? 'Alert Mission'}
+                      {alert.mission?.description ?? t('evt.alertMission')}
                     </div>
                     <div className="activity-list-subtitle">
-                      {alert.mission?.type ?? 'Unknown mission'} • {alert.mission?.node ?? 'Unknown node'}
+                      {alert.mission?.type ?? t('evt.unknownMission')} • {alert.mission?.node ?? t('mkt.unknownNode')}
                     </div>
                   </div>
                   <span className="badge badge-green">
                     {formatWorldStateCountdown(alert.expiry, nowMs)}
                   </span>
                 </div>
-                <div className="activity-list-copy">{buildRewardLabel(alert.mission?.reward ?? null)}</div>
+                <div className="activity-list-copy">{buildRewardLabel(alert.mission?.reward ?? null, rewardLabels)}</div>
                 <div className="activity-chip-row">
                   {alert.mission?.faction ? <span className="activity-chip">{alert.mission.faction}</span> : null}
                   {buildLevelLabel(alert.mission?.minEnemyLevel ?? null, alert.mission?.maxEnemyLevel ?? null) ? (
                     <span className="activity-chip">
-                      Lv {buildLevelLabel(alert.mission?.minEnemyLevel ?? null, alert.mission?.maxEnemyLevel ?? null)}
+                      {t('evt.lvLabel', { value: buildLevelLabel(alert.mission?.minEnemyLevel ?? null, alert.mission?.maxEnemyLevel ?? null) ?? '' })}
                     </span>
                   ) : null}
                   {alert.tag ? <span className="activity-chip">{alert.tag}</span> : null}
@@ -422,7 +429,7 @@ function ArbitrationCard({
         )}
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -430,27 +437,27 @@ function ArbitrationCard({
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
         <PanelError error={error} tone={hasUsableArbitration ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {!arbitration || !isActive ? (
           <PanelEmpty
-            title={!arbitration && error ? 'Arbitration couldn’t load' : 'No active arbitration'}
+            title={!arbitration && error ? t('evt.arbitrationCouldNotLoad') : t('evt.noActiveArbitration')}
             detail={!arbitration && error
               ? error
-              : 'When an arbitration is live, its node, faction, and countdown will show here.'}
-            actionLabel={!arbitration && error ? 'Retry' : null}
+              : t('evt.arbitrationHint')}
+            actionLabel={!arbitration && error ? t('common.retry') : null}
             onAction={!arbitration && error ? onRefresh : null}
           />
         ) : (
           <div className="activity-stack">
-            <div className="activity-title">{arbitration.type ?? 'Unknown mission'}</div>
-            <div className="activity-subtitle">{arbitration.node ?? 'Unknown node'}</div>
+            <div className="activity-title">{arbitration.type ?? t('evt.unknownMission')}</div>
+            <div className="activity-subtitle">{arbitration.node ?? t('mkt.unknownNode')}</div>
             <div className="activity-meta-grid activity-meta-grid-single">
-              <PanelMeta label="Faction" value={arbitration.enemy ?? 'Unknown'} />
-              <PanelMeta label="Ends In" value={formatWorldStateCountdown(arbitration.expiry, nowMs)} />
+              <PanelMeta label={t('evt.faction')} value={arbitration.enemy ?? t('evt.unknown')} />
+              <PanelMeta label={t('evt.endsIn')} value={formatWorldStateCountdown(arbitration.expiry, nowMs)} />
             </div>
             <div className="activity-flag-row">
               {arbitration.archwing ? <span className="badge badge-purple">Archwing</span> : null}
@@ -479,17 +486,18 @@ function InvasionsCard({
   const { t } = useTranslation();
   const activeInvasions = invasions.filter((invasion) => !invasion.completed);
   const hasUsableInvasions = invasions.length > 0;
+  const rewardLabels = { noRewardData: t('evt.noRewardData'), creditsSuffix: (n: string) => t('evt.creditsSuffix', { n }) };
 
   return (
     <section className="card activity-panel activity-panel-tall">
       <div className="card-header">
         <span className="card-label">{t('ws.invasions')}</span>
         <span className={`badge ${activeInvasions.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
-          {activeInvasions.length} active
+          {t('evt.activeCount', { n: activeInvasions.length })}
         </span>
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -497,18 +505,18 @@ function InvasionsCard({
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
         <PanelError error={error} tone={hasUsableInvasions ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {activeInvasions.length === 0 ? (
           <PanelEmpty
-            title={error && !hasUsableInvasions ? 'Invasions couldn’t load' : 'No active invasions'}
+            title={error && !hasUsableInvasions ? t('evt.invasionsCouldNotLoad') : t('evt.noActiveInvasions')}
             detail={error && !hasUsableInvasions
               ? error
-              : 'New invasions will appear here automatically when the worldstate changes.'}
-            actionLabel={error && !hasUsableInvasions ? 'Retry' : null}
+              : t('evt.invasionsHint')}
+            actionLabel={error && !hasUsableInvasions ? t('common.retry') : null}
             onAction={error && !hasUsableInvasions ? onRefresh : null}
           />
         ) : (
@@ -520,23 +528,23 @@ function InvasionsCard({
                   <div className="activity-list-top">
                     <div>
                       <div className="activity-list-title">
-                        {invasion.desc ?? 'Invasion'} • {invasion.node ?? 'Unknown node'}
+                        {invasion.desc ?? t('evt.invasionLabel')} • {invasion.node ?? t('mkt.unknownNode')}
                       </div>
                       <div className="activity-list-subtitle">
-                        {invasion.attacker.faction ?? 'Unknown'} vs {invasion.defender.faction ?? 'Unknown'}
+                        {invasion.attacker.faction ?? t('evt.unknown')} vs {invasion.defender.faction ?? t('evt.unknown')}
                       </div>
                     </div>
                     <span className="badge badge-purple">{completion.toFixed(1)}%</span>
                   </div>
-                  <div className="activity-list-copy">{buildInvasionRewardLabel(invasion)}</div>
+                  <div className="activity-list-copy">{buildInvasionRewardLabel(invasion, rewardLabels)}</div>
                   <div className="activity-progress">
                     <div className="activity-progress-fill" style={{ width: `${completion}%` }} />
                   </div>
                   <div className="activity-chip-row">
-                    {invasion.requiredRuns ? <span className="activity-chip">{invasion.requiredRuns.toLocaleString()} runs</span> : null}
+                    {invasion.requiredRuns ? <span className="activity-chip">{t('evt.runsSuffix', { n: invasion.requiredRuns.toLocaleString() })}</span> : null}
                     {invasion.vsInfestation ? <span className="activity-chip">Infested</span> : null}
                     <span className="activity-chip">
-                      Started {formatWorldStateDateTime(invasion.activation)}
+                      {t('evt.startedAt', { time: formatWorldStateDateTime(invasion.activation) })}
                     </span>
                   </div>
                 </article>
@@ -569,13 +577,14 @@ function SyndicateMissionsCard({
     (mission) => !mission.expired && Date.parse(mission.expiry ?? '') > nowMs,
   );
   const [selectedSyndicate, setSelectedSyndicate] = useState<string | null>(null);
+  const unknownSyndicate = t('evt.unknownSyndicate');
 
   const syndicateTabs = useMemo(
     () =>
       activeMissions
-        .map((mission) => mission.syndicate ?? 'Unknown Syndicate')
+        .map((mission) => mission.syndicate ?? unknownSyndicate)
         .filter((value, index, list) => list.indexOf(value) === index),
-    [activeMissions],
+    [activeMissions, unknownSyndicate],
   );
 
   useEffect(() => {
@@ -590,7 +599,7 @@ function SyndicateMissionsCard({
   }, [syndicateTabs]);
 
   const visibleMission = activeMissions.find(
-    (mission) => (mission.syndicate ?? 'Unknown Syndicate') === selectedSyndicate,
+    (mission) => (mission.syndicate ?? unknownSyndicate) === selectedSyndicate,
   );
   const hasUsableMissions = missions.length > 0;
 
@@ -599,11 +608,11 @@ function SyndicateMissionsCard({
       <div className="card-header">
         <span className="card-label">{t('ws.syndicateMissions')}</span>
         <span className={`badge ${activeMissions.length > 0 ? 'badge-green' : 'badge-muted'}`}>
-          {activeMissions.length} syndicates
+          {t('evt.syndicatesCount', { n: activeMissions.length })}
         </span>
         <div className="card-actions">
           <button className="text-btn" type="button" onClick={onRefresh}>
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -611,18 +620,18 @@ function SyndicateMissionsCard({
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
         <PanelError error={error} tone={hasUsableMissions ? 'warning' : 'error'} loading={loading} onRefresh={onRefresh} />
 
         {activeMissions.length === 0 ? (
           <PanelEmpty
-            title={error && !hasUsableMissions ? 'Syndicate missions couldn’t load' : 'No active syndicate missions'}
+            title={error && !hasUsableMissions ? t('evt.syndicateCouldNotLoad') : t('evt.noActiveSyndicate')}
             detail={error && !hasUsableMissions
               ? error
-              : 'Open-world and syndicate job rotations will appear here when active.'}
-            actionLabel={error && !hasUsableMissions ? 'Retry' : null}
+              : t('evt.syndicateHint')}
+            actionLabel={error && !hasUsableMissions ? t('common.retry') : null}
             onAction={error && !hasUsableMissions ? onRefresh : null}
           />
         ) : (
@@ -647,31 +656,31 @@ function SyndicateMissionsCard({
                 <div className="activity-hero activity-hero-row">
                   <div>
                     <div className="activity-title">
-                      {visibleMission.syndicate ?? 'Unknown Syndicate'}
+                      {visibleMission.syndicate ?? unknownSyndicate}
                     </div>
                     <div className="activity-subtitle">
-                      {visibleMission.nodes.join(' • ') || 'Open world rotation'}
+                      {visibleMission.nodes.join(' • ') || t('evt.openWorldRotation')}
                     </div>
                   </div>
                   <div className="activity-meta-grid">
-                    <PanelMeta label="Rotation Ends" value={formatWorldStateCountdown(visibleMission.expiry, nowMs)} />
-                    <PanelMeta label="Updated" value={formatWorldStateDateTime(lastUpdatedAt)} />
+                    <PanelMeta label={t('evt.rotationEnds')} value={formatWorldStateCountdown(visibleMission.expiry, nowMs)} />
+                    <PanelMeta label={t('evt.updated')} value={formatWorldStateDateTime(lastUpdatedAt)} />
                   </div>
                 </div>
 
                 <div className="activities-syndicate-grid">
                   {visibleMission.jobs.map((job) => {
-                    const standingTotal = formatStandingTotal(job.standingStages);
+                    const standingTotal = formatStandingTotal(job.standingStages, (n) => t('evt.standingTotal', { n }));
 
                     return (
                       <article key={job.id} className="activity-job-card">
                         <div className="activity-list-top">
                           <div>
-                            <div className="activity-list-title">{job.type ?? 'Unknown job'}</div>
+                            <div className="activity-list-title">{job.type ?? t('evt.unknownJob')}</div>
                             <div className="activity-list-subtitle">
                               {job.enemyLevels.length > 0
-                                ? `Lv ${job.enemyLevels.join('-')}`
-                                : 'Enemy levels unavailable'}
+                                ? t('evt.lvLabel', { value: job.enemyLevels.join('-') })
+                                : t('evt.enemyLevelsUnavailable')}
                             </div>
                           </div>
                           <span className="badge badge-blue">
@@ -683,7 +692,7 @@ function SyndicateMissionsCard({
                           {standingTotal ? <span className="activity-chip">{standingTotal}</span> : null}
                           {job.minMR !== null ? <span className="activity-chip">MR {job.minMR}+</span> : null}
                           {job.rewardPoolDrops.length > 0 ? (
-                            <span className="activity-chip">{job.rewardPoolDrops.length} drops</span>
+                            <span className="activity-chip">{t('evt.dropsSuffix', { n: job.rewardPoolDrops.length })}</span>
                           ) : null}
                         </div>
                       </article>

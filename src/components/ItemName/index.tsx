@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { openExternalUrl } from '../../lib/tauriClient';
 import { copyTextToClipboard } from '../../lib/marketMessages';
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 import { resolveLocalizedName } from '../../lib/itemNames';
 import type { ItemQuickViewTarget } from '../../types';
 
@@ -29,6 +30,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const openItemInQuickView = useAppStore((state) => state.openItemInQuickView);
   const pushToast = useAppStore((state) => state.pushToast);
   const itemNameMap = useAppStore((state) => state.itemNameMap);
+  const { t } = useTranslation();
   const displayName = resolveLocalizedName(itemNameMap, target);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
@@ -67,19 +69,19 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
     stop(event);
     setMenu(null);
     void copyTextToClipboard(target.name)
-      .then(() => pushToast('Item name copied', 'success'))
-      .catch(() => pushToast("Couldn't copy the item name", 'error'));
+      .then(() => pushToast(t('itm.copied'), 'success'))
+      .catch(() => pushToast(t('itm.copyFailed'), 'error'));
   };
 
   const handleOpenWfm = (event: { stopPropagation: () => void }) => {
     stop(event);
     setMenu(null);
     if (!target.slug) {
-      pushToast('No warframe.market link for this item', 'error');
+      pushToast(t('itm.noWfmLink'), 'error');
       return;
     }
     void openExternalUrl(`https://warframe.market/items/${target.slug}`).catch(() =>
-      pushToast("Couldn't open warframe.market", 'error'),
+      pushToast(t('itm.wfmOpenFailed'), 'error'),
     );
   };
 
@@ -123,10 +125,10 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
           onClick={stop}
         >
           <button type="button" className="item-context-menu-option" role="menuitem" onClick={handleOpen}>
-            Open in Quick View
+            {t('itm.openQv')}
           </button>
           <button type="button" className="item-context-menu-option" role="menuitem" onClick={handleCopy}>
-            Copy name
+            {t('itm.copyName')}
           </button>
           <button
             type="button"
@@ -135,7 +137,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
             onClick={handleOpenWfm}
             disabled={!target.slug}
           >
-            Open on warframe.market
+            {t('itm.openWfm')}
           </button>
         </div>
       ) : null}

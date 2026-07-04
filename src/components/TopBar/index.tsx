@@ -5,6 +5,7 @@ import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
 import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import { formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -63,12 +64,12 @@ function formatCurrencyValue(value: number | null, loading: boolean): string {
   return new Intl.NumberFormat().format(value);
 }
 
-function formatTopBarVariantLabel(variantKey: string, fallbackLabel: string): string {
+function formatTopBarVariantLabel(variantKey: string, fallbackLabel: string, t: (key: TranslationKey) => string): string {
   if (variantKey.startsWith('rank:')) {
     return variantKey.slice(5);
   }
 
-  return fallbackLabel;
+  return fallbackLabel === 'Base Market' ? t('mkt.baseMarketVariant') : fallbackLabel;
 }
 
 export function TopBar() {
@@ -365,17 +366,17 @@ export function TopBar() {
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'loading' ? (
-                <div className="search-state">Loading local item catalog…</div>
+                <div className="search-state">{t('topbar.loadingCatalog')}</div>
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'error' ? (
                 <div className="search-state error">
-                  {autocompleteError ?? 'Failed to load the local item catalog.'}
+                  {autocompleteError ?? t('topbar.catalogLoadFailed')}
                 </div>
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'ready' && suggestions.length === 0 ? (
-                <div className="search-state">No WFM items match that search.</div>
+                <div className="search-state">{t('topbar.noItemsMatch')}</div>
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'ready'
@@ -423,7 +424,7 @@ export function TopBar() {
           }}
           disabled={!selectedQuickViewItem || quickViewLoading}
           aria-label={t('a11y.refreshSelectedItem')}
-          title={selectedQuickViewItem ? 'Refresh selected item' : 'Search and select an item first'}
+          title={selectedQuickViewItem ? t('topbar.refreshSelectedItem') : t('topbar.searchSelectFirst')}
         >
           <RefreshIcon />
         </button>
@@ -441,7 +442,7 @@ export function TopBar() {
             >
               {marketVariants.map((variant) => (
                 <option key={variant.key} value={variant.key}>
-                  {formatTopBarVariantLabel(variant.key, variant.label)}
+                  {formatTopBarVariantLabel(variant.key, variant.label, t)}
                 </option>
               ))}
             </select>
@@ -511,7 +512,7 @@ export function TopBar() {
 
       <div className="topbar-right">
         <div className="strategy-pill" title={t('a11y.strategyConfig')}>
-          CUSTOM · H:VERY SHORT · C:{autoProfile ? 'AUTO' : 'BALANCED'}
+          {t('topbar.custom')} · H:{t('topbar.veryShort')} · C:{autoProfile ? t('topbar.auto') : t('topbar.balanced')}
         </div>
         <div ref={notificationsRef} className="notification-wrap">
         <button
@@ -548,7 +549,7 @@ export function TopBar() {
             onClick={handleOpenTrades}
           >
             <ArrowIcon />
-            {tradeAccountLoading ? 'Loading…' : 'Connect'}
+            {tradeAccountLoading ? t('common.loading') : t('common.connect')}
           </button>
         ) : (
           <div ref={tradeMenuRef} className="trade-menu-wrap">
@@ -569,9 +570,9 @@ export function TopBar() {
             {tradeMenuOpen ? (
               <div className="trade-menu-dropdown" role="listbox" aria-label={t('a11y.presence')}>
                 {([
-                  { value: 'online', label: 'Online' },
-                  { value: 'ingame', label: 'In Game' },
-                  { value: 'invisible', label: 'Invisible' },
+                  { value: 'online', label: t('status.online') },
+                  { value: 'ingame', label: t('home.seller.ingame') },
+                  { value: 'invisible', label: t('status.invisible') },
                 ] as const).map((option) => {
                   const isActive =
                     (tradeAccount.status === 'offline' ? 'invisible' : tradeAccount.status) === option.value;

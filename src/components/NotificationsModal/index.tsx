@@ -4,6 +4,15 @@ import type { TranslationKey } from '../../i18n/en';
 import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { RINGTONES, playAlertSound } from '../../lib/alertAudio';
+
+const RING_KEYS: Record<string, TranslationKey> = {
+  Chime: 'ring.chime',
+  Ping: 'ring.ping',
+  Coin: 'ring.coin',
+  Arpeggio: 'ring.arpeggio',
+  Alert: 'ring.alert',
+  Bell: 'ring.bell',
+};
 import {
   UNDERPRICED_PCT_BELOW_OPTIONS,
   isDesktopNotificationSupported,
@@ -189,7 +198,7 @@ export function NotificationsModal() {
                 >
                   {RINGTONES.map((tone) => (
                     <option key={tone.id} value={tone.id}>
-                      {tone.label}
+                      {RING_KEYS[tone.label] ? t(RING_KEYS[tone.label]) : tone.label}
                     </option>
                   ))}
                 </select>

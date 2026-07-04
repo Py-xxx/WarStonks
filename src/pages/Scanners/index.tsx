@@ -8,7 +8,9 @@ import {
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { ItemName } from '../../components/ItemName';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
+import { tConfidence, tHealth } from '../../lib/healthLabels';
 import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import {
   formatScannerErrorMessage,
   type ScannerErrorContext,
@@ -16,7 +18,6 @@ import {
 import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
-  WATCHLIST_ADD_SUCCESS_MESSAGE,
 } from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -39,12 +40,13 @@ type ScannerErrorState = {
   message: string;
   tone: 'warning' | 'error';
 };
-const RELIC_REFINEMENT_OPTIONS: Array<{ key: RelicRefinementKey; label: string }> = [
-  { key: 'intact', label: 'Intact' },
-  { key: 'exceptional', label: 'Exceptional' },
-  { key: 'flawless', label: 'Flawless' },
-  { key: 'radiant', label: 'Radiant' },
-];
+const RELIC_REFINEMENT_KEYS: RelicRefinementKey[] = ['intact', 'exceptional', 'flawless', 'radiant'];
+const RELIC_REFINEMENT_LABEL_KEYS: Record<RelicRefinementKey, TranslationKey> = {
+  intact: 'refine.intact',
+  exceptional: 'refine.exceptional',
+  flawless: 'refine.flawless',
+  radiant: 'refine.radiant',
+};
 
 function formatPlat(value: number | null): string {
   if (value === null) {
@@ -162,7 +164,10 @@ function getRelicRefinementSummary(
   );
 }
 
-function buildScannerProgressDetails(progress: ArbitrageScannerProgress | null): string[] {
+function buildScannerProgressDetails(
+  progress: ArbitrageScannerProgress | null,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+): string[] {
   if (!progress) {
     return [];
   }
@@ -170,28 +175,33 @@ function buildScannerProgressDetails(progress: ArbitrageScannerProgress | null):
   const details: string[] = [];
 
   if (progress.currentSetName) {
-    details.push(`Current set: ${progress.currentSetName}`);
+    details.push(t('scan.progress.currentSet', { name: progress.currentSetName }));
   }
 
   if (progress.currentComponentName) {
-    details.push(`Current component: ${progress.currentComponentName}`);
+    details.push(t('scan.progress.currentComponent', { name: progress.currentComponentName }));
   }
 
   if (progress.totalComponentCount > 0) {
     details.push(
-      `Components ${progress.completedComponentCount}/${progress.totalComponentCount}`,
+      t('scan.progress.componentsProgress', {
+        done: progress.completedComponentCount,
+        total: progress.totalComponentCount,
+      }),
     );
   }
 
   if (progress.totalSetCount > 0) {
-    details.push(`Sets ${progress.completedSetCount}/${progress.totalSetCount}`);
+    details.push(
+      t('scan.progress.setsProgress', { done: progress.completedSetCount, total: progress.totalSetCount }),
+    );
   }
 
-  details.push(`Skipped ${progress.skippedEntryCount}`);
+  details.push(t('scan.progress.skipped', { n: progress.skippedEntryCount }));
 
   if (progress.retryingItemName && progress.retryAttempt) {
     details.push(
-      `Retry ${progress.retryAttempt}/2: ${progress.retryingItemName}`,
+      t('scan.progress.retry', { attempt: progress.retryAttempt, name: progress.retryingItemName }),
     );
   }
 
@@ -233,7 +243,7 @@ function ArbitrageComponentRow({
               />
             </span>
             <span className={`market-panel-badge tone-${confidenceTone(component.confidenceSummary.level)}`}>
-              {component.confidenceSummary.label}
+              {tConfidence(t, component.confidenceSummary)}
             </span>
           </div>
           <div className="scanner-component-pill-row">
@@ -257,7 +267,7 @@ function ArbitrageComponentRow({
         />
         <div className="watchlist-add-feedback-stack">
           {recentlyAdded ? (
-            <span className="watchlist-add-success">{WATCHLIST_ADD_SUCCESS_MESSAGE}</span>
+            <span className="watchlist-add-success">{t('wl.addedToWatchlist')}</span>
           ) : null}
           <button
             className="btn-sm scanner-component-watch-button"
@@ -265,7 +275,7 @@ function ArbitrageComponentRow({
             disabled={isDisabled}
             onClick={onAdd}
           >
-            Add to Watchlist
+            {t('wl.addToWatchlist')}
           </button>
         </div>
       </div>
@@ -316,7 +326,7 @@ function ArbitrageRow({
               </strong>
               <div className="scanner-farm-badge-row">
                 <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
-                  {entry.confidenceSummary.label}
+                  {tConfidence(t, entry.confidenceSummary)}
                 </span>
                 <span className="market-panel-badge tone-blue">Score {Math.round(entry.arbitrageScore)}</span>
                 <span className="market-panel-badge tone-neutral">Liquidity {Math.round(entry.liquidityScore)}%</span>
@@ -358,7 +368,7 @@ function ArbitrageRow({
             </div>
             <div className="market-metric-card">
               <span className="info-card-label">{t('scan.confidence')}</span>
-              <strong>{entry.confidenceSummary.label}</strong>
+              <strong>{tConfidence(t, entry.confidenceSummary)}</strong>
             </div>
             <div className="market-metric-card">
               <span className="info-card-label">{t('scan.components')}</span>
@@ -423,7 +433,7 @@ function RelicDropRow({
             <span className="scanner-component-name">{localizeName(drop)}</span>
             {drop.rarity ? <span className="market-panel-badge tone-blue">{drop.rarity}</span> : null}
             <span className={`market-panel-badge tone-${confidenceTone(drop.confidenceSummary.level)}`}>
-              {drop.confidenceSummary.label}
+              {tConfidence(t, drop.confidenceSummary)}
             </span>
           </div>
           <div className="scanner-component-pill-row">
@@ -491,13 +501,13 @@ function RelicRoiRow({
                   <span className="market-panel-badge tone-amber">{t('scan.vaulted')}</span>
                 )}
                 <span className={`market-panel-badge tone-${confidenceTone(summary?.confidenceSummary.level ?? 'low')}`}>
-                  {summary?.confidenceSummary.label ?? entry.confidenceSummary.label}
+                  {summary ? tConfidence(t, summary.confidenceSummary) : tConfidence(t, entry.confidenceSummary)}
                 </span>
               </div>
             </div>
           </div>
           <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
-            <span className="market-panel-badge tone-blue">{summary?.refinementLabel ?? '—'}</span>
+            <span className="market-panel-badge tone-blue">{tHealth(t, summary?.refinementLabel) || '—'}</span>
           </span>
           <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
             <span className="scanner-farm-cell-label">{t('scan.runValue')}</span>
@@ -520,7 +530,7 @@ function RelicRoiRow({
           <div className="scanner-inline-summary">
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">{t('scan.refinement')}</span>
-              <span className="scanner-stat-pill-value">{summary?.refinementLabel ?? '—'}</span>
+              <span className="scanner-stat-pill-value">{tHealth(t, summary?.refinementLabel) || '—'}</span>
             </span>
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">{t('scan.runValue')}</span>
@@ -540,7 +550,7 @@ function RelicRoiRow({
             <div className="scanner-components-header">
               <span className="card-label">{t('scan.primeRewards')}</span>
               <span className="scanner-components-meta">
-                {summary?.refinementLabel ?? 'Selected'} rates applied
+                {t('scan.ratesApplied', { label: summary?.refinementLabel ? tHealth(t, summary.refinementLabel) : t('scan.selectedRefinement') })}
               </span>
             </div>
             <div className="scanner-components-list">
@@ -692,8 +702,8 @@ export function ScannersPage() {
           scannerKey: current?.scannerKey ?? 'arbitrage',
           status: 'running',
           progressValue: 0,
-          stageLabel: 'Queued',
-          statusText: 'Arbitrage scan queued.',
+          stageLabel: t('scan.queued'),
+          statusText: t('scan.arbitrageQueued'),
           updatedAt: new Date().toISOString(),
           startedAt: new Date().toISOString(),
           lastCompletedAt: current?.lastCompletedAt ?? null,
@@ -716,7 +726,7 @@ export function ScannersPage() {
                 ...current,
                 statusText: current.status === 'running'
                   ? current.statusText
-                  : 'Arbitrage scan is already running.',
+                  : t('scan.arbitrageAlreadyRunning'),
               }
             : current,
         );
@@ -740,8 +750,8 @@ export function ScannersPage() {
             ? {
                 ...current,
                 status: 'running',
-                stageLabel: 'Stopping',
-                statusText: 'Stopping arbitrage scan…',
+                stageLabel: t('scan.stopping'),
+                statusText: t('scan.stoppingArbitrage'),
                 updatedAt: new Date().toISOString(),
               }
             : current,
@@ -753,7 +763,7 @@ export function ScannersPage() {
           current
             ? {
                 ...current,
-                statusText: current.statusText || 'No active arbitrage scan to stop.',
+                statusText: current.statusText || t('scan.noArbitrageToStop'),
               }
             : current,
         );
@@ -881,13 +891,13 @@ export function ScannersPage() {
         }
       : scannerError.context === 'scanner-stop'
         ? {
-            label: 'Try Again',
+            label: t('scan.tryAgain'),
             onClick: () => {
               void stopArbitrageScan();
             },
           }
         : {
-            label: 'Retry',
+            label: t('common.retry'),
             onClick: () => {
               void loadScannerState();
             },
@@ -941,15 +951,9 @@ export function ScannersPage() {
               <div className="market-panel-header">
                 <div className="market-panel-header-copy">
                   {activeTab === 'arbitrage' ? (
-                    <p>
-                      Finds set arbitrage opportunities using the cached set map and refreshed WFM statistics,
-                      then keeps one frozen scan snapshot until the next successful run.
-                    </p>
+                    <p>{t('scan.arbitrageIntro')}</p>
                   ) : (
-                    <p>
-                      Uses the shared Arbitrage scan to rank relic ROI locally with refinement-aware expected
-                      value, liquidity, and confidence weighting.
-                    </p>
+                    <p>{t('scan.relicRoiIntro')}</p>
                   )}
                   {progress ? (
                     <div className="scanner-header-status-line">
@@ -957,8 +961,8 @@ export function ScannersPage() {
                         {progress.status === 'running'
                           ? `${progress.stageLabel} · ${Math.round(progress.progressValue)}%`
                           : progress.lastCompletedAt
-                            ? `Updated ${formatShortLocalDateTime(progress.lastCompletedAt)}`
-                            : 'No saved scan'}
+                            ? t('common.updatedAt', { time: formatShortLocalDateTime(progress.lastCompletedAt) })
+                            : t('scan.noSavedScan')}
                       </span>
                     </div>
                   ) : null}
@@ -976,9 +980,9 @@ export function ScannersPage() {
                       style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
                     />
                   </div>
-                  {buildScannerProgressDetails(progress).length > 0 ? (
+                  {buildScannerProgressDetails(progress, t).length > 0 ? (
                     <div className="scanner-progress-meta">
-                      <span>{buildScannerProgressDetails(progress).join(' · ')}</span>
+                      <span>{buildScannerProgressDetails(progress, t).join(' · ')}</span>
                     </div>
                   ) : null}
                   {arbitrage?.skippedSummaryText ? (
@@ -1007,7 +1011,7 @@ export function ScannersPage() {
                 </div>
                 <div className="scanner-summary-card--compact">
                   <span className="scanner-summary-stat">
-                    {scanSummaryCounts ?? 'No saved scan'}
+                    {scanSummaryCounts ?? t('scan.noSavedScan')}
                   </span>
                 </div>
               </div>
@@ -1056,7 +1060,7 @@ export function ScannersPage() {
                   <div className="empty-state scanners-empty-state scanner-results-empty-state">
                     <span className="empty-primary">{t('scan.noSets')}</span>
                     <span className="empty-sub">
-                      Try another set name or clear the search to see all saved scanner results.
+                      {t('scan.tryAnotherSet')}
                     </span>
                   </div>
                 )}
@@ -1092,9 +1096,9 @@ export function ScannersPage() {
                         value={relicRefinement}
                         onChange={(event) => setRelicRefinement(event.target.value as RelicRefinementKey)}
                       >
-                        {RELIC_REFINEMENT_OPTIONS.map((option) => (
-                          <option key={option.key} value={option.key}>
-                            {option.label}
+                        {RELIC_REFINEMENT_KEYS.map((key) => (
+                          <option key={key} value={key}>
+                            {t(RELIC_REFINEMENT_LABEL_KEYS[key])}
                           </option>
                         ))}
                       </select>
@@ -1125,23 +1129,23 @@ export function ScannersPage() {
                 <div className="empty-state scanners-empty-state">
                   <span className="empty-primary">
                     {normalizedRelicSearch
-                      ? 'No relics match that relic or drop search.'
+                      ? t('scan.noRelicsMatchSearch')
                       : showOnlyUnvaulted
-                        ? 'No unvaulted relic ROI results are available in the saved scan.'
-                        : 'No relic ROI rows are available in the saved scan yet.'}
+                        ? t('scan.noUnvaultedResults')
+                        : t('scan.noRelicRoiRows')}
                   </span>
                   <span className="empty-sub">
                     {normalizedRelicSearch
-                      ? 'Try another relic name or drop item search to inspect the saved relic ROI scan.'
+                      ? t('scan.tryAnotherRelicSearch')
                       : showOnlyUnvaulted
                         ? t('scan.unvaultedHint')
-                        : 'Run a fresh scan if you want to rebuild the saved relic ROI snapshot.'}
+                        : t('scan.runFreshRelicScan')}
                   </span>
                 </div>
               )
             ) : showBlockingScannerEmptyState && scannerError ? (
               <div className="empty-state scanners-empty-state">
-                <span className="empty-primary">Scanner data couldn’t load</span>
+                <span className="empty-primary">{t('scan.dataCouldNotLoad')}</span>
                 <span className="empty-sub">{scannerError.message}</span>
                 {scannerErrorAction ? (
                   <button
@@ -1157,13 +1161,13 @@ export function ScannersPage() {
               <div className="empty-state scanners-empty-state">
                 <span className="empty-primary">
                   {normalizedArbitrageSearch
-                    ? 'No sets match that search.'
-                    : 'No cached scanner results yet.'}
+                    ? t('scan.noSetsMatchSearch')
+                    : t('scan.noCachedResults')}
                 </span>
                 <span className="empty-sub">
                   {normalizedArbitrageSearch
-                    ? 'Try another set name or clear the search to see all saved scanner results.'
-                    : 'Start a scan to build and save the first result set.'}
+                    ? t('scan.tryAnotherSetSearch')
+                    : t('scan.startScanFirstResult')}
                 </span>
                 {!normalizedArbitrageSearch ? (
                   <button

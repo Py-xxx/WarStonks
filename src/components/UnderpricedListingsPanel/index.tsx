@@ -187,7 +187,7 @@ export function UnderpricedListingsPanel() {
         <div className="radar-side-header">
           <span className="panel-title-eyebrow">
             <span className="panel-dot panel-dot-green" aria-hidden="true" />
-            Underpriced Listings
+            {t('up.title')}
           </span>
           <p>
             Live sell listings priced well below their recommended entry. Verify before whispering

@@ -1,3 +1,4 @@
+import { tActive } from '../i18n/active.ts';
 export function getUserTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
 }
@@ -34,7 +35,7 @@ function formatDateParts(
 
 export function formatShortLocalDateTime(value: string | null): string {
   if (!value) {
-    return 'Not available';
+    return tActive('rel.notAvailable');
   }
 
   const parsed = parseDateValue(value);
@@ -57,7 +58,7 @@ export function formatShortLocalDateTime(value: string | null): string {
 
 export function formatShortLocalDate(value: string | null): string {
   if (!value) {
-    return 'Not available';
+    return tActive('rel.notAvailable');
   }
 
   const parsed = parseDateValue(value);
@@ -76,29 +77,29 @@ export function formatShortLocalDate(value: string | null): string {
 
 export function formatElapsedTime(value: string | null): string {
   if (!value) {
-    return 'Pending';
+    return tActive('rel.pending');
   }
 
   const parsed = parseDateValue(value);
   if (!parsed) {
-    return 'Pending';
+    return tActive('rel.pending');
   }
 
   const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
   if (elapsedSeconds < 60) {
-    return `${elapsedSeconds}s ago`;
+    return tActive('rel.s', { n: elapsedSeconds });
   }
 
   const elapsedMinutes = Math.floor(elapsedSeconds / 60);
   if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m ago`;
+    return tActive('rel.m', { n: elapsedMinutes });
   }
 
   const elapsedHours = Math.floor(elapsedMinutes / 60);
   if (elapsedHours < 24) {
-    return `${elapsedHours}h ago`;
+    return tActive('rel.h', { n: elapsedHours });
   }
 
   const elapsedDays = Math.floor(elapsedHours / 24);
-  return `${elapsedDays}d ago`;
+  return tActive('rel.d', { n: elapsedDays });
 }

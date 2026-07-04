@@ -26,7 +26,7 @@ import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
 import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
-import { tHealth } from '../../lib/healthLabels';
+import { tHealth, tTrendSummary } from '../../lib/healthLabels';
 import type {
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
@@ -596,14 +596,14 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
         <div className="listing-analysis-section-title">{t('trades.analysis.trend')}</div>
         <div className="listing-analysis-row">
           <span className={`listing-analysis-trend-dir ${getTrendClass(trend.direction)}`}>
-            {getTrendArrow(trend.direction)} {trend.direction}
+            {getTrendArrow(trend.direction)} {tHealth(t, trend.direction)}
           </span>
           {trend.confidence !== null && (
-            <span className="listing-analysis-muted">{Math.round(trend.confidence)}% conf.</span>
+            <span className="listing-analysis-muted">{t('trades.analysis.confPct', { pct: Math.round(trend.confidence) })}</span>
           )}
         </div>
         {trend.summary && (
-          <div className="listing-analysis-note listing-analysis-trend-summary">{trend.summary}</div>
+          <div className="listing-analysis-note listing-analysis-trend-summary">{tTrendSummary(t, trend)}</div>
         )}
       </div>
     </div>
@@ -917,7 +917,7 @@ function SignInPanel() {
     const trimmedEmail = email.trim();
     const trimmedPassword = password.trim();
     if (!trimmedEmail || !trimmedPassword) {
-      setLocalError('Enter both your Warframe Market email and password.');
+      setLocalError(t('trades.needEmailPassword'));
       return;
     }
 
@@ -1043,7 +1043,7 @@ function HealthTab() {
         }
       } catch (loadError) {
         if (!cancelled) {
-          setError('Couldn’t refresh listing health right now. Please try again. If it keeps happening, report it in Discord.');
+          setError(t('trades.refreshHealthFailed'));
           void loadTradeAccount();
         }
       } finally {
@@ -1146,7 +1146,7 @@ function HealthTab() {
                         imagePath={order.imagePath}
                       />
                       <div className="trade-health-item-meta">
-                        {health ? `Updated ${formatShortLocalDateTime(health.refreshedAt)}` : 'Refreshing live health…'}
+                        {health ? t('common.updatedAt', { time: formatShortLocalDateTime(health.refreshedAt) }) : t('trades.refreshingLiveHealth')}
                       </div>
                     </div>
                     <div className="trade-health-badges">
@@ -1191,7 +1191,7 @@ function HealthTab() {
                   </div>
 
                   <div className="trade-health-reason">
-                    {health?.reason ?? 'WarStonks is still building the live market picture for this listing.'}
+                    {health?.reason ?? t('trades.buildingMarketPicture')}
                   </div>
                 </div>
               </div>
@@ -1599,37 +1599,37 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
         : null;
 
     if (!selectedItem) {
-      setListingActionError('Select an item from the local catalog first.');
+      setListingActionError(t('trades.selectItemFirst'));
       return;
     }
 
     if (!selectedItem.wfmId) {
-      setListingActionError('That item cannot be listed because its market id is unavailable.');
+      setListingActionError(t('trades.marketIdUnavailable'));
       return;
     }
 
     if (listingModal.mode === 'edit' && !listingModal.orderId) {
-      setListingActionError('This listing can’t be updated because its order id is missing. Close this and refresh your listings, then try again.');
+      setListingActionError(t('trades.orderIdMissing'));
       return;
     }
 
     if (!Number.isInteger(price) || price <= 0) {
-      setListingActionError('Price must be a whole number greater than zero.');
+      setListingActionError(t('trades.priceWholeNumber'));
       return;
     }
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
-      setListingActionError('Quantity must be a whole number greater than zero.');
+      setListingActionError(t('trades.quantityWholeNumber'));
       return;
     }
 
     if (rank !== null && (!Number.isInteger(rank) || rank < 0)) {
-      setListingActionError('Rank must be a whole number.');
+      setListingActionError(t('trades.rankWholeNumber'));
       return;
     }
 
     if (perTrade !== null && (perTrade < 1 || perTrade > 6 || quantity % perTrade !== 0)) {
-      setListingActionError('Per-trade quantity must be between 1 and 6 and divide the quantity evenly.');
+      setListingActionError(t('trades.perTradeRange'));
       return;
     }
 
@@ -1690,7 +1690,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     const raw = soldQuantities[order.orderId] ?? DEFAULT_MARK_SOLD_QTY;
     const quantity = Number.parseInt(raw, 10);
     if (!Number.isInteger(quantity) || quantity <= 0) {
-      setOverviewError('Quantity to mark as sold must be a whole number greater than zero.');
+      setOverviewError(t('trades.markSoldWholeNumber'));
       return;
     }
 
@@ -1772,7 +1772,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             >
               <span className="trade-visibility-toggle-track" />
               <span className="trade-visibility-toggle-copy">
-                Auto Buy Order
+                {t('trades.autoBuyOrder')}
               </span>
             </button>
             <div className="trade-visibility-toggle-info">
@@ -1820,7 +1820,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
               disabled={visibilityActionPending || orders.every((order) => order.visible)}
               onClick={() => void handleSetAllVisibility(true)}
             >
-              Show All
+              {t('trades.showAll')}
             </button>
             <button
               className="act-btn"
@@ -1828,7 +1828,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
               disabled={visibilityActionPending || orders.every((order) => !order.visible)}
               onClick={() => void handleSetAllVisibility(false)}
             >
-              Hide All
+              {t('trades.hideAll')}
             </button>
           </div>
         </div>
@@ -2027,7 +2027,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             </div>
             <div className="settings-modal-body">
               <p className="trade-session-expired-copy">
-                Your Warframe Market session expired. Sign in again to keep managing your listings.
+                {t('trades.sessionExpiredCopy')}
               </p>
             </div>
             <div className="settings-modal-actions">
@@ -2036,7 +2036,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                 type="button"
                 onClick={() => setSessionExpiredPopupOpen(false)}
               >
-                Dismiss
+                {t('a11y.dismiss')}
               </button>
               <button
                 className="btn-primary"
@@ -2047,7 +2047,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                   void signOutTradeAccount().catch(() => undefined);
                 }}
               >
-                Sign in again
+                {t('trades.signInAgain')}
               </button>
             </div>
           </div>

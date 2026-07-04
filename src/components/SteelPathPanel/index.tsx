@@ -37,10 +37,10 @@ export function SteelPathPanel() {
   const payload = (entry.payload ?? null) as Record<string, unknown> | null;
 
   if (!payload && entry.loading) {
-    return <div className="opportunities-placeholder">Loading Steel Path…</div>;
+    return <div className="opportunities-placeholder">{t('evt.loadingSteelPath')}</div>;
   }
   if (!payload) {
-    return <div className="opportunities-placeholder">Steel Path data unavailable right now.</div>;
+    return <div className="opportunities-placeholder">{t('evt.steelPathUnavailable')}</div>;
   }
 
   const current = parseOffering(payload.currentReward);
@@ -53,17 +53,17 @@ export function SteelPathPanel() {
       <div className="events-section-header">
         <span className="panel-title-eyebrow">
           <span className="panel-dot panel-dot-amber" aria-hidden="true" />
-          Steel Path · Teshin
+          {t('evt.steelPathTeshinLabel')}
         </span>
-        <h3>This week’s honor reward</h3>
-        {expiry ? <p className="text-dim">Rotates {formatShortLocalDateTime(expiry)}</p> : null}
+        <h3>{t('evt.honorRewardTitle')}</h3>
+        {expiry ? <p className="text-dim">{t('evt.rotates', { date: formatShortLocalDateTime(expiry) })}</p> : null}
       </div>
 
       {current ? (
         <div className="steel-path-current">
           <strong>{current.name}</strong>
           {current.cost !== null ? (
-            <span className="steel-path-cost">{current.cost} Steel Essence</span>
+            <span className="steel-path-cost">{t('evt.steelEssenceSuffix', { n: current.cost })}</span>
           ) : null}
         </div>
       ) : null}
@@ -76,7 +76,7 @@ export function SteelPathPanel() {
               <div key={`rotation-${index}`} className="steel-path-row">
                 <span>{offer.name}</span>
                 {offer.cost !== null ? (
-                  <span className="steel-path-cost">{offer.cost} SE</span>
+                  <span className="steel-path-cost">{t('evt.seSuffix', { n: offer.cost })}</span>
                 ) : null}
               </div>
             ))}
@@ -86,13 +86,13 @@ export function SteelPathPanel() {
 
       {evergreens.length > 0 ? (
         <div className="steel-path-block">
-          <span className="farm-now-header-label">Always available (Teshin’s shop)</span>
+          <span className="farm-now-header-label">{t('evt.teshinShopAlwaysAvailable')}</span>
           <div className="steel-path-list">
             {evergreens.map((offer, index) => (
               <div key={`evergreen-${index}`} className="steel-path-row">
                 <span>{offer.name}</span>
                 {offer.cost !== null ? (
-                  <span className="steel-path-cost">{offer.cost} SE</span>
+                  <span className="steel-path-cost">{t('evt.seSuffix', { n: offer.cost })}</span>
                 ) : null}
               </div>
             ))}

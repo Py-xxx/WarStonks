@@ -1,3 +1,4 @@
+import { tActive, USER_MSG_MARK } from '../i18n/active.ts';
 export type TradesErrorContext =
   | 'trade-overview-load'
   | 'trade-overview-refresh'
@@ -19,17 +20,17 @@ function toRawErrorMessage(error: unknown): string {
 function tradesErrorFallback(context: TradesErrorContext): string {
   switch (context) {
     case 'trade-overview-load':
-      return 'Couldn’t load your Warframe Market orders right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.trd.loadOrders');
     case 'trade-overview-refresh':
-      return 'Couldn’t refresh your orders right now. Showing the last loaded list if possible. If it keeps happening, report it in Discord.';
+      return tActive('err.trd.refreshOrders');
     case 'trade-action':
-      return 'Couldn’t complete that order on Warframe.Market. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.trd.completeOrder');
     case 'trade-autocomplete-load':
-      return 'Couldn’t load the item list right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.trd.loadItems');
     case 'listing-analysis-load':
-      return 'Couldn’t build the market analysis for this item right now. You can still post the listing.';
+      return tActive('err.trd.analysisStillPost');
     default:
-      return 'Something went wrong. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.generic');
   }
 }
 
@@ -41,6 +42,10 @@ function tradesErrorFallback(context: TradesErrorContext): string {
  */
 export function formatTradesErrorMessage(context: TradesErrorContext, error: unknown): string {
   const raw = toRawErrorMessage(error);
+
+  if (raw.startsWith(USER_MSG_MARK)) {
+    return raw.slice(USER_MSG_MARK.length);
+  }
   if (!raw) {
     return tradesErrorFallback(context);
   }

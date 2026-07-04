@@ -42,7 +42,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
             <option value="">{t('wl.selectVariant')}</option>
             {marketVariants.map((variant) => (
               <option key={variant.key} value={variant.key}>
-                {variant.label}
+                {variant.label === 'Base Market' ? t('mkt.baseMarketVariant') : variant.label}
               </option>
             ))}
           </select>
@@ -66,7 +66,7 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
           onClick={addSelectedQuickViewToWatchlist}
           disabled={!selectedItem}
         >
-          Add to Watchlist
+          {t('wl.addToWatchlist')}
         </button>
       </div>
 
