@@ -5775,6 +5775,15 @@ fn latest_local_market_estimate(
 ) -> Result<Option<i64>> {
     let variant_key = build_trade_variant_key(rank);
 
+    // Prefer the 30-day zone model's recommended exit — anchored on weighted history, so one
+    // spiky latest bucket can't swing every holding's valuation. The single-bucket reference
+    // chain below stays as the fallback for items with too little history for a zone model.
+    if let Some(value) =
+        crate::market_observatory::zone_recommended_exit_price(connection, item_id, &variant_key)
+    {
+        return Ok(Some(round_money(value)));
+    }
+
     for (domain_key, source_kind) in [
         ("48hours", "live_sell"),
         ("48hours", "closed"),
@@ -5883,6 +5892,9 @@ fn build_portfolio_pnl_summary_inner(
     let mut kept_inventory_value = 0_i64;
     let mut partial_set_profit = 0_i64;
     let mut inventory_rows = Vec::<PortfolioInventoryRow>::new();
+    // Market estimates now come from the 30-day zone model, which is far heavier than the old
+    // single-row lookup — memoize per (item, rank) since holdings repeat items constantly.
+    let mut market_estimate_cache = HashMap::<(i64, Option<i64>), Option<i64>>::new();
     let mut audit_rows = Vec::<PortfolioAuditRow>::new();
     let mut ambiguous_group_ids = HashSet::<String>::new();
     let mut alecaframe_audit_ids = HashSet::<String>::new();
@@ -5912,12 +5924,17 @@ fn build_portfolio_pnl_summary_inner(
                     .get(record.slug.as_str())
                     .and_then(|meta| meta.item_id)
                     .and_then(|item_id| {
-                        market_connection
-                            .as_ref()
-                            .and_then(|connection| {
-                                latest_local_market_estimate(connection, item_id, record.rank).ok()
+                        *market_estimate_cache
+                            .entry((item_id, record.rank))
+                            .or_insert_with(|| {
+                                market_connection
+                                    .as_ref()
+                                    .and_then(|connection| {
+                                        latest_local_market_estimate(connection, item_id, record.rank)
+                                            .ok()
+                                    })
+                                    .flatten()
                             })
-                            .flatten()
                     });
 
                 let estimated_total = maybe_estimate

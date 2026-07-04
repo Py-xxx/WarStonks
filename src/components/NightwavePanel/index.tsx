@@ -75,7 +75,6 @@ export function NightwavePanel() {
     <div className="market-panel">
       <div className="events-section-header">
         <span className="panel-title-eyebrow">
-          <span className="panel-dot panel-dot-purple" aria-hidden="true" />
           Nightwave
         </span>
         <h3>

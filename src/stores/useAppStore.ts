@@ -20,6 +20,7 @@ import {
   getWfmTopSellOrders,
   saveAlecaframeSettings,
   saveDiscordWebhookSettings,
+  saveStrategySettings,
   sendWatchlistFoundDiscordNotification,
   sendUnderpricedListingDiscordNotification,
   signInWfmTradeAccount,
@@ -123,6 +124,7 @@ import type {
   WfstatVoidTrader,
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
+  StrategySettings,
   AppSettings,
   AppUpdateInstallState,
   DiscordWebhookSettingsInput,
@@ -224,6 +226,10 @@ const defaultAppSettings: AppSettings = {
       underpricedListing: true,
     },
     lastValidatedAt: null,
+  },
+  strategy: {
+    minEdgePlat: 10,
+    tradeValuePlat: 10,
   },
 };
 
@@ -1438,6 +1444,7 @@ interface AppStore {
   refreshWalletSnapshotSilently: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
   saveDiscordWebhookConfiguration: (input: DiscordWebhookSettingsInput) => Promise<void>;
+  saveStrategyConfiguration: (input: StrategySettings) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
   refreshWorldStateAlerts: () => Promise<void>;
   refreshWorldStateSortie: () => Promise<void>;
@@ -2064,6 +2071,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         settingsLoading: false,
         settingsError: formatSettingsErrorMessage('discord-webhook-save', error),
+      });
+      throw error;
+    }
+  },
+  saveStrategyConfiguration: async (input) => {
+    set({ settingsLoading: true, settingsError: null });
+
+    try {
+      const settings = await saveStrategySettings(input);
+      set({
+        appSettings: settings,
+        settingsLoading: false,
+        settingsError: null,
+      });
+    } catch (error) {
+      set({
+        settingsLoading: false,
+        settingsError: formatSettingsErrorMessage('strategy-save', error),
       });
       throw error;
     }

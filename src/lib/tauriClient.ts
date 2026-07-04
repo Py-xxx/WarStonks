@@ -15,6 +15,7 @@ import type {
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
   AppSettings,
+  StrategySettings,
   AlecaframeTradeMigrationInput,
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
@@ -177,6 +178,12 @@ export async function saveDiscordWebhookSettings(
   input: DiscordWebhookSettingsInput,
 ): Promise<AppSettings> {
   return invoke<AppSettings>('save_discord_webhook_settings', { input });
+}
+
+export async function saveStrategySettings(
+  input: StrategySettings,
+): Promise<AppSettings> {
+  return invoke<AppSettings>('save_strategy_settings', { input });
 }
 
 export async function sendWatchlistFoundDiscordNotification(

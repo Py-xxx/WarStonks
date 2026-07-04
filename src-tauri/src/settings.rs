@@ -86,6 +86,25 @@ impl Default for DiscordWebhookNotificationSettings {
     }
 }
 
+/// Tunables for the Opportunities engine's Set Decision Engine, edited on the Strategy tab.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StrategySettings {
+    /// Minimum plat edge required before completing a set is preferred over selling its parts.
+    pub min_edge_plat: f64,
+    /// Assumed plat value of one WFM trade slot; scales the edge by trades saved/spent.
+    pub trade_value_plat: f64,
+}
+
+impl Default for StrategySettings {
+    fn default() -> Self {
+        Self {
+            min_edge_plat: 10.0,
+            trade_value_plat: 10.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -93,6 +112,8 @@ pub struct AppSettings {
     pub warstonks_version: Option<String>,
     pub alecaframe: AlecaframeSettings,
     pub discord_webhook: DiscordWebhookSettings,
+    #[serde(default)]
+    pub strategy: StrategySettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -990,6 +1011,51 @@ pub fn save_discord_webhook_settings(
     Ok(settings)
 }
 
+#[tauri::command]
+pub fn save_strategy_settings(
+    app: tauri::AppHandle,
+    input: StrategySettings,
+) -> Result<AppSettings, String> {
+    // Serialize the whole load→modify→save against the other settings-mutating commands so a
+    // concurrent save can't clobber the section this one isn't touching.
+    let _settings_guard = lock_settings_file().map_err(|error| error.to_string())?;
+    let mut settings = load_settings_inner(&app).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "load-for-strategy-save",
+            "Failed to load settings before saving strategy configuration.",
+            "Couldn’t save strategy settings right now. Please try again.",
+            "STRATEGY-SAVE-LOAD-01",
+            &error,
+        )
+    })?;
+
+    if !input.min_edge_plat.is_finite() || !input.trade_value_plat.is_finite() {
+        return Err("Strategy values must be numbers.".to_string());
+    }
+
+    settings.strategy = StrategySettings {
+        // Clamp to a sane band — 0 disables the knob, 500p covers any realistic tuning.
+        min_edge_plat: input.min_edge_plat.clamp(0.0, 500.0),
+        trade_value_plat: input.trade_value_plat.clamp(0.0, 500.0),
+    };
+
+    save_settings_inner(&app, &settings).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "save-strategy-settings",
+            "Failed to persist strategy settings to app storage.",
+            "Couldn’t save strategy settings right now. Please try again.",
+            "STRATEGY-SAVE-STORE-01",
+            &error,
+        )
+    })?;
+
+    Ok(settings)
+}
+
 pub(crate) fn send_watchlist_found_discord_notification_inner(
     app: &tauri::AppHandle,
     input: &DiscordWatchlistNotificationInput,
@@ -1133,7 +1199,8 @@ mod tests {
         decode_alecaframe_relic_inventory_payload, extract_public_token, load_settings_from_path,
         map_currency_balance, parse_alecaframe_relic_inventory, save_settings_to_path,
         select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings, AppSettings,
-        DiscordWebhookNotificationSettings, DiscordWebhookSettings, BASE64_STANDARD,
+        DiscordWebhookNotificationSettings, DiscordWebhookSettings, StrategySettings,
+        BASE64_STANDARD,
     };
     use base64::Engine;
     use std::fs;
@@ -1215,6 +1282,7 @@ mod tests {
                 notifications: DiscordWebhookNotificationSettings::default(),
                 last_validated_at: None,
             },
+            strategy: StrategySettings::default(),
         };
 
         save_settings_to_path(&path, &settings).expect("settings should save");

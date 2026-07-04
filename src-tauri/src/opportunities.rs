@@ -117,6 +117,10 @@ pub struct EvalConfig {
     pub max_missing_distinct: i64,
     /// Ignore an edge (completing vs. selling parts) smaller than this.
     pub min_edge_plat: f64,
+    /// Assumed plat value of one WFM trade slot — trades are a scarce, rate-limited resource, so
+    /// completing a set that costs fewer total trades than selling its parts individually should
+    /// win on a smaller profit edge (or even a slightly negative one), and vice versa.
+    pub trade_value_plat: f64,
     /// Ignore opportunities worth less than this.
     pub min_value_plat: f64,
     /// A held position must be up at least this fraction of its cost to flag a "good exit".
@@ -147,6 +151,7 @@ impl Default for EvalConfig {
         Self {
             max_missing_distinct: 2,
             min_edge_plat: 10.0,
+            trade_value_plat: 10.0,
             min_value_plat: 15.0,
             holding_min_profit_pct: 0.25,
             holding_min_profit_plat: 15,
@@ -673,7 +678,23 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
     // Decide the winner. The min-edge buffer exists to justify the cost/risk of BUYING missing
     // parts — when you already own the full set there's nothing to buy, so building & selling the
     // set wins whenever it's worth at least as much as dumping the parts.
-    let edge_threshold = if missing_distinct == 0 { 0.0 } else { config.min_edge_plat };
+    //
+    // Trades are a scarce, rate-limited resource, so the buffer also scales with how many WFM
+    // trades each strategy actually costs: selling parts individually costs one trade per distinct
+    // owned part, while completing costs one buy per missing non-farmable part plus one final sell.
+    // Every trade the completion path SAVES relative to selling parts knocks a `trade_value_plat`
+    // chunk off the required edge (floored at 0); every extra trade completion COSTS raises it —
+    // e.g. owning 4/5 parts of a set only needs 2 trades to complete (buy + sell) vs. 4 to sell
+    // everything individually, so completing should win even on a fairly small profit edge.
+    let buy_trades = plan.missing.iter().filter(|part| !part.farmable).count() as i64;
+    let complete_trades = buy_trades + 1;
+    let sell_trades = owned_distinct;
+    let edge_threshold = if missing_distinct == 0 {
+        0.0
+    } else {
+        let trades_saved = sell_trades - complete_trades;
+        (config.min_edge_plat - trades_saved as f64 * config.trade_value_plat).max(0.0)
+    };
     let prefer_complete = match (complete_value, sell_value) {
         (Some(a), Some(b)) => a >= b + edge_threshold,
         (Some(_), None) => true,
@@ -748,6 +769,19 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
                 source: "market".into(),
             },
         });
+        // Surface the trade-count tiebreaker so a completion pick on a slim plat edge is
+        // self-evident — trades are rate-limited, and this path may be winning on trades saved.
+        if sell_trades > 0 && complete_trades != sell_trades {
+            reasons.push(OpportunityReason {
+                icon: "math".into(),
+                text_key: "opp.reasonTradeCount".into(),
+                text_params: params(&[
+                    ("complete", complete_trades.to_string()),
+                    ("sell", sell_trades.to_string()),
+                ]),
+                source: "math".into(),
+            });
+        }
 
         let mut actions: Vec<OpportunityAction> = plan
             .missing
@@ -949,6 +983,22 @@ pub fn rank_and_diversify(opportunities: Vec<Opportunity>, config: &EvalConfig) 
 // ---------------------------------------------------------------------------------------------
 
 /// Computes the current opportunity board. Reads only from caches; safe to call frequently.
+/// Buy cost for a missing part: the live floor when it sits inside the zone-derived entry band,
+/// otherwise clamped to that band. The floor comes from the single most recent stats bucket, so
+/// one dumped/overpriced listing would otherwise flow straight into the completion math as truth.
+fn clamped_buy_price(
+    live_floor: Option<f64>,
+    entry_low: Option<f64>,
+    entry_high: Option<f64>,
+    recommended_entry: Option<f64>,
+) -> Option<f64> {
+    match (live_floor, entry_low, entry_high) {
+        (Some(live), Some(low), Some(high)) if low <= high => Some(live.clamp(low, high)),
+        (Some(live), _, _) => Some(recommended_entry.unwrap_or(live)),
+        (None, _, _) => recommended_entry,
+    }
+}
+
 pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Opportunity>> {
     let Some(scanner) = crate::market_observatory::load_latest_arbitrage_scanner(app)? else {
         return Ok(Vec::new()); // No priced data yet — nothing to evaluate.
@@ -978,7 +1028,13 @@ pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Oppor
         })
         .unwrap_or_default();
 
-    let config = EvalConfig::default();
+    // Strategy-tab overrides on top of the balanced defaults; best-effort so a missing/corrupt
+    // settings file never blocks the board.
+    let mut config = EvalConfig::default();
+    if let Ok(settings) = crate::settings::load_settings_for_internal_use(app) {
+        config.min_edge_plat = settings.strategy.min_edge_plat;
+        config.trade_value_plat = settings.strategy.trade_value_plat;
+    }
     let mut opportunities = Vec::new();
 
     for set in &scanner.results {
@@ -1008,8 +1064,16 @@ pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Oppor
                 name: component.name.clone(),
                 quantity_in_set: component.quantity_in_set.max(1),
                 owned_qty: owned_qty.get(&component.slug).copied().unwrap_or(0),
-                // Cost to buy now: prefer the live floor, fall back to the recommended entry.
-                buy_price: component.current_stats_price.or(component.recommended_entry_price),
+                // Cost to buy now: the live floor is what you'd actually pay, but it comes from a
+                // single latest bucket and one weird listing can spike it either way. Clamp it to
+                // the zone-derived entry band so a one-bucket outlier can't distort the completion
+                // math; with no zone band, fall back to recommended entry, then the raw floor.
+                buy_price: clamped_buy_price(
+                    component.current_stats_price,
+                    component.recommended_entry_low,
+                    component.recommended_entry_high,
+                    component.recommended_entry_price,
+                ),
                 sell_price: owned_exit.get(&component.slug).map(|price| *price as f64),
                 liquidity: component.liquidity_score,
                 farmable_from_relics: farmable.contains(&component.slug),
@@ -1309,6 +1373,62 @@ mod tests {
         assert_eq!(opp.category, "sellInventory");
         assert_eq!(opp.est_value, 110);
         assert!(opp.actions.iter().all(|a| a.kind == "sellPart"));
+    }
+
+    #[test]
+    fn prefers_completing_over_selling_parts_when_it_saves_trades() {
+        // Own 4/5 parts (would cost 4 sell trades to liquidate); completing costs only 2 trades
+        // (1 buy + 1 sell). Complete nets 40 - 8 = 32p vs. 26p selling the 4 owned parts — an edge
+        // of only 6p, below the flat 10p buffer, but completing uses half as many trades, so it
+        // should still win.
+        let input = set(
+            vec![
+                component("a", 1, 1, Some(4.0), Some(5.0)),
+                component("b", 1, 1, Some(4.0), Some(7.0)),
+                component("c", 1, 1, Some(4.0), Some(6.0)),
+                component("d", 1, 1, Some(4.0), Some(8.0)),
+                component("e", 1, 0, Some(8.0), Some(7.0)),
+            ],
+            Some(40.0),
+        );
+        let opp = evaluate_set(&input, &EvalConfig::default()).expect("should produce a play");
+        assert_eq!(opp.category, "setCompletion");
+        assert_eq!(opp.est_value, 32);
+    }
+
+    #[test]
+    fn still_prefers_selling_parts_when_trades_dont_favor_completing() {
+        // Own 1/3 parts — completing costs 3 trades (2 buys + 1 sell) vs. 1 trade to sell the part
+        // you hold. Even a tied edge shouldn't flip this: completing costs more trades than it
+        // saves, so the raised threshold keeps it on "sell parts".
+        let input = set(
+            vec![
+                component("a", 1, 1, Some(12.0), Some(27.0)),
+                component("b", 1, 0, Some(12.0), Some(12.0)),
+                component("c", 1, 0, Some(12.0), Some(12.0)),
+            ],
+            Some(51.0),
+        );
+        let opp = evaluate_set(&input, &EvalConfig::default()).expect("should produce a play");
+        // Complete nets 51 - 24 = 27, tied with selling the one owned part for 27 — but completing
+        // costs 2 more trades than it saves (trades_saved = 1 - 3 = -2), raising the required edge.
+        assert_eq!(opp.category, "sellInventory");
+        assert_eq!(opp.est_value, 27);
+    }
+
+    #[test]
+    fn clamps_spiky_live_floor_to_the_entry_band() {
+        // Floor inside the band → trusted as-is.
+        assert_eq!(clamped_buy_price(Some(12.0), Some(10.0), Some(15.0), Some(11.0)), Some(12.0));
+        // One dumped listing far below the band → clamped up to the band floor.
+        assert_eq!(clamped_buy_price(Some(2.0), Some(10.0), Some(15.0), Some(11.0)), Some(10.0));
+        // Floor cleared out / spiked high → clamped down to the band ceiling.
+        assert_eq!(clamped_buy_price(Some(40.0), Some(10.0), Some(15.0), Some(11.0)), Some(15.0));
+        // No zone band → recommended entry, then the raw floor, then nothing.
+        assert_eq!(clamped_buy_price(Some(12.0), None, None, Some(11.0)), Some(11.0));
+        assert_eq!(clamped_buy_price(Some(12.0), None, None, None), Some(12.0));
+        assert_eq!(clamped_buy_price(None, None, None, Some(11.0)), Some(11.0));
+        assert_eq!(clamped_buy_price(None, None, None, None), None);
     }
 
     #[test]

@@ -4,7 +4,8 @@ export type SettingsErrorContext =
   | 'alecaframe-validate'
   | 'alecaframe-save'
   | 'alecaframe-refresh'
-  | 'discord-webhook-save';
+  | 'discord-webhook-save'
+  | 'strategy-save';
 
 function toRawErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -26,6 +27,8 @@ function friendlySettingsErrorFallback(context: SettingsErrorContext): string {
       return tActive('err.set.refreshAleca');
     case 'discord-webhook-save':
       return tActive('err.set.saveDiscord');
+    case 'strategy-save':
+      return tActive('err.set.saveStrategy');
     default:
       return tActive('err.generic');
   }
