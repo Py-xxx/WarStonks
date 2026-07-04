@@ -16,7 +16,7 @@ export function AlertsTab() {
         <div className="card-header">
           <span className="card-label">{t('wl.activeAlerts')}</span>
           <span className={`badge ${alerts.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
-            {alerts.length} active
+            {t('evt.activeCount', { n: alerts.length })}
           </span>
         </div>
         <div className="card-body">

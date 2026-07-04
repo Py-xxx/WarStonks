@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import {
   formatWorldStateCountdown,
   formatWorldStateDateTime,
@@ -19,24 +20,24 @@ function formatMeaningfulDate(value: string | null): string | null {
   return formatWorldStateDateTime(value);
 }
 
-function buildNewsTone(item: WfstatNewsItem): string {
+function buildNewsTone(item: WfstatNewsItem, t: (key: TranslationKey) => string): string {
   if (item.priority) {
-    return 'Priority';
+    return t('evt.newsTonePriority');
   }
 
   if (item.primeAccess) {
-    return 'Prime Access';
+    return t('evt.newsTonePrimeAccess');
   }
 
   if (item.stream) {
-    return 'Stream';
+    return t('evt.newsToneStream');
   }
 
   if (item.update) {
-    return 'Update';
+    return t('evt.newsToneUpdate');
   }
 
-  return 'News';
+  return t('evt.newsToneNews');
 }
 
 function sortNewsItems(left: WfstatNewsItem, right: WfstatNewsItem): number {
@@ -89,16 +90,16 @@ export function MarketNewsPanel() {
     <div className="market-news-stack">
       <div className="market-news-toolbar">
         <div className="market-news-toolbar-copy">
-          <span className="page-title">Market &amp; News</span>
+          <span className="page-title">{t('evt.marketNewsTitle')}</span>
           <span className="market-news-toolbar-subtitle">
-            Flash sales and official Warframe news are cached together from the live worldstate.
+            {t('ws.newsCacheHint')}
           </span>
         </div>
 
         <div className="market-news-toolbar-actions">
           {lastUpdatedAt ? (
             <span className="world-event-updated-at">
-              Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+              {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
             </span>
           ) : null}
           <button
@@ -108,7 +109,7 @@ export function MarketNewsPanel() {
               void refreshWorldStateMarketNews();
             }}
           >
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -127,7 +128,7 @@ export function MarketNewsPanel() {
           <div className="card-header">
             <span className="card-label">{t('ws.news')}</span>
             <span className={`badge ${sortedNews.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
-              {sortedNews.length} stories
+              {t('evt.storiesCount', { n: sortedNews.length })}
             </span>
           </div>
 
@@ -135,7 +136,7 @@ export function MarketNewsPanel() {
             {loading && sortedNews.length === 0 ? (
               <EventsPanelEmpty
                 title={t('a11y.loadingNews')}
-                detail="Pulling the latest official notices from the live worldstate."
+                detail={t('evt.pullingLatestNews')}
               />
             ) : null}
 
@@ -143,7 +144,7 @@ export function MarketNewsPanel() {
               <EventsPanelEmpty
                 title={t('a11y.newsFailed')}
                 detail={error}
-                actionLabel="Retry"
+                actionLabel={t('common.retry')}
                 onAction={() => {
                   void refreshWorldStateMarketNews();
                 }}
@@ -153,7 +154,7 @@ export function MarketNewsPanel() {
             {!loading && sortedNews.length === 0 && (!error || hasUsableData) ? (
               <EventsPanelEmpty
                 title={t('a11y.noNews')}
-                detail="The current worldstate snapshot did not include any visible news entries."
+                detail={t('evt.noNewsDetail')}
               />
             ) : null}
 
@@ -169,7 +170,7 @@ export function MarketNewsPanel() {
                         href={item.link ?? undefined}
                         target="_blank"
                         rel="noreferrer"
-                        aria-label={item.link ? `Open ${item.message}` : undefined}
+                        aria-label={item.link ? t('evt.openLabel', { message: item.message }) : undefined}
                       >
                         {item.imageLink ? <img src={item.imageLink} alt="" loading="lazy" /> : 'N'}
                       </a>
@@ -178,7 +179,7 @@ export function MarketNewsPanel() {
                         <div className="market-news-item-topline">
                           <span className="market-news-item-title">{item.message}</span>
                           <span className={`badge ${item.priority ? 'badge-amber' : 'badge-muted'}`}>
-                            {buildNewsTone(item)}
+                            {buildNewsTone(item, t)}
                           </span>
                         </div>
 
@@ -187,7 +188,7 @@ export function MarketNewsPanel() {
                           {item.mobileOnly ? <span>{t('ws.mobile')}</span> : null}
                           {item.link ? (
                             <a href={item.link} target="_blank" rel="noreferrer">
-                              Open source
+                              {t('evt.openSource')}
                             </a>
                           ) : null}
                         </div>
@@ -204,7 +205,7 @@ export function MarketNewsPanel() {
           <div className="card-header">
             <span className="card-label">{t('ws.flashSales')}</span>
             <span className={`badge ${visibleFlashSales.length > 0 ? 'badge-green' : 'badge-muted'}`}>
-              {visibleFlashSales.length} tracked
+              {t('evt.trackedCount', { n: visibleFlashSales.length })}
             </span>
           </div>
 
@@ -212,7 +213,7 @@ export function MarketNewsPanel() {
             {loading && visibleFlashSales.length === 0 ? (
               <EventsPanelEmpty
                 title={t('a11y.loadingFlashSales')}
-                detail="Checking the live market state for active and upcoming sale windows."
+                detail={t('evt.checkingFlashSales')}
               />
             ) : null}
 
@@ -220,7 +221,7 @@ export function MarketNewsPanel() {
               <EventsPanelEmpty
                 title={t('a11y.flashSalesFailed')}
                 detail={error}
-                actionLabel="Retry"
+                actionLabel={t('common.retry')}
                 onAction={() => {
                   void refreshWorldStateMarketNews();
                 }}
@@ -230,7 +231,7 @@ export function MarketNewsPanel() {
             {!loading && visibleFlashSales.length === 0 && (!error || hasUsableData) ? (
               <EventsPanelEmpty
                 title={t('a11y.noFlashSales')}
-                detail="There are no active or upcoming flash sales in the current snapshot."
+                detail={t('evt.noFlashSalesDetail')}
               />
             ) : null}
 
@@ -248,13 +249,13 @@ export function MarketNewsPanel() {
                       <div className="flash-sale-topline">
                         <span className="flash-sale-item-name">{sale.item}</span>
                         <span className={`badge ${isActive ? 'badge-green' : 'badge-blue'}`}>
-                          {isActive ? 'Active' : 'Upcoming'}
+                          {isActive ? t('evt.active') : t('evt.upcoming')}
                         </span>
                       </div>
 
                       <div className="flash-sale-stat-grid">
                         <div className="flash-sale-stat">
-                          <span className="qv-stat-label">{isActive ? 'Ends in' : 'Starts in'}</span>
+                          <span className="qv-stat-label">{isActive ? t('evt.endsInLower') : t('evt.startsInLower')}</span>
                           <span className="flash-sale-stat-value">{countdown}</span>
                         </div>
                         <div className="flash-sale-stat">
@@ -278,7 +279,7 @@ export function MarketNewsPanel() {
                       </div>
 
                       <div className="flash-sale-footer">
-                        <span>{sale.isShownInMarket ? 'Visible in market' : 'Hidden in market'}</span>
+                        <span>{sale.isShownInMarket ? t('evt.visibleInMarket') : t('evt.hiddenInMarket')}</span>
                         <span>{formatWorldStateDateTime(isActive ? sale.expiry : sale.activation)}</span>
                       </div>
                     </article>

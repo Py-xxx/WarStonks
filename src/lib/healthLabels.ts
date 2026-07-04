@@ -32,6 +32,24 @@ const HEALTH_LABEL_KEYS: Record<string, TranslationKey> = {
   Weak: 'health.weak',
   Leading: 'health.leading',
   Buried: 'health.buried',
+  Deep: 'health.deep',
+  Tradable: 'health.tradable',
+  Thin: 'health.thin',
+  Fragile: 'health.fragile',
+  'Entry Pressure': 'health.entryPressure',
+  'Exit Pressure': 'health.exitPressure',
+  'Plat Machine': 'health.platMachine',
+  'Slow Burn': 'health.slowBurn',
+  'Capital Trap': 'health.capitalTrap',
+  Pending: 'health.pending',
+  High: 'health.riskHigh',
+  Moderate: 'health.riskModerate',
+  Low: 'health.riskLow',
+  Medium: 'health.confidenceMedium',
+  Intact: 'refine.intact',
+  Exceptional: 'refine.exceptional',
+  Flawless: 'refine.flawless',
+  Radiant: 'refine.radiant',
 };
 
 /** Translate a backend health-value string, falling back to the raw English if unmapped. */
@@ -41,4 +59,46 @@ export function tHealth(t: TranslateFn, value: string | null | undefined): strin
   }
   const key = HEALTH_LABEL_KEYS[value];
   return key ? t(key) : value;
+}
+
+const CONFIDENCE_LABEL_KEYS: Record<string, TranslationKey> = {
+  high: 'mkt.conf.high',
+  medium: 'mkt.conf.medium',
+  low: 'mkt.conf.low',
+};
+
+/** Translate a MarketConfidenceSummary's raw "High/Medium/Low confidence" label via its level. */
+export function tConfidence(t: TranslateFn, confidence: { level: string; label: string } | null | undefined): string {
+  if (!confidence) {
+    return '';
+  }
+  const key = CONFIDENCE_LABEL_KEYS[confidence.level];
+  return key ? t(key) : confidence.label;
+}
+
+interface TrendSummaryLike {
+  direction: string;
+  confidenceSummary: { level: string; reasons: string[] };
+}
+
+/**
+ * Rebuilds the trend summary sentence from the closed set of base sentences the backend
+ * chooses between (by direction), instead of rendering its raw English sentence. The
+ * confidence-reduced suffix reasons themselves stay backend-generated English text.
+ */
+export function tTrendSummary(t: TranslateFn, trend: TrendSummaryLike): string {
+  const base =
+    trend.direction === 'Rising'
+      ? t('mkt.trendRisingSummary')
+      : trend.direction === 'Falling'
+        ? t('mkt.trendFallingSummary')
+        : t('mkt.trendFlatSummary');
+
+  if (trend.confidenceSummary.level !== 'high' && trend.confidenceSummary.reasons.length > 0) {
+    return base + t('mkt.trendConfidenceReduced', {
+      reasons: trend.confidenceSummary.reasons.join(', ').toLowerCase(),
+    });
+  }
+
+  return base;
 }

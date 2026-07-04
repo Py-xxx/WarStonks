@@ -9,17 +9,17 @@ import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfstatEventReward, WfstatWorldStateEvent } from '../../types';
 
-function buildRewardLabel(reward: WfstatEventReward): string {
+function buildRewardLabel(reward: WfstatEventReward, creditsLabel: (n: number) => string): string {
   const itemParts = reward.items;
   const countedParts = reward.countedItems.map((entry) => `${entry.count}x ${entry.type}`);
-  const creditPart = reward.credits && reward.credits > 0 ? [`${reward.credits} Credits`] : [];
+  const creditPart = reward.credits && reward.credits > 0 ? [creditsLabel(reward.credits)] : [];
 
   return [...itemParts, ...countedParts, ...creditPart].join(', ');
 }
 
-function buildEventRewardPreview(event: WfstatWorldStateEvent): string {
+function buildEventRewardPreview(event: WfstatWorldStateEvent, creditsLabel: (n: number) => string): string {
   const labels = event.rewards
-    .map((reward) => buildRewardLabel(reward))
+    .map((reward) => buildRewardLabel(reward, creditsLabel))
     .filter((label) => label.length > 0);
 
   return labels.join(' • ');
@@ -65,13 +65,14 @@ export function ActiveEventsPanel() {
   };
 
   const hasUsableEvents = events.length > 0;
+  const creditsLabel = (n: number) => t('evt.creditsSuffix', { n });
 
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-label">{t('ws.activeEvents')}</span>
         <span className={`badge ${events.length > 0 ? 'badge-purple' : 'badge-muted'}`}>
-          {events.length} active
+          {t('evt.activeCount', { n: events.length })}
         </span>
         <div className="card-actions">
           <button
@@ -81,7 +82,7 @@ export function ActiveEventsPanel() {
               void refreshWorldStateEvents();
             }}
           >
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -89,7 +90,7 @@ export function ActiveEventsPanel() {
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
 
@@ -105,7 +106,7 @@ export function ActiveEventsPanel() {
         {loading && events.length === 0 ? (
           <EventsPanelEmpty
             title={t('a11y.loadingEvents')}
-            detail="Checking the latest active events from the live worldstate."
+            detail={t('evt.checkingActiveEvents')}
           />
         ) : null}
 
@@ -113,7 +114,7 @@ export function ActiveEventsPanel() {
           <EventsPanelEmpty
             title={t('a11y.activeEventsFailed')}
             detail={error}
-            actionLabel="Retry"
+            actionLabel={t('common.retry')}
             onAction={() => {
               void refreshWorldStateEvents();
             }}
@@ -123,7 +124,7 @@ export function ActiveEventsPanel() {
         {!loading && events.length === 0 && !error ? (
           <EventsPanelEmpty
             title={t('a11y.noActiveEvents')}
-            detail="Active event data will appear here as soon as the live worldstate reports an event."
+            detail={t('evt.noActiveEventsDetail')}
           />
         ) : null}
 
@@ -131,7 +132,7 @@ export function ActiveEventsPanel() {
           <div className="world-event-list">
             {events.map((event) => {
               const progressPercent = getWorldStateEventProgressPercent(event, nowMs);
-              const rewardPreview = buildEventRewardPreview(event);
+              const rewardPreview = buildEventRewardPreview(event, creditsLabel);
               const expanded = expandedIds.includes(event.id);
 
               return (
@@ -166,7 +167,7 @@ export function ActiveEventsPanel() {
                       <div className="world-event-meta-item">
                         <span className="world-event-meta-label">{t('ws.node')}</span>
                         <span className="world-event-meta-value">
-                          {event.node ?? 'Unknown'}
+                          {event.node ?? t('evt.unknown')}
                         </span>
                       </div>
                       <div className="world-event-meta-item">
@@ -203,7 +204,7 @@ export function ActiveEventsPanel() {
                     ) : null}
 
                     <div className="world-event-expand-copy">
-                      {expanded ? 'Hide rewards and step details' : 'Show rewards and step details'}
+                      {expanded ? t('evt.hideRewardsDetails') : t('evt.showRewardsDetails')}
                     </div>
                   </button>
 
@@ -215,7 +216,7 @@ export function ActiveEventsPanel() {
                           <div className="world-event-tag-list">
                             {event.rewards.map((reward, index) => (
                               <span key={`${event.id}-reward-${index}`} className="world-event-tag">
-                                {buildRewardLabel(reward)}
+                                {buildRewardLabel(reward, creditsLabel)}
                               </span>
                             ))}
                           </div>
@@ -229,10 +230,10 @@ export function ActiveEventsPanel() {
                             {event.interimSteps.map((step, index) => (
                               <div key={`${event.id}-step-${index}`} className="world-event-step">
                                 <span className="world-event-step-goal">
-                                  Goal {step.goal ?? '—'}
+                                  {t('evt.goal', { value: step.goal ?? '—' })}
                                 </span>
                                 <span className="world-event-step-reward">
-                                  {step.reward ? buildRewardLabel(step.reward) : 'No reward data'}
+                                  {step.reward ? buildRewardLabel(step.reward, creditsLabel) : t('evt.noRewardData')}
                                 </span>
                               </div>
                             ))}

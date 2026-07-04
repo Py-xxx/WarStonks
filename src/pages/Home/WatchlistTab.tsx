@@ -11,7 +11,7 @@ export function WatchlistTab() {
     <div className="wl-fullscreen">
       <div className="panel-title-row">
         <span className="panel-title-eyebrow">{t('wl.watchlist')}</span>
-        <span className="badge badge-blue">{watchlistCount} items</span>
+        <span className="badge badge-blue">{t('evt.itemsCount', { n: watchlistCount })}</span>
       </div>
 
       <div className="watchlist-controls-card">

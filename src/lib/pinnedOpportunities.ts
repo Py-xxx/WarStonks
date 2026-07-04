@@ -16,7 +16,15 @@ export function loadPinnedOpportunities(): PinnedOpportunities {
       return {};
     }
     const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === 'object' ? (parsed as PinnedOpportunities) : {};
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+    // Drop pins saved before the titleKey/titleParams i18n schema (pre-3.0.x) — they can't be
+    // re-translated and would otherwise render blank/undefined.
+    const entries = Object.entries(parsed as Record<string, Partial<Opportunity>>).filter(
+      ([, opp]) => typeof opp?.titleKey === 'string',
+    );
+    return Object.fromEntries(entries) as PinnedOpportunities;
   } catch {
     return {};
   }

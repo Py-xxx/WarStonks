@@ -1,3 +1,5 @@
+import { useTranslation } from '../../i18n';
+
 type EventsPanelEmptyProps = {
   title: string;
   detail: string;
@@ -35,6 +37,8 @@ export function EventsPanelNotice({
   loading: boolean;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
+
   if (!message) {
     return null;
   }
@@ -45,7 +49,7 @@ export function EventsPanelNotice({
         {message}
       </span>
       <button className="text-btn" type="button" onClick={onRefresh}>
-        {loading ? 'Refreshing…' : 'Retry'}
+        {loading ? t('common.refreshing') : t('common.retry')}
       </button>
     </div>
   );

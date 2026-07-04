@@ -1,4 +1,5 @@
 import { useAppStore } from '../../stores/useAppStore';
+import { useTranslation } from '../../i18n';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 
 type NightwaveChallenge = {
@@ -17,7 +18,7 @@ function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function parseChallenges(payload: unknown): NightwaveChallenge[] {
+function parseChallenges(payload: unknown, unknownTitle: string): NightwaveChallenge[] {
   if (!payload || typeof payload !== 'object') {
     return [];
   }
@@ -28,7 +29,7 @@ function parseChallenges(payload: unknown): NightwaveChallenge[] {
   return list.map((raw) => {
     const record = (raw ?? {}) as Record<string, unknown>;
     return {
-      title: asString(record.title) ?? 'Challenge',
+      title: asString(record.title) ?? unknownTitle,
       desc: asString(record.desc) ?? '',
       reputation: asNumber(record.reputation),
       isDaily: record.isDaily === true,
@@ -37,32 +38,37 @@ function parseChallenges(payload: unknown): NightwaveChallenge[] {
   });
 }
 
-function challengeTier(challenge: NightwaveChallenge): { label: string; tone: string; order: number } {
+function challengeTier(
+  challenge: NightwaveChallenge,
+  labels: { elite: string; daily: string; weekly: string },
+): { label: string; tone: string; order: number } {
   if (challenge.isElite) {
-    return { label: 'Elite', tone: 'purple', order: 0 };
+    return { label: labels.elite, tone: 'purple', order: 0 };
   }
   if (challenge.isDaily) {
-    return { label: 'Daily', tone: 'blue', order: 2 };
+    return { label: labels.daily, tone: 'blue', order: 2 };
   }
-  return { label: 'Weekly', tone: 'green', order: 1 };
+  return { label: labels.weekly, tone: 'green', order: 1 };
 }
 
 export function NightwavePanel() {
+  const { t } = useTranslation();
   const entry = useAppStore((state) => state.worldStateExtra.nightwave);
   const payload = (entry.payload ?? null) as Record<string, unknown> | null;
 
+  const tierLabels = { elite: t('evt.nightwaveElite'), daily: t('evt.nightwaveDaily'), weekly: t('evt.nightwaveWeekly') };
   const season = asNumber(payload?.season);
   const phase = asNumber(payload?.phase);
   const expiry = asString(payload?.expiry);
-  const challenges = parseChallenges(payload).sort(
-    (left, right) => challengeTier(left).order - challengeTier(right).order,
+  const challenges = parseChallenges(payload, tierLabels.weekly).sort(
+    (left, right) => challengeTier(left, tierLabels).order - challengeTier(right, tierLabels).order,
   );
 
   if (!payload && entry.loading) {
-    return <div className="opportunities-placeholder">Loading Nightwave…</div>;
+    return <div className="opportunities-placeholder">{t('evt.loadingNightwave')}</div>;
   }
   if (!payload) {
-    return <div className="opportunities-placeholder">No Nightwave season is active right now.</div>;
+    return <div className="opportunities-placeholder">{t('evt.noNightwaveSeason')}</div>;
   }
 
   return (
@@ -73,27 +79,27 @@ export function NightwavePanel() {
           Nightwave
         </span>
         <h3>
-          {season !== null ? `Season ${season}` : 'Nightwave'}
-          {phase !== null ? ` · Phase ${phase}` : ''}
+          {season !== null ? t('evt.nightwaveSeason', { n: season }) : 'Nightwave'}
+          {phase !== null ? t('evt.nightwavePhase', { n: phase }) : ''}
         </h3>
         {expiry ? (
-          <p className="text-dim">Season ends {formatShortLocalDateTime(expiry)}</p>
+          <p className="text-dim">{t('evt.nightwaveSeasonEnds', { date: formatShortLocalDateTime(expiry) })}</p>
         ) : null}
       </div>
 
       {challenges.length === 0 ? (
-        <div className="opportunities-placeholder">No active challenges listed.</div>
+        <div className="opportunities-placeholder">{t('evt.noActiveChallenges')}</div>
       ) : (
         <div className="nightwave-grid">
           {challenges.map((challenge, index) => {
-            const tier = challengeTier(challenge);
+            const tier = challengeTier(challenge, tierLabels);
             return (
               <div key={index} className="nightwave-card">
                 <div className="nightwave-card-head">
                   <span className={`market-panel-badge tone-${tier.tone}`}>{tier.label}</span>
                   {challenge.reputation !== null ? (
                     <span className="nightwave-standing">
-                      +{challenge.reputation.toLocaleString()} standing
+                      {t('evt.standingGain', { n: challenge.reputation.toLocaleString() })}
                     </span>
                   ) : null}
                 </div>

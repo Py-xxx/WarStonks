@@ -1,3 +1,4 @@
+import { tActive } from '../i18n';
 import {
   exportMarketDataPayload,
   exportUserDataPayload,
@@ -48,7 +49,7 @@ export async function maybeGunzip(file: File): Promise<string> {
     return new TextDecoder().decode(bytes);
   }
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error('This file is compressed but this app build cannot decompress it.');
+    throw new Error(tActive('dt.cantDecompress'));
   }
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
   return new Response(stream).text();
@@ -109,22 +110,22 @@ function timestampSlug(): string {
 export type ProgressFn = (label: string) => void;
 
 export async function exportUserData(onProgress?: ProgressFn): Promise<void> {
-  onProgress?.('Collecting app data…');
+  onProgress?.(tActive('dt.collectApp'));
   const payloadJson = await exportUserDataPayload();
-  onProgress?.('Packaging & compressing…');
+  onProgress?.(tActive('dt.package'));
   const bundleText = await buildBundle('user', payloadJson, true);
   const blob = await maybeGzip(bundleText);
-  onProgress?.('Saving file…');
+  onProgress?.(tActive('dt.saveFile'));
   downloadBlob(blob, `warstonks-data-${timestampSlug()}.baddie`);
 }
 
 export async function exportMarketData(onProgress?: ProgressFn): Promise<void> {
-  onProgress?.('Collecting market data (this can take a moment)…');
+  onProgress?.(tActive('dt.collectMarket'));
   const payloadJson = await exportMarketDataPayload();
-  onProgress?.('Packaging & compressing…');
+  onProgress?.(tActive('dt.package'));
   const bundleText = await buildBundle('market', payloadJson, false);
   const blob = await maybeGzip(bundleText);
-  onProgress?.('Saving file…');
+  onProgress?.(tActive('dt.saveFile'));
   downloadBlob(blob, `warstonks-market-${timestampSlug()}.baddie`);
 }
 
@@ -136,10 +137,10 @@ export async function readBaddieFile(file: File): Promise<BaddieBundle> {
   try {
     bundle = JSON.parse(text) as BaddieBundle;
   } catch {
-    throw new Error('This file isn’t a valid WarStonks export (could not be read).');
+    throw new Error(tActive('dt.invalidFile'));
   }
   if (bundle.format !== FORMAT || (bundle.kind !== 'user' && bundle.kind !== 'market')) {
-    throw new Error('This file isn’t a recognised WarStonks .baddie export.');
+    throw new Error(tActive('dt.notBaddie'));
   }
   // Older exports import fine (restore tolerates missing columns); a newer schema may rely on
   // fields this build doesn't have, so refuse it with a clear message rather than failing mid-import.
@@ -160,9 +161,9 @@ export async function applyBaddieBundle(
   if (bundle.kind === 'user') {
     // Restore the backend (transactional, the part that can fail) FIRST, then localStorage —
     // so a backend failure doesn't leave localStorage already overwritten against old SQLite.
-    onProgress?.('Restoring app data…');
+    onProgress?.(tActive('dt.restoreApp'));
     await importUserDataPayload(payloadJson);
-    onProgress?.('Restoring local data…');
+    onProgress?.(tActive('dt.restoreLocal'));
     if (bundle.localStorage && typeof window !== 'undefined' && window.localStorage) {
       for (const [key, value] of Object.entries(bundle.localStorage)) {
         if (USER_LOCAL_STORAGE_KEYS.includes(key)) {
@@ -172,7 +173,7 @@ export async function applyBaddieBundle(
     }
     return 'user';
   }
-  onProgress?.('Restoring market data…');
+  onProgress?.(tActive('dt.restoreMarket'));
   await importMarketDataPayload(payloadJson);
   return 'market';
 }

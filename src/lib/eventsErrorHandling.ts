@@ -1,3 +1,4 @@
+import { tActive, USER_MSG_MARK } from '../i18n/active.ts';
 import { formatShortLocalDateTime } from './dateTime.ts';
 
 export type EventsErrorContext =
@@ -23,40 +24,40 @@ function toRawErrorMessage(error: unknown): string {
 function getEventsSubject(context: EventsErrorContext): string {
   switch (context) {
     case 'events-active-events':
-      return 'active events';
+      return tActive('err.ev.sub.events');
     case 'events-alerts':
-      return 'alerts';
+      return tActive('err.ev.sub.alerts');
     case 'events-sortie':
-      return 'sortie data';
+      return tActive('err.ev.sub.sortie');
     case 'events-arbitration':
-      return 'arbitration data';
+      return tActive('err.ev.sub.arbitration');
     case 'events-archon-hunt':
-      return 'Archon Hunt data';
+      return tActive('err.ev.sub.archon');
     case 'events-fissures':
-      return 'fissures';
+      return tActive('err.ev.sub.fissures');
     case 'events-market-news':
-      return 'market and news data';
+      return tActive('err.ev.sub.marketNews');
     case 'events-invasions':
-      return 'invasions';
+      return tActive('err.ev.sub.invasions');
     case 'events-syndicate-missions':
-      return 'syndicate missions';
+      return tActive('err.ev.sub.syndicate');
     case 'events-void-trader':
-      return 'Void Trader data';
+      return tActive('err.ev.sub.voidTrader');
     default:
-      return 'event data';
+      return tActive('err.ev.sub.default');
   }
 }
 
 function buildInitialEventsMessage(context: EventsErrorContext): string {
-  return `Couldn’t load ${getEventsSubject(context)} right now. Please try again. If it keeps happening, report it in Discord.`;
+  return tActive('err.ev.load', { subject: getEventsSubject(context) });
 }
 
 function buildDegradedEventsMessage(context: EventsErrorContext, lastAvailableAt: string | null): string {
   const formattedTimestamp = lastAvailableAt ? formatShortLocalDateTime(lastAvailableAt) : null;
 
   return formattedTimestamp
-    ? `Couldn’t refresh ${getEventsSubject(context)} right now. Showing the last available data from ${formattedTimestamp}. If it keeps happening, report it in Discord.`
-    : `Couldn’t refresh ${getEventsSubject(context)} right now. Showing the last available data if possible. If it keeps happening, report it in Discord.`;
+    ? tActive('err.ev.refreshAt', { subject: getEventsSubject(context), time: formattedTimestamp })
+    : tActive('err.ev.refresh', { subject: getEventsSubject(context) });
 }
 
 export function formatEventsErrorMessage(
@@ -65,6 +66,10 @@ export function formatEventsErrorMessage(
   options?: { lastAvailableAt?: string | null },
 ): string {
   const raw = toRawErrorMessage(error);
+
+  if (raw.startsWith(USER_MSG_MARK)) {
+    return raw.slice(USER_MSG_MARK.length);
+  }
   const lastAvailableAt = options?.lastAvailableAt ?? null;
 
   if (!raw) {

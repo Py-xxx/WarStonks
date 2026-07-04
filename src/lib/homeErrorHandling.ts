@@ -1,3 +1,4 @@
+import { tActive, USER_MSG_MARK } from '../i18n/active.ts';
 export type HomeErrorContext =
   | 'dashboard-quick-view-load'
   | 'dashboard-quick-view-copy'
@@ -21,32 +22,36 @@ function toRawErrorMessage(error: unknown): string {
 function friendlyHomeErrorFallback(context: HomeErrorContext): string {
   switch (context) {
     case 'dashboard-quick-view-load':
-      return 'Couldn’t load quick view right now. Please try another search or retry in a moment. If it keeps happening, report it in Discord.';
+      return tActive('err.home.loadQv');
     case 'dashboard-quick-view-copy':
-      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.home.copyWhisper');
     case 'dashboard-analysis-load':
-      return 'Couldn’t build the analysis preview right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.home.buildPreview');
     case 'watchlist-add':
-      return 'Couldn’t add this item to the watchlist right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.home.addWatchlist');
     case 'watchlist-buy-sync':
-      return 'Added to the watchlist, but the linked buy order could not be synced right now. If it keeps happening, report it in Discord.';
+      return tActive('err.home.buySync');
     case 'watchlist-copy':
-      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.home.copyWhisper');
     case 'watchlist-mark-bought':
-      return 'Couldn’t mark this item as bought right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.home.markBought');
     case 'watchlist-refresh':
-      return 'Couldn’t refresh this watchlist item right now. WarStonks will try again automatically. If it keeps happening, report it in Discord.';
+      return tActive('err.home.refreshItem');
     case 'alerts-copy':
-      return 'Couldn’t copy the whisper message right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.home.copyWhisper');
     case 'alerts-mark-bought':
-      return 'Couldn’t mark this alert item as bought right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.home.markBought');
     default:
-      return 'Something went wrong. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.generic');
   }
 }
 
 export function formatHomeErrorMessage(context: HomeErrorContext, error: unknown): string {
   const raw = toRawErrorMessage(error);
+
+  if (raw.startsWith(USER_MSG_MARK)) {
+    return raw.slice(USER_MSG_MARK.length);
+  }
 
   if (!raw) {
     return friendlyHomeErrorFallback(context);

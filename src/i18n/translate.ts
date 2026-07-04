@@ -1,11 +1,11 @@
 // Pure translation logic — no React, no store — so it can be unit-tested in isolation.
-import type { AppLanguage } from '../lib/language';
-import { en, type TranslationKey } from './en';
-import { zhHans } from './zh-hans';
-import { pt } from './pt';
-import { es } from './es';
-import { fr } from './fr';
-import { de } from './de';
+import type { AppLanguage } from '../lib/language.ts';
+import { en, type TranslationKey } from './en.ts';
+import { zhHans } from './zh-hans.ts';
+import { pt } from './pt.ts';
+import { es } from './es.ts';
+import { fr } from './fr.ts';
+import { de } from './de.ts';
 
 type LocaleMap = Record<string, string>;
 

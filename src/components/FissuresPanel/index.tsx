@@ -9,11 +9,6 @@ import type { RelicTierIcon, WfstatFissure } from '../../types';
 
 type FissureMode = 'normal' | 'steel-path';
 
-const FISSURE_MODE_LABELS: Record<FissureMode, string> = {
-  normal: 'Normal fissures',
-  'steel-path': 'Steel Path fissures',
-};
-
 const EXCLUDED_FISSURE_MISSION_TYPES = new Set(['skirmish', 'volatile']);
 
 function normalizeMissionTypeKey(value: string | null): string | null {
@@ -21,22 +16,22 @@ function normalizeMissionTypeKey(value: string | null): string | null {
   return normalized && normalized.length > 0 ? normalized : null;
 }
 
-function getFissureTierLabel(fissure: WfstatFissure): string {
-  return fissure.tier?.trim() || 'Unknown';
+function getFissureTierLabel(fissure: WfstatFissure, unknownLabel: string): string {
+  return fissure.tier?.trim() || unknownLabel;
 }
 
-function compareFissures(left: WfstatFissure, right: WfstatFissure): number {
+function compareFissures(left: WfstatFissure, right: WfstatFissure, unknownLabel: string): number {
   return (left.tierNum ?? Number.MAX_SAFE_INTEGER) - (right.tierNum ?? Number.MAX_SAFE_INTEGER)
-    || getFissureTierLabel(left).localeCompare(getFissureTierLabel(right))
+    || getFissureTierLabel(left, unknownLabel).localeCompare(getFissureTierLabel(right, unknownLabel))
     || (left.node ?? '').localeCompare(right.node ?? '')
     || (left.missionType ?? '').localeCompare(right.missionType ?? '');
 }
 
-function groupFissuresByTier(fissures: WfstatFissure[]) {
+function groupFissuresByTier(fissures: WfstatFissure[], unknownLabel: string) {
   const grouped = new Map<string, WfstatFissure[]>();
 
-  for (const fissure of [...fissures].sort(compareFissures)) {
-    const tier = getFissureTierLabel(fissure);
+  for (const fissure of [...fissures].sort((a, b) => compareFissures(a, b, unknownLabel))) {
+    const tier = getFissureTierLabel(fissure, unknownLabel);
     const bucket = grouped.get(tier) ?? [];
     bucket.push(fissure);
     grouped.set(tier, bucket);
@@ -156,8 +151,8 @@ export function FissuresPanel() {
     [fissures, mode, nowMs],
   );
   const groupedFissures = useMemo(
-    () => groupFissuresByTier(filteredFissures),
-    [filteredFissures],
+    () => groupFissuresByTier(filteredFissures, t('evt.unknown')),
+    [filteredFissures, t],
   );
   const tierIconMap = useMemo(
     () =>
@@ -174,7 +169,7 @@ export function FissuresPanel() {
       <div className="card-header">
         <span className="card-label">{t('ws.fissures')}</span>
         <span className={`badge ${filteredFissures.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
-          {filteredFissures.length} active
+          {t('evt.activeCount', { n: filteredFissures.length })}
         </span>
         <div className="card-actions fissure-mode-toggle" role="tablist" aria-label={t('a11y.fissureMode')}>
           <button
@@ -182,8 +177,8 @@ export function FissuresPanel() {
             type="button"
             role="tab"
             aria-selected={mode === 'normal'}
-            aria-label={FISSURE_MODE_LABELS.normal}
-            title={FISSURE_MODE_LABELS.normal}
+            aria-label={t('evt.fissuresNormal')}
+            title={t('evt.fissuresNormal')}
             onClick={() => setMode('normal')}
           >
             <NormalModeIcon />
@@ -193,8 +188,8 @@ export function FissuresPanel() {
             type="button"
             role="tab"
             aria-selected={mode === 'steel-path'}
-            aria-label={FISSURE_MODE_LABELS['steel-path']}
-            title={FISSURE_MODE_LABELS['steel-path']}
+            aria-label={t('evt.fissuresSteelPath')}
+            title={t('evt.fissuresSteelPath')}
             onClick={() => setMode('steel-path')}
           >
             <SteelPathModeIcon />
@@ -206,7 +201,7 @@ export function FissuresPanel() {
               void refreshWorldStateFissures();
             }}
           >
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -214,7 +209,7 @@ export function FissuresPanel() {
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
 
@@ -230,7 +225,7 @@ export function FissuresPanel() {
         {loading && fissures.length === 0 ? (
           <EventsPanelEmpty
             title={t('a11y.loadingFissures')}
-            detail="Checking the latest fissure rotations from the live worldstate."
+            detail={t('evt.checkingFissures')}
           />
         ) : null}
 
@@ -238,7 +233,7 @@ export function FissuresPanel() {
           <EventsPanelEmpty
             title={t('a11y.fissuresFailed')}
             detail={error}
-            actionLabel="Retry"
+            actionLabel={t('common.retry')}
             onAction={() => {
               void refreshWorldStateFissures();
             }}
@@ -247,8 +242,8 @@ export function FissuresPanel() {
 
         {!loading && groupedFissures.length === 0 && (!error || hasUsableFissures) ? (
           <EventsPanelEmpty
-            title={`No ${mode === 'steel-path' ? 'Steel Path ' : ''}fissures active`}
-            detail="Switch modes or wait for the next worldstate refresh."
+            title={mode === 'steel-path' ? t('evt.noFissuresActiveSteel') : t('evt.noFissuresActiveNormal')}
+            detail={t('evt.switchModesHint')}
           />
         ) : null}
 
@@ -271,14 +266,14 @@ export function FissuresPanel() {
                   {group.fissures.map((fissure) => (
                     <article key={fissure.id} className="fissure-item">
                       <div className="fissure-item-topline">
-                        <span className="fissure-item-node">{fissure.node ?? 'Unknown node'}</span>
+                        <span className="fissure-item-node">{fissure.node ?? t('mkt.unknownNode')}</span>
                         <span className="badge badge-green">
                           {formatWorldStateCountdown(fissure.expiry, nowMs)}
                         </span>
                       </div>
                       <div className="fissure-item-meta">
-                        <span>{fissure.missionType ?? 'Unknown mission'}</span>
-                        <span>{fissure.enemy ?? 'Unknown faction'}</span>
+                        <span>{fissure.missionType ?? t('evt.unknownMission')}</span>
+                        <span>{fissure.enemy ?? t('evt.unknownFaction')}</span>
                       </div>
                     </article>
                   ))}

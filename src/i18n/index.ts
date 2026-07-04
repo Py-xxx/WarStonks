@@ -21,3 +21,7 @@ export function useTranslation(): { t: TranslateFn; language: AppLanguage } {
   const t: TranslateFn = (key: TranslationKey, vars?: TranslateVars) => translate(language, key, vars);
   return { t, language };
 }
+
+
+
+export { tActive, tUserMessage, USER_MSG_MARK } from './active';

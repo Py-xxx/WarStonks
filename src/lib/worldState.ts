@@ -1,3 +1,4 @@
+import { tActive } from '../i18n';
 import { formatShortLocalDateTime } from './dateTime';
 
 import type {
@@ -84,6 +85,28 @@ export const WORLDSTATE_ENDPOINT_LABELS: Record<WorldStateEndpointKey, string> =
   nightwave: 'Nightwave',
   'vault-trader': 'Prime Resurgence',
 };
+
+/** Localized display label for a worldstate endpoint (English canonical map above). */
+export function worldstateEndpointLabel(key: WorldStateEndpointKey): string {
+  switch (key) {
+    case 'events': return tActive('ws.activeEvents');
+    case 'alerts': return tActive('ws.alerts');
+    case 'sortie': return tActive('ws.sorties');
+    case 'arbitration': return tActive('ws.arbitrations');
+    case 'archon-hunt': return tActive('ws.archonHunts');
+    case 'fissures': return tActive('ws.fissures');
+    case 'market-news': return tActive('ws.marketNews');
+    case 'invasions': return tActive('ws.invasions');
+    case 'syndicate-missions': return tActive('ws.syndicateMissions');
+    case 'void-trader': return tActive('ws.voidTrader');
+    case 'cycles': return tActive('ws.worldCycles');
+    case 'steel-path': return tActive('ws.steelPathName');
+    case 'nightwave': return tActive('ws.nightwaveName');
+    case 'vault-trader': return tActive('ws.primeResurgence');
+    default: return WORLDSTATE_ENDPOINT_LABELS[key];
+  }
+}
+
 
 /** Reads an ISO `expiry` from a worldstate object payload (for scheduling the next refresh). */
 export function worldStateObjectExpiry(payload: unknown): string | null {

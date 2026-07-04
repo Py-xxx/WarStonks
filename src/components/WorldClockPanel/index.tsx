@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from '../../i18n';
+import type { TranslationKey } from '../../i18n/en';
 import { useAppStore } from '../../stores/useAppStore';
 
 type CycleConfig = {
   key: string;
   label: string;
   // Maps the raw worldstate state string → a display label + tone class.
-  tone: (state: string) => { label: string; tone: string };
+  // Fass/Vome are Warframe-specific proper nouns and stay in English like Archwing/Sharkwing.
+  tone: (state: string) => { labelKey: TranslationKey | null; label?: string; tone: string };
 };
 
 const CYCLES: CycleConfig[] = [
@@ -15,32 +17,32 @@ const CYCLES: CycleConfig[] = [
     label: 'Cetus',
     tone: (state) =>
       state === 'day'
-        ? { label: 'Day', tone: 'day' }
-        : { label: 'Night', tone: 'night' },
+        ? { labelKey: 'evt.day', tone: 'day' }
+        : { labelKey: 'evt.night', tone: 'night' },
   },
   {
     key: 'vallisCycle',
     label: 'Orb Vallis',
     tone: (state) =>
       state === 'warm'
-        ? { label: 'Warm', tone: 'warm' }
-        : { label: 'Cold', tone: 'cold' },
+        ? { labelKey: 'evt.warm', tone: 'warm' }
+        : { labelKey: 'evt.cold', tone: 'cold' },
   },
   {
     key: 'cambionCycle',
     label: 'Cambion Drift',
     tone: (state) =>
       state === 'fass'
-        ? { label: 'Fass', tone: 'warm' }
-        : { label: 'Vome', tone: 'night' },
+        ? { labelKey: null, label: 'Fass', tone: 'warm' }
+        : { labelKey: null, label: 'Vome', tone: 'night' },
   },
   {
     key: 'earthCycle',
     label: 'Earth',
     tone: (state) =>
       state === 'day'
-        ? { label: 'Day', tone: 'day' }
-        : { label: 'Night', tone: 'night' },
+        ? { labelKey: 'evt.day', tone: 'day' }
+        : { labelKey: 'evt.night', tone: 'night' },
   },
 ];
 
@@ -65,13 +67,13 @@ function readCycle(payload: unknown, key: string): { state: string; expiry: stri
   return { state, expiry };
 }
 
-function formatCountdown(expiry: string | null, now: number): string {
+function formatCountdown(expiry: string | null, now: number, nowLabel: string): string {
   if (!expiry) {
     return '—';
   }
   const remaining = Date.parse(expiry) - now;
   if (!Number.isFinite(remaining) || remaining <= 0) {
-    return 'now';
+    return nowLabel;
   }
   const totalMinutes = Math.floor(remaining / 60_000);
   const hours = Math.floor(totalMinutes / 60);
@@ -105,7 +107,7 @@ export function WorldClockPanel() {
   if (cycles.length === 0) {
     return (
       <div className="world-clock world-clock-empty">
-        {entry.loading ? 'Loading world cycles…' : 'World cycles unavailable right now.'}
+        {entry.loading ? t('evt.loadingWorldCycles') : t('evt.worldCyclesUnavailable')}
       </div>
     );
   }
@@ -118,9 +120,9 @@ export function WorldClockPanel() {
           <div key={config.key} className={`world-clock-cell world-clock-${display.tone}`}>
             <span className="world-clock-place">{config.label}</span>
             <span className={`world-clock-state world-clock-state-${display.tone}`}>
-              {display.label}
+              {display.labelKey ? t(display.labelKey) : display.label}
             </span>
-            <span className="world-clock-countdown">{formatCountdown(data!.expiry, now)}</span>
+            <span className="world-clock-countdown">{formatCountdown(data!.expiry, now, t('evt.now'))}</span>
           </div>
         );
       })}

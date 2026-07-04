@@ -13,6 +13,7 @@ import { useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
 import { useDocumentVisibility } from '../../hooks/useDocumentVisibility';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { useAppStore } from '../../stores/useAppStore';
@@ -265,7 +266,7 @@ function EventsCard() {
         </div>
         <CardLoadingOverlay
           visible={worldStateEventsLoading}
-          label="Refreshing active dashboard events"
+          label={t('hm.refreshingEvents')}
         />
       </div>
     </div>
@@ -391,7 +392,7 @@ function QuickViewCard() {
     ...(mainOrder?.rank !== null && mainOrder?.rank !== undefined
       ? [
           {
-            label: 'Rank',
+            label: t('pf.rank'),
             value: `${mainOrder.rank}`,
           },
         ]
@@ -432,7 +433,7 @@ function QuickViewCard() {
     <div className="card accent-blue">
       <div className="card-header">
         <span className="card-label">{t('ov.quickView')}</span>
-        <span className="qv-title">{selectedItem?.itemFamily ?? 'WFM item'}</span>
+        <span className="qv-title">{selectedItem?.itemFamily ?? t('ov.wfmItem')}</span>
         <div className="card-actions">
           {quickView.apiVersion ? <span className="badge badge-muted">WFM {quickView.apiVersion}</span> : null}
         </div>
@@ -542,8 +543,8 @@ function QuickViewCard() {
                   <span className="qv-order-copy">
                     <span className="qv-order-primary">{order.username}</span>
                     <span className="qv-order-secondary">
-                      Qty {order.quantity}
-                      {order.rank !== null && order.rank !== undefined ? ` • Rank ${order.rank}` : ''}
+                      {t('pf.qtyValue', { n: order.quantity })}
+                      {order.rank !== null && order.rank !== undefined ? ` • ${t('pf.rank')} ${order.rank}` : ''}
                     </span>
                   </span>
                   <span className="qv-order-price">{order.platinum} pt</span>
@@ -560,7 +561,7 @@ function QuickViewCard() {
                 className="btn-secondary qv-view-all-btn"
                 onClick={() => setViewAllOpen(true)}
               >
-                View All ({allOrders.length})
+                {t('ov.viewAllCount', { n: allOrders.length })}
               </button>
             ) : null}
 
@@ -717,12 +718,12 @@ function AnalysisCard() {
                 <div className="analysis-preview-kicker">{t('ov.tradePosture')}</div>
                 <div className="analysis-preview-title">{previewLabel}</div>
                 <div className="analysis-preview-copy">
-                  {analysis.trend.summary}
+                  {tTrendSummary(t, analysis.trend)}
                 </div>
               </div>
               <div className="analysis-preview-meta">
                 <span>{selectedMarketVariantLabel ?? t('hm.baseMarket')}</span>
-                <span>{analysis.headline.confidenceSummary.label}</span>
+                <span>{tConfidence(t, analysis.headline.confidenceSummary)}</span>
               </div>
             </div>
 
@@ -753,11 +754,11 @@ function AnalysisCard() {
               </div>
               <div className="analysis-preview-stat">
                 <span className="analysis-preview-stat-label">{t('ov.trend')}</span>
-                <span className="analysis-preview-stat-value">{analysis.trend.direction}</span>
+                <span className="analysis-preview-stat-value">{tHealth(t, analysis.trend.direction)}</span>
               </div>
               <div className="analysis-preview-stat">
                 <span className="analysis-preview-stat-label">{t('ov.risk')}</span>
-                <span className="analysis-preview-stat-value">{analysis.manipulationRisk.riskLevel}</span>
+                <span className="analysis-preview-stat-value">{tHealth(t, analysis.manipulationRisk.riskLevel)}</span>
               </div>
             </div>
 

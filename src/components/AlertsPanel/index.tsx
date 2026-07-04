@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from '../../i18n';
+import { formatElapsedTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { WORLDSTATE_ENDPOINT_LABELS } from '../../lib/worldState';
@@ -9,23 +10,6 @@ import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
 
 interface AlertsPanelProps {
   compact?: boolean;
-}
-
-function formatAlertTimestamp(isoTimestamp: string): string {
-  const createdAt = new Date(isoTimestamp).getTime();
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
-
-  if (elapsedSeconds < 60) {
-    return `${elapsedSeconds}s ago`;
-  }
-
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m ago`;
-  }
-
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  return `${elapsedHours}h ago`;
 }
 
 export function AlertsPanel({ compact = false }: AlertsPanelProps) {
@@ -63,7 +47,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         <div className="empty-state">
           <span className="empty-primary">{t('al.noActiveAlerts')}</span>
           <span className="empty-sub">
-            Alerts appear when a watchlist item reaches your target price or a worldstate feed fails.
+            {t('al.emptyHint')}
           </span>
         </div>
       </div>
@@ -84,11 +68,11 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
             <div className="alerts-section-title-wrap">
               <span className="alerts-section-title">{t('al.underpricedRadar')}</span>
               <span className={`badge badge-${underpricedAlert.listing.tier === 'red' ? 'red' : underpricedAlert.listing.tier === 'yellow' ? 'amber' : 'green'}`}>
-                {Math.round(underpricedAlert.listing.pctBelow)}% below
+                {t('al.pctBelow', { pct: Math.round(underpricedAlert.listing.pctBelow) })}
               </span>
             </div>
             <button className="text-btn" type="button" onClick={dismissUnderpricedAlert}>
-              Dismiss
+              {t('al.dismiss')}
             </button>
           </div>
           <div className="alerts-list">
@@ -127,15 +111,14 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                     ).catch(() => undefined);
                   }}
                 >
-                  Copy Message
+                  {t('al.copyMessage')}
                 </button>
               </div>
             </div>
           </div>
           {underpricedAlert.otherCount > 0 ? (
             <div className="alerts-underpriced-more">
-              {underpricedAlert.otherCount} other underpriced listing
-              {underpricedAlert.otherCount === 1 ? '' : 's'} found
+              {t('al.otherUnderpricedFound', { n: underpricedAlert.otherCount })}
             </div>
           ) : null}
         </div>
@@ -151,7 +134,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
             {!compact ? (
               <div className="alert-header-actions">
                 <button className="text-btn" type="button" onClick={clearAllSystemAlerts}>
-                  Clear System
+                  {t('al.clearSystem')}
                 </button>
               </div>
             ) : null}
@@ -199,7 +182,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                             .join(', ')}
                         </span>
                       ) : null}
-                      <span>{formatAlertTimestamp(alert.createdAt)}</span>
+                      <span>{formatElapsedTime(alert.createdAt)}</span>
                     </div>
                     {alert.kind === 'app-update' && alert.releaseNotes ? (
                       <div className="alert-system-notes">
@@ -218,7 +201,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                         void retryWorldStateSystemAlert(alert.sourceKeys ?? []);
                       }}
                     >
-                      Retry
+                      {t('al.retry')}
                     </button>
                   </div>
                 ) : null}
@@ -247,7 +230,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       disabled={alert.installState === 'downloading' || alert.installState === 'installing'}
                       onClick={() => dismissSystemAlert(alert.id)}
                     >
-                      Later
+                      {t('al.later')}
                     </button>
                   </div>
                 ) : null}
@@ -267,7 +250,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
             {!compact ? (
               <div className="alert-header-actions">
                 <button className="text-btn" type="button" onClick={clearAllAlerts}>
-                  Clear Market
+                  {t('al.clearMarket')}
                 </button>
               </div>
             ) : null}
@@ -302,11 +285,11 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                       </div>
                       <div className="alert-meta">
                         <span>{alert.username}</span>
-                        <span>Qty {alert.quantity}</span>
+                        <span>{t('pf.qtyValue', { n: alert.quantity })}</span>
                         {alert.rank !== null && alert.rank !== undefined ? (
-                          <span>Rank {alert.rank}</span>
+                          <span>{t('pf.rank')} {alert.rank}</span>
                         ) : null}
-                        <span>{formatAlertTimestamp(alert.createdAt)}</span>
+                        <span>{formatElapsedTime(alert.createdAt)}</span>
                       </div>
                     </div>
                   </div>
@@ -329,10 +312,10 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                         });
                       }}
                     >
-                      Mark as bought
+                      {t('wl.markAsBought')}
                     </button>
                     <button className="act-btn" type="button" onClick={() => markAlertNoResponse(alert.id)}>
-                      No Response
+                      {t('al.noResponse')}
                     </button>
                     <button
                       className="act-btn"
@@ -355,7 +338,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                           })
                       }
                     >
-                      Copy Message
+                      {t('al.copyMessage')}
                     </button>
                   </div>
                 </div>

@@ -58,6 +58,20 @@ export function wfstatLangCode(language: AppLanguage): string {
   return language === 'zh-hans' ? 'zh' : language;
 }
 
+const INTL_LOCALE_CODES: Record<AppLanguage, string> = {
+  en: 'en-US',
+  'zh-hans': 'zh-CN',
+  pt: 'pt-BR',
+  es: 'es-ES',
+  fr: 'fr-FR',
+  de: 'de-DE',
+};
+
+/** BCP-47 locale code for `Intl`/`toLocaleDateString` calls that need the app's chosen language. */
+export function intlLocaleCode(language: AppLanguage): string {
+  return INTL_LOCALE_CODES[language] ?? 'en-US';
+}
+
 /**
  * Localized word for "Set". WFM set items (slug ending `_set`) show "… Set" in English, but the
  * localized name from WFStat often maps to the base item and drops it — so we re-append this.

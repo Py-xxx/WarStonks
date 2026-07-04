@@ -900,17 +900,21 @@ export interface UnderpricedListing {
   } | null;
 }
 
-/** A structured reason chip explaining WHY an opportunity is worth acting on. */
+/** A structured reason chip explaining WHY an opportunity is worth acting on. `textKey` is an
+ *  i18n key interpolated with `textParams` at render time, so the board renders in any app
+ *  language instead of the backend's raw English. */
 export interface OpportunityReason {
   icon: 'inventory' | 'market' | 'relics' | 'math' | string;
-  text: string;
+  textKey: string;
+  textParams: Record<string, string>;
   source: string;
 }
 
 /** A suggested action on an opportunity card. */
 export interface OpportunityAction {
   kind: 'buyPart' | 'sellPart' | 'sellSet' | 'farmRelic' | 'openWfm' | 'copyWhisper' | string;
-  label: string;
+  labelKey: string;
+  labelParams: Record<string, string>;
   itemSlug: string | null;
   itemName: string | null;
   price: number | null;
@@ -925,8 +929,10 @@ export interface Opportunity {
    *  Pins track this so a pinned "complete set" auto-becomes "sell set" once you own the parts. */
   subjectKey: string;
   category: 'setCompletion' | 'sellInventory' | string;
-  title: string;
-  subtitle: string | null;
+  titleKey: string;
+  titleParams: Record<string, string>;
+  subtitleKey: string | null;
+  subtitleParams: Record<string, string>;
   setSlug: string | null;
   imagePath: string | null;
   estValue: number;

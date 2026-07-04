@@ -90,7 +90,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
         <div className="settings-inline-error watchlist-copy-error">
           {copyError}
           <button type="button" className="text-btn" onClick={() => setCopyError(null)}>
-            Dismiss
+            {t('wl.dismiss')}
           </button>
         </div>
       ) : null}
@@ -98,7 +98,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
         <div className="settings-inline-error watchlist-copy-error">
           {watchlistActionError}
           <button type="button" className="text-btn" onClick={() => setWatchlistActionError(null)}>
-            Dismiss
+            {t('wl.dismiss')}
           </button>
         </div>
       ) : null}
@@ -107,8 +107,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
         <div className="empty-state">
           <span className="empty-primary">{t('wl.noItems')}</span>
           <span className="empty-sub">
-            Search for an item, set your desired price, and add it to start monitoring live
-            sell orders.
+            {t('wl.searchToAddHint')}
           </span>
         </div>
       ) : (
@@ -171,7 +170,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                           imagePath={item.imagePath}
                         />
                         {variant === 'compact' ? (
-                          <span className="td-muted">Refreshed {formatElapsedTime(item.lastUpdatedAt)}</span>
+                          <span className="td-muted">{t('wl.refreshedAt', { time: formatElapsedTime(item.lastUpdatedAt) })}</span>
                         ) : null}
                       </div>
                     </td>
@@ -191,7 +190,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                         <td>{item.currentSeller ?? '—'}</td>
                         <td>{item.currentQuantity ?? '—'}</td>
                         <td>{hasRank ? item.currentRank : '—'}</td>
-                        <td className="td-muted">Refreshed {formatElapsedTime(item.lastUpdatedAt)}</td>
+                        <td className="td-muted">{t('wl.refreshedAt', { time: formatElapsedTime(item.lastUpdatedAt) })}</td>
                       </>
                     ) : (
                       <>
@@ -215,7 +214,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                             setPurchaseItemId(item.id);
                           }}
                         >
-                          Mark as bought
+                          {t('wl.markAsBought')}
                         </button>
                         {canCopy ? (
                           <button
@@ -237,7 +236,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                             setRemoveItemId(item.id);
                           }}
                         >
-                          Remove
+                          {t('wl.remove')}
                         </button>
                       </div>
                     </td>
@@ -250,7 +249,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             <span>{t('hm.adaptiveScans')}</span>
             {variant === 'compact' && selectedId ? (
               <span className="selected">
-                Selected:{' '}
+                {t('wl.selectedLabel')}{' '}
                 <span className="wl-selected-name">
                   {watchlist.find((entry) => entry.id === selectedId)?.displayName}
                 </span>

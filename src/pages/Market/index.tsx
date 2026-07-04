@@ -12,14 +12,14 @@ import { formatShortLocalDate, formatShortLocalDateTime } from '../../lib/dateTi
 import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
-  WATCHLIST_ADD_SUCCESS_MESSAGE,
 } from '../../lib/watchlistAddFeedback';
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { wfstatLangCode } from '../../lib/language';
-import { useTranslation } from '../../i18n';
+import { tActive, useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { resolveLocalizedName } from '../../lib/itemNames';
+import { tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
 import type { TranslationKey } from '../../i18n/en';
 import { translate } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
@@ -89,7 +89,7 @@ interface MockBucketPoint {
 
 interface ChartSeriesOption {
   key: ChartSeriesKey;
-  label: string;
+  label: TranslationKey;
   colorClass: string;
 }
 
@@ -199,11 +199,11 @@ function queuePanelReveal<T extends string>(
   });
 }
 
-const DOMAIN_OPTIONS: Array<{ key: ChartDomainKey; label: string; hours: number }> = [
-  { key: '48h', label: '48 hours', hours: 48 },
-  { key: '7d', label: '7 days', hours: 24 * 7 },
-  { key: '30d', label: '30 days', hours: 24 * 30 },
-  { key: '90d', label: '90 days', hours: 24 * 90 },
+const DOMAIN_OPTIONS: Array<{ key: ChartDomainKey; label: TranslationKey; hours: number }> = [
+  { key: '48h', label: 'mkt.domain48h', hours: 48 },
+  { key: '7d', label: 'mkt.domain7d', hours: 24 * 7 },
+  { key: '30d', label: 'mkt.domain30d', hours: 24 * 30 },
+  { key: '90d', label: 'mkt.domain90d', hours: 24 * 90 },
 ];
 
 const BUCKET_OPTIONS_BY_DOMAIN: Record<ChartDomainKey, ChartBucketKey[]> = {
@@ -652,7 +652,7 @@ function StaticAnalyticsChart({
             <span className="panel-title-eyebrow">{t('market.priceChart')}</span>
             <span className="card-label market-panel-title-row">
               <span>{itemName}</span>
-              <AdaptiveInfoHint text="Historical price view for the selected item, including live hover details, entry and exit zones, and optional series overlays." />
+              <AdaptiveInfoHint text={t('mki.chart')} />
             </span>
           </div>
           <div className="market-chart-select-row">
@@ -728,7 +728,7 @@ function StaticAnalyticsChart({
                   onClick={() => toggleSeries(option.key)}
                 >
                   <span className={`legend-swatch ${option.colorClass}`} />
-                  {option.label}
+                  {t(option.label)}
                 </button>
               ))}
             </div>
@@ -996,7 +996,7 @@ function StaticAnalyticsChart({
         <PanelOverlay
           loading={chartLoading}
           errorMessage={!chartLoading ? errorMessage : null}
-          label="Loading chart history"
+          label={t('mkt.loadingChartHistory')}
         />
       </div>
     </div>
@@ -1047,7 +1047,15 @@ function formatDropChancePercent(value: number | null | undefined): string {
   return `${formatNumber(percentValue, digits)}%`;
 }
 
-const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAY_LABEL_KEYS: TranslationKey[] = [
+  'mkt.weekdayMon',
+  'mkt.weekdayTue',
+  'mkt.weekdayWed',
+  'mkt.weekdayThu',
+  'mkt.weekdayFri',
+  'mkt.weekdaySat',
+  'mkt.weekdaySun',
+];
 
 function formatTwoHourBlockLabel(bucketIndex: number): string {
   const start = (bucketIndex * 2) % 24;
@@ -1103,7 +1111,7 @@ function buildTimeOfDayDisplayModel(
   const todayWeekday = summary?.todayWeekday ?? -1;
   const rows = Array.from({ length: 7 }, (_, weekday): TimeOfDayDisplayRow => ({
     weekday,
-    label: WEEKDAY_LABELS[weekday],
+    label: tActive(WEEKDAY_LABEL_KEYS[weekday]),
     isToday: weekday === todayWeekday,
     cells: Array.from(
       { length: 12 },
@@ -1528,13 +1536,18 @@ function buildEventContextConfidence(entries: EventContextEntry[], t: TranslateF
     return {
       level: 'low',
       label: t('mkt.conf.low'),
-      reasons: ['No active context'],
+      reasons: [t('mkt.noActiveCtx')],
       isDegraded: true,
     };
   }
 
   const hasDirectRetailHook = entries.some((entry) =>
-    ['Void Trader', 'Flash Sale', 'Alert Reward', 'Invasion Reward'].includes(entry.label),
+    [
+      t('mkt.event.voidTrader'),
+      t('mkt.event.flashSale'),
+      t('mkt.event.alertReward'),
+      t('mkt.event.invasionReward'),
+    ].includes(entry.label),
   );
 
   if (hasDirectRetailHook || entries.length >= 2) {
@@ -1549,7 +1562,7 @@ function buildEventContextConfidence(entries: EventContextEntry[], t: TranslateF
   return {
     level: 'medium',
     label: t('mkt.conf.medium'),
-    reasons: ['Indirect context'],
+    reasons: [t('mkt.indirectCtx')],
     isDegraded: true,
   };
 }
@@ -1559,13 +1572,14 @@ function ConfidenceBadge({
 }: {
   confidence: MarketConfidenceSummary | null | undefined;
 }) {
+  const { t } = useTranslation();
   if (!confidence) {
     return null;
   }
 
   return (
     <span className={`market-panel-badge tone-${getConfidenceTone(confidence)}`}>
-      {confidence.label}
+      {tConfidence(t, confidence)}
     </span>
   );
 }
@@ -1614,7 +1628,7 @@ function buildEventContextEntries(
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
         label: t('mkt.event.alertReward'),
-        impact: `${alert.mission?.node ?? 'Unknown node'} is currently rewarding this item.`,
+        impact: t('mkev.alertImpact', { node: alert.mission?.node ?? t('mkt.unknownNode') }),
       });
     }
   }
@@ -1624,7 +1638,7 @@ function buildEventContextEntries(
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
         label: t('mkt.event.activeEvent'),
-        impact: `${event.description} currently includes this item in its reward pool.`,
+        impact: t('mkev.eventImpact', { event: event.description }),
       });
     }
   }
@@ -1637,7 +1651,7 @@ function buildEventContextEntries(
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
         label: t('mkt.event.invasionReward'),
-        impact: `${invasion.node ?? 'Unknown node'} currently offers this item through invasion rewards.`,
+        impact: t('mkev.invasionImpact', { node: invasion.node ?? t('mkt.unknownNode') }),
       });
     }
   }
@@ -1647,7 +1661,7 @@ function buildEventContextEntries(
     if (rewardItems.some((item) => containsItemMatch(item, matchNeedles))) {
       entries.push({
         label: t('mkt.event.syndicateMission'),
-        impact: `${mission.syndicate ?? 'Syndicate'} currently has a mission reward pool that includes this item.`,
+        impact: t('mkev.syndicateImpact', { syndicate: mission.syndicate ?? t('mkt.syndicate') }),
       });
     }
   }
@@ -1659,7 +1673,7 @@ function buildEventContextEntries(
   ) {
     entries.push({
       label: t('mkt.event.voidTrader'),
-      impact: 'Baro Ki’Teer is currently selling this item, which can pressure short-term pricing.',
+      impact: t('mkev.baroImpact'),
     });
   }
 
@@ -1670,7 +1684,7 @@ function buildEventContextEntries(
   ) {
     entries.push({
       label: t('mkt.event.flashSale'),
-      impact: 'A flash sale is active for this item, which can distort short-term market behavior.',
+      impact: t('mkev.flashImpact'),
     });
   }
 
@@ -1678,7 +1692,7 @@ function buildEventContextEntries(
 }
 
 function EmptyAnalyticsState({
-  title = 'Analytics is ready when the market selection is ready',
+  title,
   body,
   actionLabel = null,
   onAction = null,
@@ -1688,9 +1702,12 @@ function EmptyAnalyticsState({
   actionLabel?: string | null;
   onAction?: (() => void) | null;
 }) {
+  const { t } = useTranslation();
+  const resolvedTitle = title ?? t('mkt.emptyReady');
+
   return (
     <div className="market-empty-state">
-      <span className="empty-primary">{title}</span>
+      <span className="empty-primary">{resolvedTitle}</span>
       <span className="empty-sub">{body}</span>
       {actionLabel && onAction ? (
         <button type="button" className="market-empty-state-action" onClick={onAction}>
@@ -1752,7 +1769,7 @@ function AnalyticsPanel({
   children,
   loading = false,
   errorMessage = null,
-  loadingLabel = 'Loading panel',
+  loadingLabel,
   className = '',
   accent = 'blue',
   headerAside = null,
@@ -1769,6 +1786,9 @@ function AnalyticsPanel({
   accent?: 'blue' | 'green' | 'amber' | 'purple';
   headerAside?: ReactNode;
 }) {
+  const { t } = useTranslation();
+  const resolvedLoadingLabel = loadingLabel ?? t('mkl.panel');
+
   return (
     <div className={`card market-panel accent-${accent} ${className}`.trim()}>
       <div className="card-header">
@@ -1785,7 +1805,7 @@ function AnalyticsPanel({
       </div>
       <div className="card-body market-panel-body">
         {children}
-        <PanelOverlay loading={loading} errorMessage={errorMessage} label={loadingLabel} />
+        <PanelOverlay loading={loading} errorMessage={errorMessage} label={resolvedLoadingLabel} />
       </div>
     </div>
   );
@@ -1925,7 +1945,7 @@ function AnalyticsTab() {
   if (!selectedItem) {
     return (
       <div className="page-content">
-        <EmptyAnalyticsState body="Use the global search to select a WFM item, then this page will load cached history, live orderbook pressure, and compact market snapshots." />
+        <EmptyAnalyticsState body={t('mkb.pickItemCharts')} />
       </div>
     );
   }
@@ -1941,7 +1961,7 @@ function AnalyticsTab() {
         <EmptyAnalyticsState
           title={t('a11y.analyticsFailed')}
           body={marketVariantsError}
-          actionLabel="Retry"
+          actionLabel={t('common.retry')}
           onAction={() => {
             void loadQuickViewItem(selectedItem);
           }}
@@ -1953,7 +1973,7 @@ function AnalyticsTab() {
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
-        <EmptyAnalyticsState body="This item has separate rank markets. Pick the rank variant in the top bar so analytics only loads the selected rank." />
+        <EmptyAnalyticsState body={t('mkb.pickRankCharts')} />
         {marketVariantsError ? <MarketInlineNotice tone="error" message={marketVariantsError} /> : null}
       </div>
     );
@@ -1968,7 +1988,7 @@ function AnalyticsTab() {
         <EmptyAnalyticsState
           title={t('a11y.analyticsFailed')}
           body={errorMessage}
-          actionLabel="Retry"
+          actionLabel={t('common.retry')}
           onAction={() => setRefreshNonce((value) => value + 1)}
         />
       ) : null}
@@ -2014,11 +2034,11 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title={t('a11y.entryExitOverview')}
               eyebrow={t('mkteb.marketState')}
-              info="Current fair value, entry zone, exit zone, and zone quality derived from the latest analytics snapshot."
+              info={t('mki.zones')}
               infoPlacement="below"
               loading={!revealedPanels.overview && !analyticsPanelError}
               errorMessage={!revealedPanels.overview ? analyticsPanelError : null}
-              loadingLabel="Calculating entry and exit zones"
+              loadingLabel={t('mkl.zones')}
               headerAside={<ConfidenceBadge confidence={analytics?.entryExitZoneOverview.confidenceSummary} />}
             >
               <div className="market-metric-grid">
@@ -2061,11 +2081,11 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title={t('a11y.orderbookPressure')}
               eyebrow={t('mkteb.execution')}
-              info="Live cheapest sell, highest buy, spread, and visible depth showing whether execution currently favors entry or exit."
+              info={t('mki.orderbook')}
               infoPlacement="below"
               loading={!revealedPanels.pressure && !analyticsPanelError}
               errorMessage={!revealedPanels.pressure ? analyticsPanelError : null}
-              loadingLabel="Reading current orderbook pressure"
+              loadingLabel={t('mkl.orderbook')}
               headerAside={<ConfidenceBadge confidence={analytics?.orderbookPressure.confidenceSummary} />}
             >
               <div className="market-metric-grid">
@@ -2085,7 +2105,7 @@ function AnalyticsTab() {
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">{t('mkt.pressure')}</span>
-                  <span className="market-metric-value">{analytics?.orderbookPressure.pressureLabel ?? '—'}</span>
+                  <span className="market-metric-value">{tHealth(t, analytics?.orderbookPressure.pressureLabel) || '—'}</span>
                 </div>
               </div>
               <div className="market-pressure-row">
@@ -2108,10 +2128,10 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title={t('a11y.trendQualityBreakdown')}
               eyebrow={t('mkteb.structure')}
-              info="Short-term trend structure across multiple price views, including slope, confidence, stability, volatility, and reversal context."
+              info={t('mki.trend')}
               loading={!revealedPanels.trend && !analyticsPanelError}
               errorMessage={!revealedPanels.trend ? analyticsPanelError : null}
-              loadingLabel="Scoring short-term trend quality"
+              loadingLabel={t('mkl.trend')}
               headerAside={<ConfidenceBadge confidence={analytics?.trendQualityBreakdown.confidenceSummary} />}
             >
               <div className="market-tab-row">
@@ -2177,10 +2197,10 @@ function AnalyticsTab() {
             <AnalyticsPanel
               title={t('a11y.actionCard')}
               eyebrow={t('mkteb.readout')}
-              info="Condensed analytics recommendation that combines zone quality, adjusted edge, spread, and book bias into one suggested action."
+              info={t('mki.action')}
               loading={!revealedPanels.action && !analyticsPanelError}
               errorMessage={!revealedPanels.action ? analyticsPanelError : null}
-              loadingLabel="Building the market readout"
+              loadingLabel={t('mkl.readout')}
               headerAside={<ConfidenceBadge confidence={analytics?.actionCard.confidenceSummary} />}
             >
               <div className={`market-action-card tone-${analytics?.actionCard.tone ?? 'neutral'}`}>
@@ -2205,7 +2225,7 @@ function AnalyticsTab() {
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">{t('mkt.bookBias')}</span>
-                    <span className="market-metric-value">{analytics?.actionCard.pressureLabel ?? '—'}</span>
+                    <span className="market-metric-value">{tHealth(t, analytics?.actionCard.pressureLabel) || '—'}</span>
                   </div>
                 </div>
                 <p className="market-action-rationale">{analytics?.actionCard.rationale ?? '—'}</p>
@@ -2428,7 +2448,7 @@ function AnalysisTab() {
   if (!selectedItem) {
     return (
       <div className="page-content">
-        <EmptyAnalyticsState body="Use the global search to select a WFM item, then this page will build a trading analysis from live orders, observatory snapshots, and item-catalog context." />
+        <EmptyAnalyticsState body={t('mkb.pickItemAnalysis')} />
       </div>
     );
   }
@@ -2443,7 +2463,7 @@ function AnalysisTab() {
         <EmptyAnalyticsState
           title={t('a11y.analysisFailed')}
           body={marketVariantsError}
-          actionLabel="Retry"
+          actionLabel={t('common.retry')}
           onAction={() => {
             void loadQuickViewItem(selectedItem);
           }}
@@ -2455,7 +2475,7 @@ function AnalysisTab() {
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
       <div className="page-content">
-        <EmptyAnalyticsState body="Pick the correct rank in the top bar first so analysis never mixes rank-specific orders." />
+        <EmptyAnalyticsState body={t('mkb.pickRankAnalysis')} />
         {marketVariantsError ? <MarketInlineNotice tone="error" message={marketVariantsError} /> : null}
       </div>
     );
@@ -2492,7 +2512,7 @@ function AnalysisTab() {
         <EmptyAnalyticsState
           title={t('a11y.analysisFailed')}
           body={analysisError}
-          actionLabel="Retry"
+          actionLabel={t('common.retry')}
           onAction={() => {
             void loadSelectedMarketAnalysis({ force: true });
           }}
@@ -2542,7 +2562,7 @@ function AnalysisTab() {
                 <div className="market-hero-title-row">
                   <span className="market-hero-kicker market-hero-kicker-row">
                     <span>{t('mkt.tradePosture')}</span>
-                    <AdaptiveInfoHint text="High-level trading readout combining current entry, exit, margin, liquidity, trend confidence, and risk posture." />
+                    <AdaptiveInfoHint text={t('mki.hero')} />
                   </span>
                   <div className="market-badge-stack">
                     <span className={`market-panel-badge tone-${heroState.tone}`}>{heroState.label}</span>
@@ -2562,7 +2582,7 @@ function AnalysisTab() {
                     />
                   </div>
                   <span className="market-meter-value">
-                    {formatPercent(analysis?.headline.liquidityScore)} · {analysis?.headline.liquidityLabel ?? '—'}
+                    {formatPercent(analysis?.headline.liquidityScore)} · {tHealth(t, analysis?.headline.liquidityLabel) || '—'}
                   </span>
                 </div>
                 <div className="market-meter-card">
@@ -2574,7 +2594,7 @@ function AnalysisTab() {
                     />
                   </div>
                   <span className="market-meter-value">
-                    {formatPercent(analysis?.trend.confidence)} · {analysis?.trend.direction ?? '—'}
+                    {formatPercent(analysis?.trend.confidence)} · {tHealth(t, analysis?.trend.direction) || '—'}
                   </span>
                 </div>
                 <div className="market-meter-card">
@@ -2585,7 +2605,7 @@ function AnalysisTab() {
                       style={{ '--meter-fill': `${Math.round(riskMeterValue * 100)}%` } as CSSProperties}
                     />
                   </div>
-                  <span className="market-meter-value">{analysis?.manipulationRisk.riskLevel ?? '—'}</span>
+                  <span className="market-meter-value">{tHealth(t, analysis?.manipulationRisk.riskLevel) || '—'}</span>
                 </div>
               </div>
             </div>
@@ -2605,29 +2625,29 @@ function AnalysisTab() {
               <div className="market-summary-card">
                 <span className="market-summary-label">{t('mkt.liquidity')}</span>
                 <span className="market-summary-value">
-                  {formatPercent(analysis?.headline.liquidityScore)} · {analysis?.headline.liquidityLabel ?? '—'}
+                  {formatPercent(analysis?.headline.liquidityScore)} · {tHealth(t, analysis?.headline.liquidityLabel) || '—'}
                 </span>
               </div>
             </div>
             <PanelOverlay
               loading={!revealedPanels.headline && !analysisError}
               errorMessage={!revealedPanels.headline ? analysisError : null}
-              label="Building headline metrics"
+              label={t('mkt.buildingHeadlineMetrics')}
             />
           </div>
 
           <AnalyticsPanel
             title={t('a11y.flipAnalysis')}
             eyebrow={t('mkteb.executionModel')}
-            info="Execution-focused pricing and margin view for a simple buy-then-sell flip at the current market posture."
+            info={t('mki.flip')}
             loading={!revealedPanels.flip && !analysisError}
             errorMessage={!revealedPanels.flip ? analysisError : null}
-            loadingLabel="Calculating flip margins"
+            loadingLabel={t('mkl.flip')}
             className="market-panel-tone-blue"
             headerAside={
               <div className="market-badge-stack">
                 <span className="market-panel-badge tone-blue">
-                  {analysis?.flipAnalysis.efficiencyLabel ?? 'Building'}
+                  {tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || t('trades.row.building')}
                 </span>
                 <ConfidenceBadge confidence={analysis?.flipAnalysis.confidenceSummary} />
               </div>
@@ -2653,7 +2673,7 @@ function AnalysisTab() {
               <div className="market-metric-card">
                 <span className="market-metric-label">{t('mkt.efficiencyScore')}</span>
                 <span className="market-metric-value">
-                  {formatPercent(analysis?.flipAnalysis.efficiencyScore)} · {analysis?.flipAnalysis.efficiencyLabel ?? '—'}
+                  {formatPercent(analysis?.flipAnalysis.efficiencyScore)} · {tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || '—'}
                 </span>
               </div>
             </div>
@@ -2663,15 +2683,15 @@ function AnalysisTab() {
           <AnalyticsPanel
             title={t('a11y.liquidityDetail')}
             eyebrow={t('mkteb.marketStructure')}
-            info="Live orderbook depth, undercut behavior, and demand pressure showing how easy this market is to enter and exit."
+            info={t('mki.liquidity')}
             loading={!revealedPanels.liquidity && !analysisError}
             errorMessage={!revealedPanels.liquidity ? analysisError : null}
-            loadingLabel="Profiling live liquidity"
+            loadingLabel={t('mkl.liquidity')}
             className="market-panel-tone-blue"
             headerAside={
               <div className="market-badge-stack">
                 <span className="market-panel-badge tone-blue">
-                  {analysis?.liquidityDetail.state ?? 'Profiling'}
+                  {analysis?.liquidityDetail.state ?? t('mkt.profiling')}
                 </span>
                 <ConfidenceBadge confidence={analysis?.liquidityDetail.confidenceSummary} />
               </div>
@@ -2687,7 +2707,7 @@ function AnalysisTab() {
                 <span className="market-metric-value">{analysis?.liquidityDetail.state ?? '—'}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">Sellers Within +2pt</span>
+                <span className="market-metric-label">{t('mkt.sellersWithin')}</span>
                 <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)}</span>
               </div>
               <div className="market-metric-card">
@@ -2738,15 +2758,15 @@ function AnalysisTab() {
           <AnalyticsPanel
             title={t('trades.analysis.trend')}
             eyebrow={t('mkteb.analyticsCarryover')}
-            info="Recent direction, slope, and confidence signals derived from the latest analytics history."
+            info={t('mki.trendSummary')}
             loading={!revealedPanels.trend && !analysisError}
             errorMessage={!revealedPanels.trend ? analysisError : null}
-            loadingLabel="Summarizing the current trend"
+            loadingLabel={t('mkl.trendSummary')}
             className={`market-panel-tone-${getTrendTone(analysis?.trend.direction)}`}
             headerAside={
               <div className="market-badge-stack">
                 <span className={`market-panel-badge tone-${getTrendTone(analysis?.trend.direction)}`}>
-                  {analysis?.trend.direction ?? 'Building'}
+                  {tHealth(t, analysis?.trend.direction) || t('trades.row.building')}
                 </span>
                 <ConfidenceBadge confidence={analysis?.trend.confidenceSummary} />
               </div>
@@ -2755,7 +2775,7 @@ function AnalysisTab() {
             <div className="market-metric-grid">
               <div className="market-metric-card">
                 <span className="market-metric-label">{t('mkt.direction')}</span>
-                <span className="market-metric-value">{analysis?.trend.direction ?? '—'}</span>
+                <span className="market-metric-value">{tHealth(t, analysis?.trend.direction) || '—'}</span>
               </div>
               <div className="market-metric-card">
                 <span className="market-metric-label">{t('mkt.confidence')}</span>
@@ -2798,7 +2818,7 @@ function AnalysisTab() {
             </div>
             <div className="market-copy-block">
               <span className="market-copy-title">{t('mkt.summary')}</span>
-              <p>{analysis?.trend.summary ?? '—'}</p>
+              <p>{analysis ? tTrendSummary(t, analysis.trend) : '—'}</p>
             </div>
             <ConfidenceNote confidence={analysis?.trend.confidenceSummary} />
           </AnalyticsPanel>
@@ -2806,25 +2826,25 @@ function AnalysisTab() {
           <AnalyticsPanel
             title={
               analysis?.supplyContext.mode === 'set-components'
-                ? 'Set Components'
+                ? t('mkt.setComponents')
                 : analysis?.supplyContext.mode === 'drop-sources'
-                  ? 'Drop Sources'
-                  : 'Drop Sources / Set Components'
+                  ? t('mkt.dropSources')
+                  : t('mkt.dropSourcesOrSetComponents')
             }
             eyebrow={t('mkteb.supplyContext')}
-            info="Local item-catalog context explaining how this item is supplied, either through set components or drop sources."
+            info={t('mki.supply')}
             loading={!revealedPanels.supply && !analysisError}
             errorMessage={!revealedPanels.supply ? analysisError : null}
-            loadingLabel="Building supply context"
+            loadingLabel={t('mkl.supply')}
             className="market-panel-tone-amber"
             headerAside={
               <div className="market-badge-stack">
                 <span className="market-panel-badge tone-amber">
                   {analysis?.supplyContext.mode === 'set-components'
-                    ? 'Set Breakdown'
+                    ? t('mkt.setBreakdown')
                     : analysis?.supplyContext.mode === 'drop-sources'
-                      ? 'Drop Intel'
-                      : 'No Source'}
+                      ? t('mkt.dropIntel')
+                      : t('mkt.noSource')}
                 </span>
                 <ConfidenceBadge confidence={analysis?.supplyContext.confidenceSummary} />
               </div>
@@ -2884,7 +2904,7 @@ function AnalysisTab() {
                         />
                         <div className="watchlist-add-feedback-stack">
                           {watchlistAddFeedback[component.slug] ? (
-                            <span className="watchlist-add-success">{WATCHLIST_ADD_SUCCESS_MESSAGE}</span>
+                            <span className="watchlist-add-success">{t('wl.addedToWatchlist')}</span>
                           ) : null}
                           <button
                             className="btn-sm"
@@ -2907,7 +2927,7 @@ function AnalysisTab() {
                               );
                             }}
                           >
-                            Add to Watchlist
+                            {t('wl.addToWatchlist')}
                           </button>
                         </div>
                       </div>
@@ -2956,10 +2976,10 @@ function AnalysisTab() {
               <AnalyticsPanel
                 title={t('a11y.itemDetails')}
                 eyebrow={t('mkteb.reference')}
-                info="Reference data from the local catalog, including description, rank scaling, and item metadata."
+                info={t('mki.reference')}
                 loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
                 errorMessage={effectiveItemDetails ? null : itemDetailsError}
-                loadingLabel="Loading item details from the local catalog"
+                loadingLabel={t('mkl.details')}
                 className="market-panel-tone-neutral market-item-details-panel"
                 headerAside={
                   effectiveItemDetails?.category ? (
@@ -3004,7 +3024,7 @@ function AnalysisTab() {
                 {(effectiveItemDetails?.statHighlights.length ?? 0) > 0 ? (
                   <div className="market-copy-block">
                     <span className="market-copy-title">
-                      {effectiveItemDetails?.rankScaleLabel ?? 'Rank Scaling'}
+                      {effectiveItemDetails?.rankScaleLabel ?? t('mkt.rankScaling')}
                     </span>
                     <div className="market-detail-highlight-list">
                       {(effectiveItemDetails?.statHighlights ?? []).map((line) => (
@@ -3040,10 +3060,10 @@ function AnalysisTab() {
           <AnalyticsPanel
             title={t('a11y.eventContext')}
             eyebrow={t('mkteb.worldState')}
-            info="Current worldstate hooks and event signals that may be affecting demand, supply, or timing for this item."
+            info={t('mki.worldstate')}
             loading={!revealedPanels.eventContext && !analysisError}
             errorMessage={!revealedPanels.eventContext ? analysisError : null}
-            loadingLabel="Matching worldstate context"
+            loadingLabel={t('mkl.worldstate')}
             className="market-panel-tone-amber"
             headerAside={
               <div className="market-badge-stack">
@@ -3075,15 +3095,15 @@ function AnalysisTab() {
           <AnalyticsPanel
             title={t('a11y.manipulationRisk')}
             eyebrow={t('mkteb.safety')}
-            info="Risk signals for spoofing, shallow books, and other market behavior that can distort apparent edge."
+            info={t('mki.risk')}
             loading={!revealedPanels.manipulation && !analysisError}
             errorMessage={!revealedPanels.manipulation ? analysisError : null}
-            loadingLabel="Scanning manipulation signals"
+            loadingLabel={t('mkl.risk')}
             className={`market-panel-tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
             headerAside={
               <div className="market-badge-stack">
                 <span className={`market-panel-badge tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}>
-                  {analysis?.manipulationRisk.riskLevel ?? 'Building'}
+                  {tHealth(t, analysis?.manipulationRisk.riskLevel) || t('trades.row.building')}
                 </span>
                 <ConfidenceBadge confidence={analysis?.manipulationRisk.confidenceSummary} />
               </div>
@@ -3092,7 +3112,7 @@ function AnalysisTab() {
             <div className="market-metric-grid">
               <div className="market-metric-card">
                 <span className="market-metric-label">{t('mkt.riskLevel')}</span>
-                <span className="market-metric-value">{analysis?.manipulationRisk.riskLevel ?? '—'}</span>
+                <span className="market-metric-value">{tHealth(t, analysis?.manipulationRisk.riskLevel) || '—'}</span>
               </div>
               <div className="market-metric-card">
                 <span className="market-metric-label">{t('mkt.activeSignals')}</span>
@@ -3134,15 +3154,15 @@ function AnalysisTab() {
           <AnalyticsPanel
             title={t('a11y.timeOfDayLiquidity')}
             eyebrow={t('mkteb.observatoryTape')}
-            info="When this market is historically most active, by day of week and 2-hour block (UTC). Brighter cells = stronger liquidity + volume. Use it to time buys and sells."
+            info={t('mki.timeOfDay')}
             loading={!revealedPanels.timeOfDay && !analysisError}
             errorMessage={!revealedPanels.timeOfDay ? analysisError : null}
-            loadingLabel="Aggregating observatory tape"
+            loadingLabel={t('mkl.tape')}
               className="market-panel-tone-blue"
               headerAside={
                 <div className="market-badge-stack">
                   <span className="market-panel-badge tone-blue">
-                    {timeOfDayDisplay.todayBestLabels[0] ?? 'Building'}
+                    {timeOfDayDisplay.todayBestLabels[0] ?? t('trades.row.building')}
                   </span>
                   <ConfidenceBadge confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
                 </div>
@@ -3189,10 +3209,10 @@ function AnalysisTab() {
                         style={{ '--heat-strength': `${Math.round((cell.heatScore ?? 0) * 100)}%` } as CSSProperties}
                         title={[
                           `${row.label} ${cell.label} (UTC)`,
-                          `Heat ${formatPercent((cell.heatScore ?? 0) * 100)}`,
-                          `Liquidity ${formatPercent(cell.avgLiquidityScore)}`,
-                          `Volume ${formatNumber(cell.avgHourlyVolume, 0)}`,
-                          cell.sampleCount > 0 ? `Samples ${cell.sampleCount}` : 'No data yet',
+                          `${t('mkt.heat')} ${formatPercent((cell.heatScore ?? 0) * 100)}`,
+                          `${t('mkt.liquidity')} ${formatPercent(cell.avgLiquidityScore)}`,
+                          `${t('mkt.volume')} ${formatNumber(cell.avgHourlyVolume, 0)}`,
+                          cell.sampleCount > 0 ? `${t('mkt.samples')} ${cell.sampleCount}` : t('mkt.noDataYet'),
                         ].join('\n')}
                       />
                     ))}
@@ -3251,8 +3271,8 @@ function CalibrationBucketCard({ stat }: { stat: BacktestBucketStats }) {
         {!enough ? (
           <p className="calib-insufficient">
             {stat.tradeCount === 0
-              ? 'No graded trades yet.'
-              : `Only ${stat.tradeCount} graded trade${stat.tradeCount === 1 ? '' : 's'} — need ${MIN_TRADES_FOR_DISPLAY} to show stats.`}
+              ? t('mkt.noGradedTrades')
+              : t('mkt.onlyGradedTradesNeedMore', { n: stat.tradeCount, min: MIN_TRADES_FOR_DISPLAY })}
           </p>
         ) : (
           <>
@@ -3279,7 +3299,7 @@ function CalibrationBucketCard({ stat }: { stat: BacktestBucketStats }) {
               </div>
             </div>
             <div className="calib-return-band">
-              <span className="market-copy-title">Return range (p25 → p75)</span>
+              <span className="market-copy-title">{t('mkt.returnRange')}</span>
               <span className={`calib-band-value${returnTone(stat.p25ReturnPct)}`}>
                 {formatReturnPct(stat.p25ReturnPct)}
               </span>
@@ -3316,7 +3336,7 @@ function CalibrationTab() {
           setError(
             err instanceof Error
               ? err.message
-              : 'Couldn’t load the backtest track record right now. Please try again.',
+              : t('mkt.backtestLoadFailed'),
           );
         }
       })
@@ -3343,9 +3363,9 @@ function CalibrationTab() {
           <AnalyticsPanel
             title={t('a11y.backtestStatus')}
             eyebrow={t('mkteb.trackRecord')}
-            info="Live counts of how many recommendations have been graded (holding window elapsed) vs. still open. Grading runs automatically each time you open this tab."
+            info={t('mki.backtest')}
             loading={loading}
-            loadingLabel="Loading backtest data"
+            loadingLabel={t('mkl.backtest')}
           >
             {error ? (
               <p className="calib-insufficient">{error}</p>
@@ -3367,13 +3387,13 @@ function CalibrationTab() {
             )}
             {!error && summary && (
               <div className="market-copy-block" style={{ marginTop: 8 }}>
-                <span className="market-copy-title">Rolling 30-day hit rate (buy trades)</span>
+                <span className="market-copy-title">{t('mkt.rollingHitRate')}</span>
                 <span
                   className={`calib-rolling-hit${returnTone(rolling30dHitPct)}`}
                 >
                   {rolling30dHitPct !== null
-                    ? `${rolling30dHitPct}% across ${summary.rolling30dTradeCount} graded trade${summary.rolling30dTradeCount === 1 ? '' : 's'}`
-                    : 'Not enough data yet'}
+                    ? t('mkt.gradedTradesAcross', { pct: rolling30dHitPct, n: summary.rolling30dTradeCount })
+                    : t('mkt.notEnoughDataYet')}
                 </span>
               </div>
             )}
@@ -3382,9 +3402,9 @@ function CalibrationTab() {
           <AnalyticsPanel
             title={t('a11y.buyCalibration')}
             eyebrow={t('mkteb.buyHold')}
-            info="For each suggested action, shows the realized median return, hit rate (exit zone reached within 7 days), and interquartile return range across all graded buy trades. Needs at least 5 graded trades per label to display."
+            info={t('mki.calibration')}
             loading={loading}
-            loadingLabel="Loading calibration data"
+            loadingLabel={t('mkl.calibration')}
           >
             {error ? (
               <p className="calib-insufficient">{error}</p>
@@ -3400,7 +3420,7 @@ function CalibrationTab() {
           <AnalyticsPanel
             title={t('a11y.howThisWorks')}
             eyebrow={t('mkteb.methodology')}
-            info="Describes the backtest trade model used to grade recommendations."
+            info={t('mki.methodology')}
           >
             <div className="market-copy-block">
               <span className="market-copy-title">{t('mkt.entryModel')}</span>

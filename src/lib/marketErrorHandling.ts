@@ -1,3 +1,4 @@
+import { tActive, USER_MSG_MARK } from '../i18n/active.ts';
 export type MarketErrorContext =
   | 'market-variant-load'
   | 'market-analysis-load'
@@ -17,24 +18,28 @@ function toRawErrorMessage(error: unknown): string {
 function friendlyMarketErrorFallback(context: MarketErrorContext): string {
   switch (context) {
     case 'market-variant-load':
-      return 'Couldn’t load market variants right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.mkt.loadVariants');
     case 'market-analysis-load':
-      return 'Couldn’t build the market analysis right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.mkt.buildAnalysis');
     case 'market-analysis-refresh':
-      return 'Couldn’t refresh the market analysis right now. Showing the last available analysis if possible. If it keeps happening, report it in Discord.';
+      return tActive('err.mkt.refreshAnalysis');
     case 'market-analytics-load':
-      return 'Couldn’t load market analytics right now. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.mkt.loadAnalytics');
     case 'market-analytics-refresh':
-      return 'Couldn’t refresh market analytics right now. Showing the last available snapshot if possible. If it keeps happening, report it in Discord.';
+      return tActive('err.mkt.refreshAnalytics');
     case 'market-item-details-load':
-      return 'Couldn’t load item details right now. Showing the best available item info if possible. If it keeps happening, report it in Discord.';
+      return tActive('err.mkt.itemDetails');
     default:
-      return 'Something went wrong. Please try again. If it keeps happening, report it in Discord.';
+      return tActive('err.generic');
   }
 }
 
 export function formatMarketErrorMessage(context: MarketErrorContext, error: unknown): string {
   const raw = toRawErrorMessage(error);
+
+  if (raw.startsWith(USER_MSG_MARK)) {
+    return raw.slice(USER_MSG_MARK.length);
+  }
 
   if (!raw) {
     return friendlyMarketErrorFallback(context);

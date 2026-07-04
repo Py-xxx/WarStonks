@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useTranslation } from '../../i18n';
+import { tActive, useTranslation } from '../../i18n';
 import {
   formatWorldStateCountdown,
   formatWorldStateDateTime,
@@ -22,7 +22,7 @@ function buildInventoryGroups(items: VoidTraderInventoryItem[]) {
   const grouped = new Map<string, VoidTraderInventoryItem[]>();
 
   for (const item of items) {
-    const category = item.category.trim().length > 0 ? item.category : 'Other';
+    const category = item.category.trim().length > 0 ? item.category : tActive('evt.otherCategory');
     const bucket = grouped.get(category) ?? [];
     bucket.push(item);
     grouped.set(category, bucket);
@@ -91,7 +91,7 @@ export function VoidTraderPanel() {
       <div className="card-header">
         <span className="card-label">{t('ws.voidTrader')}</span>
         <span className={`badge ${isActive ? 'badge-green' : 'badge-amber'}`}>
-          {isActive ? 'Active' : 'Not active'}
+          {isActive ? t('evt.active') : t('evt.notActive')}
         </span>
         <div className="card-actions">
           <button
@@ -101,7 +101,7 @@ export function VoidTraderPanel() {
               void refreshWorldStateVoidTrader();
             }}
           >
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? t('common.refreshing') : t('common.refresh')}
           </button>
         </div>
       </div>
@@ -109,7 +109,7 @@ export function VoidTraderPanel() {
       <div className="card-body">
         {lastUpdatedAt ? (
           <div className="world-event-updated-at">
-            Last sync: {formatWorldStateDateTime(lastUpdatedAt)}
+            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
           </div>
         ) : null}
 
@@ -125,7 +125,7 @@ export function VoidTraderPanel() {
         {loading && !voidTrader ? (
           <EventsPanelEmpty
             title={t('a11y.loadingVoidTrader')}
-            detail="Checking the latest Void Trader state and inventory."
+            detail={t('evt.checkingVoidTrader')}
           />
         ) : null}
 
@@ -136,17 +136,17 @@ export function VoidTraderPanel() {
                 <div className="void-trader-title-row">
                   <span className="void-trader-name">{voidTrader.character}</span>
                   <span className={`badge ${isActive ? 'badge-green' : 'badge-blue'}`}>
-                    {isActive ? `${nextCountdown} left` : `${nextCountdown} until arrival`}
+                    {isActive ? t('evt.leftCountdown', { time: nextCountdown }) : t('evt.untilArrival', { time: nextCountdown })}
                   </span>
                 </div>
                 <div className="void-trader-location">
-                  {voidTrader.location ?? 'Relay location unavailable'}
+                  {voidTrader.location ?? t('evt.relayUnavailable')}
                 </div>
               </div>
 
               <div className="void-trader-meta-grid">
                 <div className="void-trader-meta-card">
-                  <span className="qv-stat-label">{isActive ? 'Leaves' : 'Arrives'}</span>
+                  <span className="qv-stat-label">{isActive ? t('evt.leaves') : t('evt.arrives')}</span>
                   <span className="void-trader-meta-value">
                     {formatWorldStateDateTime(isActive ? voidTrader.expiry : voidTrader.activation)}
                   </span>
@@ -158,7 +158,7 @@ export function VoidTraderPanel() {
                 <div className="void-trader-meta-card">
                   <span className="qv-stat-label">{t('ws.inventory')}</span>
                   <span className="void-trader-meta-value">
-                    {voidTrader.inventory.length} items
+                    {t('evt.itemsCount', { n: voidTrader.inventory.length })}
                   </span>
                 </div>
               </div>
@@ -167,7 +167,7 @@ export function VoidTraderPanel() {
             {!isActive ? (
               <EventsPanelEmpty
                 title={t('a11y.baroNotInRelay')}
-                detail="The countdown above tracks his next visit. Inventory will appear here as soon as the worldstate flips active."
+                detail={t('evt.baroNotInRelayDetail')}
               />
             ) : null}
 
@@ -182,10 +182,11 @@ export function VoidTraderPanel() {
                       onClick={() => setSelectedCategory(category)}
                     >
                       {category === 'All'
-                        ? `All (${voidTrader.inventory.length})`
-                        : `${formatCategoryLabel(category)} (${
-                            inventoryGroups.find((group) => group.category === category)?.items.length ?? 0
-                          })`}
+                        ? t('evt.allWithCount', { n: voidTrader.inventory.length })
+                        : t('evt.categoryCount', {
+                            label: formatCategoryLabel(category),
+                            n: inventoryGroups.find((group) => group.category === category)?.items.length ?? 0,
+                          })}
                     </button>
                   ))}
                 </div>
@@ -240,7 +241,7 @@ export function VoidTraderPanel() {
             {isActive && inventoryGroups.length === 0 ? (
               <EventsPanelEmpty
                 title={t('a11y.voidTraderInvUnavailable')}
-                detail="The feed shows Baro as active, but no inventory entries were returned yet."
+                detail={t('evt.voidTraderInvUnavailableDetail')}
               />
             ) : null}
           </div>
@@ -250,7 +251,7 @@ export function VoidTraderPanel() {
           <EventsPanelEmpty
             title={t('a11y.voidTraderFailed')}
             detail={error}
-            actionLabel="Retry"
+            actionLabel={t('common.retry')}
             onAction={() => {
               void refreshWorldStateVoidTrader();
             }}
@@ -260,7 +261,7 @@ export function VoidTraderPanel() {
         {!loading && !voidTrader && !error ? (
           <EventsPanelEmpty
             title={t('a11y.voidTraderUnavailableData')}
-            detail="The first worldstate snapshot did not return Void Trader information."
+            detail={t('evt.voidTraderNoDataDetail')}
           />
         ) : null}
       </div>

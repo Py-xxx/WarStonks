@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { tActive } from '../../i18n';
 
 interface ErrorBoundaryProps {
   /** Short label for what failed, shown in the fallback (e.g. "Quick View"). */
@@ -34,12 +35,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return (
         <div className="card error-boundary-card">
           <div className="empty-state">
-            <span className="empty-primary">{this.props.label} hit an error</span>
+            <span className="empty-primary">{tActive('err.boundaryTitle', { label: this.props.label })}</span>
             <span className="empty-sub">
-              This section failed to render. The rest of the page is unaffected.
+              {tActive('err.boundary')}
             </span>
             <button className="text-btn" type="button" onClick={this.handleRetry}>
-              Try again
+              {tActive('common.retry')}
             </button>
           </div>
         </div>

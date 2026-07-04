@@ -62,7 +62,7 @@ import {
   restoreCachedWorldStateSyndicateMissions,
   restoreCachedWorldStateVoidTrader,
   WORLDSTATE_ENDPOINT_KEYS,
-  WORLDSTATE_ENDPOINT_LABELS,
+  worldstateEndpointLabel,
   WORLDSTATE_RETRY_DELAY_MS,
   worldStateObjectExpiry,
   worldStateCyclesNextRefresh,
@@ -141,6 +141,7 @@ import {
   saveNotificationSettings,
 } from '../lib/notifications';
 import { applySetSuffix, type AppLanguage, loadLanguage, saveLanguage, wfmLangCode, wfstatLangCode } from '../lib/language';
+import { tActive, tUserMessage } from '../i18n';
 import {
   loadPinnedOpportunities,
   savePinnedOpportunities,
@@ -665,22 +666,19 @@ function buildWatchlistAlert(
 function buildWorldStateSystemAlert(sourceKeys: WorldStateEndpointKey[]): SystemAlert {
   const uniqueSourceKeys = [...new Set(sourceKeys)];
   const affectedLabels = uniqueSourceKeys
-    .map((sourceKey) => WORLDSTATE_ENDPOINT_LABELS[sourceKey])
+    .map((sourceKey) => worldstateEndpointLabel(sourceKey))
     .sort((left, right) => left.localeCompare(right));
   const affectedSummary =
     affectedLabels.length > 3
-      ? `${affectedLabels.slice(0, 3).join(', ')}, +${affectedLabels.length - 3} more`
+      ? `${affectedLabels.slice(0, 3).join(', ')}, ${tActive('sys.moreFeeds', { count: affectedLabels.length - 3 })}`
       : affectedLabels.join(', ');
 
   return {
     id: WORLDSTATE_SYSTEM_ALERT_ID,
     kind: 'worldstate-offline',
     sourceKeys: uniqueSourceKeys,
-    title: 'WFStat API unavailable',
-    message:
-      uniqueSourceKeys.length === 1
-        ? `${affectedSummary} could not be refreshed. Cached data will stay visible until the API recovers.`
-        : `${affectedSummary} could not be refreshed. Cached data will stay visible until the API recovers.`,
+    title: tActive('sys.wfstatTitle'),
+    message: tActive('sys.wfstatMsg', { feeds: affectedSummary }),
     createdAt: new Date().toISOString(),
   };
 }
@@ -689,8 +687,8 @@ function buildScannerStaleSystemAlert(scanFinishedAt: string): SystemAlert {
   return {
     id: SCANNER_STALE_SYSTEM_ALERT_ID,
     kind: 'scanner-stale',
-    title: 'Scanner data is stale',
-    message: 'The latest scanner run is over 48 hours old. A rescan is highly recommended.',
+    title: tActive('sys.scannerStaleTitle'),
+    message: tActive('sys.scannerStaleMsg'),
     createdAt: scanFinishedAt,
   };
 }
@@ -703,21 +701,21 @@ function buildAppUpdateSystemAlert(input: {
   progressPercent?: number | null;
   errorMessage?: string | null;
 }): SystemAlert {
-  let message = `WarStonks ${input.version} is available. You are currently on ${input.currentVersion}.`;
+  let message = tActive('sys.updAvailable', { v: input.version, cur: input.currentVersion });
   if (input.installState === 'downloading') {
     message = input.progressPercent !== null && input.progressPercent !== undefined
-      ? `Downloading WarStonks ${input.version}… ${input.progressPercent}%`
-      : `Downloading WarStonks ${input.version}…`;
+      ? `${tActive('sys.updDownloading', { v: input.version })} ${input.progressPercent}%`
+      : tActive('sys.updDownloading', { v: input.version });
   } else if (input.installState === 'installing') {
-    message = `Installing WarStonks ${input.version}. The app will relaunch automatically when the installer finishes.`;
+    message = tActive('sys.updInstalling', { v: input.version });
   } else if (input.installState === 'error') {
-    message = input.errorMessage ?? `WarStonks ${input.version} could not be installed automatically.`;
+    message = input.errorMessage ?? tActive('sys.updFailed', { v: input.version });
   }
 
   return {
     id: APP_UPDATE_SYSTEM_ALERT_ID,
     kind: 'app-update',
-    title: input.installState === 'error' ? 'Update failed' : 'Update available',
+    title: input.installState === 'error' ? tActive('sys.updateFailed') : tActive('sys.updateAvailable'),
     message,
     createdAt: new Date().toISOString(),
     updateVersion: input.version,
@@ -966,7 +964,7 @@ function createWatchlistItemFromTradeBuyOrder(
   }
 
   const variantKey = buildTradeBuyOrderVariantKey(order.rank);
-  const variantLabel = order.rank === null ? 'Base Market' : `Rank ${order.rank}`;
+  const variantLabel = order.rank === null ? 'Base Market' : tActive('watchlist.rankLabel', { n: order.rank });
   return createWatchlistItem(
     {
       itemId: order.itemId,
@@ -1236,7 +1234,7 @@ async function syncSearchTrackingSelection(
     return {
       nextTrackedSelection: previousSelection,
       selectedVariantLabel: variantKey.startsWith('rank:')
-        ? `Rank ${variantKey.slice(5)}`
+        ? tActive('watchlist.rankLabel', { n: variantKey.slice(5) })
         : 'Base Market',
     };
   }
@@ -1252,7 +1250,7 @@ async function syncSearchTrackingSelection(
   return {
     nextTrackedSelection,
     selectedVariantLabel: variantKey.startsWith('rank:')
-      ? `Rank ${variantKey.slice(5)}`
+      ? tActive('watchlist.rankLabel', { n: variantKey.slice(5) })
       : 'Base Market',
   };
 }
@@ -1676,7 +1674,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
 
     if (!resolved) {
-      get().pushToast(`Couldn't open "${target.name}".`, 'error');
+      get().pushToast(tActive('sys.openItemFailed', { name: target.name }), 'error');
       return;
     }
 
@@ -3007,12 +3005,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const state = get();
       const item = state.watchlist.find((entry) => entry.id === id);
       if (!item) {
-        throw new Error('That watchlist item could not be found.');
+        throw new Error(tUserMessage('val.watchlistNotFound'));
       }
 
       const normalizedPrice = Math.max(1, Math.round(price));
       if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
-        throw new Error('Bought price must be greater than zero.');
+        throw new Error(tUserMessage('val.boughtPriceZero'));
       }
 
       const expectedRank = deriveVariantRankFromKey(item.variantKey);
@@ -3892,7 +3890,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         resolvedQuickView.variantLabel
         ?? variants.find((variant) => variant.key === nextSelectedVariantKey)?.label
         ?? (nextSelectedVariantKey?.startsWith('rank:')
-          ? `Rank ${nextSelectedVariantKey.slice(5)}`
+          ? tActive('watchlist.rankLabel', { n: nextSelectedVariantKey.slice(5) })
           : 'Base Market');
 
       if (nextTrackedSelection?.variantKey !== nextSelectedVariantKey) {

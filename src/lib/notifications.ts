@@ -1,3 +1,4 @@
+import { tActive } from '../i18n';
 import {
   isPermissionGranted as tauriIsPermissionGranted,
   requestPermission as tauriRequestPermission,
@@ -138,7 +139,7 @@ async function showDesktopNotification(title: string, body: string): Promise<boo
  * couldn't be delivered (e.g. the OS permission was revoked after the toggle was enabled).
  */
 export async function sendTestDesktopNotification(): Promise<boolean> {
-  return showDesktopNotification('WarStonks', 'Test notification — desktop alerts are working.');
+  return showDesktopNotification('WarStonks', tActive('notif.testBody'));
 }
 
 export type NotificationEventKind =

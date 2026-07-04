@@ -1,3 +1,4 @@
+import { tActive } from '../i18n/active.ts';
 import type { WatchlistItem, WfmTopSellOrder } from '../types';
 
 export type WatchlistRequestPriority = 'low' | 'medium' | 'high';
@@ -129,7 +130,7 @@ export function getWatchlistVisualState(item: WatchlistItem): {
   if (item.currentPrice !== null && item.currentPrice <= item.targetPrice) {
     return {
       tone: 'red',
-      label: 'Found',
+      label: tActive('wl.found'),
     };
   }
 
@@ -139,19 +140,19 @@ export function getWatchlistVisualState(item: WatchlistItem): {
   ) {
     return {
       tone: 'yellow',
-      label: 'Within 10%',
+      label: tActive('wl.within10'),
     };
   }
 
   if (item.lastError) {
     return {
       tone: 'neutral',
-      label: 'Retrying',
+      label: tActive('wl.retrying'),
     };
   }
 
   return {
     tone: 'neutral',
-    label: 'Watching',
+    label: tActive('wl.watching'),
   };
 }

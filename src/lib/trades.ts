@@ -1,3 +1,4 @@
+import { tActive } from '../i18n';
 import type { TradeAccountSummary } from '../types';
 
 export function formatTradeStatusLabel(
@@ -6,11 +7,11 @@ export function formatTradeStatusLabel(
   switch ((status ?? '').toString().trim().toLowerCase()) {
     case 'ingame':
     case 'in_game':
-      return 'Ingame';
+      return tActive('home.seller.ingame');
     case 'online':
-      return 'Online';
+      return tActive('status.online');
     default:
-      return 'Invisible';
+      return tActive('status.invisible');
   }
 }
 
