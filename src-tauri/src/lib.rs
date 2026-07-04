@@ -136,6 +136,7 @@ pub fn run() {
             settings::test_alecaframe_public_link,
             settings::save_alecaframe_settings,
             settings::save_discord_webhook_settings,
+            settings::save_strategy_settings,
             settings::send_watchlist_found_discord_notification,
             settings::send_underpriced_listing_discord_notification,
             settings::get_currency_balances,

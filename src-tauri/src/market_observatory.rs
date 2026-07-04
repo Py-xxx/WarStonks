@@ -2669,6 +2669,20 @@ fn score_stats_liquidity(rows: &[InternalStatsRow]) -> (f64, String) {
     (liquidity_score, sale_state)
 }
 
+/// Zone-model recommended exit for an item variant, cache-only. Exposed for the trades module so
+/// holding valuations (Portfolio unrealized P&L, sell/stale-hold detectors) can anchor on the
+/// 30-day zone model instead of the single latest stats bucket.
+pub(crate) fn zone_recommended_exit_price(
+    connection: &Connection,
+    item_id: i64,
+    variant_key: &str,
+) -> Option<f64> {
+    build_statistics_price_model(connection, item_id, variant_key)
+        .ok()
+        .flatten()
+        .and_then(|model| model.recommended_exit_price)
+}
+
 fn build_statistics_price_model(
     connection: &Connection,
     item_id: i64,
@@ -3838,8 +3852,13 @@ const ZONE_HISTORY_WINDOW_DAYS: i64 = 30;
 const ZONE_RECENT_WINDOW_DAYS: i64 = 7;
 const ZONE_RECENCY_HALF_LIFE_DAYS: f64 = 7.0;
 const ZONE_VOLUME_WEIGHT_CAP: f64 = 50.0;
-const ZONE_REGIME_SHIFT_THRESHOLD: f64 = 0.20;
-const ZONE_REGIME_MIN_RECENT_ROWS: usize = 3;
+// A regime shift discards the whole 30-day window and trusts only the last
+// `ZONE_RECENT_WINDOW_DAYS` — so it needs real, sustained evidence, not a single spiky bucket.
+// Requiring 5+ recent daily buckets (most of the 7-day recent window) means one outlier day can no
+// longer dominate the coarse median; the threshold is raised to 35% so ordinary week-to-week noise
+// doesn't trip it either.
+const ZONE_REGIME_SHIFT_THRESHOLD: f64 = 0.35;
+const ZONE_REGIME_MIN_RECENT_ROWS: usize = 5;
 
 fn zone_row_weight(row: &InternalStatsRow, now: OffsetDateTime) -> f64 {
     let age_days = (now - row.bucket_at).whole_seconds().max(0) as f64 / 86_400.0;

@@ -1382,6 +1382,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   // Fetch market analysis whenever the listing modal is open and an item is known.
   // Both getItemAnalysis and getItemAnalytics use RequestPriority::Instant internally.
   const analysisItem = listingModal?.selectedItem ?? null;
+  const analysisRank = isRankApplicable(analysisItem) ? listingModal?.rank ?? '' : '';
+  const analysisVariantKey = analysisRank.trim() !== '' ? `rank:${analysisRank.trim()}` : null;
 
   useEffect(() => {
     if (!analysisItem) {
@@ -1393,41 +1395,49 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     let cancelled = false;
     const { itemId, slug } = analysisItem;
 
-    // Fire analytics in background — fills in market snapshot once it arrives.
-    // Analytics failure is non-fatal; the main analysis section still renders.
-    void getItemAnalytics(itemId ?? 0, slug, null, sellerMode, '48h', '1h')
-      .then((analytics) => {
-        if (!cancelled) {
-          setListingAnalysis((prev) => (prev ? { ...prev, analytics } : null));
-        }
-      })
-      .catch(() => { /* non-fatal */ });
+    // Debounced: both calls run at Instant priority on the WFM scheduler, and the variant key
+    // changes on every keystroke in the rank field — without the delay, typing "15" would fire
+    // full analysis rounds for rank 1 and then rank 15.
+    const timeoutId = window.setTimeout(() => {
+      // Fire analytics in background — fills in market snapshot once it arrives.
+      // Analytics failure is non-fatal; the main analysis section still renders.
+      void getItemAnalytics(itemId ?? 0, slug, analysisVariantKey, sellerMode, '48h', '1h')
+        .then((analytics) => {
+          if (!cancelled) {
+            setListingAnalysis((prev) => (prev ? { ...prev, analytics } : null));
+          }
+        })
+        .catch(() => { /* non-fatal */ });
 
-    // Main analysis fires at Instant priority — panel renders as soon as this resolves.
-    void getItemAnalysis(itemId ?? 0, slug, null, sellerMode)
-      .then((analysis) => {
-        if (!cancelled) {
-          setListingAnalysis((prev) =>
-            prev
-              ? { ...prev, analysis, loading: false }
-              : { analysis, analytics: null, loading: false, error: null },
-          );
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setListingAnalysis({
-            analysis: null,
-            analytics: null,
-            loading: false,
-            error: formatTradesErrorMessage('listing-analysis-load', error),
-          });
-        }
-      });
+      // Main analysis fires at Instant priority — panel renders as soon as this resolves.
+      void getItemAnalysis(itemId ?? 0, slug, analysisVariantKey, sellerMode)
+        .then((analysis) => {
+          if (!cancelled) {
+            setListingAnalysis((prev) =>
+              prev
+                ? { ...prev, analysis, loading: false }
+                : { analysis, analytics: null, loading: false, error: null },
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            setListingAnalysis({
+              analysis: null,
+              analytics: null,
+              loading: false,
+              error: formatTradesErrorMessage('listing-analysis-load', error),
+            });
+          }
+        });
+    }, 350);
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisItem, sellerMode]);
+  }, [analysisItem, analysisVariantKey, sellerMode]);
 
   // Auto-fill price with the recommended price when analysis arrives and the
   // price field has not yet been touched by the user.
@@ -1849,6 +1859,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
             <thead>
               <tr>
                 <th>{t('trades.col.item')}</th>
+                <th>{t('pf.rank')}</th>
                 <th>{t('trades.col.visible')}</th>
                 <th>{t('trades.col.yourPrice')}</th>
                 <th>{t('trades.col.marketLow')}</th>
@@ -1886,6 +1897,15 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                               : null}
                         </div>
                       </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="trade-cell-value">
+                      {order.rank !== null && order.rank !== undefined
+                        ? order.maxRank !== null && order.maxRank !== undefined && order.maxRank > 0
+                          ? `${order.rank}/${order.maxRank}`
+                          : order.rank
+                        : <span className="trade-cell-pending">—</span>}
                     </div>
                   </td>
                   <td>

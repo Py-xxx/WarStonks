@@ -293,12 +293,6 @@ export function TopBar() {
   return (
     <header className="topbar">
       <div className="logo">
-        <span className="logo-mark" aria-hidden="true">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 17l5-6 4 3 6-8" />
-            <path d="M14 6h4v4" />
-          </svg>
-        </span>
         <span className="logo-text">WarStonks</span>
       </div>
 

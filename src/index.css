@@ -13286,3 +13286,39 @@ img[data-asset-failed='true'] {
   font-size: 11px;
   line-height: 1.5;
 }
+
+/* Strategy tab */
+.strategy-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.strategy-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.strategy-side {
+  flex: 0 0 300px;
+  max-width: 300px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.strategy-side-header p {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.strategy-number-input {
+  max-width: 120px;
+  font-family: 'JetBrains Mono', monospace;
+}

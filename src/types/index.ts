@@ -687,9 +687,18 @@ export interface DiscordWebhookNotificationSettings {
   underpricedListing: boolean;
 }
 
+/** Opportunities-engine tunables, edited on the Strategy tab. */
+export interface StrategySettings {
+  /** Minimum plat edge before completing a set beats selling its parts. */
+  minEdgePlat: number;
+  /** Assumed plat value of one WFM trade slot (scales the edge by trades saved/spent). */
+  tradeValuePlat: number;
+}
+
 export interface AppSettings {
   alecaframe: AlecaframeSettings;
   discordWebhook: DiscordWebhookSettings;
+  strategy: StrategySettings;
 }
 
 export type RingtoneId = 'chime' | 'ping' | 'coin' | 'arpeggio' | 'alert' | 'bell';

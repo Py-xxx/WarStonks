@@ -52,7 +52,6 @@ export function SteelPathPanel() {
     <div className="market-panel">
       <div className="events-section-header">
         <span className="panel-title-eyebrow">
-          <span className="panel-dot panel-dot-amber" aria-hidden="true" />
           {t('evt.steelPathTeshinLabel')}
         </span>
         <h3>{t('evt.honorRewardTitle')}</h3>

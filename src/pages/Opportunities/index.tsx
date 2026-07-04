@@ -2347,7 +2347,7 @@ export function OpportunitiesPage({
             <section className="market-panel set-planner-main-panel">
               <div className="set-planner-header">
                 <div>
-                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.completionOpportunities')}</span>
+                  <span className="panel-title-eyebrow">{t('opp.completionOpportunities')}</span>
                   <h3>{t('opp.setCompletionPlanner')}</h3>
                   <p>{t('opp.setCompletionEstimateDesc')}</p>
                 </div>
@@ -2465,7 +2465,7 @@ export function OpportunitiesPage({
               <section className="market-panel inventory-catalog-panel">
                 <div className="inventory-panel-header">
                   <div>
-                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-blue" aria-hidden="true" />{t('opp.primeParts')}</span>
+                    <span className="panel-title-eyebrow">{t('opp.primeParts')}</span>
                     <h3>{t('opp.addToInventory')}</h3>
                   </div>
                 </div>
@@ -2531,7 +2531,7 @@ export function OpportunitiesPage({
               <section className="market-panel inventory-owned-panel">
                 <div className="inventory-panel-header">
                   <div>
-                    <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.ownedInventory')}</span>
+                    <span className="panel-title-eyebrow">{t('opp.ownedInventory')}</span>
                     <h3>
                       {t('opp.partsCount', { n: ownedItems.length })}
                       {componentQuery.trim() ? ` · ${t('opp.shownCount', { n: filteredOwnedItems.length })}` : ''}
@@ -2672,7 +2672,7 @@ export function OpportunitiesPage({
             <section className="market-panel owned-relics-panel">
               <div className="owned-relics-header">
                 <div>
-                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.ownedRelicsTitle')}</span>
+                  <span className="panel-title-eyebrow">{t('opp.ownedRelicsTitle')}</span>
                   <h3>{t('opp.relicInventory')}</h3>
                   <p>{t('opp.pullsAlecaframeDesc')}</p>
                 </div>
@@ -2805,7 +2805,7 @@ export function OpportunitiesPage({
             <section className="market-panel farm-now-panel">
               <div className="farm-now-header">
                 <div>
-                  <span className="panel-title-eyebrow"><span className="panel-dot panel-dot-purple" aria-hidden="true" />{t('opp.whatToFarmNow')}</span>
+                  <span className="panel-title-eyebrow">{t('opp.whatToFarmNow')}</span>
                   <h3>
                     {farmNowTab === 'set-completion'
                       ? t('opp.relicsForSetCompletion')

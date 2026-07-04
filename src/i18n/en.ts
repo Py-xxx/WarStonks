@@ -1630,6 +1630,16 @@ export const en = {
   'opp.ownedRelicsCount': 'Owned relics {n} ({total})',
   'opp.setsCoveredCount': '{n} sets',
   'opp.exitValue': 'Exit {price}',
+  'opp.reasonTradeCount': '{complete} trades to complete vs {sell} selling parts one by one',
+  'err.set.saveStrategy': 'Couldn’t save strategy settings right now. Please try again.',
+  'strategy.engineTitle': 'Set Decision Engine',
+  'strategy.engineDesc': 'Tunes how the Opportunities board decides between completing a set and selling its parts. Changes apply on the next board refresh.',
+  'strategy.minEdgeLabel': 'Minimum profit edge (plat)',
+  'strategy.minEdgeHelp': 'Completing a set must beat selling your parts by at least this much plat before it\'s recommended. Higher = more conservative about buying missing parts.',
+  'strategy.tradeValueLabel': 'Value of one trade (plat)',
+  'strategy.tradeValueHelp': 'Daily trades are limited, so each one has a value. Every trade completing a set saves (vs. selling parts one by one) lowers the required edge by this much — set higher if your trade slots are precious, 0 to ignore trade counts.',
+  'strategy.saved': 'Strategy saved. The Opportunities board will use it on its next refresh.',
+  'strategy.invalidNumbers': 'Enter valid non-negative numbers for both fields.',
 } as const;
 
 export type TranslationKey = keyof typeof en;
