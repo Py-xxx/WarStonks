@@ -16,7 +16,9 @@
         "width": 1440,
         "height": 900,
         "minWidth": 960,
-        "minHeight": 600
+        "minHeight": 600,
+        "backgroundThrottling": "disabled",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling,CalculateNativeWinOcclusion --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
       }
     ],
     "security": {

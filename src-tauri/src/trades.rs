@@ -185,6 +185,11 @@ pub struct TradeCreateListingInput {
     /// 1 when omitted. Must be 1..=6 and divide `quantity`.
     #[serde(default)]
     pub per_trade: Option<i64>,
+    /// WFM subtype for subtyped items (e.g. `regular`/`atragraph` mods, relic refinements).
+    /// When omitted, the item's default (first) subtype is used; items without subtypes
+    /// ignore this entirely.
+    #[serde(default)]
+    pub subtype: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7802,6 +7807,24 @@ fn catalog_item_is_bulk_tradable(connection: &Connection, wfm_id: &str) -> Resul
     Ok(value.unwrap_or(0) == 1)
 }
 
+/// The item's WFM subtypes in catalog order (index 0 is WFM's default — "regular" for
+/// Atragraph-variant mods, "intact" for relics). WFM rejects order creation for subtyped items
+/// when the payload omits `subtype`; items without subtypes return an empty list and the field
+/// must be omitted (sending it for those is equally rejected).
+pub(crate) fn catalog_item_subtypes(connection: &Connection, wfm_id: &str) -> Result<Vec<String>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT subtype FROM wfm_item_subtypes WHERE wfm_id = ?1 ORDER BY subtype_index ASC",
+        )
+        .context("failed to prepare the item subtype lookup")?;
+    let subtypes = statement
+        .query_map(params![wfm_id], |row| row.get::<_, String>(0))
+        .context("failed to look up the item's subtypes")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed to read the item's subtypes")?;
+    Ok(subtypes)
+}
+
 /// Resolves the `perTrade` value to send with an order. WFM requires `perTrade` for
 /// bulk-tradable items and forbids it otherwise, so this returns `None` for non-bulk items
 /// (omit the field) and a validated batch size for bulk items (1..=6 that divides quantity,
@@ -7856,9 +7879,31 @@ fn create_order_inner(
         payload["rank"] = json!(rank);
     }
     // Bulk-tradable items (e.g. arcanes) require `perTrade`; non-bulk items forbid it.
-    let bulk_tradable = catalog_item_is_bulk_tradable(&open_catalog_database(app)?, &input.wfm_id)?;
+    let catalog = open_catalog_database(app)?;
+    let bulk_tradable = catalog_item_is_bulk_tradable(&catalog, &input.wfm_id)?;
     if let Some(per_trade) = resolve_per_trade(bulk_tradable, input.per_trade, input.quantity)? {
         payload["perTrade"] = json!(per_trade);
+    }
+    // Subtyped items (relics, Atragraph-variant mods like Archon Vitality) are rejected by WFM
+    // unless the order carries a `subtype`. Honour an explicit caller choice (validated against
+    // the catalog so a stale UI value can't produce an opaque WFM 400), else the item default.
+    let subtypes = catalog_item_subtypes(&catalog, &input.wfm_id)?;
+    if let Some(first_subtype) = subtypes.first() {
+        let requested = input
+            .subtype
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let subtype = match requested {
+            Some(value) => {
+                if !subtypes.iter().any(|entry| entry == value) {
+                    return Err(anyhow!("“{value}” isn't a valid variant for this item."));
+                }
+                value.to_string()
+            }
+            None => first_subtype.clone(),
+        };
+        payload["subtype"] = json!(subtype);
     }
 
     let result = execute_wfm_request_with_priority(
@@ -7893,6 +7938,19 @@ fn create_order_inner(
                     &clear_error,
                 );
             }
+        } else {
+            // The UI only ever shows the friendly summary, so persist the raw WFM response
+            // (status + body, e.g. which payload field it objected to) for diagnosis.
+            log_feature_error_best_effort(
+                app,
+                "trades-order",
+                "create-order-failed",
+                &format!(
+                    "Warframe.Market refused a create-{order_type} order (item {}, payload {}).",
+                    input.wfm_id, payload
+                ),
+                error,
+            );
         }
     }
     result?;
@@ -7952,6 +8010,18 @@ fn update_order_inner(
         if should_attempt_trade_session_reauth(error) {
             clear_session_cache();
             let _ = clear_session(app);
+        } else {
+            // Mirror create: keep the raw WFM response in the error log for diagnosis.
+            log_feature_error_best_effort(
+                app,
+                "trades-order",
+                "update-order-failed",
+                &format!(
+                    "Warframe.Market refused an update-{order_type} order (order {}, payload {}).",
+                    input.order_id, payload
+                ),
+                error,
+            );
         }
     }
     result?;
@@ -8495,6 +8565,22 @@ pub async fn ensure_trade_set_map(
 ) -> Result<TradeSetMapSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
         build_trade_set_map_inner(&app, api_version.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// Subtypes for an item (catalog order, index 0 = WFM default), so the listing modal can offer
+/// a variant picker for subtyped items (Atragraph mods, relics, fish…). Empty = no subtypes.
+#[tauri::command]
+pub async fn get_wfm_item_subtypes(
+    app: tauri::AppHandle,
+    wfm_id: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog = open_catalog_database(&app)?;
+        catalog_item_subtypes(&catalog, &wfm_id)
     })
     .await
     .map_err(|error| error.to_string())?

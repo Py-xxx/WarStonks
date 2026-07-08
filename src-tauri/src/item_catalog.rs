@@ -3293,9 +3293,11 @@ fn fetch_http_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
 }
 
 /// Performs a rate-limited WFM GET and returns the response body. Sends our identifying
-/// User-Agent (per WFM's API rules) and goes through the shared 3 req/s scheduler.
+/// User-Agent (per WFM's API rules) and goes through the shared 3 req/s scheduler. The
+/// `language` header controls which locale WFM localizes the response `i18n` objects to.
 fn fetch_wfm_bytes(
     url: &str,
+    language: &str,
     priority: RequestPriority,
     action_label: &str,
     coalesce_key: Option<String>,
@@ -3305,6 +3307,7 @@ fn fetch_wfm_bytes(
         .build()?;
     let action_label_owned = action_label.to_string();
     let url_owned = url.to_string();
+    let language_owned = language.to_string();
     let response = execute_coalesced_wfm_request(
         priority,
         action_label,
@@ -3315,7 +3318,7 @@ fn fetch_wfm_bytes(
             let response = client
                 .get(&url_owned)
                 .header("User-Agent", WFM_USER_AGENT)
-                .header("language", "en")
+                .header("language", language_owned.as_str())
                 .header("platform", "pc")
                 .send()
                 .with_context(|| format!("failed to {}", action_label_owned))?;
@@ -3367,7 +3370,8 @@ fn fetch_wfm_to_file(
     action_label: &str,
     coalesce_key: Option<String>,
 ) -> Result<Vec<u8>> {
-    let body = fetch_wfm_bytes(url, priority, action_label, coalesce_key)?;
+    // The catalog download uses English; localized names are fetched separately per language.
+    let body = fetch_wfm_bytes(url, "en", priority, action_label, coalesce_key)?;
     fs::write(output_path, &body)
         .with_context(|| format!("failed to write {}", output_path.display()))?;
     Ok(body)
@@ -3379,6 +3383,7 @@ fn fetch_wfm_to_file(
 fn fetch_items_collection_version() -> Result<String> {
     let bytes = fetch_wfm_bytes(
         WFM_VERSIONS_URL,
+        "en",
         RequestPriority::High,
         "request WFM versions",
         Some("catalog:wfm-versions".to_string()),
@@ -3525,6 +3530,15 @@ fn store_wfstat_catalog_version(
 /// Reads the WFStat catalog version tag recorded at the last successful WFStat import.
 fn stored_wfstat_catalog_version(connection: &Connection) -> Option<String> {
     load_version_row(connection, WFSTAT_CATALOG_VERSION_SOURCE_NAME)
+        .ok()
+        .and_then(|row| row.content_sha256)
+}
+
+/// Reads the WFM `collections.items` version recorded at the last catalog sync. Directly
+/// comparable to [`fetch_items_collection_version`]; used to judge whether a language pack's
+/// localized names are current with the WFM catalog they're sourced from.
+fn stored_items_collection_version(connection: &Connection) -> Option<String> {
+    load_version_row(connection, WFM_COLLECTION_SOURCE_NAME)
         .ok()
         .and_then(|row| row.content_sha256)
 }
@@ -4005,29 +4019,40 @@ pub struct LanguagePackImportResult {
     pub item_count: i64,
 }
 
-/// Fetches localized item names from WFStat for one language, keyed by `uniqueName`.
-/// The bulk `/items/` response carries no per-language `i18n` object, so localization must
-/// come from the `?language=` param (which localizes the top-level `name` field).
-fn fetch_wfstat_item_names(lang_code: &str) -> Result<HashMap<String, String>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()?;
-    let url = format!("{WFSTAT_ITEMS_URL}?language={lang_code}&only=name,uniqueName");
-    let items: Vec<Value> = client
-        .get(url)
-        .header("User-Agent", WFM_USER_AGENT)
-        .header("Accept", "application/json")
-        .send()?
-        .error_for_status()?
-        .json()?;
+/// Fetches localized item names from Warframe.Market for one language, keyed by WFM item id
+/// (which is exactly our stored `wfm_id`, so names attach with no join). WFM's `/v2/items`
+/// returns a per-item `i18n` object localized to the `language` header; we read `i18n[lang].name`.
+/// WFM is the marketplace's own canonical localization — complete across all supported languages
+/// (unlike WFStat, which lacked names for many tradeable parts and had no Spanish at all).
+fn fetch_wfm_item_names(lang_code: &str) -> Result<HashMap<String, String>> {
+    // Low priority: this is a large (~2.4 MB) background download that must never delay live
+    // order/watchlist traffic on the shared WFM scheduler.
+    let bytes = fetch_wfm_bytes(
+        WFM_ITEMS_URL,
+        lang_code,
+        RequestPriority::Low,
+        "request WFM localized item names",
+        Some(format!("catalog:wfm-item-names:{lang_code}")),
+    )?;
+    let json: Value =
+        serde_json::from_slice(&bytes).context("failed to parse WFM items response")?;
+    let items = json
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("WFM items response is missing the data array"))?;
     let mut map = HashMap::with_capacity(items.len());
     for item in items {
-        if let (Some(unique), Some(name)) = (
-            item.get("uniqueName").and_then(Value::as_str),
-            item.get("name").and_then(Value::as_str),
-        ) {
-            if !unique.is_empty() && !name.is_empty() {
-                map.insert(unique.to_string(), name.to_string());
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let name = item
+            .get("i18n")
+            .and_then(|i18n| i18n.get(lang_code))
+            .and_then(|entry| entry.get("name"))
+            .and_then(Value::as_str);
+        if let Some(name) = name {
+            if !id.is_empty() && !name.is_empty() {
+                map.insert(id.to_string(), name.to_string());
             }
         }
     }
@@ -4050,39 +4075,28 @@ pub fn populate_language_item_names(
                 item_count: 0,
             });
         }
-        let names = fetch_wfstat_item_names(&lang_code)?;
+        // WFM item id == our stored wfm_id, so localized names attach directly — no uniqueName
+        // join. The FK-safe insert only writes rows for items present in this catalog.
+        let names = fetch_wfm_item_names(&lang_code)?;
         let paths = resolve_app_paths(&app)?;
         let mut connection = open_database(&paths.db_path)?;
         ensure_language_pack_meta_table(&connection)?;
-        // Map every WFM item to its matched WFStat uniqueName so we can attach the localized name.
-        let pairs: Vec<(String, String)> = {
-            let mut statement = connection.prepare(
-                "SELECT w.wfm_id, i.primary_wfstat_unique_name
-                 FROM wfm_items w
-                 JOIN items i ON i.item_id = w.item_id
-                 WHERE i.primary_wfstat_unique_name IS NOT NULL
-                   AND i.primary_wfstat_unique_name <> ''",
-            )?;
-            let rows = statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<rusqlite::Result<Vec<(String, String)>>>()?;
-            rows
-        };
         let tx = connection.transaction()?;
         tx.execute("DELETE FROM wfm_item_i18n WHERE lang_code = ?1", [&lang_code])?;
         let mut inserted: i64 = 0;
         {
             let mut insert = tx.prepare(
-                "INSERT OR REPLACE INTO wfm_item_i18n (wfm_id, lang_code, name) VALUES (?1, ?2, ?3)",
+                "INSERT OR REPLACE INTO wfm_item_i18n (wfm_id, lang_code, name)
+                 SELECT ?1, ?2, ?3
+                 WHERE EXISTS (SELECT 1 FROM wfm_items WHERE wfm_id = ?1)",
             )?;
-            for (wfm_id, unique_name) in &pairs {
-                if let Some(name) = names.get(unique_name) {
-                    insert.execute(params![wfm_id, lang_code, name])?;
-                    inserted += 1;
-                }
+            for (wfm_id, name) in &names {
+                inserted += insert.execute(params![wfm_id, lang_code, name])? as i64;
             }
         }
-        let version = fetch_wfstat_catalog_version().ok().flatten();
+        // Stamp the WFM catalog version (repurposing the `wfstat_version` column) so the
+        // language pack's currency is judged against WFM — the source these names now come from.
+        let version = fetch_items_collection_version().ok();
         tx.execute(
             "INSERT INTO language_pack_meta (lang_code, wfstat_version, item_count, updated_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -4123,8 +4137,9 @@ fn i18n_row_count(connection: &Connection, lang_code: &str) -> Result<i64> {
     )?)
 }
 
-/// The WFStat version a language's translations were built from: an imported pack's
-/// recorded version wins; otherwise a natively-built language inherits the catalog version.
+/// The WFM catalog version a language's names were built from: the recorded pack version wins;
+/// otherwise fall back to the stored WFM collection version. (The `wfstat_version` column name is
+/// legacy — it now holds a WFM version, since names are sourced from WFM.)
 fn language_built_version(connection: &Connection, lang_code: &str) -> Result<Option<String>> {
     ensure_language_pack_meta_table(connection)?;
     let imported: Option<String> = connection
@@ -4135,7 +4150,7 @@ fn language_built_version(connection: &Connection, lang_code: &str) -> Result<Op
         )
         .optional()?
         .flatten();
-    Ok(imported.or_else(|| stored_wfstat_catalog_version(connection)))
+    Ok(imported.or_else(|| stored_items_collection_version(connection)))
 }
 
 pub fn get_language_pack_status(
@@ -4148,13 +4163,15 @@ pub fn get_language_pack_status(
         ensure_language_pack_meta_table(&connection)?;
         let item_count = i18n_row_count(&connection, &lang_code)?;
         let built_version = language_built_version(&connection, &lang_code)?;
-        // A HEAD probe doubles as the reachability + currency check.
-        let (wfstat_reachable, current_version) = match fetch_wfstat_catalog_version() {
-            Ok(version) => (true, version),
+        // The tiny /v2/versions probe doubles as the reachability + currency check. Names come
+        // from WFM now, so currency is judged against WFM (the `wfstatReachable` field name the
+        // frontend reads is legacy — it means "the name source is reachable").
+        let (wfstat_reachable, current_version) = match fetch_items_collection_version() {
+            Ok(version) => (true, Some(version)),
             Err(_) => (false, None),
         };
-        // Up to date when versions match, or when WFStat is reachable but we simply never
-        // recorded a build version (can't disprove currency → treat as current).
+        // Up to date when versions match, or when WFM is reachable but we simply never recorded
+        // a build version (can't disprove currency → treat as current).
         let up_to_date = match (&built_version, &current_version) {
             (Some(b), Some(c)) => b == c,
             (None, Some(_)) => true,
@@ -4187,8 +4204,9 @@ pub fn export_language_pack(
         if i18n_row_count(&connection, &lang_code)? == 0 {
             anyhow::bail!("LANGPACK_EMPTY");
         }
+        // Names are sourced from WFM, so currency is judged against WFM's catalog version.
         let current_version =
-            fetch_wfstat_catalog_version().map_err(|_| anyhow!("LANGPACK_OFFLINE"))?;
+            Some(fetch_items_collection_version().map_err(|_| anyhow!("LANGPACK_OFFLINE"))?);
         let built_version = language_built_version(&connection, &lang_code)?;
         match (&built_version, &current_version) {
             // Reachable but no validator header → can't stamp a version, don't guess.

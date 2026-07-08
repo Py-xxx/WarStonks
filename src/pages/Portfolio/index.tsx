@@ -736,6 +736,89 @@ function PortfolioPanelHeader({
   );
 }
 
+/** One ledger entry line — shared by standalone trades and expanded group children, which render
+ *  identically except for the child indent. Numeric columns carry their secondary metric as a
+ *  sub-line (qty under price, margin under profit) so the table fits without horizontal scroll. */
+function TradeLogEntryRow({
+  entry,
+  isChild = false,
+  keepOn,
+  onToggleKeep,
+}: {
+  entry: PortfolioTradeLogEntry;
+  isChild?: boolean;
+  keepOn: boolean;
+  onToggleKeep: (entry: PortfolioTradeLogEntry) => void;
+}) {
+  const { t } = useTranslation();
+  const profitTone = entry.profit == null ? '' : entry.profit < 0 ? ' neg' : ' pos';
+  const metaParts = [
+    entry.source === 'wfm' ? 'WFM' : t('pf.alecaframe'),
+    entry.rank !== null && entry.rank !== undefined ? `${t('pf.rank')} ${entry.rank}` : null,
+    isChild && entry.allocationMode
+      ? entry.allocationMode === 'manual' ? t('pf.manual') : t('pf.auto')
+      : null,
+  ].filter(Boolean);
+
+  return (
+    <div className={`portfolio-log-row${isChild ? ' portfolio-log-row-child' : ''}`}>
+      <div className={`portfolio-log-item${isChild ? ' portfolio-log-item-child' : ''}`}>
+        <span className="portfolio-log-thumb">
+          {entry.imagePath ? (
+            <img src={resolveWfmAssetUrl(entry.imagePath) ?? undefined} alt="" />
+          ) : (
+            <span className="portfolio-log-thumb-fallback">{entry.itemName.charAt(0)}</span>
+          )}
+        </span>
+        <div className="portfolio-log-item-copy">
+          <span className="portfolio-log-item-name">{entry.itemName}</span>
+          <span className="portfolio-log-item-slug">{metaParts.join(' · ')}</span>
+        </div>
+      </div>
+      <span className={`badge ${buildTradeTypeClassName(entry.orderType)}`}>
+        {renderTradeType(entry.orderType)}
+      </span>
+      <div className="portfolio-log-cell">
+        <span className="portfolio-log-cell-main">{formatPlatinumValue(entry.platinum)}</span>
+        <span className="portfolio-log-cell-sub">×{entry.quantity}</span>
+      </div>
+      <div className="portfolio-log-cell">
+        <span className={`portfolio-log-cell-main${profitTone}`}>
+          {entry.profit == null ? '—' : formatPlatinumValue(entry.profit)}
+        </span>
+        <span className="portfolio-log-cell-sub">{formatMarginValue(entry.margin)}</span>
+      </div>
+      <span className="portfolio-log-status-cell">
+        {entry.status ? (
+          <span className={`badge ${buildTradeStatusClassName(entry.status)}`}>
+            {renderTradeStatus(entry.status)}
+          </span>
+        ) : (
+          <span className="portfolio-log-value">—</span>
+        )}
+      </span>
+      <span className="portfolio-log-date">{formatShortLocalDateTime(entry.closedAt)}</span>
+      <span className="portfolio-log-actions">
+        {entry.orderType === 'buy' ? (
+          <label className="portfolio-keep-toggle-wrap">
+            <button
+              className={`toggle portfolio-keep-toggle${keepOn ? ' on' : ''}`}
+              type="button"
+              role="switch"
+              aria-checked={keepOn}
+              aria-label={t('pf.keepAriaLabel', { name: entry.itemName })}
+              onClick={() => onToggleKeep(entry)}
+            />
+            <span>{t('pf.keepItem')}</span>
+          </label>
+        ) : (
+          <span className="portfolio-log-value">—</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 function TradeLogTab({ username }: { username: string | null }) {
   const { t } = useTranslation();
   const appSettings = useAppStore((state) => state.appSettings);
@@ -1214,14 +1297,11 @@ function TradeLogTab({ username }: { username: string | null }) {
             <div className="portfolio-log-header">
               <span>{t('pf.item')}</span>
               <span>{t('pf.type')}</span>
-              <span>{t('pf.price')}</span>
-              <span>{t('pf.qty')}</span>
-              <span>{t('pf.rank')}</span>
-              <span>{t('pf.profit')}</span>
-              <span>{t('pf.margin')}</span>
+              <span className="portfolio-log-header-num">{t('pf.price')}</span>
+              <span className="portfolio-log-header-num">{t('pf.profit')}</span>
               <span>{t('pf.status')}</span>
-              <span>{t('pf.closed')}</span>
-              <span>{t('pf.action')}</span>
+              <span className="portfolio-log-header-num">{t('pf.closed')}</span>
+              <span className="portfolio-log-header-num">{t('pf.action')}</span>
             </div>
 
             <div className="portfolio-log-list">
@@ -1230,57 +1310,12 @@ function TradeLogTab({ username }: { username: string | null }) {
               ) : (
                 displayRows.map((row) =>
                   row.kind === 'single' ? (
-                    <div key={row.entry.id} className="portfolio-log-group">
-                      <div className="portfolio-log-row">
-                        <div className="portfolio-log-item">
-                          <span className="portfolio-log-thumb">
-                            {row.entry.imagePath ? (
-                              <img src={resolveWfmAssetUrl(row.entry.imagePath) ?? undefined} alt="" />
-                            ) : (
-                              <span className="portfolio-log-thumb-fallback">{row.entry.itemName.charAt(0)}</span>
-                            )}
-                          </span>
-                          <div className="portfolio-log-item-copy">
-                            <span className="portfolio-log-item-name">{row.entry.itemName}</span>
-                            <span className="portfolio-log-item-slug">{row.entry.slug}</span>
-                            <div className="portfolio-row-badges">
-                              <span className="badge">{row.entry.source === 'wfm' ? 'WFM' : 'Alecaframe'}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <span className={`badge ${buildTradeTypeClassName(row.entry.orderType)}`}>{renderTradeType(row.entry.orderType)}</span>
-                        <span className="portfolio-log-value">{formatPlatinumValue(row.entry.platinum)}</span>
-                        <span className="portfolio-log-value">{row.entry.quantity}</span>
-                        <span className="portfolio-log-value">{row.entry.rank ?? '—'}</span>
-                        <span className="portfolio-log-value">{row.entry.profit == null ? '—' : formatPlatinumValue(row.entry.profit)}</span>
-                        <span className="portfolio-log-value">{formatMarginValue(row.entry.margin)}</span>
-                        <span>
-                          {row.entry.status ? (
-                            <span className={`badge ${buildTradeStatusClassName(row.entry.status)}`}>{renderTradeStatus(row.entry.status)}</span>
-                          ) : (
-                            <span className="portfolio-log-value">—</span>
-                          )}
-                        </span>
-                        <span className="portfolio-log-date">{formatShortLocalDateTime(row.entry.closedAt)}</span>
-                        <span className="portfolio-log-actions">
-                          {row.entry.orderType === 'buy' ? (
-                            <label className="portfolio-keep-toggle-wrap">
-                              <button
-                                className={`toggle portfolio-keep-toggle${(keepOverrides[row.entry.id] ?? row.entry.keepItem) ? ' on' : ''}`}
-                                type="button"
-                                role="switch"
-                                aria-checked={keepOverrides[row.entry.id] ?? row.entry.keepItem}
-                                aria-label={t('pf.keepAriaLabel', { name: row.entry.itemName })}
-                                onClick={() => handleToggleKeepItem(row.entry)}
-                              />
-                              <span>{t('pf.keepItem')}</span>
-                            </label>
-                          ) : (
-                            <span className="portfolio-log-value">—</span>
-                          )}
-                        </span>
-                      </div>
-                    </div>
+                    <TradeLogEntryRow
+                      key={row.entry.id}
+                      entry={row.entry}
+                      keepOn={keepOverrides[row.entry.id] ?? row.entry.keepItem}
+                      onToggleKeep={handleToggleKeepItem}
+                    />
                   ) : (
                     <div key={row.groupId} className="portfolio-log-group">
                       <div className="portfolio-log-row portfolio-log-row-parent">
@@ -1303,25 +1338,25 @@ function TradeLogTab({ username }: { username: string | null }) {
                           <div className="portfolio-log-item-copy">
                             <span className="portfolio-log-item-name">{row.label}</span>
                             <span className="portfolio-log-item-slug">
-                              {buildTradeGroupSummary(row.children)} · {t('pf.itemsCount', { n: row.itemCount })}
+                              {buildTradeGroupSummary(row.children)}
+                              {' · '}
+                              {row.children.some((child) => child.allocationMode === 'manual') ? t('pf.manualSplit') : t('pf.autoSplit')}
                             </span>
-                            <div className="portfolio-row-badges">
-                              <span className="badge">{row.children[0]?.source === 'wfm' ? 'WFM' : 'Alecaframe'}</span>
-                              <span className="badge">
-                                {row.children.some((child) => child.allocationMode === 'manual') ? t('pf.manualSplit') : t('pf.autoSplit')}
-                              </span>
-                            </div>
                           </div>
                         </div>
                         <span className={`badge ${buildTradeTypeClassName(row.orderType)}`}>{renderTradeType(row.orderType)}</span>
-                        <span className="portfolio-log-value">{formatPlatinumValue(row.totalPlatinum)}</span>
-                        <span className="portfolio-log-value">{row.itemCount}</span>
-                        <span className="portfolio-log-value">—</span>
-                        <span className="portfolio-log-value">—</span>
-                        <span className="portfolio-log-value">—</span>
-                        <span className="portfolio-log-value">{t('pf.grouped')}</span>
+                        <div className="portfolio-log-cell">
+                          <span className="portfolio-log-cell-main">{formatPlatinumValue(row.totalPlatinum)}</span>
+                          <span className="portfolio-log-cell-sub">{t('pf.itemsCount', { n: row.itemCount })}</span>
+                        </div>
+                        <div className="portfolio-log-cell">
+                          <span className="portfolio-log-cell-main">—</span>
+                        </div>
+                        <span className="portfolio-log-status-cell">
+                          <span className="badge">{t('pf.grouped')}</span>
+                        </span>
                         <span className="portfolio-log-date">{formatShortLocalDateTime(row.closedAt)}</span>
-                        <span className="portfolio-log-actions portfolio-log-actions-parent">
+                        <span className="portfolio-log-actions">
                           <button className="act-btn portfolio-secondary-btn" type="button" onClick={() => handleOpenAllocationModal(row)}>
                             {t('pf.adjustAmounts')}
                           </button>
@@ -1329,57 +1364,13 @@ function TradeLogTab({ username }: { username: string | null }) {
                       </div>
                       {expandedGroupIds.includes(row.groupId)
                         ? row.children.map((child) => (
-                            <div key={child.id} className="portfolio-log-child-wrap">
-                              <div className="portfolio-log-row portfolio-log-row-child">
-                                <div className="portfolio-log-item portfolio-log-item-child">
-                                  <span className="portfolio-log-thumb">
-                                    {child.imagePath ? (
-                                      <img src={resolveWfmAssetUrl(child.imagePath) ?? undefined} alt="" />
-                                    ) : (
-                                      <span className="portfolio-log-thumb-fallback">{child.itemName.charAt(0)}</span>
-                                    )}
-                                  </span>
-                                  <div className="portfolio-log-item-copy">
-                                    <span className="portfolio-log-item-name">{child.itemName}</span>
-                                    <span className="portfolio-log-item-slug">{child.slug}</span>
-                                    <div className="portfolio-row-badges">
-                                      {child.allocationMode ? <span className="badge">{child.allocationMode === 'manual' ? t('pf.manual') : t('pf.auto')}</span> : null}
-                                    </div>
-                                  </div>
-                                </div>
-                                <span className={`badge ${buildTradeTypeClassName(child.orderType)}`}>{renderTradeType(child.orderType)}</span>
-                                <span className="portfolio-log-value">{formatPlatinumValue(child.platinum)}</span>
-                                <span className="portfolio-log-value">{child.quantity}</span>
-                                <span className="portfolio-log-value">{child.rank ?? '—'}</span>
-                                <span className="portfolio-log-value">{child.profit == null ? '—' : formatPlatinumValue(child.profit)}</span>
-                                <span className="portfolio-log-value">{formatMarginValue(child.margin)}</span>
-                                <span>
-                                  {child.status ? (
-                                    <span className={`badge ${buildTradeStatusClassName(child.status)}`}>{renderTradeStatus(child.status)}</span>
-                                  ) : (
-                                    <span className="portfolio-log-value">—</span>
-                                  )}
-                                </span>
-                                <span className="portfolio-log-date">{formatShortLocalDateTime(child.closedAt)}</span>
-                                <span className="portfolio-log-actions">
-                                  {child.orderType === 'buy' ? (
-                                    <label className="portfolio-keep-toggle-wrap">
-                                      <button
-                                        className={`toggle portfolio-keep-toggle${(keepOverrides[child.id] ?? child.keepItem) ? ' on' : ''}`}
-                                        type="button"
-                                        role="switch"
-                                        aria-checked={keepOverrides[child.id] ?? child.keepItem}
-                                        aria-label={t('pf.keepAriaLabel', { name: child.itemName })}
-                                        onClick={() => handleToggleKeepItem(child)}
-                                      />
-                                      <span>{t('pf.keepItem')}</span>
-                                    </label>
-                                  ) : (
-                                    <span className="portfolio-log-value">—</span>
-                                  )}
-                                </span>
-                              </div>
-                            </div>
+                            <TradeLogEntryRow
+                              key={child.id}
+                              entry={child}
+                              isChild
+                              keepOn={keepOverrides[child.id] ?? child.keepItem}
+                              onToggleKeep={handleToggleKeepItem}
+                            />
                           ))
                         : null}
                     </div>

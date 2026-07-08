@@ -12,8 +12,40 @@ mod wfm_scheduler;
 mod wfm_queue_log;
 mod worldstate_cache;
 
+/// Opts the whole process out of Windows 11 Efficiency Mode (EcoQoS). Windows moves backgrounded
+/// apps onto efficiency cores and throttles their execution speed, which starves the WFM
+/// scheduler / websocket / scanner threads and contributes to the frozen-on-refocus state after
+/// long background stints. `StateMask = 0` with the execution-speed bit in `ControlMask` means
+/// "never apply speed throttling to this process".
+#[cfg(target_os = "windows")]
+fn opt_out_of_windows_efficiency_mode() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, ProcessPowerThrottling, SetProcessInformation,
+        PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        PROCESS_POWER_THROTTLING_STATE,
+    };
+
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    // Best-effort: failure just means Windows keeps its default throttling behavior.
+    unsafe {
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            std::ptr::from_ref(&state).cast(),
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    opt_out_of_windows_efficiency_mode();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -100,6 +132,7 @@ pub fn run() {
             trades::update_trade_group_allocations,
             trades::force_wfm_trade_log_resync,
             trades::ensure_trade_set_map,
+            trades::get_wfm_item_subtypes,
             trades::create_wfm_sell_order,
             trades::create_wfm_buy_order,
             trades::update_wfm_sell_order,

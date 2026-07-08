@@ -76,6 +76,35 @@ export function tConfidence(t: TranslateFn, confidence: { level: string; label: 
   return key ? t(key) : confidence.label;
 }
 
+/** WFM order subtypes (closed set) → translation keys; relic refinements reuse `refine.*`.
+ *  "Atragraph" is a Warframe proper noun and stays untranslated, like Archwing. */
+const SUBTYPE_LABEL_KEYS: Record<string, TranslationKey> = {
+  intact: 'refine.intact',
+  exceptional: 'refine.exceptional',
+  flawless: 'refine.flawless',
+  radiant: 'refine.radiant',
+  regular: 'subtype.regular',
+  small: 'subtype.small',
+  medium: 'subtype.medium',
+  large: 'subtype.large',
+  basic: 'subtype.basic',
+  adorned: 'subtype.adorned',
+  magnificent: 'subtype.magnificent',
+  crafted: 'subtype.crafted',
+  blueprint: 'subtype.blueprint',
+  unrevealed: 'subtype.unrevealed',
+  revealed: 'subtype.revealed',
+};
+
+/** Translate a WFM subtype value, falling back to a capitalized raw value for unknown ones. */
+export function tSubtype(t: TranslateFn, subtype: string): string {
+  const key = SUBTYPE_LABEL_KEYS[subtype];
+  if (key) {
+    return t(key);
+  }
+  return subtype.charAt(0).toUpperCase() + subtype.slice(1);
+}
+
 interface TrendSummaryLike {
   direction: string;
   confidenceSummary: { level: string; reasons: string[] };
