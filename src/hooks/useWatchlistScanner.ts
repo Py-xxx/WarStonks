@@ -6,10 +6,8 @@ import {
   selectNextWatchlistItemToScan,
 } from '../lib/watchlist';
 import { useAppStore } from '../stores/useAppStore';
-import { useDocumentVisibility } from './useDocumentVisibility';
 
 export function useWatchlistScanner() {
-  const isVisible = useDocumentVisibility();
   const watchlistScheduleVersion = useAppStore((state) => {
     let nextScanAt = Number.POSITIVE_INFINITY;
 
@@ -30,9 +28,11 @@ export function useWatchlistScanner() {
   }, []);
 
   useEffect(() => {
-    // Pause scanning while hidden or during a data import/export, so WebView2 throttling
-    // can't queue a backlog and no scan writes mid import/export.
-    if (!isVisible || maintenance) {
+    // Scanning deliberately continues while the window is hidden — price alerts firing while
+    // the user is in-game (app backgrounded) is the core use case. Webview timer throttling is
+    // disabled app-wide (additionalBrowserArgs / backgroundThrottling in tauri.conf.json), so
+    // background ticks run at full cadence. Only a data import/export pauses the scanner.
+    if (maintenance) {
       return undefined;
     }
 
@@ -97,5 +97,5 @@ export function useWatchlistScanner() {
       disposed = true;
       clearScheduledTick();
     };
-  }, [watchlistScheduleVersion, isVisible, maintenance]);
+  }, [watchlistScheduleVersion, maintenance]);
 }

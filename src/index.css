@@ -8638,24 +8638,35 @@ body {
 /* Horizontal scroll so the full row (including the Keep Item toggle) stays
    reachable on narrow windows instead of being clipped by the card. */
 .portfolio-log-scroll {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: min(64vh, 680px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
 }
 .portfolio-log-header,
 .portfolio-log-row {
   display: grid;
-  grid-template-columns: minmax(280px, 1.8fr) 78px 78px 56px 56px 78px 78px 124px 150px 124px;
+  grid-template-columns: minmax(200px, 1.6fr) 64px 100px 110px 118px 132px 118px;
   align-items: center;
   gap: 12px;
-  min-width: 1200px;
+  min-width: 780px;
 }
 .portfolio-log-header {
-  padding: 12px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  padding: 11px 16px;
   border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  letter-spacing: 0.16em;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+.portfolio-log-header-num {
+  text-align: right;
 }
 .portfolio-log-list {
   display: grid;
@@ -8664,32 +8675,40 @@ body {
   display: grid;
 }
 .portfolio-log-row {
-  padding: 12px 16px;
+  padding: 9px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 100ms ease;
+}
+.portfolio-log-row:hover {
+  background: rgba(74, 158, 255, 0.045);
 }
 .portfolio-log-row:last-child {
   border-bottom: none;
 }
 .portfolio-log-row-parent {
-  background: rgba(255, 255, 255, 0.01);
+  background: rgba(139, 111, 255, 0.04);
+}
+.portfolio-log-row-parent:hover {
+  background: rgba(139, 111, 255, 0.07);
 }
 .portfolio-log-row-child {
   background: rgba(255, 255, 255, 0.015);
+  box-shadow: inset 2px 0 0 rgba(139, 111, 255, 0.35);
 }
 .portfolio-log-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 11px;
   min-width: 0;
 }
 .portfolio-log-item-child {
-  padding-left: 34px;
+  padding-left: 32px;
 }
 .portfolio-log-thumb,
 .portfolio-log-thumb-fallback {
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
   border: 1px solid var(--border);
   background: rgba(16, 20, 28, 0.92);
   display: inline-flex;
@@ -8705,28 +8724,60 @@ body {
 }
 .portfolio-log-thumb-fallback {
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 .portfolio-log-item-copy {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 2px;
 }
 .portfolio-log-item-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .portfolio-log-item-slug {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-muted);
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .portfolio-row-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+/* Numeric column: main value with its secondary metric stacked underneath (price/×qty,
+   profit/margin) — halves the column count so the ledger fits without horizontal scroll. */
+.portfolio-log-cell {
+  display: grid;
+  gap: 1px;
+  justify-items: end;
+  text-align: right;
+  min-width: 0;
+}
+.portfolio-log-cell-main {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+.portfolio-log-cell-main.pos { color: var(--accent-green); }
+.portfolio-log-cell-main.neg { color: var(--accent-red); }
+.portfolio-log-cell-sub {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.portfolio-log-status-cell {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
 }
 .portfolio-log-value,
 .portfolio-log-date {
@@ -8779,17 +8830,18 @@ body {
 }
 .portfolio-log-date {
   text-align: right;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
 }
 .portfolio-log-actions {
   display: flex;
   justify-content: flex-end;
   align-items: center;
 }
-.portfolio-log-actions-parent {
-  gap: 8px;
-}
-.portfolio-log-child-wrap {
-  border-top: 1px solid var(--border-subtle);
+.portfolio-log-actions .portfolio-secondary-btn {
+  white-space: nowrap;
 }
 .portfolio-keep-toggle-wrap {
   display: inline-flex;
@@ -9196,7 +9248,7 @@ body {
 
   .portfolio-log-header,
   .portfolio-log-row {
-    grid-template-columns: minmax(220px, 1.6fr) 72px 72px 48px 48px 72px 72px 110px 120px 96px;
+    grid-template-columns: minmax(180px, 1.5fr) 58px 92px 100px 108px 120px 104px;
     gap: 10px;
   }
 

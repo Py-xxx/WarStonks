@@ -1640,6 +1640,18 @@ export const en = {
   'strategy.tradeValueHelp': 'Daily trades are limited, so each one has a value. Every trade completing a set saves (vs. selling parts one by one) lowers the required edge by this much — set higher if your trade slots are precious, 0 to ignore trade counts.',
   'strategy.saved': 'Strategy saved. The Opportunities board will use it on its next refresh.',
   'strategy.invalidNumbers': 'Enter valid non-negative numbers for both fields.',
+  'trades.modal.subtype': 'Variant',
+  'subtype.regular': 'Regular',
+  'subtype.small': 'Small',
+  'subtype.medium': 'Medium',
+  'subtype.large': 'Large',
+  'subtype.basic': 'Basic',
+  'subtype.adorned': 'Adorned',
+  'subtype.magnificent': 'Magnificent',
+  'subtype.crafted': 'Crafted',
+  'subtype.blueprint': 'Blueprint',
+  'subtype.unrevealed': 'Unrevealed',
+  'subtype.revealed': 'Revealed',
 } as const;
 
 export type TranslationKey = keyof typeof en;

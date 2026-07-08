@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { WORLDSTATE_RETRY_DELAY_MS } from '../lib/worldState';
 import { useAppStore } from '../stores/useAppStore';
-import { useDocumentVisibility } from './useDocumentVisibility';
 
 interface UseWorldStateRefreshOptions {
   lastUpdatedAt: string | null;
@@ -13,8 +12,9 @@ interface UseWorldStateRefreshOptions {
 
 export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
   const { lastUpdatedAt, nextRefreshAt, error, loading, refresh } = options;
-  const isVisible = useDocumentVisibility();
-  // Pause refreshes while a data import/export is running.
+  // Pause refreshes while a data import/export is running. Refreshes deliberately continue
+  // while the window is hidden (webview throttling is disabled app-wide) so worldstate
+  // alerts stay live during gameplay.
   const maintenance = useAppStore((state) => state.dataMaintenanceActive);
   // Force an immediate refetch when the display language changes (worldstate is localized
   // server-side, so cached data is stale in the new language).
@@ -33,17 +33,15 @@ export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
   }, [worldstateEpoch, maintenance, refresh]);
 
   useEffect(() => {
-    if (maintenance || !isVisible || lastUpdatedAt || nextRefreshAt || error || loading) {
+    if (maintenance || lastUpdatedAt || nextRefreshAt || error || loading) {
       return;
     }
 
     void refresh();
-  }, [error, isVisible, lastUpdatedAt, loading, maintenance, nextRefreshAt, refresh]);
+  }, [error, lastUpdatedAt, loading, maintenance, nextRefreshAt, refresh]);
 
   useEffect(() => {
-    // Don't keep a refresh timer armed while hidden; re-arm on resume. The effect
-    // re-runs when isVisible flips, so a due refresh fires promptly once visible.
-    if (!isVisible || maintenance) {
+    if (maintenance) {
       return undefined;
     }
 
@@ -62,5 +60,5 @@ export function useWorldStateRefresh(options: UseWorldStateRefreshOptions) {
     }, Math.max(0, targetMs - Date.now()));
 
     return () => window.clearTimeout(timeoutId);
-  }, [error, isVisible, maintenance, nextRefreshAt, refresh]);
+  }, [error, maintenance, nextRefreshAt, refresh]);
 }

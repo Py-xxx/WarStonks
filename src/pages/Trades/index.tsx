@@ -12,6 +12,7 @@ import {
   getItemAnalytics,
   getTradeSellOrderHealth,
   getWfmAutocompleteItems,
+  getWfmItemSubtypes,
   getWfmTradeOverview,
   setWfmOrdersVisibility,
   updateWfmBuyOrder,
@@ -26,7 +27,7 @@ import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
 import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
-import { tHealth, tTrendSummary } from '../../lib/healthLabels';
+import { tHealth, tSubtype, tTrendSummary } from '../../lib/healthLabels';
 import type {
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
@@ -63,6 +64,8 @@ interface ListingModalState {
   quantity: string;
   rank: string;
   perTrade: string;
+  /** Chosen WFM subtype; '' until the item's subtypes load (or when it has none). */
+  subtype: string;
   visible: boolean;
 }
 
@@ -319,6 +322,7 @@ function createListingModalState(
     quantity: order ? String(order.quantity) : '1',
     rank: rankValue,
     perTrade: isBulkTradable(item) ? String(order?.perTrade ?? 1) : '',
+    subtype: '',
     visible: order?.visible ?? true,
   };
 }
@@ -667,6 +671,32 @@ function ListingModal({
   const typeLocked = form.mode === 'edit';
   const showAnalysis = true;
 
+  // Subtyped items (Atragraph-variant mods, relics, fish…) get a variant picker; the choice is
+  // reset whenever the item changes so a stale value can never be submitted for the wrong item.
+  const [subtypeOptions, setSubtypeOptions] = useState<string[]>([]);
+  const subtypeWfmId = form.selectedItem?.wfmId ?? null;
+  useEffect(() => {
+    setSubtypeOptions([]);
+    onChange({ subtype: '' });
+    if (!subtypeWfmId) {
+      return;
+    }
+    let cancelled = false;
+    void getWfmItemSubtypes(subtypeWfmId)
+      .then((subtypes) => {
+        if (!cancelled) {
+          setSubtypeOptions(subtypes);
+        }
+      })
+      .catch(() => {
+        // Missing options just hide the picker; the backend still applies the item default.
+      });
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subtypeWfmId]);
+
   const formContent = (
     <>
       <div className="listing-form-section listing-form-section-type">
@@ -794,6 +824,23 @@ function ListingModal({
                 {Array.from({ length: (form.selectedItem?.maxRank ?? 0) + 1 }, (_, index) => (
                   <option key={index} value={String(index)}>
                     {index}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          {form.mode === 'create' && subtypeOptions.length > 1 ? (
+            <div className="trade-listing-fieldset">
+              <label className="trade-listing-label" htmlFor="trade-listing-subtype">{t('trades.modal.subtype')}</label>
+              <select
+                id="trade-listing-subtype"
+                className="field-input"
+                value={form.subtype || subtypeOptions[0]}
+                onChange={(event) => onChange({ subtype: event.target.value })}
+              >
+                {subtypeOptions.map((subtype) => (
+                  <option key={subtype} value={subtype}>
+                    {tSubtype(t, subtype)}
                   </option>
                 ))}
               </select>
@@ -1657,6 +1704,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
                 rank,
                 visible: listingModal.visible,
                 perTrade,
+                // '' = untouched picker → omit so the backend applies the item default.
+                subtype: listingModal.subtype || null,
               } satisfies TradeCreateListingInput,
               sellerMode,
             )

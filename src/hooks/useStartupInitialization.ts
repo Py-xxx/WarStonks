@@ -159,9 +159,11 @@ export function useStartupInitialization(): StartupState {
 
         setSummary(nextSummary);
 
-        // Build the localized item-name map now that the catalog exists (drives item names
-        // shown across the UI). Fire-and-forget; names fall back to English until it resolves.
-        void useAppStore.getState().loadLocalizedNames();
+        // Ensure the active language's WFM name pack is present + current, then build the
+        // localized item-name map (drives item names across the UI). This silently upgrades
+        // installs whose names predate the WFM name source. Fire-and-forget; names fall back to
+        // English until it resolves.
+        void useAppStore.getState().ensureLanguagePackFresh();
 
         const setMapProgress: StartupProgress = {
           stageKey: 'trade-set-map',

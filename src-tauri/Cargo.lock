@@ -5356,6 +5356,7 @@ dependencies = [
  "tokio-tungstenite",
  "uuid",
  "webbrowser",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -489,6 +489,14 @@ export async function ensureTradeSetMap(
   });
 }
 
+/** Subtypes for an item in catalog order (index 0 = WFM default); empty = no subtypes. */
+export async function getWfmItemSubtypes(wfmId: string): Promise<string[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+  return invoke<string[]>('get_wfm_item_subtypes', { wfmId });
+}
+
 export async function createWfmSellOrder(
   input: TradeCreateListingInput,
   sellerMode: SellerMode,

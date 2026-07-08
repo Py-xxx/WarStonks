@@ -3,7 +3,7 @@ import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { translate, useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
-import { LANGUAGES, type AppLanguage, wfstatLangCode } from '../../lib/language';
+import { LANGUAGES, type AppLanguage, wfmLangCode } from '../../lib/language';
 import {
   getLanguagePackStatus,
   openExternalUrl,
@@ -30,9 +30,9 @@ function packErrorKey(error: unknown): TranslationKey {
   return 'langpanel.err.badformat';
 }
 
-/** wfstat code (e.g. "zh") back to our AppLanguage (e.g. "zh-hans"). */
-function appLanguageForWfstat(code: string): AppLanguage | null {
-  return LANGUAGES.find((option) => wfstatLangCode(option.code) === code)?.code ?? null;
+/** WFM code (e.g. "zh-hans") back to our AppLanguage. */
+function appLanguageForWfm(code: string): AppLanguage | null {
+  return LANGUAGES.find((option) => wfmLangCode(option.code) === code)?.code ?? null;
 }
 
 export function LanguageModal() {
@@ -55,7 +55,7 @@ export function LanguageModal() {
 
   const refreshStatus = useCallback(async () => {
     try {
-      setStatus(await getLanguagePackStatus(wfstatLangCode(language)));
+      setStatus(await getLanguagePackStatus(wfmLangCode(language)));
     } catch {
       setStatus(null);
     }
@@ -71,9 +71,9 @@ export function LanguageModal() {
       setLanguage(next);
       try {
         if (next !== 'en') {
-          const nextStatus = await getLanguagePackStatus(wfstatLangCode(next));
+          const nextStatus = await getLanguagePackStatus(wfmLangCode(next));
           if (nextStatus && !nextStatus.populated && nextStatus.wfstatReachable) {
-            await populateLanguageItemNames(wfstatLangCode(next));
+            await populateLanguageItemNames(wfmLangCode(next));
           }
         }
       } catch {
@@ -88,7 +88,7 @@ export function LanguageModal() {
     setBusy('download');
     setSwitchTarget(language);
     try {
-      await populateLanguageItemNames(wfstatLangCode(language));
+      await populateLanguageItemNames(wfmLangCode(language));
       window.location.reload();
     } catch {
       setSwitchTarget(null);
@@ -111,7 +111,7 @@ export function LanguageModal() {
   const handleExport = async () => {
     setBusy('export');
     try {
-      const count = await exportLanguagePackFile(wfstatLangCode(language));
+      const count = await exportLanguagePackFile(wfmLangCode(language));
       pushToast(t('langpanel.exportOk', { lang: nativeName, count }), 'success');
     } catch (error) {
       pushToast(t(packErrorKey(error)), 'error');
@@ -125,7 +125,7 @@ export function LanguageModal() {
     setBusy('import');
     try {
       const result = await importLanguagePackFile(file);
-      const applied = appLanguageForWfstat(result.langCode);
+      const applied = appLanguageForWfm(result.langCode);
       setSwitchTarget(applied ?? language);
       if (applied) {
         setLanguage(applied);

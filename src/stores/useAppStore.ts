@@ -7,6 +7,8 @@ import {
   ensureMarketTracking,
   getCachedWfmProfileTradeLog,
   getWfmAutocompleteItems,
+  getLanguagePackStatus,
+  populateLanguageItemNames,
   getAppSettings,
   getItemAnalytics,
   getItemAnalysis,
@@ -142,7 +144,7 @@ import {
   loadNotificationSettings,
   saveNotificationSettings,
 } from '../lib/notifications';
-import { applySetSuffix, type AppLanguage, loadLanguage, saveLanguage, wfmLangCode, wfstatLangCode } from '../lib/language';
+import { type AppLanguage, loadLanguage, saveLanguage, wfmLangCode, wfstatLangCode } from '../lib/language';
 import { tActive, tUserMessage } from '../i18n';
 import {
   loadPinnedOpportunities,
@@ -1354,6 +1356,8 @@ interface AppStore {
   /** Localized item names keyed by wfmId and slug, for display across the UI. */
   itemNameMap: Record<string, string>;
   loadLocalizedNames: () => Promise<void>;
+  /** Ensure the active language's WFM name pack is present/current, then rebuild the name map. */
+  ensureLanguagePackFresh: () => Promise<void>;
   /** True when WFStat data (item catalog enrichment and/or live worldstate) is being served
    * from cache because warframestat.us was unreachable at startup. Drives a dismissible banner;
    * resolves itself once WFStat is back online. */
@@ -1737,25 +1741,44 @@ export const useAppStore = create<AppStore>((set, get) => ({
   loadLocalizedNames: async () => {
     try {
       const language = useAppStore.getState().language;
-      const items = await getWfmAutocompleteItems(wfstatLangCode(language));
+      // Names come from WFM (i18n keyed by the WFM language code, e.g. "zh-hans"); they're
+      // complete and already carry the localized "Set" suffix, so no post-processing is needed.
+      const items = await getWfmAutocompleteItems(wfmLangCode(language));
       const map: Record<string, string> = {};
       for (const item of items) {
         if (!item.name) {
           continue;
         }
-        // Re-append the localized "Set" suffix for set items whose localized name dropped it.
-        const name = applySetSuffix(language, item.slug, item.name);
         if (item.wfmId) {
-          map[item.wfmId] = name;
+          map[item.wfmId] = item.name;
         }
         if (item.slug) {
-          map[item.slug] = name;
+          map[item.slug] = item.name;
         }
       }
       set({ itemNameMap: map });
     } catch {
       // Keep the previous map on failure; names fall back to English per-row.
     }
+  },
+  // Startup: make sure the active language's WFM name pack is present and current, then (re)build
+  // the name map. Silently upgrades installs whose names predate the WFM switch — the pack is
+  // "stale" whenever its recorded version isn't WFM's, and missing for es/zh-hans which WFStat
+  // never covered. English needs no pack. Fire-and-forget; names fall back to English until done.
+  ensureLanguagePackFresh: async () => {
+    const language = useAppStore.getState().language;
+    if (language !== 'en') {
+      const code = wfmLangCode(language);
+      try {
+        const status = await getLanguagePackStatus(code);
+        if (status && status.wfstatReachable && (!status.populated || !status.upToDate)) {
+          await populateLanguageItemNames(code);
+        }
+      } catch {
+        // Offline or failed → fall through; existing/English names still render.
+      }
+    }
+    await useAppStore.getState().loadLocalizedNames();
   },
   wfstatDataStale: false,
   notificationSettings: loadNotificationSettings(),

@@ -39,5 +39,10 @@ tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-clipboard-manager = "2"
 
+# Opt the process out of Windows 11 Efficiency Mode (EcoQoS) so the WFM scheduler,
+# websocket, and scanner threads aren't speed-throttled while the window is backgrounded.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [profile.dev]
 incremental = false

@@ -190,6 +190,8 @@ export interface TradeCreateListingInput {
   visible: boolean;
   /** Batch size for bulk-tradable items (arcanes). Omit/null for non-bulk items. */
   perTrade?: number | null;
+  /** WFM subtype for subtyped items (Atragraph mods, relics…). Omit for the item default. */
+  subtype?: string | null;
 }
 
 export interface TradeUpdateListingInput {

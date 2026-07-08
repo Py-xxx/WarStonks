@@ -1,23 +1,23 @@
 import { useEffect, useRef } from 'react';
 import { refreshMarketTracking } from '../lib/tauriClient';
 import { useAppStore } from '../stores/useAppStore';
-import { useDocumentVisibility } from './useDocumentVisibility';
 
 const MARKET_TRACKING_REFRESH_MS = 60_000;
-// Small delay before the first refresh after (re)becoming visible, so a window
-// restore doesn't immediately kick off heavy DB work (refresh + outcome grading)
-// while the webview is still waking up and re-rendering.
+// Small delay before the first refresh after mount / seller-mode change, so startup
+// doesn't immediately kick off heavy DB work (refresh + outcome grading) while the
+// webview is still rendering.
 const MARKET_TRACKING_RESUME_DELAY_MS = 1_500;
 
 export function useMarketTracking() {
   const requestInFlightRef = useRef(false);
   const sellerMode = useAppStore((state) => state.sellerMode);
-  const isVisible = useDocumentVisibility();
   const maintenance = useAppStore((state) => state.dataMaintenanceActive);
 
   useEffect(() => {
-    // Pause polling while the window is hidden or a data import/export is in progress.
-    if (!isVisible || maintenance) {
+    // Tracking keeps polling while the window is hidden (webview throttling is disabled
+    // app-wide) so alerts and price data stay live during gameplay. Only a data
+    // import/export pauses it.
+    if (maintenance) {
       return undefined;
     }
 
@@ -43,5 +43,5 @@ export function useMarketTracking() {
       window.clearTimeout(initialTimeoutId);
       window.clearInterval(intervalId);
     };
-  }, [sellerMode, isVisible, maintenance]);
+  }, [sellerMode, maintenance]);
 }
