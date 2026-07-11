@@ -9522,6 +9522,35 @@ body {
   padding-top: 6px;
 }
 
+.scanner-auto-scan-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  cursor: pointer;
+}
+.scanner-auto-scan-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.scanner-auto-scan-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.scanner-auto-scan-help {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 .scanner-progress-block {
   display: flex;
   flex-direction: column;

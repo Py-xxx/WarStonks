@@ -1626,4 +1626,6 @@ export const zhHans: Record<string, string> = {
   'subtype.blueprint': '蓝图',
   'subtype.unrevealed': '未鉴定',
   'subtype.revealed': '已鉴定',
+  'scan.autoScan': '自动扫描（每日）',
+  'scan.autoScanHelp': '当套利扫描数据过期时，每天自动重新扫描一次。以低优先级运行，绝不会延误实时交易。默认关闭。',
 };

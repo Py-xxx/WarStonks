@@ -1652,6 +1652,8 @@ export const en = {
   'subtype.blueprint': 'Blueprint',
   'subtype.unrevealed': 'Unrevealed',
   'subtype.revealed': 'Revealed',
+  'scan.autoScan': 'Auto-scan (daily)',
+  'scan.autoScanHelp': 'Automatically re-run the arbitrage scan once a day when it goes stale. Runs at low priority so it never delays live trading. Off by default.',
 } as const;
 
 export type TranslationKey = keyof typeof en;

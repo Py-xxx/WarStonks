@@ -144,6 +144,7 @@ import {
   loadNotificationSettings,
   saveNotificationSettings,
 } from '../lib/notifications';
+import { loadAutoScanEnabled, saveAutoScanEnabled } from '../lib/autoScan';
 import { type AppLanguage, loadLanguage, saveLanguage, wfmLangCode, wfstatLangCode } from '../lib/language';
 import { tActive, tUserMessage } from '../i18n';
 import {
@@ -1587,6 +1588,9 @@ interface AppStore {
   setTradeAccountStatus: (status: 'ingame' | 'online' | 'invisible') => Promise<void>;
   autoWatchlistBuyOrdersEnabled: boolean;
   setAutoWatchlistBuyOrdersEnabled: (enabled: boolean) => void;
+  /** Opt-in: keep the arbitrage scan fresh automatically (~daily). Drives useAutoScanScheduler. */
+  autoScanEnabled: boolean;
+  setAutoScanEnabled: (enabled: boolean) => void;
   tradesSubTab: TradesSubTab;
   setTradesSubTab: (tab: TradesSubTab) => void;
 
@@ -4420,6 +4424,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
       throw error;
     }
+  },
+  autoScanEnabled: loadAutoScanEnabled(),
+  setAutoScanEnabled: (enabled) => {
+    saveAutoScanEnabled(enabled);
+    set({ autoScanEnabled: enabled });
   },
   autoWatchlistBuyOrdersEnabled: true,
   setAutoWatchlistBuyOrdersEnabled: (enabled) => {

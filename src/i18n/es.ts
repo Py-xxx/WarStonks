@@ -1626,4 +1626,6 @@ export const es: Record<string, string> = {
   'subtype.blueprint': 'Plano',
   'subtype.unrevealed': 'Sin revelar',
   'subtype.revealed': 'Revelado',
+  'scan.autoScan': 'Escaneo automático (diario)',
+  'scan.autoScanHelp': 'Vuelve a ejecutar el escaneo de arbitraje una vez al día cuando quede desactualizado. Se ejecuta con baja prioridad para no retrasar el trading en vivo. Desactivado por defecto.',
 };

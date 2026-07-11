@@ -587,6 +587,8 @@ export function ScannersPage() {
   const lastSavedScanAtRef = useRef<string | null>(null);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const syncScannerStaleAlert = useAppStore((state) => state.syncScannerStaleAlert);
+  const autoScanEnabled = useAppStore((state) => state.autoScanEnabled);
+  const setAutoScanEnabled = useAppStore((state) => state.setAutoScanEnabled);
 
   useEffect(() => {
     lastSavedScanAtRef.current = arbitrage?.scanFinishedAt ?? progress?.lastCompletedAt ?? null;
@@ -955,6 +957,20 @@ export function ScannersPage() {
                   ) : (
                     <p>{t('scan.relicRoiIntro')}</p>
                   )}
+                  <label className="scanner-auto-scan-toggle" title={t('scan.autoScanHelp')}>
+                    <span className="scanner-auto-scan-copy">
+                      <span className="scanner-auto-scan-label">{t('scan.autoScan')}</span>
+                      <span className="scanner-auto-scan-help">{t('scan.autoScanHelp')}</span>
+                    </span>
+                    <button
+                      type="button"
+                      className={`toggle${autoScanEnabled ? ' on' : ''}`}
+                      role="switch"
+                      aria-checked={autoScanEnabled}
+                      aria-label={t('scan.autoScan')}
+                      onClick={() => setAutoScanEnabled(!autoScanEnabled)}
+                    />
+                  </label>
                   {progress ? (
                     <div className="scanner-header-status-line">
                       <span className="market-panel-badge tone-neutral">

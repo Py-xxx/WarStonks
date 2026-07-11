@@ -33,6 +33,7 @@ import { useWorldStateVoidTrader } from './hooks/useWorldStateVoidTrader';
 import { useWorldStateActivities } from './hooks/useWorldStateActivities';
 import { useWorldStateExtras } from './hooks/useWorldStateExtras';
 import { useMarketTracking } from './hooks/useMarketTracking';
+import { useAutoScanScheduler } from './hooks/useAutoScanScheduler';
 import { useTradeDetection } from './hooks/useTradeDetection';
 import { useTradePresence } from './hooks/useTradePresence';
 import { useAppUpdater } from './hooks/useAppUpdater';
@@ -106,6 +107,7 @@ function AppShell() {
   useOwnedRelicsBootstrap();
   useImageErrorRecovery();
   useMarketTracking();
+  useAutoScanScheduler();
   useTradeDetection();
   useTradePresence();
   useAppUpdater();
