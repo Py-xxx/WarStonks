@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { formatEventsErrorMessage } from './eventsErrorHandling.ts';
+import { formatShortLocalDateTime } from './dateTime.ts';
 
 test('falls back to friendly initial load copy for raw failures', () => {
   assert.equal(
@@ -17,7 +18,7 @@ test('builds degraded message when cached data exists', () => {
       new Error('network timeout'),
       { lastAvailableAt: '2026-03-17T08:15:00.000Z' },
     ),
-    'Couldn’t refresh Void Trader data right now. Showing the last available data from 17 Mar 2026 - 10:15am. If it keeps happening, report it in Discord.',
+    `Couldn’t refresh Void Trader data right now. Showing the last available data from ${formatShortLocalDateTime('2026-03-17T08:15:00.000Z')}. If it keeps happening, report it in Discord.`,
   );
 });
 

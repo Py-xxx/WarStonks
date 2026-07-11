@@ -1626,4 +1626,6 @@ export const de: Record<string, string> = {
   'subtype.blueprint': 'Bauplan',
   'subtype.unrevealed': 'Unaufgedeckt',
   'subtype.revealed': 'Aufgedeckt',
+  'scan.autoScan': 'Auto-Scan (täglich)',
+  'scan.autoScanHelp': 'Führt den Arbitrage-Scan einmal täglich erneut aus, wenn er veraltet. Läuft mit niedriger Priorität und verzögert den Live-Handel nie. Standardmäßig aus.',
 };

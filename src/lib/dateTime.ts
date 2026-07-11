@@ -1,4 +1,6 @@
 import { tActive } from '../i18n/active.ts';
+import { intlLocaleCode, loadLanguage } from './language.ts';
+
 export function getUserTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
 }
@@ -16,21 +18,17 @@ function parseDateValue(value: string | null): Date | null {
   return parsed;
 }
 
-function formatDateParts(
-  date: Date,
-  options: Intl.DateTimeFormatOptions,
-): Record<string, string> {
-  const formatter = new Intl.DateTimeFormat(undefined, {
+/**
+ * Formats a date in the app's chosen language, letting `Intl` own the field ordering and
+ * conventions (e.g. Chinese renders year-first `2026年7月5日`, German day-first `5. Juli 2026`,
+ * en-US `Jul 5, 2026`). Previously this hand-assembled parts in a fixed English `day month year`
+ * order under the *system* locale, so non-English users got English ordering.
+ */
+function formatLocalized(date: Date, options: Intl.DateTimeFormatOptions): string {
+  return new Intl.DateTimeFormat(intlLocaleCode(loadLanguage()), {
     timeZone: getUserTimeZone(),
     ...options,
-  });
-
-  return formatter.formatToParts(date).reduce<Record<string, string>>((parts, part) => {
-    if (part.type !== 'literal') {
-      parts[part.type] = part.value;
-    }
-    return parts;
-  }, {});
+  }).format(date);
 }
 
 export function formatShortLocalDateTime(value: string | null): string {
@@ -43,17 +41,14 @@ export function formatShortLocalDateTime(value: string | null): string {
     return value;
   }
 
-  const parts = formatDateParts(parsed, {
+  // No `hour12` — let the locale decide (en-US → 12h, zh/de/fr/… → 24h).
+  return formatLocalized(parsed, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-    hour12: true,
   });
-
-  const meridiem = (parts.dayPeriod ?? '').toLowerCase();
-  return `${parts.day} ${parts.month} ${parts.year} - ${parts.hour}:${parts.minute}${meridiem}`;
 }
 
 export function formatShortLocalDate(value: string | null): string {
@@ -66,13 +61,11 @@ export function formatShortLocalDate(value: string | null): string {
     return value;
   }
 
-  const parts = formatDateParts(parsed, {
+  return formatLocalized(parsed, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
   });
-
-  return `${parts.day} ${parts.month} ${parts.year}`;
 }
 
 export function formatElapsedTime(value: string | null): string {

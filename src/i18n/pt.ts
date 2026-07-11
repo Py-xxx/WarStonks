@@ -1626,4 +1626,6 @@ export const pt: Record<string, string> = {
   'subtype.blueprint': 'Projeto',
   'subtype.unrevealed': 'Não revelado',
   'subtype.revealed': 'Revelado',
+  'scan.autoScan': 'Escaneamento automático (diário)',
+  'scan.autoScanHelp': 'Executa novamente o escaneamento de arbitragem uma vez por dia quando ficar desatualizado. Roda em baixa prioridade para nunca atrasar negociações ao vivo. Desativado por padrão.',
 };

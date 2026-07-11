@@ -1626,4 +1626,6 @@ export const fr: Record<string, string> = {
   'subtype.blueprint': 'Plan',
   'subtype.unrevealed': 'Non révélé',
   'subtype.revealed': 'Révélé',
+  'scan.autoScan': 'Analyse automatique (quotidienne)',
+  'scan.autoScanHelp': 'Relance l\'analyse d\'arbitrage une fois par jour lorsqu\'elle devient obsolète. S\'exécute en basse priorité pour ne jamais retarder le trading en direct. Désactivé par défaut.',
 };

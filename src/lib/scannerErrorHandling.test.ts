@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { formatScannerErrorMessage } from './scannerErrorHandling.ts';
+import { formatShortLocalDateTime } from './dateTime.ts';
 
 test('falls back to initial scanner load copy for raw failures', () => {
   assert.equal(
@@ -17,7 +18,7 @@ test('builds degraded scanner refresh copy when a saved scan exists', () => {
       new Error('scanner worker crashed'),
       { lastCompletedAt: '2026-03-17T08:15:00.000Z' },
     ),
-    'Couldn’t complete the scanner refresh right now. Showing the last saved scan from 17 Mar 2026 - 10:15am. If it keeps happening, report it in Discord.',
+    `Couldn’t complete the scanner refresh right now. Showing the last saved scan from ${formatShortLocalDateTime('2026-03-17T08:15:00.000Z')}. If it keeps happening, report it in Discord.`,
   );
 });
 

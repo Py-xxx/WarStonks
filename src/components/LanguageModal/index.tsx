@@ -35,6 +35,17 @@ function appLanguageForWfm(code: string): AppLanguage | null {
   return LANGUAGES.find((option) => wfmLangCode(option.code) === code)?.code ?? null;
 }
 
+/**
+ * Resolves after the browser has actually painted a pending React state change. A double rAF
+ * clears the commit + the following frame, so a loading overlay set just before a heavy/blocking
+ * step (a reload, a multi-MB name download) is guaranteed visible first — no frozen-looking gap.
+ */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 export function LanguageModal() {
   const modalOpen = useAppStore((s) => s.languageModalOpen);
   const closeModal = useAppStore((s) => s.closeLanguageModal);
@@ -61,33 +72,29 @@ export function LanguageModal() {
     }
   }, [language]);
 
-  // Switch language: point the backend at it, install item names if missing (and online), then
-  // do a FULL reload so every already-fetched surface (worldstate, market, trades, quick view)
-  // re-renders in the new language rather than keeping stale cached names.
+  // Switch language: persist the choice, then do a FULL reload so every already-fetched surface
+  // (worldstate, market, trades, quick view) re-renders in the new language. We deliberately do
+  // NOT download item names here — that (multi-MB) work happens after the reload under the
+  // startup screen via `ensureLanguagePackFresh`, so the switch itself is instant and never
+  // blocks the UI. The overlay is painted before the reload so there's no frozen-looking gap.
   const handleSwitchLanguage = useCallback(
     async (next: AppLanguage) => {
       setBusy('switching');
       setSwitchTarget(next);
       setLanguage(next);
-      try {
-        if (next !== 'en') {
-          const nextStatus = await getLanguagePackStatus(wfmLangCode(next));
-          if (nextStatus && !nextStatus.populated && nextStatus.wfstatReachable) {
-            await populateLanguageItemNames(wfmLangCode(next));
-          }
-        }
-      } catch {
-        // Reload regardless — names simply fall back to English until a pack is installed.
-      }
+      await nextPaint();
       window.location.reload();
     },
     [setLanguage],
   );
 
+  // Explicit "download item names now" action — the download IS the task, so the overlay stays
+  // up (painted first) for its duration, then reloads to apply the names everywhere.
   const handleDownload = useCallback(async () => {
     setBusy('download');
     setSwitchTarget(language);
     try {
+      await nextPaint();
       await populateLanguageItemNames(wfmLangCode(language));
       window.location.reload();
     } catch {
@@ -123,11 +130,15 @@ export function LanguageModal() {
   const handleImportFile = async (file: File | undefined) => {
     if (!file) return;
     setBusy('import');
+    // Show the overlay (with the "applying pack" sub-line) BEFORE the parse/DB import, which is
+    // the heavy step — otherwise the UI would sit unresponsive with no feedback until reload.
+    setSwitchTarget(language);
     try {
+      await nextPaint();
       const result = await importLanguagePackFile(file);
       const applied = appLanguageForWfm(result.langCode);
-      setSwitchTarget(applied ?? language);
       if (applied) {
+        setSwitchTarget(applied);
         setLanguage(applied);
       }
       // Full reload so the imported language applies everywhere.
