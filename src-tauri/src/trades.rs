@@ -1224,11 +1224,17 @@ fn cleanup_legacy_trade_files(app: &tauri::AppHandle) {
 
 fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
     let db_path = build_item_catalog_path(app)?;
-    Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .context("failed to open item catalog")
+    .context("failed to open item catalog")?;
+    // The catalog DB takes large write transactions (startup refresh, language-pack population).
+    // Without a busy timeout a concurrent write surfaces as an instant SQLITE_BUSY on reads.
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .context("failed to configure item catalog connection")?;
+    Ok(connection)
 }
 
 fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
@@ -2251,7 +2257,8 @@ fn resolve_catalog_trade_item_by_alias(
               COALESCE(items.wfm_slug, wfm_items.slug, ''),
               COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
               COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank
+              wfm_items.max_rank,
+              wfm_items.bulk_tradable
             FROM items
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
             WHERE items.primary_wfstat_unique_name = ?2
@@ -3206,7 +3213,24 @@ fn build_alecaframe_trade_entries(
         };
 
         for (index, item) in trade_items.into_iter().enumerate() {
-            let meta = resolve_catalog_trade_item_by_alias(&catalog, &item.name)?;
+            // A failed catalog lookup must not abort the whole resync — the metadata is optional
+            // (we fall back to AlecaFrame's display name below), so log and continue instead.
+            let meta = match resolve_catalog_trade_item_by_alias(&catalog, &item.name) {
+                Ok(meta) => meta,
+                Err(error) => {
+                    log_feature_error_best_effort(
+                        app,
+                        "trade-log",
+                        "resync-alias-lookup",
+                        &format!(
+                            "Catalog lookup failed for '{}' during trade-log resync — falling back to the raw item name.",
+                            item.name
+                        ),
+                        &error,
+                    );
+                    None
+                }
+            };
             let item_name = meta
                 .as_ref()
                 .map(|entry| entry.name.clone())
@@ -8555,7 +8579,9 @@ pub async fn force_wfm_trade_log_resync(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    // `{:#}` prints the full anyhow context chain so the root cause (e.g. the underlying SQLite
+    // error) reaches the UI/error log instead of only the outermost context message.
+    .map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]

@@ -316,6 +316,8 @@ export const de: Record<string, string> = {
   'trades.modal.price': 'Preis',
   'trades.modal.quantity': 'Menge',
   'trades.modal.rank': 'Rang',
+  'trades.modal.rankUnranked': 'Unrangiert',
+  'trades.modal.rankMax': 'Max. Rang',
   'trades.modal.perTrade': 'Pro Handel',
   'trades.modal.bulkHint': 'Massenhandel: pro Ingame-Handel getauschte Einheiten (max. 6, muss die Menge teilen).',
   'trades.modal.visibility': 'Sichtbarkeit',

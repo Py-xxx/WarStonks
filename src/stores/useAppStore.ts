@@ -4461,3 +4461,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   eventsSubTab: 'vendors',
   setEventsSubTab: (tab) => set({ eventsSubTab: tab }),
 }));
+// Dev-only: expose the store for browser-preview state injection.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __appStore?: unknown }).__appStore = useAppStore;
+}

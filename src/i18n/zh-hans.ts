@@ -316,6 +316,8 @@ export const zhHans: Record<string, string> = {
   'trades.modal.price': '价格',
   'trades.modal.quantity': '数量',
   'trades.modal.rank': '等级',
+  'trades.modal.rankUnranked': '未升级',
+  'trades.modal.rankMax': '满级',
   'trades.modal.perTrade': '每次交易',
   'trades.modal.bulkHint': '批量交易：每次游戏内交易兑换的单位数（最多 6，且必须整除数量）。',
   'trades.modal.visibility': '可见性',

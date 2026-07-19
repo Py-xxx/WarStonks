@@ -341,6 +341,8 @@ export const en = {
   'trades.modal.price': 'Price',
   'trades.modal.quantity': 'Quantity',
   'trades.modal.rank': 'Rank',
+  'trades.modal.rankUnranked': 'Unranked',
+  'trades.modal.rankMax': 'Max rank',
   'trades.modal.perTrade': 'Per trade',
   'trades.modal.bulkHint': 'Bulk trade: units exchanged per in-game trade (max 6, must divide quantity).',
   'trades.modal.visibility': 'Visibility',
