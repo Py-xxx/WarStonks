@@ -1,6 +1,6 @@
 [package]
 name = "warstonks"
-version = "3.0.11"
+version = "3.0.12"
 description = "WarStonks — Warframe market assistant"
 authors = ["py."]
 license = "GPL-3.0-only"
