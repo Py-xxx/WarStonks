@@ -75,7 +75,6 @@ function formatTopBarVariantLabel(variantKey: string, fallbackLabel: string, t: 
 export function TopBar() {
   const language = useAppStore((s) => s.language);
   const { t } = useTranslation();
-  const autoProfile = useAppStore((s) => s.autoProfile);
   const alerts = useAppStore((s) => s.alerts);
   const marketVariants = useAppStore((s) => s.marketVariants);
   const marketVariantsLoading = useAppStore((s) => s.marketVariantsLoading);
@@ -122,6 +121,17 @@ export function TopBar() {
     Boolean(selectedQuickViewItem)
     && !marketVariantsLoading
     && marketVariants.length > 1;
+  // For plain ranked items every variant is a rank — collapse the dropdown into a
+  // rank-0 / max-rank toggle. Mixed variant kinds (e.g. subtypes) keep the select.
+  const rankToggleVariants = (() => {
+    if (!showMarketVariantSelect || !marketVariants.every((v) => v.key.startsWith('rank:') && v.rank !== null)) {
+      return null;
+    }
+    const sorted = [...marketVariants].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
+    return min.key === max.key ? null : { min, max };
+  })();
 
   useEffect(() => {
     void loadTradeAccount();
@@ -426,20 +436,47 @@ export function TopBar() {
         {showMarketVariantSelect ? (
           <div className="topbar-market-variant">
             <span className="topbar-market-variant-label">{t('wl.rank')}</span>
-            <select
-              className="topbar-market-variant-select"
-              value={selectedMarketVariantKey ?? ''}
-              onChange={(event) => {
-                void setSelectedMarketVariantKey(event.target.value || null);
-              }}
-              aria-label={t('a11y.selectRankMarket')}
-            >
-              {marketVariants.map((variant) => (
-                <option key={variant.key} value={variant.key}>
-                  {formatTopBarVariantLabel(variant.key, variant.label, t)}
-                </option>
-              ))}
-            </select>
+            {rankToggleVariants ? (
+              <div className="rank-toggle" role="group" aria-label={t('a11y.selectRankMarket')}>
+                <button
+                  type="button"
+                  className={`rank-toggle-option${selectedMarketVariantKey === rankToggleVariants.min.key ? ' active' : ''}`}
+                  aria-pressed={selectedMarketVariantKey === rankToggleVariants.min.key}
+                  title={t('trades.modal.rankUnranked')}
+                  onClick={() => {
+                    void setSelectedMarketVariantKey(rankToggleVariants.min.key);
+                  }}
+                >
+                  R{rankToggleVariants.min.rank ?? 0}
+                </button>
+                <button
+                  type="button"
+                  className={`rank-toggle-option${selectedMarketVariantKey === rankToggleVariants.max.key ? ' active' : ''}`}
+                  aria-pressed={selectedMarketVariantKey === rankToggleVariants.max.key}
+                  title={t('trades.modal.rankMax')}
+                  onClick={() => {
+                    void setSelectedMarketVariantKey(rankToggleVariants.max.key);
+                  }}
+                >
+                  R{rankToggleVariants.max.rank ?? 0}
+                </button>
+              </div>
+            ) : (
+              <select
+                className="topbar-market-variant-select"
+                value={selectedMarketVariantKey ?? ''}
+                onChange={(event) => {
+                  void setSelectedMarketVariantKey(event.target.value || null);
+                }}
+                aria-label={t('a11y.selectRankMarket')}
+              >
+                {marketVariants.map((variant) => (
+                  <option key={variant.key} value={variant.key}>
+                    {formatTopBarVariantLabel(variant.key, variant.label, t)}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         ) : null}
       </div>
@@ -505,9 +542,6 @@ export function TopBar() {
       </div>
 
       <div className="topbar-right">
-        <div className="strategy-pill" title={t('a11y.strategyConfig')}>
-          {t('topbar.custom')} · H:{t('topbar.veryShort')} · C:{autoProfile ? t('topbar.auto') : t('topbar.balanced')}
-        </div>
         <div ref={notificationsRef} className="notification-wrap">
         <button
           className={`notification-btn${notificationsOpen ? ' open' : ''}`}

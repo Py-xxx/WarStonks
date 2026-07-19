@@ -3798,10 +3798,6 @@ body {
   gap: 6px;
   min-width: 0;
   height: 32px;
-  padding: 0 7px 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg-base);
 }
 
 .topbar-market-variant-label {
@@ -3897,20 +3893,6 @@ body {
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-}
-
-.strategy-pill {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 4px 10px;
-  border-radius: 4px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
 }
 
 .btn-connect {
@@ -4011,21 +3993,21 @@ body {
 .currency-strip {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   background: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: 5px;
-  padding: 0 2px;
-  height: 36px;
+  padding: 0 1px;
+  height: 32px;
   flex-shrink: 0;
 }
 
 .currency-item {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 9px;
-  height: 30px;
+  gap: 4px;
+  padding: 0 7px;
+  height: 26px;
   border-radius: 3px;
   cursor: default;
   transition: background 0.12s;
@@ -7928,6 +7910,43 @@ body {
   font-size: 10px;
   line-height: 1.4;
   color: var(--text-muted);
+}
+.rank-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+.rank-toggle-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.rank-toggle-option + .rank-toggle-option {
+  border-left: 1px solid var(--border-strong);
+}
+.rank-toggle-option:hover {
+  color: var(--text-primary);
+}
+.rank-toggle-option.active {
+  background: rgba(74, 158, 255, 0.16);
+  color: var(--accent-blue);
 }
 .trade-listing-toggle-field {
   align-content: end;
