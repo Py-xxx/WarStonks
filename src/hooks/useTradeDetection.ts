@@ -12,13 +12,23 @@ import { useAppStore } from '../stores/useAppStore';
 const WFM_TRADE_POLL_MIN_MS = 5_000;
 const WFM_TRADE_POLL_MAX_MS = 30_000;
 const WFM_TRADE_IDLE_STREAK_CAP = 3; // 5s → 10s → 20s → 30s
-const ALECAFRAME_TRADE_POLL_INTERVAL_MS = 10_000;
+// AlecaFrame's server data only changes when the companion app uploads a sync (a minutes-scale
+// cadence), so tight polling is pure flood. Poll at 30s briefly after activity, backing off to
+// 3 minutes while idle; the backend additionally coalesces these fetches with the wallet poll
+// and enforces an error cooldown, so this cadence is an upper bound on real requests.
+const ALECAFRAME_POLL_MIN_MS = 30_000;
+const ALECAFRAME_POLL_MAX_MS = 180_000;
+const ALECAFRAME_IDLE_STREAK_CAP = 3; // 30s → 60s → 120s → 180s
 const WFM_INITIAL_DELAY_MS = 1_000;
 const ALECAFRAME_INITIAL_DELAY_MS = 2_500;
 const MIN_TRADE_REFRESH_GAP_MS = 3_000;
 
 function wfmPollIntervalForStreak(idleStreak: number): number {
   return Math.min(WFM_TRADE_POLL_MIN_MS * 2 ** idleStreak, WFM_TRADE_POLL_MAX_MS);
+}
+
+function alecaframePollIntervalForStreak(idleStreak: number): number {
+  return Math.min(ALECAFRAME_POLL_MIN_MS * 2 ** idleStreak, ALECAFRAME_POLL_MAX_MS);
 }
 
 function computeNextRefreshDelay(
@@ -61,6 +71,7 @@ export function useTradeDetection() {
     let lastWfmStartedAt = 0;
     let lastAlecaframeStartedAt = 0;
     let wfmIdleStreak = 0;
+    let alecaframeIdleStreak = 0;
 
     const scheduleWfm = (preferredAt: number) => {
       if (cancelled) {
@@ -135,11 +146,20 @@ export function useTradeDetection() {
         if (result.detectedBuys && result.detectedBuys.length > 0) {
           await handleDetectedBuys(result.detectedBuys);
         }
+        // Reset to the fast cadence on activity; otherwise back off while idle.
+        if (result.newTradeCount > 0) {
+          alecaframeIdleStreak = 0;
+        } else {
+          alecaframeIdleStreak = Math.min(alecaframeIdleStreak + 1, ALECAFRAME_IDLE_STREAK_CAP);
+        }
       } catch (error) {
+        // Errors (including the backend's cooldown refusals) also back off — retrying fast
+        // against an unhealthy server is what got us rate-limited in the first place.
+        alecaframeIdleStreak = Math.min(alecaframeIdleStreak + 1, ALECAFRAME_IDLE_STREAK_CAP);
         console.error('[trades] failed to refresh Alecaframe trade detection', error);
       } finally {
         alecaframeInFlight = false;
-        scheduleAlecaframe(startedAt + ALECAFRAME_TRADE_POLL_INTERVAL_MS);
+        scheduleAlecaframe(startedAt + alecaframePollIntervalForStreak(alecaframeIdleStreak));
       }
     };
 
