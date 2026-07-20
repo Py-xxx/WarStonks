@@ -31,7 +31,7 @@ trading actually works.
 
 Grab the latest Windows installer (`.exe`) from
 **[Releases](https://github.com/Py-xxx/WarStonks/releases)** or
-**[pyth.co.za/apps/warstonks](https://pyth.co.za/get)** — install once and the app
+**[https://pyth.co.za/get](https://pyth.co.za/get)** — install once and the app
 updates itself from there. (Skip the source-code zip unless you're building it yourself.)
 
 ## Why WarStonks?
