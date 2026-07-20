@@ -23,7 +23,7 @@ trading actually works.
 > a modified version, please rename it and don't present it as official.
 >
 > ⚠️ **Only download official builds** from [GitHub Releases](https://github.com/Py-xxx/WarStonks/releases)
-> or https://pyth.co.za/apps/warstonks. WarStonks signs into your Warframe.Market account —
+> or https://pyth.co.za/get/. WarStonks signs into your Warframe.Market account —
 > unofficial builds could be tampered with to steal credentials. See [`NOTICE.md`](NOTICE.md)
 > and [`PRIVACY.md`](PRIVACY.md).
 
@@ -31,7 +31,7 @@ trading actually works.
 
 Grab the latest Windows installer (`.exe`) from
 **[Releases](https://github.com/Py-xxx/WarStonks/releases)** or
-**[pyth.co.za/apps/warstonks](https://pyth.co.za/apps/warstonks)** — install once and the app
+**[pyth.co.za/apps/warstonks](https://pyth.co.za/get)** — install once and the app
 updates itself from there. (Skip the source-code zip unless you're building it yourself.)
 
 ## Why WarStonks?
