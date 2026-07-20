@@ -613,21 +613,130 @@ fn build_alecaframe_client() -> Result<Client> {
         .context("failed to construct Alecaframe client")
 }
 
-fn fetch_public_stats(public_token: &str) -> Result<AlecaframePublicStatsResponse> {
-    let client = build_alecaframe_client()?;
+/// Shared cache + failure backoff for the `/api/stats/public` endpoint. Both the wallet
+/// snapshot and trade detection read this endpoint; without sharing, they each ran their own
+/// polling stream and AlecaFrame started shedding us with 503s. The cache also enforces a
+/// cooldown after failures (honoring Retry-After, exponential otherwise) so an unhealthy or
+/// rate-limiting server is left alone instead of hammered on the next poll tick.
+struct AlecaframeStatsState {
+    token: String,
+    body: std::sync::Arc<String>,
+    fetched_at: std::time::Instant,
+}
 
-    client
-        .get(format!(
-            "{ALECAFRAME_BASE_URL}{ALECAFRAME_PUBLIC_STATS_PATH}"
-        ))
-        .query(&[("token", public_token)])
-        .header("User-Agent", ALECAFRAME_USER_AGENT)
-        .header("Accept", "application/json")
-        .send()
-        .context("failed to request Alecaframe public stats")?
-        .error_for_status()
-        .context("Alecaframe public stats request failed")?
-        .json::<AlecaframePublicStatsResponse>()
+#[derive(Default)]
+struct AlecaframeStatsGuard {
+    cache: Option<AlecaframeStatsState>,
+    consecutive_failures: u32,
+    cooldown_until: Option<std::time::Instant>,
+}
+
+fn alecaframe_stats_guard() -> &'static Mutex<AlecaframeStatsGuard> {
+    static GUARD: OnceLock<Mutex<AlecaframeStatsGuard>> = OnceLock::new();
+    GUARD.get_or_init(|| Mutex::new(AlecaframeStatsGuard::default()))
+}
+
+const ALECAFRAME_BACKOFF_BASE_SECONDS: u64 = 30;
+const ALECAFRAME_BACKOFF_CAP_SECONDS: u64 = 600;
+
+/// Fetch the raw public-stats body, serving a cached copy when it is younger than `max_age`.
+/// Holding the guard lock across the HTTP call is deliberate: concurrent callers (wallet poll
+/// + trade detection) coalesce onto one request instead of racing.
+pub(crate) fn fetch_public_stats_body_cached(
+    public_token: &str,
+    max_age: Duration,
+) -> Result<std::sync::Arc<String>> {
+    let mut guard = alecaframe_stats_guard()
+        .lock()
+        .map_err(|_| anyhow!("Alecaframe stats cache lock poisoned"))?;
+    let now = std::time::Instant::now();
+
+    if let Some(cache) = &guard.cache {
+        if cache.token == public_token && now.duration_since(cache.fetched_at) <= max_age {
+            return Ok(cache.body.clone());
+        }
+    }
+
+    if let Some(until) = guard.cooldown_until {
+        if until > now {
+            let remaining = until.duration_since(now).as_secs().max(1);
+            return Err(anyhow!(
+                "Alecaframe requests are paused for {remaining}s after repeated errors."
+            ));
+        }
+    }
+
+    // (error, server-provided Retry-After seconds when present)
+    let result: std::result::Result<String, (anyhow::Error, Option<u64>)> = (|| {
+        let client = build_alecaframe_client().map_err(|error| (error, None))?;
+        let response = client
+            .get(format!(
+                "{ALECAFRAME_BASE_URL}{ALECAFRAME_PUBLIC_STATS_PATH}"
+            ))
+            .query(&[("token", public_token)])
+            .header("User-Agent", ALECAFRAME_USER_AGENT)
+            .header("Accept", "application/json")
+            .send()
+            .map_err(|error| {
+                (
+                    anyhow!(error).context("failed to request Alecaframe public stats"),
+                    None,
+                )
+            })?;
+
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok());
+        if let Err(error) = response.error_for_status_ref() {
+            return Err((
+                anyhow!(error).context("Alecaframe public stats request failed"),
+                retry_after,
+            ));
+        }
+        response.text().map_err(|error| {
+            (
+                anyhow!(error).context("failed to read Alecaframe public stats response"),
+                None,
+            )
+        })
+    })();
+
+    match result {
+        Ok(body) => {
+            guard.consecutive_failures = 0;
+            guard.cooldown_until = None;
+            let body = std::sync::Arc::new(body);
+            guard.cache = Some(AlecaframeStatsState {
+                token: public_token.to_string(),
+                body: body.clone(),
+                fetched_at: now,
+            });
+            Ok(body)
+        }
+        Err((error, server_delay)) => {
+            guard.consecutive_failures = guard.consecutive_failures.saturating_add(1);
+            let exponential = ALECAFRAME_BACKOFF_BASE_SECONDS
+                .saturating_mul(1_u64 << (guard.consecutive_failures - 1).min(5));
+            // The server's own Retry-After wins over our exponential schedule.
+            let delay = server_delay
+                .unwrap_or(exponential)
+                .clamp(ALECAFRAME_BACKOFF_BASE_SECONDS, ALECAFRAME_BACKOFF_CAP_SECONDS);
+            guard.cooldown_until = Some(now + Duration::from_secs(delay));
+            Err(error)
+        }
+    }
+}
+
+/// Wallet callers tolerate slightly stale data (balances change on the cadence of AlecaFrame's
+/// own uploads, i.e. minutes) — a 90s window lets the wallet poll ride on trade detection's
+/// fetches instead of issuing its own.
+const WALLET_STATS_MAX_AGE: Duration = Duration::from_secs(90);
+
+fn fetch_public_stats(public_token: &str) -> Result<AlecaframePublicStatsResponse> {
+    let body = fetch_public_stats_body_cached(public_token, WALLET_STATS_MAX_AGE)?;
+    serde_json::from_str::<AlecaframePublicStatsResponse>(&body)
         .context("failed to parse Alecaframe public stats response")
 }
 

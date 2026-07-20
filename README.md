@@ -1,145 +1,160 @@
 # WarStonks
 
-> **WarStonks is free, open-source software** licensed under the [GNU GPL-3.0](LICENSE) — you're
-> free to use, study, modify, and redistribute it under those terms. **However**, the name
-> *"WarStonks"*, the *"py."* identity, and the project's branding/logos are **not** licensed: if
-> you fork and redistribute a modified version, please **rename it** and don't present it as the
-> official WarStonks or imply endorsement by py.
->
-> ⚠️ **Only download official builds** from the [GitHub Releases](https://github.com/Py-xxx/WarStonks/releases)
-> or https://pyth.co.za/apps/warstonks. WarStonks signs into your Warframe.Market account — unofficial
-> builds could be tampered with to steal credentials. See [`NOTICE.md`](NOTICE.md) and
-> [`PRIVACY.md`](PRIVACY.md).
+**Stop guessing. Trade Warframe's market like you mean it.**
+
+WarStonks is a free, open-source desktop companion that turns Warframe.Market from a
+price-checking chore into an edge: live analysis with entry/exit zones, scanners that find
+profitable set flips for you, a watchlist that pings you the moment your price hits, a board
+that literally tells you *what to do next* — and a local ledger that proves whether your
+trading actually works.
 
 [![Windows](https://img.shields.io/badge/platform-Windows-0f172a?style=flat-square)](https://github.com/Py-xxx/WarStonks/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 [![Auto Updates](https://img.shields.io/badge/updates-automatic-15803d?style=flat-square)](https://github.com/Py-xxx/WarStonks/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db?style=flat-square&logo=tauri)](https://tauri.app/)
 [![Data: warframe.market](https://img.shields.io/badge/data-warframe.market-f97316?style=flat-square)](https://warframe.market/)
+[![6 Languages](https://img.shields.io/badge/languages-EN%20DE%20ES%20FR%20PT%20中文-8b6fff?style=flat-square)](#)
 
-WarStonks is a desktop trading companion for Warframe players who want to stop guessing and start making cleaner, faster market decisions.
+![WarStonks Home dashboard](Resources/pics/home.png)
 
-It brings live market data, analysis, scanners, watchlists, relic/set planning, worldstate tracking, and portfolio tracking into one local-first app so you can see:
-
-- what is worth flipping
-- what is worth farming
-- what is worth completing
-- what your trades are actually doing over time
-
-If you actively use Warframe.Market and want better timing, better visibility, and less manual checking, this app is built for that.
-
-![WarStonks dashboard](Resources/pics/dashboard.png)
+> **WarStonks is free, open-source software** licensed under the [GNU GPL-3.0](LICENSE) — use,
+> study, modify, and redistribute it under those terms. The name *"WarStonks"*, the *"py."*
+> identity, and the project's branding/logos are **not** licensed: if you fork and redistribute
+> a modified version, please rename it and don't present it as official.
+>
+> ⚠️ **Only download official builds** from [GitHub Releases](https://github.com/Py-xxx/WarStonks/releases)
+> or https://pyth.co.za/apps/warstonks. WarStonks signs into your Warframe.Market account —
+> unofficial builds could be tampered with to steal credentials. See [`NOTICE.md`](NOTICE.md)
+> and [`PRIVACY.md`](PRIVACY.md).
 
 ## Download
 
-Download the latest version from [Releases](https://github.com/Py-xxx/WarStonks/releases) or https://pyth.co.za/apps/warstonks.
+Grab the latest Windows installer (`.exe`) from
+**[Releases](https://github.com/Py-xxx/WarStonks/releases)** or
+**[pyth.co.za/apps/warstonks](https://pyth.co.za/apps/warstonks)** — install once and the app
+updates itself from there. (Skip the source-code zip unless you're building it yourself.)
 
-For normal use:
+## Why WarStonks?
 
-- download the latest Windows installer (`.exe`)
-- do not download the source-code zip
-- install once, then let the app handle updates from there
+Warframe trading rewards the player with better information and better timing. Getting either
+normally means a dozen browser tabs, spreadsheet math, and refreshing listings by hand.
+WarStonks does all of it, continuously, on your machine:
 
-WarStonks supports **in-app automatic updates**, so future versions are delivered directly through the app.
+- **It tells you what a fair price actually is.** Every item gets recommended entry/exit
+  zones, liquidity and trend readouts, and a confidence rating — not just "current lowest
+  seller".
+- **It finds the plays for you.** Scanners sweep the entire market for set-arbitrage and relic
+  ROI; the Opportunities board ranks your best moves — complete this set, sell those parts,
+  snipe that underpriced listing — with the profit math already done.
+- **It watches so you don't have to.** Watchlist targets refresh continuously and alert you
+  in-app, on your desktop, or in Discord the moment a price is hit — even while you're
+  in-mission with the app minimized.
+- **It keeps score.** Every trade lands in a local ledger with realized profit, win rate, and
+  inventory value — so you know if your strategy makes plat or just feels like it does.
+- **Your data stays yours.** Local-first by design: everything lives in SQLite on your PC,
+  with one-click backup/restore. No accounts, no telemetry, no cloud.
 
-## What the app does
+## The tour
 
-WarStonks is designed around practical decisions, not raw data dumps. It helps you:
+### Know the price before you whisper — *Home & Market*
 
-- search and analyze items quickly, with entry/exit zones and execution quality
-- run scanner-based opportunity discovery (arbitrage + relic ROI)
-- catch underpriced live listings the moment they're posted
-- manage a live watchlist with actionable, alertable buy targets
-- plan set completion using your owned prime parts and relics
-- manage your Warframe.Market buy/sell orders without losing context
-- track your trade history and P&L locally
-- stay on top of worldstate (vendors, fissures, Nightwave, Steel Path, open-world cycles)
+Search any item and get an instant Quick View: cheapest sellers, spread, a one-click whisper
+message, and an analysis preview with trade posture, entry/exit, margin, liquidity, trend, and
+risk. Dive deeper in Market for full price history, a time-of-day liquidity heatmap, and
+calibration diagnostics that show how trustworthy the recommendations are.
 
-Everything is **local-first**: your data lives on your machine in SQLite + local storage, and can be backed up or restored from **Settings → Import & Export**.
+![Market summary with entry/exit zones](Resources/pics/marketSummary.png)
+![Price history and liquidity charts](Resources/pics/marketCharts.png)
 
-## Tabs
+### Let the app do the waiting — *Watchlist & Notifications*
 
-### Home
-Your day-to-day trading dashboard — global item search, Quick View pricing (with a "View All" listing popup), watchlist management, and alert handling for the items you're actively monitoring.
+Set a target price and walk away. WarStonks scans your watchlist around the clock, marks items
+**Found** when a listing hits your number, and fires native desktop notifications, in-app
+alert tones, or rich Discord webhooks — your choice, per event type.
 
-### Market
-The deep-dive page for a specific item, across three subtabs:
-- **Summary** — headline pricing, entry/exit zones, liquidity & execution readouts, supply and drop-source context
-- **Charts** — price history, the time-of-day liquidity heatmap, and analytics panels
-- **Calibration** — confidence/accuracy diagnostics for the recommendations
+![Watchlist with live buy targets](Resources/pics/watchlist.png)
+![Notification settings](Resources/pics/notifications.png)
 
-![Item Summary view](Resources/pics/analysis.png)
-![Item Charts view](Resources/pics/analytics.png)
+### Find the plays you'd never spot by hand — *Scanners & Opportunities*
 
-### Events
-Warframe worldstate in one place, with an always-visible **World Clock** for the open-world day/night cycles (Cetus, Vallis, Cambion):
-- **Vendors** — Void Trader (Baro Ki'Teer) and the Prime Resurgence / Vault Trader. When Baro is in relay, WarStonks runs a one-time scan of his stock and shows each item's **recommended exit price**.
-- **Fissures**
-- **Activities**
-- **Nightwave & Steel Path**
-- **Events & News**
+The Arbitrage scanner prices every prime set against its parts across the whole market; the
+Relic ROI scanner does the same for relics. Then the **What To Do Now** board turns it all
+into ranked, one-click moves: *complete Destreza Prime for +114p*, *your Nekros set isn't
+worth finishing — sell the parts for +67p*, *snipe this listing at 50% under its usual
+entry*. Each card shows its reasoning, confidence, and the exact buys/sells to make.
 
-### Scanners
-Bulk opportunity discovery — the **Arbitrage scanner** (set-versus-component opportunities) and the **Relic ROI scanner** (relic value and reward quality). Run these when you want the app to surface opportunities for you.
+![Arbitrage scanner results](Resources/pics/scannersArbitrage.png)
+![What To Do Now opportunity board](Resources/pics/opportunities.png)
 
-### Opportunities
-Turns raw data into a next move:
-- **What To Do Now** — a prioritized opportunity board (the Set Decision Engine: complete vs. sell-parts vs. farm)
-- **What To Farm Now**
-- **Underpriced Listings radar** — flags live market listings posted well below their recommended price
-- accept ("pin") opportunities to keep them on top across recomputes
+**What To Farm Now** goes one step further and cross-references your *owned relics* — telling
+you which farm actually pays out given what's already in your inventory.
 
-![Set completion planner](Resources/pics/set1.png)
-![What to farm now](Resources/pics/set2.png)
+![What To Farm Now](Resources/pics/opportunitiesFarmNow.png)
 
-### Inventory
-Your owned prime-part inventory, in two subtabs:
-- **Set Completion Planner** — uses your owned parts + cached scan pricing to estimate the remaining investment and completion profit for a set
-- **Inventory** — a searchable catalog to add/remove owned parts, each showing its **recommended exit value**, sortable by name or value, with a one-shot **Screenshot Import** to bulk-add parts
+### Turn your part pile into plat — *Inventory*
 
-### Trades
-Your Warframe.Market operations tab — buy orders, sell orders, listing health, and account status, with watchlist-linked order automation and automatic trade detection (Warframe.Market + Alecaframe). Mark items as "kept" to pull them out of P&L.
+Track your owned prime parts (bulk-import them with a screenshot), and the Set Completion
+Planner prices out every set you're sitting on: what the missing parts cost, what the
+completed set sells for, and whether finishing or selling wins.
 
-![Trade log view](Resources/pics/log1.png)
+![Set Completion Planner](Resources/pics/InvSetCompletion.png)
 
-### Portfolio
-Your local trade record and performance layer — the permanent trade ledger, realized profit, estimated inventory value, total P&L, win rate, and trade breakdowns. This is where you see whether your process is actually working.
+### Run your shop without the tab-juggling — *Trades*
 
-![Portfolio summary](Resources/pics/portfilio.png)
+Manage your Warframe.Market sell and buy orders in place — with per-item rank and variant
+handling, bulk arcane batching, and live market context next to every listing. Trades are
+detected automatically (via Warframe.Market and optionally AlecaFrame), and the **Listing
+Health** view flags orders that have drifted from the market so stale prices never cost you a
+sale.
 
-### Strategy
-Higher-level planning and trading-workflow tools.
+![Order management](Resources/pics/trades.png)
+![Listing health](Resources/pics/tradesHealth.png)
 
-### Guide
-Built-in onboarding and help — searchable explanations of features, terms, and workflows.
+### Know if you're actually winning — *Portfolio*
 
-## Settings
+A permanent local trade ledger with realized P&L, win rate, average margins, and estimated
+inventory value. Group trades, mark items as "kept" to exclude them from profit math, and see
+your performance over any period. This is where "I think I'm profitable" becomes a number.
 
-- **Alecaframe** — optional wallet/inventory sync and top-bar balances
-- **Discord Webhook** — optional rich alerts for watchlist hits, detected trades, and underpriced listings
-- **Notifications** — native desktop notifications + an in-app alert tone (selectable ringtones), with per-event toggles and an underpriced-discount threshold
-- **Import & Export** — back up or restore your data as `.baddie` files (app data and the large market-snapshot cache are separate files); secrets like your webhook URL are never included
+![Trade log](Resources/pics/tradeLog.png)
+![Portfolio P&L](Resources/pics/PorfolioPnL.png)
 
-## Typical workflow
+### And the rest
 
-1. Search an item on Home or Market
-2. Review the analysis and current market posture
-3. Add it to your watchlist if the setup is good
-4. Let alerts (in-app, desktop, or Discord) surface the moment it's actionable
-5. Use Trades to manage orders
-6. Use Portfolio to measure results
-7. Use Scanners / Opportunities to find the next edge
+- **Events** — the full worldstate at a glance: Baro Ki'Teer (with exit-price analysis of his
+  stock while he's in relay), Prime Resurgence, fissures, Nightwave, Steel Path, and a world
+  clock for the open-world cycles.
+- **Six languages** — English, Deutsch, Español, Français, Português, 简体中文 — with item
+  names straight from Warframe.Market's official translations.
+- **AlecaFrame integration** *(optional)* — live wallet balances in the top bar, owned-relic
+  sync, and automatic in-game trade detection.
+- **Import & Export** — back up or move your entire setup as a single file; secrets are never
+  included.
+- **Built-in Guide** — searchable in-app explanations of every feature and term.
 
-## Developer notes
+![Settings](Resources/pics/settings.png)
 
-WarStonks is a Tauri 2 desktop app built with React 18, TypeScript, Rust, and bundled SQLite. It integrates the Warframe.Market and warframestat.us APIs, and optionally Alecaframe.
+## A typical session
+
+1. **Scan** — run the arbitrage scanner (or let daily auto-scan do it) and open Opportunities.
+2. **Act** — accept the plays worth taking; the app pre-fills the buys, sells, and whispers.
+3. **Watch** — put slower setups on the watchlist and go play; alerts find you.
+4. **Settle** — detected trades flow into the Portfolio ledger on their own.
+5. **Review** — check P&L and win rate, adjust, repeat.
+
+## For developers
+
+WarStonks is a Tauri 2 app — React 18 + TypeScript on the front, Rust + SQLite on the back —
+integrating the Warframe.Market and warframestat.us APIs (and optionally AlecaFrame). All API
+access is rate-limited and coalesced to stay well within each service's rules.
 
 ```bash
 pnpm install
-pnpm tauri dev      # run the full app (requires the Rust toolchain)
+pnpm tauri dev      # full app (requires the Rust toolchain)
 
 pnpm test           # frontend tests (Node test runner)
 pnpm run test:rust  # Rust tests
 ```
 
-Releases are published through GitHub Releases; for users the install artifact is the Windows `.exe`. 
+Contributions, bug reports, and feedback are welcome — the fastest way to reach us is the
+**Join Discord** button in the app.

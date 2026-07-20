@@ -56,7 +56,6 @@ const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
 const TRADE_LOG_DERIVED_VERSION: i64 = 3;
 const PORTFOLIO_PNL_CHART_BUCKET_LIMIT: usize = 90;
 const PORTFOLIO_PROFIT_POINT_LIMIT: usize = 12;
-const ALECAFRAME_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
 const WFM_TRADE_LOG_LOCK_DAYS: i64 = 80;
 const PENDING_NOTIFICATION_WINDOW_MINUTES: i64 = 30;
@@ -748,6 +747,9 @@ struct AlecaframeTradeResponse {
     sell_trades: Vec<AlecaframeTradeRecord>,
     #[serde(default)]
     trades: Vec<AlecaframeRawTradeRecord>,
+    /// AlecaFrame's server-side upload timestamp — unchanged means the payload is identical
+    /// to the previous poll, letting trade detection skip re-diffing entirely.
+    last_update: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2418,20 +2420,17 @@ fn fetch_alecaframe_trade_payload(app: &tauri::AppHandle) -> Result<AlecaframeTr
         return Err(anyhow!("No Alecaframe public link is saved."));
     };
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("failed to construct Alecaframe trade client")?;
+    let public_token = crate::settings::extract_public_token(&public_link)
+        .ok_or_else(|| anyhow!("Could not extract a public token from the Alecaframe link."))?;
 
-    client
-        .get(public_link)
-        .header("User-Agent", ALECAFRAME_USER_AGENT)
-        .header("Accept", "application/json")
-        .send()
-        .context("failed to request Alecaframe trade history")?
-        .error_for_status()
-        .context("Alecaframe trade history request failed")?
-        .json::<AlecaframeTradeResponse>()
+    // Shared, rate-limited fetch: coalesces with the wallet poll and backs off on errors. A
+    // ≤20s-old body is as good as fresh here — AlecaFrame's data only changes when the
+    // companion app uploads, which happens on a minutes cadence.
+    let body = crate::settings::fetch_public_stats_body_cached(
+        &public_token,
+        Duration::from_secs(20),
+    )?;
+    serde_json::from_str::<AlecaframeTradeResponse>(&body)
         .context("failed to parse Alecaframe trade history response")
 }
 
@@ -3106,8 +3105,19 @@ fn build_alecaframe_trade_entries(
     baseline_date: &str,
     existing: &[StoredTradeLogRecord],
 ) -> Result<Vec<PortfolioTradeLogEntry>> {
+    let payload = fetch_alecaframe_trade_payload(app)?;
+    build_alecaframe_trade_entries_from_payload(app, username, baseline_date, existing, payload)
+}
+
+fn build_alecaframe_trade_entries_from_payload(
+    app: &tauri::AppHandle,
+    username: &str,
+    baseline_date: &str,
+    existing: &[StoredTradeLogRecord],
+    payload: AlecaframeTradeResponse,
+) -> Result<Vec<PortfolioTradeLogEntry>> {
     let baseline = parse_date_start_utc(baseline_date)?;
-    let trades = normalize_alecaframe_trade_payload(fetch_alecaframe_trade_payload(app)?);
+    let trades = normalize_alecaframe_trade_payload(payload);
     let catalog = open_catalog_database(app)?;
     let mut imported = Vec::new();
 
@@ -5496,6 +5506,13 @@ fn refresh_wfm_trade_detection_inner(
     })
 }
 
+/// Per-username `lastUpdate` values already processed by trade detection. In-memory only — a
+/// restart just re-runs one full diff, which is harmless.
+fn alecaframe_last_processed_update() -> &'static Mutex<HashMap<String, String>> {
+    static SEEN: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    SEEN.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn refresh_alecaframe_trade_detection_inner(
     app: &tauri::AppHandle,
     username: &str,
@@ -5538,9 +5555,38 @@ fn refresh_alecaframe_trade_detection_inner(
         });
     };
 
+    // Skip the whole diff when AlecaFrame's upload timestamp hasn't moved since the last poll —
+    // the payload is byte-identical, so there is nothing new to detect.
+    let payload = fetch_alecaframe_trade_payload(app)?;
+    if let Some(last_update) = payload.last_update.clone() {
+        let seen = alecaframe_last_processed_update()
+            .lock()
+            .ok()
+            .and_then(|map| map.get(trimmed_username).cloned());
+        if seen.as_deref() == Some(last_update.as_str()) {
+            return Ok(TradeDetectionRefreshResult {
+                source: "alecaframe".to_string(),
+                new_trade_count: 0,
+                notification_count: 0,
+                last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
+                skipped: true,
+                message: Some("Alecaframe data unchanged since the last check.".to_string()),
+                detected_buys: Vec::new(),
+            });
+        }
+        if let Ok(mut map) = alecaframe_last_processed_update().lock() {
+            map.insert(trimmed_username.to_string(), last_update);
+        }
+    }
+
     let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
-    let imported =
-        build_alecaframe_trade_entries(app, trimmed_username, &baseline_date, &existing)?;
+    let imported = build_alecaframe_trade_entries_from_payload(
+        app,
+        trimmed_username,
+        &baseline_date,
+        &existing,
+        payload,
+    )?;
 
     let mut notification_count = 0_i64;
     let mut last_updated_at = None;
@@ -8946,6 +8992,7 @@ mod tests {
         let trades = normalize_alecaframe_trade_payload(AlecaframeTradeResponse {
             buy_trades: Vec::new(),
             sell_trades: Vec::new(),
+            last_update: None,
             trades: vec![
                 AlecaframeRawTradeRecord {
                     timestamp: "2026-03-07T12:12:25.5764897Z".to_string(),
