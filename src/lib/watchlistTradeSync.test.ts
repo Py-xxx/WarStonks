@@ -26,6 +26,7 @@ function createBuyOrder(input: Partial<TradeSellOrder> & Pick<TradeSellOrder, 'o
     priceGap: input.priceGap ?? null,
     visible: input.visible ?? true,
     updatedAt: input.updatedAt,
+    createdAt: input.updatedAt,
     healthScore: input.healthScore ?? null,
     healthNote: input.healthNote ?? null,
     health: input.health ?? null,

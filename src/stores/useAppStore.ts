@@ -3667,7 +3667,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   requestTradeListing: (req) => {
-    get().setTradesSubTab(req.orderType === 'sell' ? 'sell-orders' : 'buy-orders');
+    get().setTradesSubTab('orders');
     set({ pendingTradeListing: req, activePage: 'trades', navigationBack: null });
   },
   clearPendingTradeListing: () => set({ pendingTradeListing: null }),
@@ -4379,7 +4379,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         tradeAccountLoading: false,
         tradeAccountError: null,
         activePage: 'trades',
-        tradesSubTab: 'sell-orders',
+        tradesSubTab: 'orders',
       });
     } catch (error) {
       set({
@@ -4449,7 +4449,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set({ tradeAccountError: toErrorMessage(error) });
       });
   },
-  tradesSubTab: 'sell-orders',
+  tradesSubTab: 'orders',
   setTradesSubTab: (tab) => set({ tradesSubTab: tab }),
 
   tradePeriod: '30d',
@@ -4461,6 +4461,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
   eventsSubTab: 'vendors',
   setEventsSubTab: (tab) => set({ eventsSubTab: tab }),
 }));
+// Dev-only: expose the store for browser-preview state injection.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __appStore?: unknown }).__appStore = useAppStore;
+}
+// Dev-only: expose the store for browser-preview state injection.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __appStore?: unknown }).__appStore = useAppStore;
+}
 // Dev-only: expose the store for browser-preview state injection.
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   (window as unknown as { __appStore?: unknown }).__appStore = useAppStore;

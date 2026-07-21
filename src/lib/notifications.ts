@@ -20,6 +20,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     scannerStale: true,
     appUpdate: true,
     underpricedListing: true,
+    listingHealth: false,
   },
 };
 
@@ -146,7 +147,8 @@ export type NotificationEventKind =
   | 'watchlistAlert'
   | 'scannerStale'
   | 'appUpdate'
-  | 'underpricedListing';
+  | 'underpricedListing'
+  | 'listingHealth';
 
 /**
  * Fires an alert through the channels enabled in settings: an in-app tone and/or a

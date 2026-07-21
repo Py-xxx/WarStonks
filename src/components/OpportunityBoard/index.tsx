@@ -180,7 +180,7 @@ function ActionButton({ action }: { action: OpportunityAction }) {
         requestOpportunitiesTab('farm-now', action.itemName ?? undefined);
         break;
       case 'editOrder':
-        setTradesSubTab('sell-orders');
+        setTradesSubTab('orders');
         setActivePage('trades');
         break;
       default:

@@ -13,7 +13,7 @@ export type PageId =
 export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | '90d' | 'all';
-export type TradesSubTab = 'sell-orders' | 'buy-orders' | 'health';
+export type TradesSubTab = 'orders' | 'health';
 export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'notifications' | 'import-export' | 'language';
 export type WorldStateEndpointKey =
   | 'events'
@@ -138,9 +138,15 @@ export interface TradeSellOrder {
   priceGap: number | null;
   visible: boolean;
   updatedAt: string;
+  createdAt: string | null;
   healthScore: number | null;
   healthNote: string | null;
   health: TradeListingHealth | null;
+}
+
+export interface TradeHealthScoreFactor {
+  label: string;
+  delta: number;
 }
 
 export interface TradeListingHealth {
@@ -163,7 +169,26 @@ export interface TradeListingHealth {
   liquidityScore: number | null;
   liquidityLabel: string | null;
   pressureLabel: string | null;
+  dailyVolume: number | null;
+  estSellHoursAtPrice: number | null;
+  estSellHoursAtMarket: number | null;
+  costBasis: number | null;
+  wouldRealizeLoss: boolean;
+  listingAgeHours: number | null;
+  scoreFactors: TradeHealthScoreFactor[];
+  confidenceLevel: string;
+  confidenceLabel: string;
+  undercutVelocity: number | null;
+  isPriceWar: boolean;
+  buyDemand: number;
+  isOnlyVariantSeller: boolean;
   isDegraded: boolean;
+}
+
+export interface HealthPredictionAccuracy {
+  sampleCount: number;
+  withinEtaPct: number;
+  medianAbsErrorHours: number | null;
 }
 
 export interface TradeOverview {
@@ -722,6 +747,8 @@ export interface NotificationSettings {
     scannerStale: boolean;
     appUpdate: boolean;
     underpricedListing: boolean;
+    /** Proactive alert when several listings need action (reprice / outbid). Opt-in. */
+    listingHealth: boolean;
   };
 }
 

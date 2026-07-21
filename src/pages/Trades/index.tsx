@@ -4,6 +4,7 @@ import { useModalA11y } from '../../hooks/useModalA11y';
 import { formatTradesErrorMessage } from '../../lib/tradesErrorHandling';
 import {
   closeWfmSellOrder,
+  closeWfmBuyOrder,
   createWfmBuyOrder,
   createWfmSellOrder,
   deleteWfmBuyOrder,
@@ -11,6 +12,9 @@ import {
   getItemAnalysis,
   getItemAnalytics,
   getTradeSellOrderHealth,
+  getTradeBuyOrderHealth,
+  getHealthPredictionAccuracy,
+  isTauriRuntime,
   getWfmAutocompleteItems,
   getWfmItemSubtypes,
   getWfmTradeOverview,
@@ -26,7 +30,8 @@ import { ItemName } from '../../components/ItemName';
 import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
 import { wfstatLangCode } from '../../lib/language';
-import { useTranslation } from '../../i18n';
+import { useTranslation, tActive } from '../../i18n';
+import { loadNotificationSettings, fireAlertNotification } from '../../lib/notifications';
 import { tHealth, tSubtype, tTrendSummary } from '../../lib/healthLabels';
 import type {
   ItemAnalysisResponse,
@@ -38,10 +43,35 @@ import type {
   WfmAutocompleteItem,
   SellerMode,
   TradeListingHealth,
+  HealthPredictionAccuracy,
 } from '../../types';
 
 type ListingModalMode = 'create' | 'edit';
 type TradeListingKind = 'sell' | 'buy';
+
+const CheckIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
+    <path d="M20 6 9 17l-5-5" />
+  </svg>
+);
+
+const PencilIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+  </svg>
+);
+
+const DotsIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+    <circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" />
+  </svg>
+);
+
+const BoltIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+  </svg>
+);
 
 function InfoHint({ text }: { text: string }) {
   return (
@@ -69,7 +99,6 @@ interface ListingModalState {
   visible: boolean;
 }
 
-const DEFAULT_MARK_SOLD_QTY = '1';
 const tradeOverviewCache = new Map<SellerMode, TradeOverview>();
 const tradeOverviewLoadPromises = new Map<SellerMode, Promise<TradeOverview>>();
 
@@ -158,6 +187,37 @@ function getTradeHealthPriority(order: TradeSellOrder): number {
   }
 }
 
+// #15 Proactive "listings need action" alert. Throttled module-wide so it fires at most once
+// per window regardless of which tab triggers it. Opt-in via the listingHealth notification event
+// (off by default), so it never surprises users who didn't ask for it.
+let lastHealthAlertAt = 0;
+const HEALTH_ALERT_THROTTLE_MS = 30 * 60 * 1000;
+
+function maybeFireHealthAlert(orders: TradeSellOrder[]): void {
+  const settings = loadNotificationSettings();
+  if (!settings.events.listingHealth) {
+    return;
+  }
+  const needsAction = orders.filter((order) => {
+    const label = order.health?.label ?? '';
+    return label === 'Action Needed' || label === 'Weak';
+  }).length;
+  if (needsAction < 1) {
+    return;
+  }
+  const now = Date.now();
+  if (now - lastHealthAlertAt < HEALTH_ALERT_THROTTLE_MS) {
+    return;
+  }
+  lastHealthAlertAt = now;
+  fireAlertNotification(
+    settings,
+    'listingHealth',
+    tActive('trades.health.alertTitle'),
+    tActive('trades.health.alertBody', { count: String(needsAction) }),
+  );
+}
+
 function useTradeSellHealthRefresh({
   enabled,
   sellerMode,
@@ -175,6 +235,7 @@ function useTradeSellHealthRefresh({
   const healthInFlight = useRef<Set<string>>(new Set());
   const healthFailures = useRef<Record<string, number>>({});
   const sellOrdersRef = useRef<TradeSellOrder[]>([]);
+  const buyOrdersRef = useRef<TradeSellOrder[]>([]);
 
   useEffect(() => {
     if (!enabled) {
@@ -185,76 +246,103 @@ function useTradeSellHealthRefresh({
     const MEDIUM_THRESHOLD_MS = 45_000;
     const HIGH_THRESHOLD_MS = 60_000;
 
+    const refreshOrder = (order: TradeSellOrder, kind: 'sell' | 'buy') => {
+      if (healthInFlight.current.has(order.orderId)) {
+        return;
+      }
+      const parsedHealthRefresh = order.health?.refreshedAt
+        ? Date.parse(order.health.refreshedAt)
+        : Number.NaN;
+      const lastRefresh = healthRefreshedAt.current[order.orderId]
+        ?? (Number.isFinite(parsedHealthRefresh) ? parsedHealthRefresh : 0);
+      const ageMs = Date.now() - (Number.isFinite(lastRefresh) ? lastRefresh : 0);
+      if (lastRefresh > 0 && ageMs < MEDIUM_THRESHOLD_MS) {
+        return;
+      }
+      const priority: 'high' | 'medium' | 'low' =
+        ageMs >= HIGH_THRESHOLD_MS ? 'high' : ageMs >= MEDIUM_THRESHOLD_MS ? 'medium' : 'low';
+
+      healthInFlight.current.add(order.orderId);
+      const request =
+        kind === 'sell'
+          ? getTradeSellOrderHealth(
+              order.itemId,
+              order.slug,
+              order.rank,
+              order.yourPrice,
+              sellerMode,
+              priority,
+              order.createdAt,
+              order.bulkTradable ? order.perTrade : null,
+              order.orderId,
+            )
+          : getTradeBuyOrderHealth(
+              order.itemId,
+              order.slug,
+              order.rank,
+              order.yourPrice,
+              sellerMode,
+              priority,
+            );
+      void request
+        .then((health) => {
+          const refreshedAt = Date.parse(health.refreshedAt);
+          const refreshedAtMs = Number.isFinite(refreshedAt) ? refreshedAt : Date.now();
+          healthRefreshedAt.current[order.orderId] = refreshedAtMs;
+          healthFailures.current[order.orderId] = 0;
+          onHealthRefreshed?.(order.orderId, refreshedAtMs);
+          marketLowCache.set(marketLowKey(order.slug, order.rank), {
+            marketLow: health.marketLow,
+            refreshedAt: refreshedAtMs,
+          });
+          tradeHealthCache.set(order.orderId, { health, yourPrice: order.yourPrice });
+          setOverview((current) => {
+            if (!current) {
+              return current;
+            }
+            const listKey = kind === 'sell' ? 'sellOrders' : 'buyOrders';
+            const next = {
+              ...current,
+              [listKey]: current[listKey].map((candidate) =>
+                candidate.orderId === order.orderId
+                  ? {
+                      ...candidate,
+                      marketLow: health.marketLow,
+                      priceGap: health.priceGap,
+                      healthScore: health.score,
+                      healthNote: health.reason,
+                      health,
+                    }
+                  : candidate,
+              ),
+            };
+            // #15 Fire the proactive alert off the freshly-updated sell orders (throttled + opt-in).
+            if (kind === 'sell') {
+              maybeFireHealthAlert(next.sellOrders);
+            }
+            return next;
+          });
+        })
+        .catch(() => {
+          // Non-blocking background refresh — but after several consecutive failures, flag the
+          // order so the UI can show "couldn't refresh" instead of spinning on "refreshing…".
+          const count = (healthFailures.current[order.orderId] ?? 0) + 1;
+          healthFailures.current[order.orderId] = count;
+          if (count >= 3) {
+            onHealthRefreshFailed?.(order.orderId);
+          }
+        })
+        .finally(() => {
+          healthInFlight.current.delete(order.orderId);
+        });
+    };
+
     const tick = () => {
       for (const order of sellOrdersRef.current) {
-        if (healthInFlight.current.has(order.orderId)) {
-          continue;
-        }
-        const parsedHealthRefresh = order.health?.refreshedAt
-          ? Date.parse(order.health.refreshedAt)
-          : Number.NaN;
-        const lastRefresh = healthRefreshedAt.current[order.orderId]
-          ?? (Number.isFinite(parsedHealthRefresh) ? parsedHealthRefresh : 0);
-        const ageMs = Date.now() - (Number.isFinite(lastRefresh) ? lastRefresh : 0);
-        if (lastRefresh > 0 && ageMs < MEDIUM_THRESHOLD_MS) {
-          continue;
-        }
-        const priority: 'high' | 'medium' | 'low' =
-          ageMs >= HIGH_THRESHOLD_MS ? 'high' : ageMs >= MEDIUM_THRESHOLD_MS ? 'medium' : 'low';
-
-        healthInFlight.current.add(order.orderId);
-        void getTradeSellOrderHealth(
-          order.itemId,
-          order.slug,
-          order.rank,
-          order.yourPrice,
-          sellerMode,
-          priority,
-        )
-          .then((health) => {
-            const refreshedAt = Date.parse(health.refreshedAt);
-            const refreshedAtMs = Number.isFinite(refreshedAt) ? refreshedAt : Date.now();
-            healthRefreshedAt.current[order.orderId] = refreshedAtMs;
-            healthFailures.current[order.orderId] = 0;
-            onHealthRefreshed?.(order.orderId, refreshedAtMs);
-            marketLowCache.set(marketLowKey(order.slug, order.rank), {
-              marketLow: health.marketLow,
-              refreshedAt: refreshedAtMs,
-            });
-            tradeHealthCache.set(order.orderId, { health, yourPrice: order.yourPrice });
-            setOverview((current) => {
-              if (!current) {
-                return current;
-              }
-              return {
-                ...current,
-                sellOrders: current.sellOrders.map((candidate) =>
-                  candidate.orderId === order.orderId
-                    ? {
-                        ...candidate,
-                        marketLow: health.marketLow,
-                        priceGap: health.priceGap,
-                        healthScore: health.score,
-                        healthNote: health.reason,
-                        health,
-                      }
-                    : candidate,
-                ),
-              };
-            });
-          })
-          .catch(() => {
-            // Non-blocking background refresh — but after several consecutive failures, flag the
-            // order so the UI can show "couldn't refresh" instead of spinning on "refreshing…".
-            const count = (healthFailures.current[order.orderId] ?? 0) + 1;
-            healthFailures.current[order.orderId] = count;
-            if (count >= 3) {
-              onHealthRefreshFailed?.(order.orderId);
-            }
-          })
-          .finally(() => {
-            healthInFlight.current.delete(order.orderId);
-          });
+        refreshOrder(order, 'sell');
+      }
+      for (const order of buyOrdersRef.current) {
+        refreshOrder(order, 'buy');
       }
     };
 
@@ -263,7 +351,7 @@ function useTradeSellHealthRefresh({
     return () => clearInterval(interval);
   }, [enabled, onHealthRefreshed, onHealthRefreshFailed, sellerMode, setOverview]);
 
-  return { sellOrdersRef };
+  return { sellOrdersRef, buyOrdersRef };
 }
 
 async function loadTradeOverviewSnapshot(sellerMode: SellerMode): Promise<TradeOverview> {
@@ -389,6 +477,21 @@ function formatMarketLowAge(timestampMs: number | undefined): string {
     return `${ageMinutes}m ago`;
   }
   return `${Math.floor(ageMinutes / 60)}h ago`;
+}
+
+// Compact "time to sell" label from an estimated hours figure. Rounds to human units so a
+// velocity estimate reads as "~3h" / "~2d", never "2.83 hours".
+function formatEtaHours(hours: number | null | undefined): string | null {
+  if (hours === null || hours === undefined || !Number.isFinite(hours) || hours <= 0) {
+    return null;
+  }
+  if (hours < 1) {
+    return '<1h';
+  }
+  if (hours < 48) {
+    return `~${Math.round(hours)}h`;
+  }
+  return `~${Math.round(hours / 24)}d`;
 }
 
 function isTradeSessionExpiredMessage(message: string): boolean {
@@ -1057,7 +1160,7 @@ function HealthTab() {
   const [overview, setOverview] = useState<TradeOverview | null>(() => tradeOverviewCache.get(sellerMode) ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { sellOrdersRef } = useTradeSellHealthRefresh({
+  const { sellOrdersRef, buyOrdersRef } = useTradeSellHealthRefresh({
     enabled: Boolean(tradeAccount),
     sellerMode,
     setOverview,
@@ -1107,6 +1210,15 @@ function HealthTab() {
   }, [loadTradeAccount, sellerMode, syncWatchlistTradeOverview, tradeAccount]);
 
   sellOrdersRef.current = overview?.sellOrders ?? [];
+  buyOrdersRef.current = overview?.buyOrders ?? [];
+
+  // Staleness weight: an old listing that is also priced above market is the most "stuck" —
+  // age in days × how many plat over market. Surfaces genuinely-neglected orders first.
+  const stalenessWeight = (order: TradeSellOrder): number => {
+    const ageHours = order.health?.listingAgeHours ?? 0;
+    const gap = Math.max(order.priceGap ?? 0, 0);
+    return (ageHours / 24) * gap;
+  };
 
   const sellOrders = useMemo(
     () =>
@@ -1114,6 +1226,11 @@ function HealthTab() {
         const priorityDelta = getTradeHealthPriority(left) - getTradeHealthPriority(right);
         if (priorityDelta !== 0) {
           return priorityDelta;
+        }
+        // Within the same health tier, float the most stuck (old × overpriced) listings up.
+        const staleDelta = stalenessWeight(right) - stalenessWeight(left);
+        if (Math.abs(staleDelta) > 0.01) {
+          return staleDelta;
         }
         const scoreDelta = (left.health?.score ?? -1) - (right.health?.score ?? -1);
         if (scoreDelta !== 0) {
@@ -1123,6 +1240,93 @@ function HealthTab() {
       }),
     [overview?.sellOrders],
   );
+
+  // Orders whose health recommends a concrete price change we can apply in one click.
+  const fixableOrders = useMemo(
+    () =>
+      sellOrders.filter(
+        (order) =>
+          order.health?.recommendedPrice != null
+          && order.health.recommendedPrice > 0
+          && order.health.recommendedPrice !== order.yourPrice,
+      ),
+    [sellOrders],
+  );
+
+  const [healthActionPending, setHealthActionPending] = useState<readonly string[]>([]);
+  const [fixAllRunning, setFixAllRunning] = useState(false);
+  const [accuracy, setAccuracy] = useState<HealthPredictionAccuracy | null>(null);
+
+  // #14 Self-calibration: load how the engine's past predictions actually held up.
+  useEffect(() => {
+    if (!tradeAccount || !isTauriRuntime()) {
+      return;
+    }
+    let cancelled = false;
+    void getHealthPredictionAccuracy()
+      .then((result) => {
+        if (!cancelled) {
+          setAccuracy(result);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [tradeAccount]);
+  const isHealthActionPending = (orderId: string) => healthActionPending.includes(orderId);
+
+  const applyHealthPrice = async (order: TradeSellOrder): Promise<boolean> => {
+    const target = order.health?.recommendedPrice;
+    if (target == null || target <= 0 || target === order.yourPrice) {
+      return false;
+    }
+    setHealthActionPending((current) =>
+      current.includes(order.orderId) ? current : [...current, order.orderId],
+    );
+    const updateOrderFn = order.orderType === 'sell' ? updateWfmSellOrder : updateWfmBuyOrder;
+    try {
+      const nextOverview = await updateOrderFn(
+        {
+          orderId: order.orderId,
+          price: target,
+          quantity: order.quantity,
+          rank: order.rank ?? null,
+          visible: order.visible,
+          wfmId: order.wfmId,
+          perTrade: order.bulkTradable ? order.perTrade : null,
+        } satisfies TradeUpdateListingInput,
+        sellerMode,
+      );
+      const hydrated = hydrateOverviewFromCache(nextOverview);
+      tradeOverviewCache.set(sellerMode, hydrated.overview);
+      setOverview(hydrated.overview);
+      return true;
+    } catch {
+      setError(t('trades.refreshHealthFailed'));
+      return false;
+    } finally {
+      setHealthActionPending((current) => current.filter((id) => id !== order.orderId));
+    }
+  };
+
+  const handleFixAll = async () => {
+    if (fixAllRunning || fixableOrders.length === 0) {
+      return;
+    }
+    if (!window.confirm(t('trades.health.fixAllConfirm', { count: String(fixableOrders.length) }))) {
+      return;
+    }
+    setFixAllRunning(true);
+    try {
+      // Sequential so we don't fire a burst of WFM writes at once.
+      for (const order of fixableOrders) {
+        await applyHealthPrice(order);
+      }
+    } finally {
+      setFixAllRunning(false);
+    }
+  };
 
   const actionNeededCount = sellOrders.filter((order) => {
     const label = order.health?.label ?? '';
@@ -1149,9 +1353,31 @@ function HealthTab() {
           <div className="info-card-label">{t('trades.health.likelySoon')}</div>
           <div className="info-card-val neutral">{likelySoonCount}</div>
         </div>
+        {accuracy && accuracy.sampleCount >= 3 ? (
+          <div className="info-card trade-health-summary-card" title={t('trades.health.accuracyHint', { count: String(accuracy.sampleCount) })}>
+            <div className="info-card-label">{t('trades.health.etaAccuracy')}</div>
+            <div className="info-card-val neutral">{Math.round(accuracy.withinEtaPct)}%</div>
+          </div>
+        ) : null}
       </div>
 
       {error ? <div className="trade-inline-error">{error}</div> : null}
+
+      {fixableOrders.length > 0 ? (
+        <div className="trade-health-fixall-bar">
+          <span className="trade-health-fixall-copy">
+            {t('trades.health.fixAllConfirm', { count: String(fixableOrders.length) })}
+          </span>
+          <button
+            className="btn-primary trade-health-fixall-btn"
+            type="button"
+            disabled={fixAllRunning}
+            onClick={() => void handleFixAll()}
+          >
+            {fixAllRunning ? t('trades.row.working') : t('trades.health.fixAll', { count: String(fixableOrders.length) })}
+          </button>
+        </div>
+      ) : null}
 
       <div className="trade-health-list">
         {loading && !overview ? (
@@ -1197,12 +1423,37 @@ function HealthTab() {
                       </div>
                     </div>
                     <div className="trade-health-badges">
+                      {health?.isPriceWar ? (
+                        <span className="market-panel-badge tone-red" title={t('trades.health.priceWarHint')}>
+                          {t('trades.health.priceWar')}
+                        </span>
+                      ) : null}
+                      {health && health.confidenceLevel !== 'high' ? (
+                        <span className={`market-panel-badge ${health.confidenceLevel === 'low' ? 'tone-amber' : 'tone-blue'}`} title={t('trades.health.confidenceHint')}>
+                          {health.confidenceLabel}
+                        </span>
+                      ) : null}
                       <span className={`market-panel-badge ${getTradeHealthToneClass(health?.tone ?? 'amber')}`}>
                         {tHealth(t, health?.label) || t('trades.row.building')}
+                        {health ? <span className="trade-health-score">{health.score}</span> : null}
                       </span>
                       <span className={`market-panel-badge ${getTradeHealthToneClass(health?.actionTone ?? 'blue')}`}>
                         {tHealth(t, health?.actionLabel) || t('trades.row.building')}
                       </span>
+                      {health?.recommendedPrice != null
+                        && health.recommendedPrice > 0
+                        && health.recommendedPrice !== order.yourPrice ? (
+                        <button
+                          type="button"
+                          className="act-btn trade-health-apply-btn"
+                          disabled={isHealthActionPending(order.orderId)}
+                          onClick={() => void applyHealthPrice(order)}
+                        >
+                          {isHealthActionPending(order.orderId)
+                            ? t('trades.row.working')
+                            : `${t('trades.health.apply')} ${formatPlatinumValue(health.recommendedPrice)}`}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1220,12 +1471,41 @@ function HealthTab() {
                       <strong>{health ? `${health.sellersAhead} ahead` : '—'}</strong>
                     </div>
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.direction')}</span>
-                      <strong>{tHealth(t, health?.marketDirection) || t('trades.row.building')}</strong>
+                      <span className="trade-health-metric-label">{t('trades.health.timeToSell')}</span>
+                      <strong>
+                        {formatEtaHours(health?.estSellHoursAtPrice) ?? '—'}
+                        {formatEtaHours(health?.estSellHoursAtMarket)
+                          && health?.estSellHoursAtPrice != null
+                          && health?.estSellHoursAtMarket != null
+                          && health.estSellHoursAtMarket < health.estSellHoursAtPrice ? (
+                          <span className="trade-health-metric-alt">
+                            {' · '}{formatEtaHours(health.estSellHoursAtMarket)} {t('trades.health.atMarket')}
+                          </span>
+                        ) : null}
+                      </strong>
                     </div>
                     <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.outlook')}</span>
-                      <strong>{tHealth(t, health?.outlookLabel) || t('trades.row.building')}</strong>
+                      <span className="trade-health-metric-label">{t('trades.health.costBasis')}</span>
+                      <strong className={health?.wouldRealizeLoss ? 'trade-health-loss' : undefined}>
+                        {health?.costBasis != null ? formatPlatinumValue(health.costBasis) : '—'}
+                      </strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">{t('trades.health.velocity')}</span>
+                      <strong>{health?.dailyVolume != null ? health.dailyVolume.toFixed(1) : '—'}</strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">{t('trades.health.demand')}</span>
+                      <strong>
+                        {health ? t('trades.health.buyersCount', { count: String(health.buyDemand) }) : '—'}
+                        {health?.isOnlyVariantSeller ? (
+                          <span className="trade-health-metric-alt">{' · '}{t('trades.health.onlySeller')}</span>
+                        ) : null}
+                      </strong>
+                    </div>
+                    <div className="trade-health-metric">
+                      <span className="trade-health-metric-label">{t('trades.health.listingAge')}</span>
+                      <strong>{formatEtaHours(health?.listingAgeHours) ?? '—'}</strong>
                     </div>
                     <div className="trade-health-metric">
                       <span className="trade-health-metric-label">{t('trades.health.suggested')}</span>
@@ -1236,6 +1516,25 @@ function HealthTab() {
                       </strong>
                     </div>
                   </div>
+
+                  {health?.scoreFactors && health.scoreFactors.length > 0 ? (
+                    <div className="trade-health-breakdown">
+                      <span className="trade-health-breakdown-label">
+                        {t('trades.health.scoreBreakdown')}
+                        {health ? ` — ${health.score}/100` : null}
+                      </span>
+                      <div className="trade-health-breakdown-chips">
+                        {health.scoreFactors.map((factor, index) => (
+                          <span
+                            key={`${factor.label}-${index}`}
+                            className={`trade-health-factor ${factor.delta >= 0 ? 'pos' : 'neg'}`}
+                          >
+                            {factor.label} {factor.delta >= 0 ? '+' : ''}{factor.delta}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div className="trade-health-reason">
                     {health?.reason ?? t('trades.buildingMarketPicture')}
@@ -1250,7 +1549,7 @@ function HealthTab() {
   );
 }
 
-function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
+function ListingsTab() {
   const { t } = useTranslation();
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
@@ -1270,7 +1569,6 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const [listingModal, setListingModal] = useState<ListingModalState | null>(null);
   const [listingActionPending, setListingActionPending] = useState(false);
   const [listingActionError, setListingActionError] = useState<string | null>(null);
-  const [soldQuantities, setSoldQuantities] = useState<Record<string, string>>({});
   const [sessionExpiredPopupOpen, setSessionExpiredPopupOpen] = useState(false);
   const [visibilityActionPending, setVisibilityActionPending] = useState(false);
   // Per-order in-flight guard for row mutations (toggle visibility / mark sold / remove). The
@@ -1292,9 +1590,17 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     setPendingOrderIds(Array.from(pendingOrderIdsRef.current));
   };
   const isOrderPending = (orderId: string) => pendingOrderIds.includes(orderId);
+  const [actionMenuOrderId, setActionMenuOrderId] = useState<string | null>(null);
+  // Quantity popup for closing part of a stacked order (quantity > 1).
+  const [closeQtyTarget, setCloseQtyTarget] = useState<TradeSellOrder | null>(null);
+  const [closeQtyValue, setCloseQtyValue] = useState('1');
   const sessionExpiredRef = useModalA11y<HTMLDivElement>({
     onClose: () => setSessionExpiredPopupOpen(false),
     active: sessionExpiredPopupOpen,
+  });
+  const closeQtyRef = useModalA11y<HTMLDivElement>({
+    onClose: () => setCloseQtyTarget(null),
+    active: closeQtyTarget !== null,
   });
   // Analysis preview for the create-listing modal (cleared on modal close).
   const [listingAnalysis, setListingAnalysis] = useState<ListingAnalysisState | null>(null);
@@ -1304,8 +1610,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   // Orders whose background health refresh has failed repeatedly — shown as "couldn't refresh"
   // instead of an endless "refreshing…".
   const [staleHealthIds, setStaleHealthIds] = useState<readonly string[]>([]);
-  const { sellOrdersRef } = useTradeSellHealthRefresh({
-    enabled: Boolean(tradeAccount) && listingType === 'sell',
+  const { sellOrdersRef, buyOrdersRef } = useTradeSellHealthRefresh({
+    enabled: Boolean(tradeAccount),
     sellerMode,
     setOverview,
     onHealthRefreshed: (orderId, refreshedAt) => {
@@ -1414,17 +1720,15 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   }, [tradeAccount]);
 
   sellOrdersRef.current = overview?.sellOrders ?? [];
+  buyOrdersRef.current = overview?.buyOrders ?? [];
 
   // Ticker: forces the "X ago" labels to stay current between market_low fetches.
   useEffect(() => {
-    if (listingType !== 'sell') {
-      return;
-    }
     const interval = setInterval(() => {
       setMarketLowTimestamps((prev) => ({ ...prev }));
     }, 15_000);
     return () => clearInterval(interval);
-  }, [listingType]);
+  }, []);
 
   // Fetch market analysis whenever the listing modal is open and an item is known.
   // Both getItemAnalysis and getItemAnalytics use RequestPriority::Instant internally.
@@ -1514,12 +1818,11 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     setOverview(hydratedSynced);
   };
 
-  const updateOrderFn = listingType === 'sell' ? updateWfmSellOrder : updateWfmBuyOrder;
-
   const handleToggleOrderVisibility = async (order: TradeSellOrder) => {
     if (!beginOrderAction(order.orderId)) {
       return;
     }
+    const updateOrderFn = order.orderType === 'sell' ? updateWfmSellOrder : updateWfmBuyOrder;
     try {
       const nextOverview = await updateOrderFn(
         {
@@ -1541,8 +1844,9 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     }
   };
 
-  const handleSetAllVisibility = async (visible: boolean) => {
-    const targets = orders.filter((order) => order.visible !== visible);
+  const handleSetAllVisibility = async (visible: boolean, orderType: TradeListingKind) => {
+    const scoped = orderType === 'sell' ? sellOrders : buyOrders;
+    const targets = scoped.filter((order) => order.visible !== visible);
     if (targets.length === 0 || visibilityActionPending) {
       return;
     }
@@ -1552,7 +1856,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     try {
       // One bulk call (PATCH /orders/group/all, scoped to this tab's order type) instead of
       // one request per order — far lighter on WFM and instant for the user.
-      const latestOverview = await setWfmOrdersVisibility(visible, listingType, sellerMode);
+      const latestOverview = await setWfmOrdersVisibility(visible, orderType, sellerMode);
       await applyOverview(latestOverview);
     } catch (error) {
       handleTradeActionFailure(error);
@@ -1561,10 +1865,10 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     }
   };
 
-  const openCreateListing = () => {
+  const openCreateListing = (orderType: TradeListingKind) => {
     setListingActionError(null);
     setListingAnalysis(null);
-    setListingModal(createListingModalState('create', listingType, null));
+    setListingModal(createListingModalState('create', orderType, null));
   };
 
   const openEditListing = (order: TradeSellOrder) => {
@@ -1587,7 +1891,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
   const pendingTradeListing = useAppStore((s) => s.pendingTradeListing);
   const clearPendingTradeListing = useAppStore((s) => s.clearPendingTradeListing);
   useEffect(() => {
-    if (!pendingTradeListing || pendingTradeListing.orderType !== listingType) {
+    if (!pendingTradeListing) {
       return;
     }
     const request = pendingTradeListing;
@@ -1608,7 +1912,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
       }
       setListingActionError(null);
       setListingAnalysis(null);
-      const base = createListingModalState('create', listingType, item);
+      const base = createListingModalState('create', request.orderType, item);
       setListingModal({
         ...base,
         itemName: request.name,
@@ -1622,7 +1926,7 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     return () => {
       cancelled = true;
     };
-  }, [pendingTradeListing, listingType, clearPendingTradeListing]);
+  }, [pendingTradeListing, clearPendingTradeListing]);
 
   const handleTradeActionFailure = (error: unknown) => {
     const rawMessage = error instanceof Error ? error.message : String(error);
@@ -1745,9 +2049,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     }
   };
 
-  const handleMarkAsSold = async (order: TradeSellOrder) => {
-    const raw = soldQuantities[order.orderId] ?? DEFAULT_MARK_SOLD_QTY;
-    const quantity = Number.parseInt(raw, 10);
+  const handleCloseOrder = async (order: TradeSellOrder, quantityOverride?: number) => {
+    const quantity = quantityOverride ?? 1;
     if (!Number.isInteger(quantity) || quantity <= 0) {
       setOverviewError(t('trades.markSoldWholeNumber'));
       return;
@@ -1756,8 +2059,9 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     if (!beginOrderAction(order.orderId)) {
       return;
     }
+    const closeOrderFn = order.orderType === 'sell' ? closeWfmSellOrder : closeWfmBuyOrder;
     try {
-      const nextOverview = await closeWfmSellOrder(
+      const nextOverview = await closeOrderFn(
         order.orderId,
         Math.min(quantity, order.quantity),
         sellerMode,
@@ -1770,20 +2074,55 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     }
   };
 
-  const handleDeleteOrder = async (orderId: string) => {
-    if (!beginOrderAction(orderId)) {
+  // One-click fix for a drifted sell listing: reprice straight to the current market low.
+  // One-click apply of the health engine's recommended price. Works for both sides: a sell
+  // gets repriced to the recommended exit (market low / trim target), a buy gets raised to the
+  // recommended bid (match top bid). Falls back to market low for sells with no explicit target.
+  const handleApplyRecommended = async (order: TradeSellOrder) => {
+    const target = order.health?.recommendedPrice
+      ?? (order.orderType === 'sell' ? order.marketLow ?? null : null);
+    if (target === null || target === undefined || target <= 0 || target === order.yourPrice) {
       return;
     }
+    if (!beginOrderAction(order.orderId)) {
+      return;
+    }
+    const updateOrderFn = order.orderType === 'sell' ? updateWfmSellOrder : updateWfmBuyOrder;
     try {
-      const nextOverview =
-        listingType === 'sell'
-          ? await deleteWfmSellOrder(orderId, sellerMode)
-          : await deleteWfmBuyOrder(orderId, sellerMode);
+      const nextOverview = await updateOrderFn(
+        {
+          orderId: order.orderId,
+          price: target,
+          quantity: order.quantity,
+          rank: order.rank ?? null,
+          visible: order.visible,
+          wfmId: order.wfmId,
+          perTrade: order.bulkTradable ? order.perTrade : null,
+        } satisfies TradeUpdateListingInput,
+        sellerMode,
+      );
       await applyOverview(nextOverview);
     } catch (error) {
       handleTradeActionFailure(error);
     } finally {
-      endOrderAction(orderId);
+      endOrderAction(order.orderId);
+    }
+  };
+
+  const handleDeleteOrder = async (order: TradeSellOrder) => {
+    if (!beginOrderAction(order.orderId)) {
+      return;
+    }
+    try {
+      const nextOverview =
+        order.orderType === 'sell'
+          ? await deleteWfmSellOrder(order.orderId, sellerMode)
+          : await deleteWfmBuyOrder(order.orderId, sellerMode);
+      await applyOverview(nextOverview);
+    } catch (error) {
+      handleTradeActionFailure(error);
+    } finally {
+      endOrderAction(order.orderId);
     }
   };
 
@@ -1799,7 +2138,215 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
     return <SignInPanel />;
   }
 
-  const orders = listingType === 'sell' ? (overview?.sellOrders ?? []) : (overview?.buyOrders ?? []);
+  const sellOrders = overview?.sellOrders ?? [];
+  const buyOrders = overview?.buyOrders ?? [];
+  const buyExposure = buyOrders.reduce((sum, order) => sum + order.yourPrice * order.quantity, 0);
+
+  const renderOrderRow = (order: TradeSellOrder, type: TradeListingKind) => {
+    const pending = isOrderPending(order.orderId);
+    const recommendedPrice = order.health?.recommendedPrice
+      ?? (type === 'sell' && (order.priceGap ?? 0) > 0 ? order.marketLow ?? null : null);
+    const canApplyPrice =
+      recommendedPrice !== null && recommendedPrice !== undefined
+      && recommendedPrice > 0 && recommendedPrice !== order.yourPrice;
+    const eta = type === 'sell' ? formatEtaHours(order.health?.estSellHoursAtPrice) : null;
+    const menuOpen = actionMenuOrderId === order.orderId;
+    return (
+      <div
+        key={order.orderId}
+        className={`trade-split-row${order.visible ? '' : ' trade-row-hidden'}`}
+      >
+        <div className="trade-split-item">
+          <span className="item-thumb trade-item-thumb">
+            {resolveWfmAssetUrl(order.imagePath) ? (
+              <img src={resolveWfmAssetUrl(order.imagePath) ?? undefined} alt="" />
+            ) : (
+              <span>{order.name.slice(0, 1)}</span>
+            )}
+          </span>
+          <div className="trade-split-item-copy">
+            <ItemName
+              className="item-name trade-split-item-name"
+              name={order.name}
+              slug={order.slug}
+              itemId={order.itemId}
+              imagePath={order.imagePath}
+            />
+            <span className="trade-split-subline">
+              {order.maxRank !== null && order.maxRank !== undefined && order.maxRank > 0
+                ? `${order.rank ?? 0}/${order.maxRank} · `
+                : null}
+              ×{order.quantity}
+              {!order.visible ? ` · ${t('trades.row.hidden').toLowerCase()}` : null}
+              {order.health ? (
+                <span className={`trade-split-health ${getTradeHealthToneClass(order.health.tone)}`}>
+                  {' · '}{tHealth(t, order.health.label)}
+                </span>
+              ) : null}
+              {eta ? <span className="trade-split-eta">{' · '}{eta}</span> : null}
+              {order.health?.wouldRealizeLoss ? (
+                <span className="trade-split-loss">{' · '}{t('trades.health.wouldLose')}</span>
+              ) : null}
+              {type === 'sell' ? (
+                <span className="trade-split-age">
+                  {' · '}
+                  {marketLowTimestamps[order.orderId]
+                    ? formatMarketLowAge(marketLowTimestamps[order.orderId])
+                    : staleHealthIds.includes(order.orderId)
+                      ? t('trades.row.cantRefresh')
+                      : t('trades.row.refreshing')}
+                </span>
+              ) : null}
+            </span>
+          </div>
+        </div>
+        <span className="trade-split-prices">
+          {formatPlatinumValue(order.yourPrice)}
+          <span className="trade-split-market">
+            {' / '}
+            {order.marketLow !== null && order.marketLow !== undefined
+              ? formatPlatinumValue(order.marketLow)
+              : '—'}
+          </span>
+        </span>
+        <span className={`trade-split-gap ${getGapClassName(order.priceGap)}`}>
+          {order.marketLow !== null && order.marketLow !== undefined ? formatGap(order.priceGap) : '—'}
+        </span>
+        <span className="trade-split-actions">
+          {canApplyPrice ? (
+            <button
+              type="button"
+              className="trade-icon-btn trade-icon-btn-warn"
+              disabled={pending}
+              title={t('trades.row.reprice', { price: formatPlatinumValue(recommendedPrice ?? 0) })}
+              aria-label={t('trades.row.reprice', { price: formatPlatinumValue(recommendedPrice ?? 0) })}
+              onClick={() => void handleApplyRecommended(order)}
+            >
+              <BoltIcon />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="trade-icon-btn trade-icon-btn-good"
+            disabled={pending}
+            title={t(type === 'sell' ? 'trades.row.markSold' : 'trades.row.markBought')}
+            aria-label={t(type === 'sell' ? 'trades.row.markSoldAria' : 'trades.row.markBoughtAria', { name: order.name })}
+            onClick={() => {
+              if (order.quantity > 1) {
+                setCloseQtyValue('1');
+                setCloseQtyTarget(order);
+              } else {
+                void handleCloseOrder(order, 1);
+              }
+            }}
+          >
+            <CheckIcon />
+          </button>
+          <button
+            type="button"
+            className="trade-icon-btn"
+            disabled={pending}
+            title={t('trades.row.edit')}
+            aria-label={t('trades.row.edit')}
+            onClick={() => openEditListing(order)}
+          >
+            <PencilIcon />
+          </button>
+          <span className="trade-split-menu-wrap">
+            <button
+              type="button"
+              className={`trade-icon-btn${menuOpen ? ' open' : ''}`}
+              disabled={pending}
+              title={t('trades.row.more')}
+              aria-label={t('trades.row.more')}
+              aria-expanded={menuOpen}
+              onClick={() => setActionMenuOrderId(menuOpen ? null : order.orderId)}
+            >
+              <DotsIcon />
+            </button>
+            {menuOpen ? (
+              <div className="trade-split-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setActionMenuOrderId(null);
+                    void handleToggleOrderVisibility(order);
+                  }}
+                >
+                  {order.visible ? t('trades.row.ariaHide') : t('trades.row.ariaShow')}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="danger"
+                  onClick={() => {
+                    setActionMenuOrderId(null);
+                    void handleDeleteOrder(order);
+                  }}
+                >
+                  {t('trades.row.remove')}
+                </button>
+              </div>
+            ) : null}
+          </span>
+        </span>
+      </div>
+    );
+  };
+
+  const renderOrderPanel = (type: TradeListingKind) => {
+    const panelOrders = type === 'sell' ? sellOrders : buyOrders;
+    const visibleCount = panelOrders.filter((order) => order.visible).length;
+    return (
+      <div className="trade-order-panel">
+        <div className="trade-order-panel-head">
+          <span className={`trade-order-panel-dot ${type}`} />
+          <span className="trade-order-panel-title">
+            {t(type === 'sell' ? 'trades.panel.sellOrders' : 'trades.panel.buyOrders')}
+          </span>
+          <span className="trade-order-panel-count">
+            {visibleCount}/{panelOrders.length}
+          </span>
+          <span className="trade-order-panel-head-actions">
+            <button
+              className="act-btn"
+              type="button"
+              disabled={visibilityActionPending || panelOrders.every((order) => order.visible)}
+              onClick={() => void handleSetAllVisibility(true, type)}
+            >
+              {t('trades.showAll')}
+            </button>
+            <button
+              className="act-btn"
+              type="button"
+              disabled={visibilityActionPending || panelOrders.every((order) => !order.visible)}
+              onClick={() => void handleSetAllVisibility(false, type)}
+            >
+              {t('trades.hideAll')}
+            </button>
+          </span>
+        </div>
+        <div className="trade-split-header">
+          <span>{t('trades.col.item')}</span>
+          <span>{t(type === 'sell' ? 'trades.col.yoursLow' : 'trades.col.yoursMarket')}</span>
+          <span>{t('trades.col.priceGap')}</span>
+          <span className="trade-split-header-actions">{t('trades.col.actions')}</span>
+        </div>
+        {panelOrders.map((order) => renderOrderRow(order, type))}
+        {overview && panelOrders.length === 0 ? (
+          <div className="empty-state trade-split-empty">
+            <span className="empty-primary">
+              {t(type === 'sell' ? 'trades.noSellOrders' : 'trades.noBuyOrders')}
+            </span>
+            <span className="empty-sub">
+              {t(type === 'sell' ? 'trades.createSellHint' : 'trades.createBuyHint')}
+            </span>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -1820,8 +2367,8 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           </div>
         </div>
         <div className="trade-hero-actions">
-          <button className="btn-primary" type="button" onClick={openCreateListing}>
-            {t(listingType === 'sell' ? 'trades.hero.createSellOrder' : 'trades.hero.createBuyOrder')}
+          <button className="btn-primary" type="button" onClick={() => openCreateListing('sell')}>
+            {t('trades.hero.createListing')}
           </button>
           <div className="trade-visibility-toggle-wrap">
             <button
@@ -1852,6 +2399,12 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
           </div>
         </div>
         <div className="stat-mini">
+          <div className="stat-mini-label">{t('trades.stat.buyExposure')}</div>
+          <div className="stat-mini-val neutral">
+            {overview ? formatPlatinumValue(buyExposure) : '—'}
+          </div>
+        </div>
+        <div className="stat-mini">
           <div className="stat-mini-label">{t('trades.stat.completedTrades')}</div>
           <div className="stat-mini-val neutral">
             {overview?.totalCompletedTrades ?? '—'}
@@ -1867,207 +2420,120 @@ function ListingsTab({ listingType }: { listingType: TradeListingKind }) {
 
       {overviewError ? <div className="trade-inline-error">{overviewError}</div> : null}
 
-      {orders.length > 0 ? (
-        <div className="trade-visibility-bar">
-          <span className="trade-visibility-bar-label">
-            {orders.filter((order) => order.visible).length}/{orders.length} {listingType} orders visible
-          </span>
-          <div className="trade-visibility-bar-actions">
-            <button
-              className="act-btn"
-              type="button"
-              disabled={visibilityActionPending || orders.every((order) => order.visible)}
-              onClick={() => void handleSetAllVisibility(true)}
-            >
-              {t('trades.showAll')}
-            </button>
-            <button
-              className="act-btn"
-              type="button"
-              disabled={visibilityActionPending || orders.every((order) => !order.visible)}
-              onClick={() => void handleSetAllVisibility(false)}
-            >
-              {t('trades.hideAll')}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="card trade-list-card">
-        {overviewLoading && !overview ? (
+      {overviewLoading && !overview ? (
+        <div className="card trade-list-card">
           <div className="empty-state">
-            <span className="empty-primary">
-              {t(listingType === 'sell' ? 'trades.loadingSellOrders' : 'trades.loadingBuyOrders')}
-            </span>
+            <span className="empty-primary">{t('trades.loadingSellOrders')}</span>
             <span className="empty-sub">{t('trades.syncingAccount')}</span>
           </div>
-        ) : null}
+        </div>
+      ) : (
+        <div className="trade-orders-split">
+          {renderOrderPanel('sell')}
+          {renderOrderPanel('buy')}
+        </div>
+      )}
 
-        {!overviewLoading || overview ? (
-          <table className="listing-table">
-            <thead>
-              <tr>
-                <th>{t('trades.col.item')}</th>
-                <th>{t('pf.rank')}</th>
-                <th>{t('trades.col.visible')}</th>
-                <th>{t('trades.col.yourPrice')}</th>
-                <th>{t('trades.col.marketLow')}</th>
-                <th>{t('trades.col.priceGap')}</th>
-                <th>{t('trades.col.listingHealth')}</th>
-                <th>{t('trades.col.quantity')}</th>
-                <th>{t('trades.col.actions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.map((order) => (
-                <tr key={order.orderId} className={order.visible ? undefined : 'trade-row-hidden'}>
-                  <td>
-                    <div className="item-cell">
-                      <span className="item-thumb trade-item-thumb">
-                        {resolveWfmAssetUrl(order.imagePath) ? (
-                          <img src={resolveWfmAssetUrl(order.imagePath) ?? undefined} alt="" />
-                        ) : (
-                          <span>{order.name.slice(0, 1)}</span>
-                        )}
-                      </span>
-                      <div>
-                        <ItemName
-                          className="item-name"
-                          name={order.name}
-                          slug={order.slug}
-                          itemId={order.itemId}
-                          imagePath={order.imagePath}
-                        />
-                        <div className="trade-cell-age">
-                          {marketLowTimestamps[order.orderId]
-                            ? formatMarketLowAge(marketLowTimestamps[order.orderId])
-                            : listingType === 'sell'
-                              ? (staleHealthIds.includes(order.orderId) ? t('trades.row.cantRefresh') : t('trades.row.refreshing'))
-                              : null}
-                        </div>
-                      </div>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="trade-cell-value">
-                      {order.rank !== null && order.rank !== undefined
-                        ? order.maxRank !== null && order.maxRank !== undefined && order.maxRank > 0
-                          ? `${order.rank}/${order.maxRank}`
-                          : order.rank
-                        : <span className="trade-cell-pending">—</span>}
-                    </div>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className={`trade-row-visibility${order.visible ? ' on' : ' off'}`}
-                      disabled={visibilityActionPending || isOrderPending(order.orderId)}
-                      onClick={() => void handleToggleOrderVisibility(order)}
-                      title={order.visible ? t('trades.row.titleVisible') : t('trades.row.titleHidden')}
-                      aria-label={order.visible ? t('trades.row.ariaHide') : t('trades.row.ariaShow')}
-                    >
-                      {order.visible ? t('trades.row.visible') : t('trades.row.hidden')}
-                    </button>
-                  </td>
-                  <td>
-                    <div className="trade-cell-value">{formatPlatinumValue(order.yourPrice)}</div>
-                  </td>
-                  <td>
-                    <div className="trade-cell-value">
-                      {order.marketLow !== null && order.marketLow !== undefined
-                        ? formatPlatinumValue(order.marketLow)
-                        : <span className="trade-cell-pending">—</span>}
-                    </div>
-                  </td>
-                  <td>
-                    <div className={`trade-cell-value ${getGapClassName(order.priceGap)}`}>
-                      {order.marketLow !== null && order.marketLow !== undefined
-                        ? formatGap(order.priceGap)
-                        : <span className="trade-cell-pending">—</span>}
-                    </div>
-                  </td>
-                  <td>
-                    {listingType === 'sell' ? (
-                      <div className="trade-health-stack">
-                        <span className={`market-panel-badge ${getTradeHealthToneClass(order.health?.tone ?? 'amber')}`}>
-                          {order.health ? tHealth(t, order.health.label) : t('trades.row.building')}
-                        </span>
-                        <span className="health-note">
-                          {order.health
-                            ? `${tHealth(t, order.health.actionLabel)} · ${tHealth(t, order.health.outlookLabel)}`
-                            : t('trades.row.refreshingContext')}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="trade-cell-pending">—</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="trade-cell-value">{order.quantity}</div>
-                  </td>
-                  <td>
-                    <div className="actions-cell trade-actions-cell">
-                      {listingType === 'sell' ? (
-                        <div className="trade-sold-action">
-                          <input
-                            className="qty-input"
-                            type="number"
-                            min={1}
-                            max={order.quantity}
-                            aria-label={t('trades.row.markSoldAria', { name: order.name })}
-                            value={soldQuantities[order.orderId] ?? DEFAULT_MARK_SOLD_QTY}
-                            onChange={(event) =>
-                              setSoldQuantities((current) => ({
-                                ...current,
-                                [order.orderId]: event.target.value,
-                              }))
-                            }
-                          />
-                          <button
-                            className="act-btn"
-                            type="button"
-                            disabled={isOrderPending(order.orderId)}
-                            onClick={() => void handleMarkAsSold(order)}
-                          >
-                            {isOrderPending(order.orderId) ? t('trades.row.working') : t('trades.row.markSold')}
-                          </button>
-                        </div>
-                      ) : null}
-                      <button
-                        className="act-btn"
-                        type="button"
-                        disabled={isOrderPending(order.orderId)}
-                        onClick={() => openEditListing(order)}
-                      >{t('trades.row.edit')}</button>
-                      <button
-                        className="act-btn danger"
-                        type="button"
-                        disabled={isOrderPending(order.orderId)}
-                        onClick={() => void handleDeleteOrder(order.orderId)}
-                      >{t('trades.row.remove')}</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-
-              {overview && orders.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>
-                    <div className="empty-state">
-                      <span className="empty-primary">
-                        {t(listingType === 'sell' ? 'trades.noSellOrders' : 'trades.noBuyOrders')}
-                      </span>
-                      <span className="empty-sub">
-                        {t(listingType === 'sell' ? 'trades.createSellHint' : 'trades.createBuyHint')}
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        ) : null}
-      </div>
+      {closeQtyTarget ? (
+        <ModalPortal>
+          <div className="modal-backdrop" role="presentation">
+            <div
+              ref={closeQtyRef}
+              className="settings-modal trade-close-qty-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="trade-close-qty-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="settings-modal-header">
+                <div className="settings-modal-title">
+                  <span className="card-label">{closeQtyTarget.name}</span>
+                  <h3 id="trade-close-qty-title">
+                    {t(closeQtyTarget.orderType === 'sell' ? 'trades.row.markSold' : 'trades.row.markBought')}
+                  </h3>
+                </div>
+                <button
+                  className="settings-close-btn"
+                  type="button"
+                  onClick={() => setCloseQtyTarget(null)}
+                  aria-label={t('a11y.dismiss')}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="settings-modal-body">
+                <p className="trade-close-qty-prompt">
+                  {t(
+                    closeQtyTarget.orderType === 'sell'
+                      ? 'trades.closeQty.promptSold'
+                      : 'trades.closeQty.promptBought',
+                    { count: String(closeQtyTarget.quantity) },
+                  )}
+                </p>
+                <div className="trade-close-qty-controls">
+                  <input
+                    className="qty-input trade-close-qty-input"
+                    type="number"
+                    min={1}
+                    max={closeQtyTarget.quantity}
+                    autoFocus
+                    value={closeQtyValue}
+                    onChange={(event) => setCloseQtyValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        const parsed = Number.parseInt(closeQtyValue, 10);
+                        if (Number.isInteger(parsed) && parsed >= 1) {
+                          const target = closeQtyTarget;
+                          setCloseQtyTarget(null);
+                          void handleCloseOrder(target, Math.min(parsed, target.quantity));
+                        }
+                      }
+                    }}
+                    aria-label={t('trades.closeQty.inputAria')}
+                  />
+                  <div className="trade-close-qty-chips">
+                    {[1, Math.ceil(closeQtyTarget.quantity / 2), closeQtyTarget.quantity]
+                      .filter((value, index, all) => value >= 1 && all.indexOf(value) === index)
+                      .map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={`act-btn${Number.parseInt(closeQtyValue, 10) === value ? ' active' : ''}`}
+                          onClick={() => setCloseQtyValue(String(value))}
+                        >
+                          {value === closeQtyTarget.quantity
+                            ? t('trades.closeQty.all', { count: String(value) })
+                            : value}
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              </div>
+              <div className="settings-modal-actions">
+                <button className="btn-secondary" type="button" onClick={() => setCloseQtyTarget(null)}>
+                  {t('a11y.dismiss')}
+                </button>
+                <button
+                  className="btn-primary"
+                  type="button"
+                  disabled={
+                    !Number.isInteger(Number.parseInt(closeQtyValue, 10))
+                    || Number.parseInt(closeQtyValue, 10) < 1
+                  }
+                  onClick={() => {
+                    const parsed = Number.parseInt(closeQtyValue, 10);
+                    const target = closeQtyTarget;
+                    setCloseQtyTarget(null);
+                    void handleCloseOrder(target, Math.min(parsed, target.quantity));
+                  }}
+                >
+                  {t(closeQtyTarget.orderType === 'sell' ? 'trades.row.markSold' : 'trades.row.markBought')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      ) : null}
 
       {sessionExpiredPopupOpen ? (
         <ModalPortal>
@@ -2176,21 +2642,12 @@ export function TradesPage() {
           <div className="subnav-tabs" role="tablist" aria-label={t('trades.sections')}>
             <button
               type="button"
-              className={`subtab${tradesSubTab === 'sell-orders' ? ' active' : ''}`}
-              onClick={() => setTradesSubTab('sell-orders')}
+              className={`subtab${tradesSubTab === 'orders' ? ' active' : ''}`}
+              onClick={() => setTradesSubTab('orders')}
               role="tab"
-              aria-selected={tradesSubTab === 'sell-orders'}
+              aria-selected={tradesSubTab === 'orders'}
             >
-              {t('trades.tab.sell')}
-            </button>
-            <button
-              type="button"
-              className={`subtab${tradesSubTab === 'buy-orders' ? ' active' : ''}`}
-              onClick={() => setTradesSubTab('buy-orders')}
-              role="tab"
-              aria-selected={tradesSubTab === 'buy-orders'}
-            >
-              {t('trades.tab.buy')}
+              {t('trades.tab.orders')}
             </button>
             <button
               type="button"
@@ -2203,11 +2660,9 @@ export function TradesPage() {
             </button>
           </div>
         </div>
-        {tradeAccount && (tradesSubTab === 'sell-orders' || tradesSubTab === 'buy-orders') ? (
+        {tradeAccount && tradesSubTab === 'orders' ? (
           <div className="subnav-right">
-            <span className="trade-subnav-hint">
-              {t(tradesSubTab === 'sell-orders' ? 'trades.subnav.liveSell' : 'trades.subnav.liveBuy')}
-            </span>
+            <span className="trade-subnav-hint">{t('trades.subnav.liveOrders')}</span>
           </div>
         ) : null}
       </div>
@@ -2216,8 +2671,7 @@ export function TradesPage() {
           <SignInPanel />
         ) : (
           <>
-            {tradesSubTab === 'sell-orders' && <ListingsTab listingType="sell" />}
-            {tradesSubTab === 'buy-orders' && <ListingsTab listingType="buy" />}
+            {tradesSubTab === 'orders' && <ListingsTab />}
             {tradesSubTab === 'health' && <HealthTab />}
           </>
         )}

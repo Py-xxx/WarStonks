@@ -13422,3 +13422,262 @@ img[data-asset-failed='true'] {
   max-width: 120px;
   font-family: 'JetBrains Mono', monospace;
 }
+
+/* ---- Trades: merged orders split view ---- */
+.trade-orders-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 1180px) {
+  .trade-orders-split { grid-template-columns: minmax(0, 1fr); }
+}
+.trade-order-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: visible;
+}
+.trade-order-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.trade-order-panel-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.trade-order-panel-dot.sell { background: var(--color-green); }
+.trade-order-panel-dot.buy { background: var(--color-blue); }
+.trade-order-panel-title {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+.trade-order-panel-count {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+.trade-order-panel-head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.trade-split-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) 92px 52px 128px;
+  gap: 8px;
+  padding: 6px 12px;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.trade-split-header-actions { text-align: right; }
+.trade-split-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) 92px 52px 128px;
+  gap: 8px;
+  padding: 9px 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.trade-split-row:last-child { border-bottom: none; }
+/* Dim only the data columns of a hidden listing — never the actions, or the popup menu
+   (a child of the row) would inherit the opacity and become un-clickable. */
+.trade-split-row.trade-row-hidden .trade-split-item,
+.trade-split-row.trade-row-hidden .trade-split-prices,
+.trade-split-row.trade-row-hidden .trade-split-gap { opacity: 0.5; }
+.trade-split-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.trade-split-item-copy { min-width: 0; }
+.trade-split-item-name {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trade-split-subline {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trade-split-health.tone-green { color: var(--color-green); }
+.trade-split-health.tone-blue { color: var(--color-blue); }
+.trade-split-health.tone-red { color: var(--color-red); }
+.trade-split-health.tone-amber { color: var(--color-amber); }
+.trade-split-age { color: var(--text-muted); }
+.trade-split-prices {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.trade-split-market { color: var(--text-muted); }
+.trade-split-gap {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.trade-split-gap.good { color: var(--color-green); }
+.trade-split-gap.bad { color: var(--color-red); }
+.trade-split-gap.neutral { color: var(--text-muted); }
+.trade-split-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.trade-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.trade-icon-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+.trade-icon-btn:disabled { opacity: 0.45; cursor: default; }
+.trade-icon-btn.open { background: var(--bg-elevated); color: var(--text-primary); }
+.trade-icon-btn-good { color: var(--color-green); border-color: rgba(61, 214, 140, 0.35); }
+.trade-icon-btn-good:hover:not(:disabled) { color: var(--color-green); background: rgba(61, 214, 140, 0.12); }
+.trade-icon-btn-warn { color: var(--color-amber); border-color: rgba(240, 160, 48, 0.4); background: rgba(240, 160, 48, 0.08); }
+.trade-icon-btn-warn:hover:not(:disabled) { color: var(--color-amber); background: rgba(240, 160, 48, 0.16); }
+.trade-split-menu-wrap { position: relative; }
+.trade-split-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 190px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 4px;
+  z-index: 30;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.trade-split-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+.trade-split-menu button:hover { background: var(--bg-surface); }
+.trade-split-menu button.danger { color: var(--color-red); }
+.trade-split-empty { padding: 24px 12px; }
+
+/* Trades: close-quantity popup */
+.trade-close-qty-modal { max-width: 380px; }
+.trade-close-qty-prompt {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.trade-close-qty-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.trade-close-qty-input { width: 82px; }
+.trade-close-qty-chips { display: flex; gap: 6px; }
+.trade-close-qty-chips .act-btn.active {
+  border-color: rgba(74, 158, 255, 0.5);
+  color: var(--color-blue);
+}
+
+/* Trades: health enrichments (velocity, cost, age, breakdown, apply) */
+.trade-split-eta { color: var(--color-blue); }
+.trade-split-loss { color: var(--color-red); }
+.trade-health-metric-alt { color: var(--color-green); font-weight: 400; }
+.trade-health-loss { color: var(--color-red); }
+.trade-health-fixall-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: rgba(240, 160, 48, 0.08);
+  border: 1px solid rgba(240, 160, 48, 0.3);
+  border-radius: 8px;
+}
+.trade-health-fixall-copy { font-size: 12px; color: var(--text-secondary); }
+.trade-health-fixall-btn { margin-left: auto; }
+.trade-health-apply-btn {
+  border-color: rgba(74, 158, 255, 0.5);
+  color: var(--color-blue);
+}
+.trade-health-breakdown {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.trade-health-breakdown-label {
+  display: block;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.trade-health-breakdown-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.trade-health-factor {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+}
+.trade-health-factor.pos { color: var(--color-green); }
+.trade-health-factor.neg { color: var(--color-red); }
+
+/* Trades: health score chip inside the label badge */
+.trade-health-score {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Trades: health confidence / demand extras */
+.trade-health-summary-card[title] { cursor: help; }

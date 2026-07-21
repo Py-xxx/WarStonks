@@ -25,6 +25,7 @@ import type {
   MarketVariant,
   TradeCreateListingInput,
   TradeListingHealth,
+  HealthPredictionAccuracy,
   PortfolioPnlSummary,
   SetCompletionInventoryValue,
   SetCompletionOwnedItemValue,
@@ -595,8 +596,36 @@ export async function getTradeSellOrderHealth(
   yourPrice: number,
   sellerMode: SellerMode,
   priority: 'high' | 'medium' | 'low',
+  createdAt: string | null,
+  perTrade: number | null,
+  orderId: string | null,
 ): Promise<TradeListingHealth> {
   return invoke<TradeListingHealth>('get_trade_sell_order_health', {
+    itemId,
+    slug,
+    rank,
+    yourPrice,
+    sellerMode,
+    priority,
+    createdAt,
+    perTrade,
+    orderId,
+  });
+}
+
+export async function getHealthPredictionAccuracy(): Promise<HealthPredictionAccuracy> {
+  return invoke<HealthPredictionAccuracy>('get_health_prediction_accuracy');
+}
+
+export async function getTradeBuyOrderHealth(
+  itemId: number | null,
+  slug: string,
+  rank: number | null,
+  yourPrice: number,
+  sellerMode: SellerMode,
+  priority: 'high' | 'medium' | 'low',
+): Promise<TradeListingHealth> {
+  return invoke<TradeListingHealth>('get_trade_buy_order_health', {
     itemId,
     slug,
     rank,
