@@ -421,7 +421,72 @@ pub(crate) struct CachedTradeHealthContext {
     pub liquidity_label: String,
     pub pressure_label: String,
     pub exit_zone_low: Option<f64>,
+    /// Recent units sold per day, derived from tracked trade-volume history. Drives the
+    /// estimated time-to-sell shown on listing health. None when there isn't enough volume
+    /// history to be meaningful.
+    pub daily_volume: Option<f64>,
+    /// Multiplier for the current hour's activity vs the item's own average (1.0 = typical,
+    /// >1 busier than usual right now, <1 quieter). Scales the "now" sell-time estimate.
+    pub current_hour_volume_factor: Option<f64>,
+    /// How fast the floor is being undercut right now (undercut steps per hour). High = a race
+    /// to the bottom / price war.
+    pub undercut_velocity: Option<f64>,
+    /// Graded confidence in this context, 0=low … derived from source freshness + sample depth.
+    pub confidence_level: String,
+    pub confidence_label: String,
     pub is_degraded: bool,
+}
+
+/// Current-hour activity multiplier from the time-of-day grid: the current 2-hour block's
+/// normalized volume divided by the mean normalized volume across populated blocks. Clamped so
+/// a single sparse bucket can't wildly distort the sell-time estimate.
+fn current_hour_volume_factor(summary: &TimeOfDayLiquiditySummary) -> Option<f64> {
+    let now = now_utc();
+    let weekday = now.weekday().number_days_from_monday() as i64;
+    let hour = now.hour() as i64;
+    let bucket_index = hour / 2;
+    let populated: Vec<f64> = summary
+        .buckets
+        .iter()
+        .filter(|bucket| bucket.sample_count > 0)
+        .map(|bucket| bucket.normalized_volume)
+        .collect();
+    if populated.len() < 3 {
+        return None;
+    }
+    let mean = populated.iter().sum::<f64>() / populated.len() as f64;
+    if mean <= 0.0 {
+        return None;
+    }
+    let current = summary
+        .buckets
+        .iter()
+        .find(|bucket| bucket.weekday == weekday && bucket.bucket_index == bucket_index)
+        .filter(|bucket| bucket.sample_count > 0)
+        .map(|bucket| bucket.normalized_volume)?;
+    Some((current / mean).clamp(0.35, 3.0))
+}
+
+/// Estimate recent units-sold-per-day from analytics chart points, bucket-size-agnostic:
+/// total tracked volume over the covered span, divided by the number of days it spans. Uses
+/// the most recent ~14 days of points so a long-dead history doesn't drag the rate down.
+fn estimate_daily_volume(chart_points: &[AnalyticsChartPoint]) -> Option<f64> {
+    let cutoff = now_utc() - TimeDuration::days(14);
+    let recent: Vec<&AnalyticsChartPoint> = chart_points
+        .iter()
+        .filter(|point| parse_timestamp(&point.bucket_at).is_some_and(|ts| ts >= cutoff))
+        .collect();
+    if recent.len() < 2 {
+        return None;
+    }
+    let total_volume: f64 = recent.iter().map(|point| point.volume).sum();
+    if total_volume <= 0.0 {
+        return None;
+    }
+    let first = parse_timestamp(&recent.first()?.bucket_at)?;
+    let last = parse_timestamp(&recent.last()?.bucket_at)?;
+    let span_days = ((last - first).whole_minutes().abs() as f64 / (60.0 * 24.0)).max(0.5);
+    Some(total_volume / span_days)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9913,8 +9978,41 @@ fn build_fallback_trade_health_context(recent_snapshots: &[MarketSnapshot]) -> O
         liquidity_label: liquidity_label(liquidity_score),
         pressure_label: pressure_label(latest.pressure_ratio, latest.buy_order_count),
         exit_zone_low: None,
+        // The snapshot-only fallback has no trade-volume history to estimate velocity from.
+        daily_volume: None,
+        current_hour_volume_factor: None,
+        undercut_velocity: undercut_velocity_per_hour(recent_snapshots),
+        // Snapshot-only fallback is inherently the low-confidence path.
+        confidence_level: "low".to_string(),
+        confidence_label: "Low confidence".to_string(),
         is_degraded,
     })
+}
+
+/// Fold several section confidence summaries into one graded health confidence. Levels are
+/// "high" / "medium" / "low"; the result is the weakest input, dropped one notch further when
+/// the underlying data is stale (older than 6h).
+fn derive_trade_health_confidence(
+    summaries: &[&MarketConfidenceSummary],
+    latest_age_minutes: i64,
+) -> (String, String) {
+    let rank = |level: &str| match level.to_ascii_lowercase().as_str() {
+        "high" => 2,
+        "medium" => 1,
+        _ => 0,
+    };
+    let mut worst = 2;
+    for summary in summaries {
+        worst = worst.min(rank(&summary.level));
+    }
+    if latest_age_minutes > 360 {
+        worst = 0;
+    }
+    match worst {
+        2 => ("high".to_string(), "High confidence".to_string()),
+        1 => ("medium".to_string(), "Medium confidence".to_string()),
+        _ => ("low".to_string(), "Low confidence".to_string()),
+    }
 }
 
 pub(crate) fn load_cached_trade_health_context(
@@ -9941,6 +10039,24 @@ pub(crate) fn load_cached_trade_health_context(
             || analytics.orderbook_pressure.confidence_summary.is_degraded
             || trend.confidence_summary.is_degraded;
 
+        // Undercut velocity + time-of-day factor both need recent snapshot history.
+        let recent = recent_snapshots(connection, item_id, variant_key, seller_mode, 24)?;
+        let undercut_velocity = undercut_velocity_per_hour(&recent);
+        let current_hour_volume_factor =
+            build_time_of_day_liquidity(connection, item_id, variant_key, seller_mode)
+                .ok()
+                .and_then(|summary| current_hour_volume_factor(&summary));
+        // Graded confidence: take the weakest of the section confidences (a chain is only as
+        // trustworthy as its shakiest link), then downgrade further if data is stale.
+        let (confidence_level, confidence_label) = derive_trade_health_confidence(
+            &[
+                &analytics.entry_exit_zone_overview.confidence_summary,
+                &analytics.orderbook_pressure.confidence_summary,
+                &trend.confidence_summary,
+            ],
+            latest_age_minutes,
+        );
+
         return Ok(Some(CachedTradeHealthContext {
             trend_direction: trend.direction,
             trend_summary: trend.summary,
@@ -9950,6 +10066,11 @@ pub(crate) fn load_cached_trade_health_context(
                 .unwrap_or_else(|| "Thin".to_string()),
             pressure_label: analytics.orderbook_pressure.pressure_label,
             exit_zone_low: analytics.entry_exit_zone_overview.exit_zone_low,
+            daily_volume: estimate_daily_volume(&analytics.chart_points),
+            current_hour_volume_factor,
+            undercut_velocity,
+            confidence_level,
+            confidence_label,
             is_degraded,
         }));
     }

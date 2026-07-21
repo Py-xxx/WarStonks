@@ -273,7 +273,7 @@ export function TopBar() {
 
   const handleOpenTrades = () => {
     setActivePage('trades');
-    setTradesSubTab('sell-orders');
+    setTradesSubTab('orders');
     void loadTradeAccount();
     setTradeMenuOpen(false);
   };

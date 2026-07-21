@@ -46,6 +46,11 @@ const EVENT_ROWS: EventRow[] = [
     helpKey: 'notif.event.underpricedListing.help',
   },
   {
+    key: 'listingHealth',
+    labelKey: 'notif.event.listingHealth.label',
+    helpKey: 'notif.event.listingHealth.help',
+  },
+  {
     key: 'scannerStale',
     labelKey: 'notif.event.scannerStale.label',
     helpKey: 'notif.event.scannerStale.help',

@@ -109,6 +109,9 @@ pub struct TradeSellOrder {
     pub price_gap: Option<i64>,
     pub visible: bool,
     pub updated_at: String,
+    /// When the order was first created on WFM (drives listing-age signals). Optional because
+    /// older cached shapes and some code paths don't carry it.
+    pub created_at: Option<String>,
     pub health_score: Option<i64>,
     pub health_note: Option<String>,
     pub health: Option<TradeListingHealth>,
@@ -136,7 +139,53 @@ pub struct TradeListingHealth {
     pub liquidity_score: Option<i64>,
     pub liquidity_label: Option<String>,
     pub pressure_label: Option<String>,
+    /// Recent units sold per day for this item (velocity), when known.
+    pub daily_volume: Option<f64>,
+    /// Estimated hours to sell at the listing's current price (queue ahead ÷ velocity).
+    pub est_sell_hours_at_price: Option<f64>,
+    /// Estimated hours to sell if repriced to the front of the queue (market low).
+    pub est_sell_hours_at_market: Option<f64>,
+    /// Your average acquisition cost for this item, from the trade log, when known.
+    pub cost_basis: Option<i64>,
+    /// True when the recommended action would sell below cost basis.
+    pub would_realize_loss: bool,
+    /// How long this listing has been live, in hours (from WFM order creation time).
+    pub listing_age_hours: Option<f64>,
+    /// Human-readable breakdown of what moved the health score, best (positive) first.
+    pub score_factors: Vec<TradeHealthScoreFactor>,
+    /// Graded confidence in this recommendation ("high" / "medium" / "low") and its label.
+    pub confidence_level: String,
+    pub confidence_label: String,
+    /// Floor undercut rate (steps/hour); high values mean an active price war.
+    pub undercut_velocity: Option<f64>,
+    /// True when the floor is being undercut fast enough to be a race to the bottom.
+    pub is_price_war: bool,
+    /// Number of live buyers bidding for this item (demand depth behind a sell listing).
+    pub buy_demand: i64,
+    /// True when you're the only seller at your rank variant (so "buried" wouldn't apply).
+    pub is_only_variant_seller: bool,
     pub is_degraded: bool,
+}
+
+/// One contribution to the health score, surfaced so the number is explainable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeHealthScoreFactor {
+    pub label: String,
+    /// Signed points this factor added to (or removed from) the score.
+    pub delta: i64,
+}
+
+/// #14 Self-calibration summary: how the health engine's time-to-sell predictions have held up
+/// against the user's actual closed sales.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthPredictionAccuracy {
+    pub sample_count: i64,
+    /// Share (0–100) of resolved predictions that sold within 1.5× the estimated time.
+    pub within_eta_pct: f64,
+    /// Median absolute error between predicted and actual sell hours, when computable.
+    pub median_abs_error_hours: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -540,6 +589,8 @@ struct WfmOwnOrder {
     item_id: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
+    #[serde(rename = "createdAt", default)]
+    created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1339,6 +1390,30 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
               closed_at TEXT NOT NULL,
               PRIMARY KEY (username, fingerprint)
             );
+
+            -- #14 First health prediction captured for a live listing, so we can later check it
+            -- against reality. One row per open order (the earliest prediction we saw).
+            CREATE TABLE IF NOT EXISTS health_prediction (
+              username TEXT NOT NULL,
+              order_id TEXT NOT NULL,
+              slug TEXT NOT NULL,
+              predicted_at TEXT NOT NULL,
+              est_sell_hours REAL,
+              outlook_label TEXT NOT NULL,
+              PRIMARY KEY (username, order_id)
+            );
+
+            -- Resolved outcomes: how a predicted listing actually performed once it sold.
+            CREATE TABLE IF NOT EXISTS health_prediction_outcome (
+              outcome_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              username TEXT NOT NULL,
+              slug TEXT NOT NULL,
+              predicted_at TEXT NOT NULL,
+              est_sell_hours REAL,
+              actual_hours REAL NOT NULL,
+              within_eta INTEGER NOT NULL,
+              recorded_at TEXT NOT NULL
+            );
             ",
         )
         .context("failed to initialize trades cache schema")?;
@@ -1812,9 +1887,12 @@ struct TradeHealthOrder {
 struct TradeHealthLiveContext {
     sell_orders: Vec<TradeHealthOrder>,
     market_low: Option<i64>,
+    buy_orders: Vec<TradeHealthOrder>,
+    /// Highest visible buy bid in the current seller-mode scope.
+    top_bid: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct TradeHealthDecision {
     score: i64,
     label: &'static str,
@@ -1824,6 +1902,9 @@ struct TradeHealthDecision {
     outlook_label: &'static str,
     posture_label: &'static str,
     recommended_price: Option<i64>,
+    would_realize_loss: bool,
+    is_price_war: bool,
+    score_factors: Vec<TradeHealthScoreFactor>,
 }
 
 fn seller_mode_allows_status(status: Option<&str>, seller_mode: &str) -> bool {
@@ -1884,6 +1965,128 @@ fn count_queue_ahead(
     (sellers_ahead, quantity_ahead, tie_count)
 }
 
+/// Compute the health score and, alongside it, the signed factors that produced it so the UI
+/// can explain the number. Base starts at 84 ("healthy by default"); each factor pushes it.
+/// Average recent acquisition cost (platinum per unit) for an item, from the user's own logged
+/// buy trades. Recency-weighted by taking only the most recent buys so an old cheap purchase
+/// doesn't misrepresent today's cost basis. Best-effort — returns None on any failure or when
+/// there are no logged buys for the slug.
+/// Returns `(avg_cost, sample_count)` from the most recent logged buys. The count lets callers
+/// judge confidence: a single cheap buy shouldn't drive a "you'd sell at a loss" warning.
+fn load_avg_buy_cost(connection: &Connection, username: &str, slug: &str) -> Option<(i64, i64)> {
+    let trimmed = slug.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    connection
+        .query_row(
+            "SELECT CAST(ROUND(AVG(platinum)) AS INTEGER), COUNT(*)
+             FROM (
+               SELECT platinum
+               FROM portfolio_trade_log_cache
+               WHERE username = ?1 AND slug = ?2 AND order_type = 'buy' AND platinum > 0
+               ORDER BY closed_at DESC
+               LIMIT 10
+             )",
+            params![username, trimmed],
+            |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .ok()
+        .and_then(|(cost, count)| cost.map(|value| (value, count)))
+}
+
+/// #14 Record the earliest health prediction we've seen for a live listing (INSERT OR IGNORE
+/// keeps the first one, so accuracy reflects the prediction made while the listing was fresh).
+/// Best-effort: prediction tracking must never fail a health refresh.
+fn record_health_prediction(
+    conn: &Connection,
+    username: &str,
+    order_id: &str,
+    slug: &str,
+    est_sell_hours: Option<f64>,
+    outlook_label: &str,
+) {
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO health_prediction
+           (username, order_id, slug, predicted_at, est_sell_hours, outlook_label)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            username,
+            order_id,
+            slug,
+            format_timestamp(now_utc()).unwrap_or_default(),
+            est_sell_hours,
+            outlook_label,
+        ],
+    );
+}
+
+/// #14 When a sell order closes, turn its stored prediction into a resolved outcome (how long
+/// it actually took vs the ETA), then drop the open prediction. Best-effort.
+fn resolve_health_prediction(conn: &Connection, username: &str, order_id: &str) {
+    let row = conn
+        .query_row(
+            "SELECT slug, predicted_at, est_sell_hours FROM health_prediction
+             WHERE username = ?1 AND order_id = ?2",
+            params![username, order_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                ))
+            },
+        )
+        .ok();
+    let Some((slug, predicted_at, est_sell_hours)) = row else {
+        return;
+    };
+    let Some(actual_hours) = hours_since(Some(&predicted_at)) else {
+        return;
+    };
+    // "Hit" if it sold within 1.5× the estimate (or if there was no estimate, we can't judge).
+    let within_eta = match est_sell_hours {
+        Some(est) if est > 0.0 => actual_hours <= est * 1.5,
+        _ => false,
+    };
+    let _ = conn.execute(
+        "INSERT INTO health_prediction_outcome
+           (username, slug, predicted_at, est_sell_hours, actual_hours, within_eta, recorded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            username,
+            slug,
+            predicted_at,
+            est_sell_hours,
+            actual_hours,
+            i64::from(within_eta),
+            format_timestamp(now_utc()).unwrap_or_default(),
+        ],
+    );
+    let _ = conn.execute(
+        "DELETE FROM health_prediction WHERE username = ?1 AND order_id = ?2",
+        params![username, order_id],
+    );
+}
+
+/// Estimated hours to sell `quantity` units given a daily sales velocity. None when velocity is
+/// unknown or effectively zero (avoids dividing by ~0 and reporting "sells in 4000 hours").
+fn estimate_sell_hours(units_ahead: i64, daily_volume: Option<f64>) -> Option<f64> {
+    let velocity = daily_volume?;
+    if velocity < 0.25 {
+        return None;
+    }
+    // +1: your own unit still has to clear after everything ahead of it.
+    let units = (units_ahead.max(0) as f64) + 1.0;
+    Some((units / velocity) * 24.0)
+}
+
+/// Whole hours between an ISO timestamp and now, if parseable.
+fn hours_since(timestamp: Option<&str>) -> Option<f64> {
+    let parsed = timestamp.and_then(parse_timestamp)?;
+    Some(((now_utc() - parsed).whole_minutes() as f64 / 60.0).max(0.0))
+}
+
 fn calculate_trade_health_score(
     price_gap: Option<i64>,
     sellers_ahead: i64,
@@ -1891,29 +2094,71 @@ fn calculate_trade_health_score(
     tie_count: i64,
     market_direction: &str,
     liquidity_score: Option<i64>,
-) -> i64 {
+    listing_age_hours: Option<f64>,
+) -> (i64, Vec<TradeHealthScoreFactor>) {
     let mut score = 84.0;
-    score -= (sellers_ahead.min(8) as f64) * 5.0;
-    score -= (quantity_ahead.min(24) as f64) * 1.4;
-    score -= (tie_count.min(5) as f64) * 2.0;
-    score -= match price_gap {
-        Some(value) if value <= 0 => 0.0,
-        Some(value) => (value.min(10) as f64) * 3.0,
-        None => 10.0,
+    let mut factors: Vec<TradeHealthScoreFactor> = Vec::new();
+    let mut push = |label: &str, delta: f64| {
+        if delta.round() != 0.0 {
+            factors.push(TradeHealthScoreFactor {
+                label: label.to_string(),
+                delta: delta.round() as i64,
+            });
+        }
     };
-    score += match market_direction {
+
+    let queue_delta = -(sellers_ahead.min(8) as f64) * 5.0;
+    score += queue_delta;
+    push("Sellers ahead of you", queue_delta);
+
+    let depth_delta = -(quantity_ahead.min(24) as f64) * 1.4;
+    score += depth_delta;
+    push("Units queued ahead", depth_delta);
+
+    let tie_delta = -(tie_count.min(5) as f64) * 2.0;
+    score += tie_delta;
+    push("Sellers tied at your price", tie_delta);
+
+    let gap_delta = match price_gap {
+        Some(value) if value <= 0 => 0.0,
+        Some(value) => -(value.min(10) as f64) * 3.0,
+        None => -10.0,
+    };
+    score += gap_delta;
+    push(
+        if price_gap.is_none() { "No live market price" } else { "Priced above market" },
+        gap_delta,
+    );
+
+    let trend_delta = match market_direction {
         "Rising" => 10.0,
         "Falling" => -8.0,
         _ => 0.0,
     };
-    score += match liquidity_score {
+    score += trend_delta;
+    push(if trend_delta >= 0.0 { "Rising market" } else { "Falling market" }, trend_delta);
+
+    let liquidity_delta = match liquidity_score {
         Some(value) if value >= 75 => 10.0,
         Some(value) if value >= 55 => 4.0,
         Some(value) if value < 35 => -10.0,
         Some(value) if value < 55 => -4.0,
         _ => 0.0,
     };
-    score.round().clamp(0.0, 100.0) as i64
+    score += liquidity_delta;
+    push(if liquidity_delta >= 0.0 { "Healthy liquidity" } else { "Thin liquidity" }, liquidity_delta);
+
+    // Stale-listing penalty: an order that has sat unsold for days despite the market moving is
+    // less healthy than a fresh one at the same price. Ramps to -12 by ~10 days.
+    let age_delta = match listing_age_hours {
+        Some(hours) if hours >= 24.0 => -((hours / 24.0).min(10.0) * 1.2),
+        _ => 0.0,
+    };
+    score += age_delta;
+    push("Listing sitting unsold", age_delta);
+
+    factors.sort_by(|a, b| b.delta.cmp(&a.delta));
+    (score.round().clamp(0.0, 100.0) as i64, factors)
 }
 
 fn derive_trade_health_reason(
@@ -1957,20 +2202,67 @@ fn decide_trade_health(
     quantity_ahead: i64,
     tie_count: i64,
     context: Option<&CachedTradeHealthContext>,
+    cost_basis: Option<i64>,
+    listing_age_hours: Option<f64>,
+    buy_depth: i64,
+    per_trade: i64,
 ) -> TradeHealthDecision {
     let price_gap = market_low.map(|value| your_price - value);
     let market_direction = context
         .map(|entry| entry.trend_direction.as_str())
         .unwrap_or("Flat");
     let liquidity_score = context.and_then(|entry| entry.liquidity_score.map(|value| value.round() as i64));
-    let score = calculate_trade_health_score(
+    // #13 Bulk items (arcanes) clear `per_trade` units per trade, so units-ahead overstates the
+    // real wait — a buyer takes a whole batch at once. Deflate the queue depth accordingly.
+    let effective_quantity_ahead = if per_trade > 1 {
+        (quantity_ahead + per_trade - 1) / per_trade
+    } else {
+        quantity_ahead
+    };
+    let (base_score, mut score_factors) = calculate_trade_health_score(
         price_gap,
         sellers_ahead,
-        quantity_ahead,
+        effective_quantity_ahead,
         tie_count,
         market_direction,
         liquidity_score,
+        listing_age_hours,
     );
+    let mut score = base_score as f64;
+
+    // #10 Buy-side demand: buyers waiting behind the book make a sale likelier even when you're
+    // queued; no demand at all is a real red flag the sell-only view can't see.
+    let demand_delta: f64 = if buy_depth >= 8 {
+        8.0
+    } else if buy_depth >= 3 {
+        4.0
+    } else if buy_depth == 0 {
+        -8.0
+    } else {
+        0.0
+    };
+    if demand_delta.round() != 0.0 {
+        score += demand_delta;
+        score_factors.push(TradeHealthScoreFactor {
+            label: if demand_delta >= 0.0 { "Buyers waiting" } else { "No live buyers" }.to_string(),
+            delta: demand_delta.round() as i64,
+        });
+    }
+
+    // #11 Price-war detection: a floor being undercut fast is a race to the bottom you usually
+    // want to step out of, not chase into.
+    let undercut_velocity = context.and_then(|entry| entry.undercut_velocity);
+    let is_price_war = undercut_velocity.unwrap_or(0.0) >= 0.45;
+    if is_price_war {
+        score -= 6.0;
+        score_factors.push(TradeHealthScoreFactor {
+            label: "Active price war".to_string(),
+            delta: -6,
+        });
+    }
+
+    let score = score.round().clamp(0.0, 100.0) as i64;
+    score_factors.sort_by(|a, b| b.delta.cmp(&a.delta));
     let posture_label = if price_gap.unwrap_or_default() < 0 {
         "Leading"
     } else if price_gap == Some(0) && sellers_ahead == 0 {
@@ -1992,8 +2284,14 @@ fn decide_trade_health(
         _ => false,
     };
 
+    // Would the natural reprice target (market low) sell below what we paid?
+    let reprice_target_loss = matches!((cost_basis, market_low), (Some(cost), Some(low)) if low < cost);
+
     let (action_label, action_tone, outlook_label, recommended_price) = if market_low.is_none() {
         ("Reprice to market", "amber", "Needs a refresh", None)
+    } else if is_price_war && price_gap.unwrap_or_default() > 0 && market_direction != "Rising" {
+        // A live race to the bottom: don't chase the floor down — sit out the war.
+        ("Wait out price war", "amber", "Floor is dropping fast", None)
     } else if weak_exit_zone && market_direction != "Rising" {
         ("Wait for normalization", "amber", "Do not chase down", None)
     } else if sellers_ahead == 0 && price_gap.unwrap_or_default() <= 0 {
@@ -2005,6 +2303,13 @@ fn decide_trade_health(
             "Competitive, but may take time",
             Some(your_price.saturating_sub(price_gap.unwrap_or_default().clamp(1, 2))),
         )
+    } else if (sellers_ahead >= 6 || quantity_ahead >= 10 || price_gap.unwrap_or_default() >= 4)
+        && reprice_target_loss
+        && market_direction != "Falling"
+    {
+        // The queue says "reprice to market", but doing so locks in a loss and the market
+        // isn't actively falling — holding for a better exit is the defensible call.
+        ("Hold above cost", "amber", "Repricing would lock a loss", None)
     } else if sellers_ahead >= 6 || quantity_ahead >= 10 || price_gap.unwrap_or_default() >= 4 {
         ("Reprice to market", "red", "Unlikely at current price", market_low)
     } else if liquidity_score.unwrap_or(60) < 35 {
@@ -2012,6 +2317,9 @@ fn decide_trade_health(
     } else {
         ("Hold", "blue", "Needs patience", None)
     };
+
+    let would_realize_loss =
+        matches!((cost_basis, recommended_price), (Some(cost), Some(target)) if target < cost);
 
     let (label, tone) = if score >= 78 {
         ("Strong", "green")
@@ -2034,6 +2342,136 @@ fn decide_trade_health(
         outlook_label,
         posture_label,
         recommended_price,
+        would_realize_loss,
+        is_price_war,
+        score_factors,
+    }
+}
+
+/// Buy-side mirror of `count_queue_ahead`: how many other buyers are bidding strictly higher
+/// than you (ahead of you in the fill queue), plus how many are tied at your bid.
+fn count_bids_ahead(
+    buy_orders: &[TradeHealthOrder],
+    your_bid: i64,
+    account_name: &str,
+) -> (i64, i64) {
+    let normalized_account_name = account_name.trim().to_ascii_lowercase();
+    let target = your_bid as f64;
+    let mut bids_ahead = 0_i64;
+    let mut tie_count = 0_i64;
+    for order in buy_orders {
+        if order.username.trim().to_ascii_lowercase() == normalized_account_name {
+            continue;
+        }
+        if order.price > target + 0.5 {
+            bids_ahead += 1;
+        } else if (order.price - target).abs() < 0.5 {
+            tie_count += 1;
+        }
+    }
+    (bids_ahead, tie_count)
+}
+
+/// Decides health for a BUY order. The logic mirrors sell health but inverts direction: a buy
+/// wants to be the *highest* bid, so "outbid" is the buy-side equivalent of "buried". Returns a
+/// decision reusing the sell shape (recommended_price = the bid to place to lead the book).
+fn decide_buy_health(
+    your_bid: i64,
+    top_bid: Option<i64>,
+    bids_ahead: i64,
+    tie_count: i64,
+    context: Option<&CachedTradeHealthContext>,
+) -> TradeHealthDecision {
+    // How far below the leading bid you are (positive = outbid by that many plat).
+    let bid_gap = top_bid.map(|top| top - your_bid);
+    let market_direction = context
+        .map(|entry| entry.trend_direction.as_str())
+        .unwrap_or("Flat");
+    let liquidity_score = context.and_then(|entry| entry.liquidity_score.map(|value| value.round() as i64));
+
+    let mut score = 84.0;
+    let mut factors: Vec<TradeHealthScoreFactor> = Vec::new();
+    let mut push = |label: &str, delta: f64| {
+        if delta.round() != 0.0 {
+            factors.push(TradeHealthScoreFactor { label: label.to_string(), delta: delta.round() as i64 });
+        }
+    };
+    let ahead_delta = -(bids_ahead.min(8) as f64) * 6.0;
+    score += ahead_delta;
+    push("Buyers bidding higher", ahead_delta);
+    let tie_delta = -(tie_count.min(5) as f64) * 2.0;
+    score += tie_delta;
+    push("Buyers tied at your bid", tie_delta);
+    let gap_delta = match bid_gap {
+        Some(value) if value <= 0 => 0.0,
+        Some(value) => -(value.min(10) as f64) * 3.0,
+        None => -10.0,
+    };
+    score += gap_delta;
+    push(if bid_gap.is_none() { "No live bids" } else { "Bidding below the top" }, gap_delta);
+    // A falling market is good for a buyer (you may not need to raise); rising is bad.
+    let trend_delta = match market_direction {
+        "Falling" => 8.0,
+        "Rising" => -8.0,
+        _ => 0.0,
+    };
+    score += trend_delta;
+    push(if trend_delta >= 0.0 { "Softening prices" } else { "Rising prices" }, trend_delta);
+    let liquidity_delta = match liquidity_score {
+        Some(value) if value >= 75 => 8.0,
+        Some(value) if value < 35 => -8.0,
+        _ => 0.0,
+    };
+    score += liquidity_delta;
+    push(if liquidity_delta >= 0.0 { "Healthy liquidity" } else { "Thin liquidity" }, liquidity_delta);
+    factors.sort_by(|a, b| b.delta.cmp(&a.delta));
+    let score = score.round().clamp(0.0, 100.0) as i64;
+
+    let (action_label, action_tone, outlook_label, recommended_price, posture_label) =
+        if top_bid.is_none() {
+            ("Hold", "green", "You lead the book", None, "Leading")
+        } else if bids_ahead == 0 && bid_gap.unwrap_or_default() >= 0 {
+            ("Hold", "green", "Top bid — fills first", None, "Leading")
+        } else if bids_ahead <= 2 && bid_gap.unwrap_or(99) <= 2 {
+            (
+                "Raise by 1-2p",
+                "blue",
+                "Competitive, close to the top",
+                top_bid.map(|top| top.saturating_add(1)),
+                "Competitive",
+            )
+        } else {
+            (
+                "Match top bid",
+                "amber",
+                "Outbid — unlikely to fill soon",
+                top_bid.map(|top| top.saturating_add(1)),
+                "Outbid",
+            )
+        };
+
+    let (label, tone) = if score >= 78 {
+        ("Strong", "green")
+    } else if score >= 62 {
+        ("Healthy", "blue")
+    } else if score >= 42 {
+        ("Watch", "amber")
+    } else {
+        ("Action Needed", "red")
+    };
+
+    TradeHealthDecision {
+        score,
+        label,
+        tone,
+        action_label,
+        action_tone,
+        outlook_label,
+        posture_label,
+        recommended_price,
+        would_realize_loss: false,
+        is_price_war: false,
+        score_factors: factors,
     }
 }
 
@@ -2090,9 +2528,27 @@ fn fetch_trade_health_live_context_inner(
         .map(|order| order.price.round() as i64)
         .min();
 
+    let buy_orders = payload
+        .data
+        .iter()
+        .filter(|order| order.order_type == "buy")
+        .filter(|order| order.visible.unwrap_or(true))
+        .filter(|order| seller_mode_allows_status(order.user.status.as_deref(), seller_mode))
+        .filter(|order| trade_health_variant_matches(order.rank, rank))
+        .cloned()
+        .filter_map(normalize_trade_health_order)
+        .collect::<Vec<_>>();
+
+    let top_bid = buy_orders
+        .iter()
+        .map(|order| order.price.round() as i64)
+        .max();
+
     Ok(TradeHealthLiveContext {
         sell_orders,
         market_low,
+        buy_orders,
+        top_bid,
     })
 }
 
@@ -2130,9 +2586,14 @@ pub async fn get_trade_sell_order_health(
     your_price: i64,
     seller_mode: String,
     priority: String,
+    created_at: Option<String>,
+    per_trade: Option<i64>,
+    order_id: Option<String>,
 ) -> Result<TradeListingHealth, String> {
     let app_for_work = app.clone();
+    let health_order_id = order_id;
     tauri::async_runtime::spawn_blocking(move || {
+        let per_trade = per_trade.unwrap_or(1).max(1);
         let priority = RequestPriority::from_wire(Some(priority.trim()), RequestPriority::Low);
         let seller_mode = seller_mode.trim().to_string();
         let live_context =
@@ -2144,8 +2605,19 @@ pub async fn get_trade_sell_order_health(
             .map(|value| load_cached_trade_health_context(&observatory, value, &variant_key, &seller_mode))
             .transpose()?
             .flatten();
+        // Cost basis is best-effort: a missing trades cache must not fail health.
+        let cost_basis_sample = open_trades_cache_database(&app_for_work)
+            .ok()
+            .and_then(|conn| load_avg_buy_cost(&conn, &session.account.name, slug.trim()));
+        let cost_basis = cost_basis_sample.map(|(cost, _)| cost);
+        // #9 Only let cost basis drive a "would lose money" decision when it's backed by more
+        // than one logged buy — a single cheap/farmed acquisition isn't a reliable basis.
+        let cost_basis_for_decision =
+            cost_basis_sample.filter(|(_, count)| *count >= 2).map(|(cost, _)| cost);
+        let listing_age_hours = hours_since(created_at.as_deref());
         let (sellers_ahead, quantity_ahead, tie_count) =
             count_queue_ahead(&live_context.sell_orders, your_price, &session.account.name);
+        let buy_depth = live_context.buy_orders.len() as i64;
         let decision = decide_trade_health(
             your_price,
             live_context.market_low,
@@ -2153,6 +2625,10 @@ pub async fn get_trade_sell_order_health(
             quantity_ahead,
             tie_count,
             cached_context.as_ref(),
+            cost_basis_for_decision,
+            listing_age_hours,
+            buy_depth,
+            per_trade,
         );
         let market_direction = cached_context
             .as_ref()
@@ -2161,6 +2637,37 @@ pub async fn get_trade_sell_order_health(
         let price_gap = live_context.market_low.map(|value| your_price - value);
         let reason =
             derive_trade_health_reason(&decision, sellers_ahead, quantity_ahead, cached_context.as_ref());
+        let daily_volume = cached_context.as_ref().and_then(|entry| entry.daily_volume);
+        // #7 Time-of-day: scale the "now at your price" estimate by the current hour's activity
+        // relative to the item's own average, so a 3am estimate isn't quoted at midday pace.
+        let hour_factor = cached_context
+            .as_ref()
+            .and_then(|entry| entry.current_hour_volume_factor);
+        let effective_now_volume = match (daily_volume, hour_factor) {
+            (Some(volume), Some(factor)) => Some(volume * factor),
+            (volume, _) => volume,
+        };
+        let est_sell_hours_at_price = estimate_sell_hours(quantity_ahead, effective_now_volume);
+        // At market low you jump to the front of the queue → nothing ahead of you.
+        let est_sell_hours_at_market = estimate_sell_hours(0, effective_now_volume);
+        // #12 Rank/variant: you're the sole seller at your variant when nobody is cheaper or tied.
+        let is_only_variant_seller = sellers_ahead == 0 && tie_count == 0 && !live_context.sell_orders.is_empty();
+
+        // #14 Capture this prediction so we can later grade it against the real sale time. Keyed
+        // by order_id via the caller — here we only have slug, so record under a slug-scoped id
+        // is insufficient; the frontend passes the order_id through `created_at`-adjacent context.
+        if let (Some(order_id), Ok(conn)) =
+            (health_order_id.as_deref(), open_trades_cache_database(&app_for_work))
+        {
+            record_health_prediction(
+                &conn,
+                &session.account.name,
+                order_id,
+                slug.trim(),
+                est_sell_hours_at_price,
+                decision.outlook_label,
+            );
+        }
 
         Ok::<_, anyhow::Error>(TradeListingHealth {
             refreshed_at: format_timestamp(now_utc())?,
@@ -2184,6 +2691,25 @@ pub async fn get_trade_sell_order_health(
                 .and_then(|entry| entry.liquidity_score.map(|value| value.round() as i64)),
             liquidity_label: cached_context.as_ref().map(|entry| entry.liquidity_label.clone()),
             pressure_label: cached_context.as_ref().map(|entry| entry.pressure_label.clone()),
+            daily_volume,
+            est_sell_hours_at_price,
+            est_sell_hours_at_market,
+            cost_basis,
+            would_realize_loss: decision.would_realize_loss,
+            listing_age_hours,
+            score_factors: decision.score_factors.clone(),
+            confidence_level: cached_context
+                .as_ref()
+                .map(|entry| entry.confidence_level.clone())
+                .unwrap_or_else(|| "low".to_string()),
+            confidence_label: cached_context
+                .as_ref()
+                .map(|entry| entry.confidence_label.clone())
+                .unwrap_or_else(|| "Low confidence".to_string()),
+            undercut_velocity: cached_context.as_ref().and_then(|entry| entry.undercut_velocity),
+            is_price_war: decision.is_price_war,
+            buy_demand: buy_depth,
+            is_only_variant_seller,
             is_degraded: cached_context
                 .as_ref()
                 .map(|entry| entry.is_degraded)
@@ -2212,6 +2738,177 @@ pub async fn get_trade_sell_order_health(
         );
         "Couldn’t refresh listing health right now.".to_string()
     })
+}
+
+#[tauri::command]
+pub async fn get_trade_buy_order_health(
+    app: tauri::AppHandle,
+    item_id: Option<i64>,
+    slug: String,
+    rank: Option<i64>,
+    your_price: i64,
+    seller_mode: String,
+    priority: String,
+) -> Result<TradeListingHealth, String> {
+    let app_for_work = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let priority = RequestPriority::from_wire(Some(priority.trim()), RequestPriority::Low);
+        let seller_mode = seller_mode.trim().to_string();
+        let live_context =
+            fetch_trade_health_live_context_inner(slug.trim(), rank, &seller_mode, priority)?;
+        let session = ensure_authenticated_session(&app_for_work)?;
+        let observatory = open_market_observatory_database(&app_for_work)?;
+        let variant_key = trade_health_variant_key(rank);
+        let cached_context = item_id
+            .map(|value| load_cached_trade_health_context(&observatory, value, &variant_key, &seller_mode))
+            .transpose()?
+            .flatten();
+        let (bids_ahead, tie_count) =
+            count_bids_ahead(&live_context.buy_orders, your_price, &session.account.name);
+        let decision = decide_buy_health(
+            your_price,
+            live_context.top_bid,
+            bids_ahead,
+            tie_count,
+            cached_context.as_ref(),
+        );
+        let market_direction = cached_context
+            .as_ref()
+            .map(|entry| entry.trend_direction.clone())
+            .unwrap_or_else(|| "Flat".to_string());
+        // For a buy, "price gap" is how far you are below the top bid (positive = outbid).
+        let bid_gap = live_context.top_bid.map(|top| top - your_price);
+        let queue_summary = if bids_ahead == 0 {
+            "You hold the top bid, so you fill before other buyers.".to_string()
+        } else {
+            format!(
+                "{bids_ahead} buyer{} {} bidding above you.",
+                if bids_ahead == 1 { "" } else { "s" },
+                if bids_ahead == 1 { "is" } else { "are" },
+            )
+        };
+        let market_summary = cached_context
+            .as_ref()
+            .map(|entry| entry.trend_summary.clone())
+            .unwrap_or_else(|| "WarStonks is using live orderbook data only for this bid right now.".to_string());
+
+        Ok::<_, anyhow::Error>(TradeListingHealth {
+            refreshed_at: format_timestamp(now_utc())?,
+            score: decision.score,
+            label: decision.label.to_string(),
+            tone: decision.tone.to_string(),
+            action_label: decision.action_label.to_string(),
+            action_tone: decision.action_tone.to_string(),
+            outlook_label: decision.outlook_label.to_string(),
+            posture_label: decision.posture_label.to_string(),
+            market_direction,
+            reason: format!("{queue_summary} {market_summary}"),
+            sellers_ahead: bids_ahead,
+            quantity_ahead: 0,
+            tie_count,
+            market_low: live_context.top_bid,
+            price_gap: bid_gap,
+            recommended_price: decision.recommended_price,
+            liquidity_score: cached_context
+                .as_ref()
+                .and_then(|entry| entry.liquidity_score.map(|value| value.round() as i64)),
+            liquidity_label: cached_context.as_ref().map(|entry| entry.liquidity_label.clone()),
+            pressure_label: cached_context.as_ref().map(|entry| entry.pressure_label.clone()),
+            daily_volume: cached_context.as_ref().and_then(|entry| entry.daily_volume),
+            est_sell_hours_at_price: None,
+            est_sell_hours_at_market: None,
+            cost_basis: None,
+            would_realize_loss: false,
+            listing_age_hours: None,
+            score_factors: decision.score_factors.clone(),
+            confidence_level: cached_context
+                .as_ref()
+                .map(|entry| entry.confidence_level.clone())
+                .unwrap_or_else(|| "low".to_string()),
+            confidence_label: cached_context
+                .as_ref()
+                .map(|entry| entry.confidence_label.clone())
+                .unwrap_or_else(|| "Low confidence".to_string()),
+            undercut_velocity: cached_context.as_ref().and_then(|entry| entry.undercut_velocity),
+            is_price_war: false,
+            buy_demand: live_context.buy_orders.len() as i64,
+            is_only_variant_seller: false,
+            is_degraded: cached_context
+                .as_ref()
+                .map(|entry| entry.is_degraded)
+                .unwrap_or(true),
+        })
+    })
+    .await
+    .map_err(|error| {
+        let error = anyhow!("failed to join trade buy health worker: {error}");
+        log_feature_error_best_effort(
+            &app,
+            "trades-health",
+            "refresh-buy-health-join",
+            "Failed to join the trade buy order health refresh worker.",
+            &error,
+        );
+        "Couldn’t refresh bid health right now.".to_string()
+    })?
+    .map_err(|error| {
+        log_feature_error_best_effort(
+            &app,
+            "trades-health",
+            "refresh-buy-health",
+            "Failed to refresh the live trade buy order health context.",
+            &error,
+        );
+        "Couldn’t refresh bid health right now.".to_string()
+    })
+}
+
+#[tauri::command]
+pub async fn get_health_prediction_accuracy(
+    app: tauri::AppHandle,
+) -> Result<HealthPredictionAccuracy, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_authenticated_session(&app)?;
+        let conn = open_trades_cache_database(&app)?;
+        let (sample_count, within_eta): (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(within_eta), 0)
+                 FROM health_prediction_outcome WHERE username = ?1",
+                params![session.account.name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap_or((0, 0));
+        let within_eta_pct = if sample_count > 0 {
+            (within_eta as f64 / sample_count as f64) * 100.0
+        } else {
+            0.0
+        };
+        // Median absolute error over resolved rows that carried an estimate.
+        let mut errors: Vec<f64> = conn
+            .prepare(
+                "SELECT ABS(actual_hours - est_sell_hours) FROM health_prediction_outcome
+                 WHERE username = ?1 AND est_sell_hours IS NOT NULL AND est_sell_hours > 0",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map(params![session.account.name], |row| row.get::<_, f64>(0))
+                    .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+            })
+            .unwrap_or_default();
+        errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_abs_error_hours = if errors.is_empty() {
+            None
+        } else {
+            Some(errors[errors.len() / 2])
+        };
+        Ok::<_, anyhow::Error>(HealthPredictionAccuracy {
+            sample_count,
+            within_eta_pct,
+            median_abs_error_hours,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
@@ -7808,6 +8505,7 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
             price_gap: None,
             visible: order.visible.unwrap_or(true),
             updated_at: order.updated_at,
+            created_at: order.created_at,
             health_score: None,
             health_note: None,
             health: None,
@@ -8176,6 +8874,13 @@ fn close_order_inner(
         }
     }
     result?;
+
+    // #14 A sell closing IS the outcome we predicted — grade the stored prediction now.
+    if order_type == "sell" {
+        if let Ok(conn) = open_trades_cache_database(app) {
+            resolve_health_prediction(&conn, &session.account.name, order_id);
+        }
+    }
 
     build_trade_overview_inner(app, seller_mode)
 }
@@ -8794,7 +9499,7 @@ mod tests {
         append_unique_trade_entries, build_cost_basis_confidence,
         build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
         build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
-        compute_current_value_coverage, decide_trade_health,
+        compute_current_value_coverage, decide_trade_health, estimate_sell_hours,
         derive_trade_log_entries_with_components, initialize_trades_cache_schema,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         map_trade_set_components_from_file, merge_wfm_trade_log_entries,
@@ -10007,10 +10712,15 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Balanced".to_string(),
             exit_zone_low: Some(118.0),
+            daily_volume: Some(6.0),
+            current_hour_volume_factor: None,
+            undercut_velocity: None,
+            confidence_level: "high".to_string(),
+            confidence_label: "High confidence".to_string(),
             is_degraded: false,
         };
 
-        let decision = decide_trade_health(120, Some(120), 0, 0, 0, Some(&context));
+        let decision = decide_trade_health(120, Some(120), 0, 0, 0, Some(&context), None, None, 2, 1);
         assert_eq!(decision.action_label, "Hold");
         assert_eq!(decision.outlook_label, "Likely soon");
         assert!(decision.score >= 70);
@@ -10025,12 +10735,118 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Exit Pressure".to_string(),
             exit_zone_low: Some(90.0),
+            daily_volume: Some(4.0),
+            current_hour_volume_factor: None,
+            undercut_velocity: None,
+            confidence_level: "medium".to_string(),
+            confidence_label: "Medium confidence".to_string(),
             is_degraded: false,
         };
 
-        let decision = decide_trade_health(88, Some(82), 3, 5, 1, Some(&context));
+        let decision = decide_trade_health(88, Some(82), 3, 5, 1, Some(&context), None, None, 1, 1);
         assert_eq!(decision.action_label, "Wait for normalization");
         assert_eq!(decision.action_tone, "amber");
+    }
+
+    #[test]
+    fn decide_trade_health_holds_above_cost_instead_of_selling_at_a_loss() {
+        let context = CachedTradeHealthContext {
+            trend_direction: "Flat".to_string(),
+            trend_summary: "Recent tracked floors are broadly stable.".to_string(),
+            liquidity_score: Some(60.0),
+            liquidity_label: "Tradable".to_string(),
+            pressure_label: "Balanced".to_string(),
+            exit_zone_low: None,
+            daily_volume: Some(5.0),
+            current_hour_volume_factor: None,
+            undercut_velocity: None,
+            confidence_level: "medium".to_string(),
+            confidence_label: "Medium confidence".to_string(),
+            is_degraded: false,
+        };
+        // Deep in the queue (would normally say "Reprice to market"), but market low (40) is
+        // below our 50p cost basis and the market isn't falling → hold above cost.
+        let decision =
+            decide_trade_health(60, Some(40), 7, 12, 0, Some(&context), Some(50), None, 2, 1);
+        assert_eq!(decision.action_label, "Hold above cost");
+        assert!(!decision.would_realize_loss);
+    }
+
+    #[test]
+    fn decide_trade_health_still_reprices_at_a_loss_when_market_is_falling() {
+        let context = CachedTradeHealthContext {
+            trend_direction: "Falling".to_string(),
+            trend_summary: "Recent tracked floors are still slipping.".to_string(),
+            liquidity_score: Some(60.0),
+            liquidity_label: "Tradable".to_string(),
+            pressure_label: "Exit Pressure".to_string(),
+            exit_zone_low: None,
+            daily_volume: Some(5.0),
+            current_hour_volume_factor: None,
+            undercut_velocity: None,
+            confidence_level: "medium".to_string(),
+            confidence_label: "Medium confidence".to_string(),
+            is_degraded: false,
+        };
+        let decision =
+            decide_trade_health(60, Some(40), 7, 12, 0, Some(&context), Some(50), None, 2, 1);
+        assert_eq!(decision.action_label, "Reprice to market");
+        assert!(decision.would_realize_loss);
+    }
+
+    #[test]
+    fn decide_trade_health_flags_a_price_war_and_waits_it_out() {
+        let context = CachedTradeHealthContext {
+            trend_direction: "Flat".to_string(),
+            trend_summary: "Stable.".to_string(),
+            liquidity_score: Some(60.0),
+            liquidity_label: "Tradable".to_string(),
+            pressure_label: "Balanced".to_string(),
+            exit_zone_low: None,
+            daily_volume: Some(5.0),
+            current_hour_volume_factor: None,
+            undercut_velocity: Some(0.9), // fast race to the bottom
+            confidence_level: "medium".to_string(),
+            confidence_label: "Medium confidence".to_string(),
+            is_degraded: false,
+        };
+        let decision =
+            decide_trade_health(80, Some(70), 4, 6, 0, Some(&context), None, None, 0, 1);
+        assert!(decision.is_price_war);
+        assert_eq!(decision.action_label, "Wait out price war");
+    }
+
+    #[test]
+    fn decide_trade_health_penalizes_zero_buy_demand() {
+        let context = CachedTradeHealthContext {
+            trend_direction: "Flat".to_string(),
+            trend_summary: "Stable.".to_string(),
+            liquidity_score: Some(60.0),
+            liquidity_label: "Tradable".to_string(),
+            pressure_label: "Balanced".to_string(),
+            exit_zone_low: None,
+            daily_volume: Some(5.0),
+            current_hour_volume_factor: None,
+            undercut_velocity: None,
+            confidence_level: "medium".to_string(),
+            confidence_label: "Medium confidence".to_string(),
+            is_degraded: false,
+        };
+        let with_demand =
+            decide_trade_health(60, Some(60), 0, 0, 0, Some(&context), None, None, 10, 1);
+        let no_demand =
+            decide_trade_health(60, Some(60), 0, 0, 0, Some(&context), None, None, 0, 1);
+        assert!(with_demand.score > no_demand.score);
+    }
+
+    #[test]
+    fn estimate_sell_hours_scales_with_queue_and_velocity() {
+        // 5 units ahead + your own = 6 units, at 12/day → ~12 hours.
+        let hours = estimate_sell_hours(5, Some(12.0)).unwrap();
+        assert!((hours - 12.0).abs() < 0.5, "got {hours}");
+        // No velocity data → no estimate rather than a nonsense huge number.
+        assert!(estimate_sell_hours(5, None).is_none());
+        assert!(estimate_sell_hours(5, Some(0.0)).is_none());
     }
 
     #[test]
