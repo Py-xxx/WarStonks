@@ -5,6 +5,7 @@ mod item_catalog;
 mod maintenance;
 mod market_observatory;
 mod opportunities;
+mod order_flow;
 mod recommended_prices;
 mod settings;
 mod trades;
