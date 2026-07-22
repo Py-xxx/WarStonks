@@ -13681,3 +13681,229 @@ img[data-asset-failed='true'] {
 
 /* Trades: health confidence / demand extras */
 .trade-health-summary-card[title] { cursor: help; }
+
+/* ============ Trade Health redesign (HealthCard) ============ */
+.trade-hc {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  overflow: hidden;
+}
+.trade-hc.expanded { align-items: flex-start; }
+.trade-hc.tone-red { border-color: rgba(240, 79, 88, 0.4); color: var(--color-red); }
+.trade-hc.tone-amber { color: var(--color-amber); }
+.trade-hc.tone-blue { color: var(--color-blue); }
+.trade-hc.tone-green { color: var(--color-green); }
+.trade-hc-accent {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: currentColor;
+}
+.trade-hc-gauge {
+  position: relative;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+}
+.trade-hc-gauge-num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 15px;
+  font-weight: 600;
+  color: currentColor;
+}
+.trade-hc-body { flex: 1; min-width: 0; color: var(--text-primary); }
+.trade-hc-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.trade-hc-name { font-size: 14px; font-weight: 600; }
+.trade-hc-label {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+.trade-hc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  border: 1px solid;
+}
+.trade-hc-chip.war { color: var(--color-red); border-color: rgba(240, 79, 88, 0.4); }
+.trade-hc-chip.only { color: var(--color-purple); border-color: rgba(139, 111, 255, 0.4); }
+.trade-hc-chip.warn { color: var(--color-amber); border-color: rgba(240, 160, 48, 0.4); }
+.trade-hc-chip.info { color: var(--color-blue); border-color: rgba(74, 158, 255, 0.4); }
+.trade-hc-chip .ti { font-size: 10px; }
+.trade-hc-reason {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+.trade-hc-metrics {
+  display: flex;
+  gap: 16px;
+  margin-top: 11px;
+  flex-wrap: wrap;
+}
+.trade-hc-metrics > div span {
+  display: block;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.trade-hc-metrics > div strong {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.trade-hc-metrics strong.muted { color: var(--text-muted); }
+.trade-hc-metrics strong.good { color: var(--color-green); }
+.trade-hc-metrics strong.bad { color: var(--color-red); }
+.trade-hc-metrics strong.neutral { color: var(--text-muted); }
+.trade-hc-metrics strong.trade-health-loss { color: var(--color-red); }
+.trade-hc-eta {
+  margin-top: 12px;
+  background: var(--bg-base);
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+.trade-hc-eta-head {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+.trade-hc-eta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+.trade-hc-eta-label { width: 74px; font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
+.trade-hc-eta-track {
+  flex: 1;
+  height: 7px;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.trade-hc-eta-fill { display: block; height: 100%; background: var(--text-muted); }
+.trade-hc-eta-fill.good { background: var(--color-green); }
+.trade-hc-eta-fill.bad { background: var(--color-red); }
+.trade-hc-eta-fill.neutral { background: var(--color-blue); }
+.trade-hc-eta-val {
+  width: 36px;
+  text-align: right;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 11px;
+}
+.trade-hc-eta-val.good { color: var(--color-green); }
+.trade-hc-eta-val.bad { color: var(--color-red); }
+.trade-hc-eta-val.neutral { color: var(--text-secondary); }
+.trade-hc-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 11px;
+  flex-wrap: wrap;
+}
+.trade-hc-compact-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.trade-hc-apply {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  border-radius: 7px;
+  padding: 7px 13px;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #04182f;
+  background: var(--color-blue);
+}
+.trade-hc-apply.tone-red { background: var(--color-red); color: #2a0a0d; }
+.trade-hc-apply.tone-amber { background: var(--color-amber); color: #1a1305; }
+.trade-hc-apply.tone-green { background: var(--color-green); color: #05231a; }
+.trade-hc-apply:disabled { opacity: 0.6; cursor: default; }
+.trade-hc-apply .ti { font-size: 13px; }
+.trade-hc-edit {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+}
+.trade-hc-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  color: currentColor;
+}
+.trade-hc-ok .ti { font-size: 13px; }
+.trade-hc-loss-note {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  color: var(--color-amber);
+}
+.trade-hc-loss-note .ti { font-size: 11px; }
+.trade-hc-breakdown { margin-top: 10px; }
+.trade-hc-breakdown summary {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+.trade-hc-breakdown summary::-webkit-details-marker { display: none; }
+.trade-hc-factors { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.trade-hc-factor {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+.trade-hc-factor.pos { color: var(--color-green); }
+.trade-hc-factor.neg { color: var(--color-red); }

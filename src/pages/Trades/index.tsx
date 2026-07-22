@@ -31,8 +31,8 @@ import { ItemName } from '../../components/ItemName';
 import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
 import { wfstatLangCode } from '../../lib/language';
-import { useTranslation, tActive } from '../../i18n';
-import { loadNotificationSettings, fireAlertNotification } from '../../lib/notifications';
+import { useTranslation } from '../../i18n';
+import { maybeFireHealthAlert } from '../../lib/tradeHealthAlerts';
 import { tHealth, tSubtype, tTrendSummary } from '../../lib/healthLabels';
 import type {
   ItemAnalysisResponse,
@@ -186,37 +186,6 @@ function getTradeHealthPriority(order: TradeSellOrder): number {
     default:
       return 5;
   }
-}
-
-// #15 Proactive "listings need action" alert. Throttled module-wide so it fires at most once
-// per window regardless of which tab triggers it. Opt-in via the listingHealth notification event
-// (off by default), so it never surprises users who didn't ask for it.
-let lastHealthAlertAt = 0;
-const HEALTH_ALERT_THROTTLE_MS = 30 * 60 * 1000;
-
-function maybeFireHealthAlert(orders: TradeSellOrder[]): void {
-  const settings = loadNotificationSettings();
-  if (!settings.events.listingHealth) {
-    return;
-  }
-  const needsAction = orders.filter((order) => {
-    const label = order.health?.label ?? '';
-    return label === 'Action Needed' || label === 'Weak';
-  }).length;
-  if (needsAction < 1) {
-    return;
-  }
-  const now = Date.now();
-  if (now - lastHealthAlertAt < HEALTH_ALERT_THROTTLE_MS) {
-    return;
-  }
-  lastHealthAlertAt = now;
-  fireAlertNotification(
-    settings,
-    'listingHealth',
-    tActive('trades.health.alertTitle'),
-    tActive('trades.health.alertBody', { count: String(needsAction) }),
-  );
 }
 
 function useTradeSellHealthRefresh({
@@ -1180,11 +1149,242 @@ function SignInPanel() {
   );
 }
 
+// Circumference of the score-gauge ring (r=19) — used to convert a 0-100 score into a
+// stroke-dashoffset so the arc fills proportionally.
+const HEALTH_GAUGE_CIRCUMFERENCE = 2 * Math.PI * 19;
+
+function healthGaugeOffset(score: number): number {
+  const clamped = Math.max(0, Math.min(100, score));
+  return HEALTH_GAUGE_CIRCUMFERENCE * (1 - clamped / 100);
+}
+
+// Two ETA bars comparing time-to-sell at your price vs at market. The slower wait renders as the
+// longer bar so the speed/price trade-off is visual. Only shown when we have a usable estimate.
+function HealthEtaBars({
+  atPriceHours,
+  atMarketHours,
+  yourPrice,
+  marketPrice,
+  gapToneClass,
+  t,
+}: {
+  atPriceHours: number;
+  atMarketHours: number | null;
+  yourPrice: number;
+  marketPrice: number | null;
+  gapToneClass: string;
+  t: ReturnType<typeof useTranslation>['t'];
+}) {
+  const maxHours = Math.max(atPriceHours, atMarketHours ?? 0, 1);
+  const widthPct = (hours: number) => Math.max(6, Math.min(100, (hours / maxHours) * 100));
+  const showMarket =
+    atMarketHours !== null && marketPrice !== null && atMarketHours < atPriceHours;
+  return (
+    <div className="trade-hc-eta">
+      <div className="trade-hc-eta-head">
+        <span>{t('trades.health.timeToSell')}</span>
+        <span>{t('trades.health.faster')}</span>
+      </div>
+      <div className="trade-hc-eta-row">
+        <span className="trade-hc-eta-label">{t('trades.health.atPrice', { price: formatPlatinumValue(yourPrice) })}</span>
+        <span className="trade-hc-eta-track">
+          <span className={`trade-hc-eta-fill ${gapToneClass}`} style={{ width: `${widthPct(atPriceHours)}%` }} />
+        </span>
+        <span className={`trade-hc-eta-val ${gapToneClass}`}>{formatEtaHours(atPriceHours)}</span>
+      </div>
+      {showMarket ? (
+        <div className="trade-hc-eta-row">
+          <span className="trade-hc-eta-label">{t('trades.health.atPrice', { price: formatPlatinumValue(marketPrice as number) })}</span>
+          <span className="trade-hc-eta-track">
+            <span className="trade-hc-eta-fill good" style={{ width: `${widthPct(atMarketHours as number)}%` }} />
+          </span>
+          <span className="trade-hc-eta-val good">{formatEtaHours(atMarketHours as number)}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function HealthCard({
+  order,
+  applyPending,
+  onApply,
+  onEdit,
+  t,
+}: {
+  order: TradeSellOrder;
+  applyPending: boolean;
+  onApply: (order: TradeSellOrder) => void;
+  onEdit: (order: TradeSellOrder) => void;
+  t: ReturnType<typeof useTranslation>['t'];
+}) {
+  const health = order.health;
+  const toneClass = getTradeHealthToneClass(health?.tone ?? 'amber');
+  const gapToneClass = getGapClassName(order.priceGap);
+  const marketPrice = health?.marketLow ?? order.marketLow ?? null;
+  const canApply =
+    health?.recommendedPrice != null
+    && health.recommendedPrice > 0
+    && health.recommendedPrice !== order.yourPrice;
+  const label = health?.label ?? '';
+  const urgent = label === 'Action Needed' || label === 'Weak' || Boolean(health?.isPriceWar);
+  const expanded = urgent;
+
+  const rankBit =
+    order.maxRank != null && order.maxRank > 0 ? `${order.rank ?? 0}/${order.maxRank} · ` : '';
+  const meta = `${rankBit}×${order.quantity}`;
+
+  const badges = health ? (
+    <>
+      {health.isPriceWar ? (
+        <span className="trade-hc-chip war" title={t('trades.health.priceWarHint')}>
+          <i className="ti ti-flame" aria-hidden="true" /> {t('trades.health.priceWar')}
+        </span>
+      ) : null}
+      {health.isOnlyVariantSeller ? (
+        <span className="trade-hc-chip only">{t('trades.health.onlySeller')}</span>
+      ) : null}
+      {health.confidenceLevel !== 'high' ? (
+        <span
+          className={`trade-hc-chip ${health.confidenceLevel === 'low' ? 'warn' : 'info'}`}
+          title={t('trades.health.confidenceHint')}
+        >
+          {health.confidenceLabel}
+        </span>
+      ) : null}
+    </>
+  ) : null;
+
+  const applyBtn = canApply ? (
+    <button
+      type="button"
+      className={`trade-hc-apply ${toneClass}`}
+      disabled={applyPending}
+      onClick={() => onApply(order)}
+    >
+      <i className="ti ti-bolt" aria-hidden="true" />
+      {applyPending
+        ? t('trades.row.working')
+        : `${tHealth(t, health?.actionLabel) || t('trades.health.apply')} ${formatPlatinumValue(health?.recommendedPrice ?? 0)}`}
+    </button>
+  ) : null;
+
+  return (
+    <div className={`trade-hc ${toneClass}${expanded ? ' expanded' : ''}`}>
+      <span className="trade-hc-accent" />
+      <div className="trade-hc-gauge">
+        <svg viewBox="0 0 44 44" width="52" height="52" aria-hidden="true">
+          <circle cx="22" cy="22" r="19" fill="none" stroke="#242A38" strokeWidth="4" />
+          {health ? (
+            <circle
+              cx="22"
+              cy="22"
+              r="19"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeDasharray={HEALTH_GAUGE_CIRCUMFERENCE}
+              strokeDashoffset={healthGaugeOffset(health.score)}
+              transform="rotate(-90 22 22)"
+            />
+          ) : null}
+        </svg>
+        <span className="trade-hc-gauge-num">{health ? health.score : '—'}</span>
+      </div>
+
+      <div className="trade-hc-body">
+        <div className="trade-hc-title-row">
+          <ItemName
+            className="item-name trade-hc-name"
+            name={order.name}
+            slug={order.slug}
+            itemId={order.itemId}
+            imagePath={order.imagePath}
+          />
+          <span className={`trade-hc-label ${toneClass}`}>
+            {tHealth(t, health?.label) || t('trades.row.building')}
+          </span>
+          {badges}
+        </div>
+        <div className="trade-hc-reason">
+          {meta}
+          {health?.reason ? ` · ${health.reason}` : ` · ${t('trades.refreshingLiveHealth')}`}
+        </div>
+
+        {expanded && health ? (
+          <>
+            <div className="trade-hc-metrics">
+              <div><span>{t('trades.health.yourPrice')}</span><strong>{formatPlatinumValue(order.yourPrice)}</strong></div>
+              <div><span>{t('trades.health.marketLow')}</span><strong className="muted">{formatPlatinumValue(marketPrice)}</strong></div>
+              <div><span>{t('trades.col.priceGap')}</span><strong className={gapToneClass}>{marketPrice != null ? formatGap(order.priceGap) : '—'}</strong></div>
+              <div><span>{t('trades.health.demand')}</span><strong>{t('trades.health.buyersCount', { count: String(health.buyDemand) })}</strong></div>
+              <div title={health.wouldRealizeLoss ? t('trades.health.wouldLose') : undefined}><span>{t('trades.health.costBasis')}</span><strong className={health.wouldRealizeLoss ? 'trade-health-loss' : undefined}>{health.costBasis != null ? formatPlatinumValue(health.costBasis) : '—'}</strong></div>
+            </div>
+
+            {health.estSellHoursAtPrice != null ? (
+              <HealthEtaBars
+                atPriceHours={health.estSellHoursAtPrice}
+                atMarketHours={health.estSellHoursAtMarket}
+                yourPrice={order.yourPrice}
+                marketPrice={health.recommendedPrice ?? marketPrice}
+                gapToneClass={gapToneClass}
+                t={t}
+              />
+            ) : null}
+
+            <div className="trade-hc-actions">
+              {applyBtn}
+              <button type="button" className="trade-hc-edit" onClick={() => onEdit(order)}>
+                {t('trades.row.edit')}
+              </button>
+              {health.wouldRealizeLoss && health.costBasis != null ? (
+                <span className="trade-hc-loss-note">
+                  <i className="ti ti-alert-triangle" aria-hidden="true" />
+                  {t('trades.health.lossVsCost', { plat: formatPlatinumValue(Math.abs((health.recommendedPrice ?? marketPrice ?? 0) - health.costBasis)) })}
+                </span>
+              ) : null}
+            </div>
+
+            {health.scoreFactors.length > 0 ? (
+              <details className="trade-hc-breakdown">
+                <summary>{t('trades.health.scoreBreakdown')} — {health.score}/100 · {health.confidenceLabel.toLowerCase()}</summary>
+                <div className="trade-hc-factors">
+                  {health.scoreFactors.map((factor, index) => (
+                    <span key={`${factor.label}-${index}`} className={`trade-hc-factor ${factor.delta >= 0 ? 'pos' : 'neg'}`}>
+                      {factor.label} {factor.delta >= 0 ? '+' : ''}{factor.delta}
+                    </span>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </>
+        ) : (
+          <div className="trade-hc-compact-foot">
+            {applyBtn ?? (
+              <span className={`trade-hc-ok ${toneClass}`}>
+                <i className="ti ti-check" aria-hidden="true" />
+                {tHealth(t, health?.actionLabel) || t('trades.health.noAction')}
+              </span>
+            )}
+            {!applyBtn ? (
+              <button type="button" className="trade-hc-edit" onClick={() => onEdit(order)}>
+                {t('trades.row.edit')}
+              </button>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HealthTab() {
   const { t } = useTranslation();
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const syncWatchlistTradeOverview = useAppStore((s) => s.syncWatchlistTradeOverview);
+  const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
   const sellerMode = useAppStore((s) => s.sellerMode);
   const [overview, setOverview] = useState<TradeOverview | null>(() => tradeOverviewCache.get(sellerMode) ?? null);
   const [loading, setLoading] = useState(false);
@@ -1425,154 +1625,16 @@ function HealthTab() {
           </div>
         ) : null}
 
-        {sellOrders.map((order) => {
-          const health = order.health;
-          return (
-            <div key={order.orderId} className="trade-health-card">
-              <div className="trade-health-card-main">
-                <span className="item-thumb trade-item-thumb trade-health-thumb">
-                  {resolveWfmAssetUrl(order.imagePath) ? (
-                    <img src={resolveWfmAssetUrl(order.imagePath) ?? undefined} alt="" />
-                  ) : (
-                    <span>{order.name.slice(0, 1)}</span>
-                  )}
-                </span>
-                <div className="trade-health-copy">
-                  <div className="trade-health-copy-top">
-                    <div>
-                      <ItemName
-                        className="item-name trade-health-item-name"
-                        name={order.name}
-                        slug={order.slug}
-                        itemId={order.itemId}
-                        imagePath={order.imagePath}
-                      />
-                      <div className="trade-health-item-meta">
-                        {health ? t('common.updatedAt', { time: formatShortLocalDateTime(health.refreshedAt) }) : t('trades.refreshingLiveHealth')}
-                      </div>
-                    </div>
-                    <div className="trade-health-badges">
-                      {health?.isPriceWar ? (
-                        <span className="market-panel-badge tone-red" title={t('trades.health.priceWarHint')}>
-                          {t('trades.health.priceWar')}
-                        </span>
-                      ) : null}
-                      {health && health.confidenceLevel !== 'high' ? (
-                        <span className={`market-panel-badge ${health.confidenceLevel === 'low' ? 'tone-amber' : 'tone-blue'}`} title={t('trades.health.confidenceHint')}>
-                          {health.confidenceLabel}
-                        </span>
-                      ) : null}
-                      <span className={`market-panel-badge ${getTradeHealthToneClass(health?.tone ?? 'amber')}`}>
-                        {tHealth(t, health?.label) || t('trades.row.building')}
-                        {health ? <span className="trade-health-score">{health.score}</span> : null}
-                      </span>
-                      <span className={`market-panel-badge ${getTradeHealthToneClass(health?.actionTone ?? 'blue')}`}>
-                        {tHealth(t, health?.actionLabel) || t('trades.row.building')}
-                      </span>
-                      {health?.recommendedPrice != null
-                        && health.recommendedPrice > 0
-                        && health.recommendedPrice !== order.yourPrice ? (
-                        <button
-                          type="button"
-                          className="act-btn trade-health-apply-btn"
-                          disabled={isHealthActionPending(order.orderId)}
-                          onClick={() => void applyHealthPrice(order)}
-                        >
-                          {isHealthActionPending(order.orderId)
-                            ? t('trades.row.working')
-                            : `${t('trades.health.apply')} ${formatPlatinumValue(health.recommendedPrice)}`}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="trade-health-metrics">
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.yourPrice')}</span>
-                      <strong>{formatPlatinumValue(order.yourPrice)}</strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.marketLow')}</span>
-                      <strong>{formatPlatinumValue(health?.marketLow ?? order.marketLow ?? null)}</strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.queue')}</span>
-                      <strong>{health ? `${health.sellersAhead} ahead` : '—'}</strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.timeToSell')}</span>
-                      <strong>
-                        {formatEtaHours(health?.estSellHoursAtPrice) ?? '—'}
-                        {formatEtaHours(health?.estSellHoursAtMarket)
-                          && health?.estSellHoursAtPrice != null
-                          && health?.estSellHoursAtMarket != null
-                          && health.estSellHoursAtMarket < health.estSellHoursAtPrice ? (
-                          <span className="trade-health-metric-alt">
-                            {' · '}{formatEtaHours(health.estSellHoursAtMarket)} {t('trades.health.atMarket')}
-                          </span>
-                        ) : null}
-                      </strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.costBasis')}</span>
-                      <strong className={health?.wouldRealizeLoss ? 'trade-health-loss' : undefined}>
-                        {health?.costBasis != null ? formatPlatinumValue(health.costBasis) : '—'}
-                      </strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.velocity')}</span>
-                      <strong>{health?.dailyVolume != null ? health.dailyVolume.toFixed(1) : '—'}</strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.demand')}</span>
-                      <strong>
-                        {health ? t('trades.health.buyersCount', { count: String(health.buyDemand) }) : '—'}
-                        {health?.isOnlyVariantSeller ? (
-                          <span className="trade-health-metric-alt">{' · '}{t('trades.health.onlySeller')}</span>
-                        ) : null}
-                      </strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.listingAge')}</span>
-                      <strong>{formatEtaHours(health?.listingAgeHours) ?? '—'}</strong>
-                    </div>
-                    <div className="trade-health-metric">
-                      <span className="trade-health-metric-label">{t('trades.health.suggested')}</span>
-                      <strong>
-                        {health?.recommendedPrice !== null && health?.recommendedPrice !== undefined
-                          ? formatPlatinumValue(health.recommendedPrice)
-                          : tHealth(t, health?.actionLabel) || '—'}
-                      </strong>
-                    </div>
-                  </div>
-
-                  {health?.scoreFactors && health.scoreFactors.length > 0 ? (
-                    <div className="trade-health-breakdown">
-                      <span className="trade-health-breakdown-label">
-                        {t('trades.health.scoreBreakdown')}
-                        {health ? ` — ${health.score}/100` : null}
-                      </span>
-                      <div className="trade-health-breakdown-chips">
-                        {health.scoreFactors.map((factor, index) => (
-                          <span
-                            key={`${factor.label}-${index}`}
-                            className={`trade-health-factor ${factor.delta >= 0 ? 'pos' : 'neg'}`}
-                          >
-                            {factor.label} {factor.delta >= 0 ? '+' : ''}{factor.delta}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="trade-health-reason">
-                    {health?.reason ?? t('trades.buildingMarketPicture')}
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        {sellOrders.map((order) => (
+          <HealthCard
+            key={order.orderId}
+            order={order}
+            applyPending={isHealthActionPending(order.orderId)}
+            onApply={(target) => void applyHealthPrice(target)}
+            onEdit={() => setTradesSubTab('orders')}
+            t={t}
+          />
+        ))}
       </div>
     </div>
   );

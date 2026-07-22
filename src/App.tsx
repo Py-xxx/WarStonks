@@ -35,6 +35,7 @@ import { useWorldStateExtras } from './hooks/useWorldStateExtras';
 import { useMarketTracking } from './hooks/useMarketTracking';
 import { useAutoScanScheduler } from './hooks/useAutoScanScheduler';
 import { useTradeDetection } from './hooks/useTradeDetection';
+import { useTradeHealthBackground } from './hooks/useTradeHealthBackground';
 import { useTradePresence } from './hooks/useTradePresence';
 import { useAppUpdater } from './hooks/useAppUpdater';
 
@@ -109,6 +110,7 @@ function AppShell() {
   useMarketTracking();
   useAutoScanScheduler();
   useTradeDetection();
+  useTradeHealthBackground();
   useTradePresence();
   useAppUpdater();
   useIntegrationSettings();
