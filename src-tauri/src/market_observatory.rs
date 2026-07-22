@@ -1328,6 +1328,24 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           PRIMARY KEY (item_id, slug, variant_key)
         );
 
+        -- Stream-derived order-flow samples from the newOrders firehose, for items the user
+        -- uses. Keyed by the WFM hex item id (what the firehose carries). Removal-agnostic:
+        -- these are arrival rates, not orderbook state.
+        CREATE TABLE IF NOT EXISTS order_flow_sample (
+          sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          wfm_item_id TEXT NOT NULL,
+          variant_key TEXT NOT NULL,
+          captured_at TEXT NOT NULL,
+          sell_arrivals_per_hour REAL NOT NULL,
+          buy_arrivals_per_hour REAL NOT NULL,
+          undercut_per_hour REAL NOT NULL,
+          observed_floor REAL,
+          sample_seconds REAL NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_order_flow_sample_lookup
+          ON order_flow_sample (wfm_item_id, variant_key, captured_at DESC);
+
         CREATE TABLE IF NOT EXISTS orderbook_snapshots (
           snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
           item_id INTEGER NOT NULL,
@@ -8112,6 +8130,43 @@ pub(crate) fn persist_trade_sell_orders(app: &tauri::AppHandle, payload_json: &s
             params![TRADE_SELL_ORDER_CACHE_KEY, payload_json, computed_at],
         )
         .context("failed to persist trade sell order cache")?;
+    Ok(())
+}
+
+/// Persist a batch of stream-derived order-flow samples, then prune anything older than 14 days
+/// so the table can't grow without bound. Best-effort per row.
+pub(crate) fn persist_order_flow_samples(
+    app: &tauri::AppHandle,
+    samples: &[crate::order_flow::FlowSample],
+) -> Result<()> {
+    if samples.is_empty() {
+        return Ok(());
+    }
+    let connection = open_market_observatory_database(app)?;
+    let captured_at = format_timestamp(now_utc())?;
+    for sample in samples {
+        let _ = connection.execute(
+            "INSERT INTO order_flow_sample
+               (wfm_item_id, variant_key, captured_at, sell_arrivals_per_hour,
+                buy_arrivals_per_hour, undercut_per_hour, observed_floor, sample_seconds)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                sample.wfm_item_id,
+                sample.variant_key,
+                captured_at,
+                sample.sell_arrivals_per_hour,
+                sample.buy_arrivals_per_hour,
+                sample.undercut_per_hour,
+                sample.observed_floor,
+                sample.sample_seconds,
+            ],
+        );
+    }
+    let cutoff = format_timestamp(now_utc() - TimeDuration::days(14))?;
+    let _ = connection.execute(
+        "DELETE FROM order_flow_sample WHERE captured_at < ?1",
+        params![cutoff],
+    );
     Ok(())
 }
 

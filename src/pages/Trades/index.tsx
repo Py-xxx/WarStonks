@@ -14,6 +14,7 @@ import {
   getTradeSellOrderHealth,
   getTradeBuyOrderHealth,
   getHealthPredictionAccuracy,
+  subscribeToTradeHealthStale,
   isTauriRuntime,
   getWfmAutocompleteItems,
   getWfmItemSubtypes,
@@ -237,6 +238,33 @@ function useTradeSellHealthRefresh({
   const sellOrdersRef = useRef<TradeSellOrder[]>([]);
   const buyOrdersRef = useRef<TradeSellOrder[]>([]);
 
+  // #20 Event-driven refresh: when the firehose reports a live undercut on an item we have a
+  // listing on, expire that listing's last-refresh stamp so the next tick re-polls it now.
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void subscribeToTradeHealthStale((wfmItemId) => {
+      for (const order of [...sellOrdersRef.current, ...buyOrdersRef.current]) {
+        if (order.wfmId === wfmItemId) {
+          healthRefreshedAt.current[order.orderId] = 0;
+        }
+      }
+    }).then((unlisten) => {
+      if (cancelled) {
+        unlisten();
+      } else {
+        dispose = unlisten;
+      }
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, [enabled]);
+
   useEffect(() => {
     if (!enabled) {
       return;
@@ -275,6 +303,7 @@ function useTradeSellHealthRefresh({
               order.createdAt,
               order.bulkTradable ? order.perTrade : null,
               order.orderId,
+              order.wfmId,
             )
           : getTradeBuyOrderHealth(
               order.itemId,

@@ -2589,9 +2589,11 @@ pub async fn get_trade_sell_order_health(
     created_at: Option<String>,
     per_trade: Option<i64>,
     order_id: Option<String>,
+    wfm_id: Option<String>,
 ) -> Result<TradeListingHealth, String> {
     let app_for_work = app.clone();
     let health_order_id = order_id;
+    let health_wfm_id = wfm_id;
     tauri::async_runtime::spawn_blocking(move || {
         let per_trade = per_trade.unwrap_or(1).max(1);
         let priority = RequestPriority::from_wire(Some(priority.trim()), RequestPriority::Low);
@@ -2601,10 +2603,24 @@ pub async fn get_trade_sell_order_health(
         let session = ensure_authenticated_session(&app_for_work)?;
         let observatory = open_market_observatory_database(&app_for_work)?;
         let variant_key = trade_health_variant_key(rank);
-        let cached_context = item_id
+        let mut cached_context = item_id
             .map(|value| load_cached_trade_health_context(&observatory, value, &variant_key, &seller_mode))
             .transpose()?
             .flatten();
+        // #20 Prefer real-time order-flow undercut velocity (from the firehose) over the
+        // snapshot-diff estimate when we have live flow for this item — it reacts to price wars
+        // the moment they start, not on the next tracked-snapshot cadence.
+        if let Some(wfm_id) = health_wfm_id.as_deref() {
+            let flow_variant = crate::recommended_prices::variant_key_for_rank(rank);
+            if let Some(flow) = crate::order_flow::flow_stats(wfm_id, &flow_variant) {
+                // Require a little history so a single arrival can't fake a price war.
+                if flow.sample_seconds >= 300.0 {
+                    if let Some(context) = cached_context.as_mut() {
+                        context.undercut_velocity = Some(flow.undercut_per_hour);
+                    }
+                }
+            }
+        }
         // Cost basis is best-effort: a missing trades cache must not fail health.
         let cost_basis_sample = open_trades_cache_database(&app_for_work)
             .ok()
@@ -7155,6 +7171,9 @@ const WATCHLIST_ORDER_EVENT: &str = "wfm-watchlist-order";
 /// Emitted when a live `newOrders` sell listing is priced well below its recommended entry
 /// price (the "underpriced listings" radar on the Opportunities tab).
 const UNDERPRICED_LISTING_EVENT: &str = "wfm-underpriced-listing";
+/// Emitted when the firehose sees a live undercut on an item the user has a listing on, so the
+/// frontend can refresh that listing's health immediately instead of waiting for the poll.
+const TRADE_HEALTH_STALE_EVENT: &str = "wfm-trade-health-stale";
 
 /// The discount needed to flag a listing scales with the item's value: cheap items must be
 /// discounted hard before they're worth a ping, while expensive items fire on a shallower
@@ -7365,7 +7384,26 @@ pub fn start_ws_manager(app: tauri::AppHandle) {
     if let Ok(mut guard) = ws_command_sender().lock() {
         *guard = Some(tx);
     }
+    tauri::async_runtime::spawn(run_order_flow_flusher(app.clone()));
     tauri::async_runtime::spawn(run_ws_manager(app, rx));
+}
+
+/// Periodically persists stream-derived order-flow samples so the firehose builds real history
+/// for the items the user uses. Runs for the app's lifetime; a flush failure is non-fatal.
+async fn run_order_flow_flusher(app: tauri::AppHandle) {
+    const FLUSH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+    loop {
+        tokio::time::sleep(FLUSH_INTERVAL).await;
+        let samples = crate::order_flow::collect_samples();
+        if samples.is_empty() {
+            continue;
+        }
+        let app_for_persist = app.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            crate::market_observatory::persist_order_flow_samples(&app_for_persist, &samples)
+        })
+        .await;
+    }
 }
 
 /// The persistent websocket manager. Holds at most one connection, opened whenever we are
@@ -7647,6 +7685,25 @@ fn handle_new_order_event(app: &tauri::AppHandle, payload: &Value) {
 
     // Count every firehose order we examine — a simple "the subscription is flowing" signal.
     crate::recommended_prices::increment_scanned();
+
+    // Order-flow intelligence: for items the user actually uses, record the arrival (after
+    // outlier filtering) so the stream builds real supply/demand + undercut velocity. This is
+    // removal-agnostic by design — we only ever learn from arrivals, never removals.
+    if order.platinum.is_finite() && order.platinum > 0.0 && crate::order_flow::is_used(item_id) {
+        let variant_key = crate::recommended_prices::variant_key_for_rank(order.rank);
+        let side = if order.order_type == "buy" {
+            crate::order_flow::FlowSide::Buy
+        } else {
+            crate::order_flow::FlowSide::Sell
+        };
+        // A visible sell that undercuts an item we have a live listing on → nudge its health to
+        // refresh now rather than waiting for the next poll.
+        let was_undercut =
+            crate::order_flow::record_order(item_id, &variant_key, side, order.platinum);
+        if was_undercut && order.order_type == "sell" && order.visible != Some(false) {
+            let _ = app.emit(TRADE_HEALTH_STALE_EVENT, json!({ "itemId": item_id }));
+        }
+    }
 
     // Underpriced-listings radar — runs for the WHOLE firehose (any item with a recommended
     // price), independent of the watchlist branch below.
@@ -8521,6 +8578,15 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
     sell_orders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
     buy_orders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
 
+    // Register the items we have live orders on as "used" so the firehose records their flow.
+    let listing_item_ids: Vec<String> = sell_orders
+        .iter()
+        .chain(buy_orders.iter())
+        .map(|order| order.wfm_id.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+    crate::order_flow::set_used_items("listings", &listing_item_ids);
+
     // Active trade value reflects only visible SELL orders — it's the plat you have
     // listed for sale, not what you're bidding to buy.
     let active_trade_value = sell_orders
@@ -9140,6 +9206,10 @@ pub async fn set_watchlist_targets(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error: anyhow::Error| error.to_string())?;
+
+    // Watchlist items are "used" too — record their firehose flow for richer market context.
+    let watchlist_item_ids: Vec<String> = resolved.keys().cloned().collect();
+    crate::order_flow::set_used_items("watchlist", &watchlist_item_ids);
 
     if let Ok(mut guard) = watchlist_targets().lock() {
         *guard = resolved;

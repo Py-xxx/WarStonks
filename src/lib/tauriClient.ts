@@ -599,6 +599,7 @@ export async function getTradeSellOrderHealth(
   createdAt: string | null,
   perTrade: number | null,
   orderId: string | null,
+  wfmId: string | null,
 ): Promise<TradeListingHealth> {
   return invoke<TradeListingHealth>('get_trade_sell_order_health', {
     itemId,
@@ -610,6 +611,7 @@ export async function getTradeSellOrderHealth(
     createdAt,
     perTrade,
     orderId,
+    wfmId,
   });
 }
 
@@ -1028,6 +1030,24 @@ export async function listenToUnderpricedListings(
   const { listen } = await import('@tauri-apps/api/event');
   return listen<UnderpricedListing>('wfm-underpriced-listing', (event) => {
     onListing(event.payload);
+  });
+}
+
+/**
+ * Subscribes to the firehose "your listing was just undercut" signal so health can refresh that
+ * item immediately instead of waiting for the poll. Payload carries the WFM hex item id.
+ */
+export async function subscribeToTradeHealthStale(
+  onStale: (wfmItemId: string) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<{ itemId: string }>('wfm-trade-health-stale', (event) => {
+    if (event.payload?.itemId) {
+      onStale(event.payload.itemId);
+    }
   });
 }
 
