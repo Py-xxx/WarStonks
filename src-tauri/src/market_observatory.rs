@@ -421,6 +421,8 @@ pub(crate) struct CachedTradeHealthContext {
     pub liquidity_label: String,
     pub pressure_label: String,
     pub exit_zone_low: Option<f64>,
+    /// Top of the fair-value exit zone — the ceiling Smart Manage prices toward.
+    pub exit_zone_high: Option<f64>,
     /// Recent units sold per day, derived from tracked trade-volume history. Drives the
     /// estimated time-to-sell shown on listing health. None when there isn't enough volume
     /// history to be meaningful.
@@ -10033,6 +10035,7 @@ fn build_fallback_trade_health_context(recent_snapshots: &[MarketSnapshot]) -> O
         liquidity_label: liquidity_label(liquidity_score),
         pressure_label: pressure_label(latest.pressure_ratio, latest.buy_order_count),
         exit_zone_low: None,
+        exit_zone_high: None,
         // The snapshot-only fallback has no trade-volume history to estimate velocity from.
         daily_volume: None,
         current_hour_volume_factor: None,
@@ -10121,6 +10124,7 @@ pub(crate) fn load_cached_trade_health_context(
                 .unwrap_or_else(|| "Thin".to_string()),
             pressure_label: analytics.orderbook_pressure.pressure_label,
             exit_zone_low: analytics.entry_exit_zone_overview.exit_zone_low,
+            exit_zone_high: analytics.entry_exit_zone_overview.exit_zone_high,
             daily_volume: estimate_daily_volume(&analytics.chart_points),
             current_hour_volume_factor,
             undercut_velocity,

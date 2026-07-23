@@ -23,6 +23,7 @@ import {
   saveAlecaframeSettings,
   saveDiscordWebhookSettings,
   saveStrategySettings,
+  saveSmartManageSettings,
   sendWatchlistFoundDiscordNotification,
   sendUnderpricedListingDiscordNotification,
   signInWfmTradeAccount,
@@ -127,6 +128,7 @@ import type {
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
   StrategySettings,
+  SmartManageSettings,
   AppSettings,
   AppUpdateInstallState,
   DiscordWebhookSettingsInput,
@@ -227,12 +229,20 @@ const defaultAppSettings: AppSettings = {
       watchlistFound: true,
       tradeDetected: true,
       underpricedListing: true,
+      priceChange: true,
     },
     lastValidatedAt: null,
   },
   strategy: {
     minEdgePlat: 10,
     tradeValuePlat: 10,
+  },
+  smartManage: {
+    enabled: false,
+    aggressiveness: 'balanced',
+    minMarginPct: 0,
+    maxChangesPerDay: 8,
+    minIntervalMinutes: 10,
   },
 };
 
@@ -1334,6 +1344,8 @@ interface AppStore {
   dismissToast: (id: string) => void;
   searchFocusNonce: number;
   requestSearchFocus: () => void;
+  tradeOverviewReloadNonce: number;
+  requestTradeOverviewReload: () => void;
 
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
@@ -1450,6 +1462,7 @@ interface AppStore {
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
   saveDiscordWebhookConfiguration: (input: DiscordWebhookSettingsInput) => Promise<void>;
   saveStrategyConfiguration: (input: StrategySettings) => Promise<void>;
+  saveSmartManageConfiguration: (input: SmartManageSettings) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
   refreshWorldStateAlerts: () => Promise<void>;
   refreshWorldStateSortie: () => Promise<void>;
@@ -1636,6 +1649,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   ownedRelicsLastRefreshAt: null,
   searchFocusNonce: 0,
   requestSearchFocus: () => set((state) => ({ searchFocusNonce: state.searchFocusNonce + 1 })),
+  tradeOverviewReloadNonce: 0,
+  requestTradeOverviewReload: () => set((state) => ({ tradeOverviewReloadNonce: state.tradeOverviewReloadNonce + 1 })),
   pushToast: (message, tone = 'info') => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     set((state) => ({ toasts: [...state.toasts, { id, tone, message }] }));
@@ -2116,6 +2131,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         settingsLoading: false,
         settingsError: formatSettingsErrorMessage('strategy-save', error),
+      });
+      throw error;
+    }
+  },
+  saveSmartManageConfiguration: async (input) => {
+    set({ settingsLoading: true, settingsError: null });
+    try {
+      const settings = await saveSmartManageSettings(input);
+      set({ appSettings: settings, settingsLoading: false, settingsError: null });
+    } catch (error) {
+      set({
+        settingsLoading: false,
+        settingsError: formatSettingsErrorMessage('smart-manage-save', error),
       });
       throw error;
     }
@@ -4461,15 +4489,3 @@ export const useAppStore = create<AppStore>((set, get) => ({
   eventsSubTab: 'vendors',
   setEventsSubTab: (tab) => set({ eventsSubTab: tab }),
 }));
-// Dev-only: expose the store for browser-preview state injection.
-if (import.meta.env.DEV && typeof window !== 'undefined') {
-  (window as unknown as { __appStore?: unknown }).__appStore = useAppStore;
-}
-// Dev-only: expose the store for browser-preview state injection.
-if (import.meta.env.DEV && typeof window !== 'undefined') {
-  (window as unknown as { __appStore?: unknown }).__appStore = useAppStore;
-}
-// Dev-only: expose the store for browser-preview state injection.
-if (import.meta.env.DEV && typeof window !== 'undefined') {
-  (window as unknown as { __appStore?: unknown }).__appStore = useAppStore;
-}

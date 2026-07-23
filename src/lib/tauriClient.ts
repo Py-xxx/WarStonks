@@ -16,6 +16,11 @@ import type {
   AnalyticsDomainKey,
   AppSettings,
   StrategySettings,
+  SmartManageSettings,
+  SmartManageStateEntry,
+  SmartManageLogEntry,
+  SmartListingOverrides,
+  SmartManageImpact,
   AlecaframeTradeMigrationInput,
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
@@ -185,6 +190,80 @@ export async function saveStrategySettings(
   input: StrategySettings,
 ): Promise<AppSettings> {
   return invoke<AppSettings>('save_strategy_settings', { input });
+}
+
+export async function saveSmartManageSettings(
+  input: SmartManageSettings,
+): Promise<AppSettings> {
+  return invoke<AppSettings>('save_smart_manage_settings', { input });
+}
+
+/** Set/clear a listing's auto-manage opt-in. `enabled = null` clears the override (use default). */
+export async function setSmartManageForListing(
+  wfmId: string,
+  rank: number | null,
+  enabled: boolean | null,
+): Promise<void> {
+  return invoke<void>('set_smart_manage_for_listing', { wfmId, rank, enabled });
+}
+
+export async function getSmartManageStates(): Promise<SmartManageStateEntry[]> {
+  return invoke<SmartManageStateEntry[]>('get_smart_manage_states');
+}
+
+export async function getSmartManageImpact(): Promise<SmartManageImpact> {
+  return invoke<SmartManageImpact>('get_smart_manage_impact');
+}
+
+export async function setSmartManageOverrides(
+  wfmId: string,
+  rank: number | null,
+  overrides: SmartListingOverrides,
+): Promise<void> {
+  return invoke<void>('set_smart_manage_overrides', {
+    wfmId,
+    variantKey: rank === null || rank === undefined ? 'base' : `rank:${rank}`,
+    aggressiveness: overrides.aggressiveness,
+    minPrice: overrides.minPrice,
+    maxPrice: overrides.maxPrice,
+  });
+}
+
+export async function clearSmartManageFailures(
+  wfmId: string,
+  variantKey: string,
+): Promise<void> {
+  return invoke<void>('clear_smart_manage_failures', { wfmId, variantKey });
+}
+
+export async function getSmartManageLog(limit?: number): Promise<SmartManageLogEntry[]> {
+  return invoke<SmartManageLogEntry[]>('get_smart_manage_log', { limit: limit ?? 50 });
+}
+
+/** Subscribe to Smart Manage price changes (and preview intents) for the activity feed + alerts. */
+export interface SmartManageChange {
+  wfmId: string;
+  slug: string;
+  oldPrice: number;
+  newPrice: number;
+  action: string;
+  reasonCode: string;
+  applied: boolean;
+  preview: boolean;
+}
+
+export async function subscribeToSmartManageChanges(
+  onChange: (change: SmartManageChange) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<SmartManageChange>('wfm-smart-manage-change', (event) => {
+    if (event.payload) {
+      onChange(event.payload);
+    }
+  });
 }
 
 export async function sendWatchlistFoundDiscordNotification(
@@ -600,6 +679,9 @@ export async function getTradeSellOrderHealth(
   perTrade: number | null,
   orderId: string | null,
   wfmId: string | null,
+  quantity: number | null,
+  visible: boolean | null,
+  bulkTradable: boolean | null,
 ): Promise<TradeListingHealth> {
   return invoke<TradeListingHealth>('get_trade_sell_order_health', {
     itemId,
@@ -612,6 +694,9 @@ export async function getTradeSellOrderHealth(
     perTrade,
     orderId,
     wfmId,
+    quantity,
+    visible,
+    bulkTradable,
   });
 }
 

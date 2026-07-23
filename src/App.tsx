@@ -36,6 +36,7 @@ import { useMarketTracking } from './hooks/useMarketTracking';
 import { useAutoScanScheduler } from './hooks/useAutoScanScheduler';
 import { useTradeDetection } from './hooks/useTradeDetection';
 import { useTradeHealthBackground } from './hooks/useTradeHealthBackground';
+import { useSmartManageAlerts } from './hooks/useSmartManageAlerts';
 import { useTradePresence } from './hooks/useTradePresence';
 import { useAppUpdater } from './hooks/useAppUpdater';
 
@@ -111,6 +112,7 @@ function AppShell() {
   useAutoScanScheduler();
   useTradeDetection();
   useTradeHealthBackground();
+  useSmartManageAlerts();
   useTradePresence();
   useAppUpdater();
   useIntegrationSettings();

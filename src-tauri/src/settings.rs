@@ -74,6 +74,8 @@ pub struct DiscordWebhookNotificationSettings {
     pub watchlist_found: bool,
     pub trade_detected: bool,
     pub underpriced_listing: bool,
+    /// Smart Manage auto price changes (and preview intents).
+    pub price_change: bool,
 }
 
 impl Default for DiscordWebhookNotificationSettings {
@@ -82,6 +84,7 @@ impl Default for DiscordWebhookNotificationSettings {
             watchlist_found: true,
             trade_detected: true,
             underpriced_listing: true,
+            price_change: true,
         }
     }
 }
@@ -105,6 +108,35 @@ impl Default for StrategySettings {
     }
 }
 
+/// Global config for Smart Manage — optional auto-repricing of your sell listings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SmartManageSettings {
+    /// Master switch. When on, new listings default to auto-managed; when off, auto only runs
+    /// for listings you individually opt in.
+    pub enabled: bool,
+    /// "conservative" | "balanced" | "aggressive" — profit-vs-speed trade-off.
+    pub aggressiveness: String,
+    /// Percent of margin to keep above cost when the cost floor applies.
+    pub min_margin_pct: f64,
+    /// Max auto price-changes per listing per day.
+    pub max_changes_per_day: i64,
+    /// Minimum minutes between auto changes on the same listing.
+    pub min_interval_minutes: i64,
+}
+
+impl Default for SmartManageSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            aggressiveness: "balanced".to_string(),
+            min_margin_pct: 0.0,
+            max_changes_per_day: 8,
+            min_interval_minutes: 10,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -114,6 +146,8 @@ pub struct AppSettings {
     pub discord_webhook: DiscordWebhookSettings,
     #[serde(default)]
     pub strategy: StrategySettings,
+    #[serde(default)]
+    pub smart_manage: SmartManageSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1121,6 +1155,52 @@ pub fn save_discord_webhook_settings(
 }
 
 #[tauri::command]
+pub fn save_smart_manage_settings(
+    app: tauri::AppHandle,
+    input: SmartManageSettings,
+) -> Result<AppSettings, String> {
+    let _settings_guard = lock_settings_file().map_err(|error| error.to_string())?;
+    let mut settings = load_settings_inner(&app).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "load-for-smart-manage-save",
+            "Failed to load settings before saving Smart Manage configuration.",
+            "Couldn’t save Smart Manage settings right now. Please try again.",
+            "SMART-SAVE-LOAD-01",
+            &error,
+        )
+    })?;
+
+    let aggressiveness = match input.aggressiveness.trim().to_ascii_lowercase().as_str() {
+        "conservative" => "conservative",
+        "aggressive" => "aggressive",
+        _ => "balanced",
+    };
+    settings.smart_manage = SmartManageSettings {
+        enabled: input.enabled,
+        aggressiveness: aggressiveness.to_string(),
+        min_margin_pct: input.min_margin_pct.clamp(0.0, 100.0),
+        max_changes_per_day: input.max_changes_per_day.clamp(1, 100),
+        min_interval_minutes: input.min_interval_minutes.clamp(1, 720),
+    };
+
+    save_settings_inner(&app, &settings).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "save-smart-manage-settings",
+            "Failed to persist Smart Manage settings to app storage.",
+            "Couldn’t save Smart Manage settings right now. Please try again.",
+            "SMART-SAVE-STORE-01",
+            &error,
+        )
+    })?;
+
+    Ok(settings)
+}
+
+#[tauri::command]
 pub fn save_strategy_settings(
     app: tauri::AppHandle,
     input: StrategySettings,
@@ -1222,6 +1302,69 @@ pub(crate) fn send_underpriced_listing_discord_notification_inner(
 
     post_discord_webhook_payload(&webhook_url, build_underpriced_listing_payload(input))?;
     Ok(true)
+}
+
+/// Fire a Discord webhook for a Smart Manage price change (or preview intent).
+pub(crate) fn send_smart_manage_discord_notification_inner(
+    app: &tauri::AppHandle,
+    item_slug: &str,
+    old_price: i64,
+    new_price: i64,
+    action: &str,
+    applied: bool,
+    preview: bool,
+) -> Result<bool> {
+    let settings = load_settings_inner(app)?;
+    let discord = settings.discord_webhook;
+    if !discord.enabled || !discord.notifications.price_change {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+    post_discord_webhook_payload(
+        &webhook_url,
+        build_smart_manage_payload(item_slug, old_price, new_price, action, applied, preview),
+    )?;
+    Ok(true)
+}
+
+fn build_smart_manage_payload(
+    item_slug: &str,
+    old_price: i64,
+    new_price: i64,
+    action: &str,
+    applied: bool,
+    preview: bool,
+) -> serde_json::Value {
+    let market_url = format!("https://warframe.market/items/{item_slug}");
+    let direction = if new_price > old_price { "Raised" } else { "Trimmed" };
+    let verb = if preview {
+        "would be"
+    } else if applied {
+        "was"
+    } else {
+        "failed to be"
+    };
+    let color = if new_price > old_price { 0x3DD68C } else { 0x4A9EFF };
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "title": format!("🤖 Smart Manage — {direction}"),
+        "description": format!(
+            "**{item_slug}** {verb} repriced {old_price}p → **{new_price}p** ({action}).{}",
+            if preview { "\n_Preview mode — no change applied._" } else { "" }
+        ),
+        "url": market_url,
+        "color": color,
+        "fields": [
+          { "name": "Old", "value": format!("{old_price}p"), "inline": true },
+          { "name": "New", "value": format!("{new_price}p"), "inline": true },
+          { "name": "Action", "value": action, "inline": true }
+        ],
+        "footer": { "text": "WarStonks • Smart Manage" }
+      }]
+    })
 }
 
 #[tauri::command]
@@ -1392,6 +1535,7 @@ mod tests {
                 last_validated_at: None,
             },
             strategy: StrategySettings::default(),
+            smart_manage: super::SmartManageSettings::default(),
         };
 
         save_settings_to_path(&path, &settings).expect("settings should save");

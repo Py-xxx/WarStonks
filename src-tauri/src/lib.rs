@@ -7,6 +7,7 @@ mod market_observatory;
 mod opportunities;
 mod order_flow;
 mod recommended_prices;
+mod smart_manage;
 mod settings;
 mod trades;
 mod wfm_scheduler;
@@ -146,6 +147,12 @@ pub fn run() {
             trades::get_trade_sell_order_health,
             trades::get_trade_buy_order_health,
             trades::get_health_prediction_accuracy,
+            trades::set_smart_manage_for_listing,
+            trades::set_smart_manage_overrides,
+            trades::get_smart_manage_states,
+            trades::get_smart_manage_log,
+            trades::get_smart_manage_impact,
+            trades::clear_smart_manage_failures,
             trades::verify_market_listing,
             commands::get_worldstate_events,
             commands::get_worldstate_alerts,
@@ -173,6 +180,7 @@ pub fn run() {
             settings::save_alecaframe_settings,
             settings::save_discord_webhook_settings,
             settings::save_strategy_settings,
+            settings::save_smart_manage_settings,
             settings::send_watchlist_found_discord_notification,
             settings::send_underpriced_listing_discord_notification,
             settings::get_currency_balances,

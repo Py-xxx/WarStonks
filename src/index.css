@@ -4466,7 +4466,33 @@ body {
 .settings-notification-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 6px;
+}
+
+/* Event toggles are single-line labels (the description moved to a hover title), so they get a
+   denser row than the general compact switch. Scoped to the grid so the multi-line toggles
+   elsewhere — Strategy, and the rows above this grid — keep their descriptions and spacing. */
+.settings-notification-grid .settings-switch-row-compact {
+  align-items: center;
+  padding: 7px 12px;
+  border-radius: 9px;
+}
+.settings-notification-grid .settings-field-label { font-size: 12px; }
+/* The ON/OFF label widens the control, so the event toggles shrink to keep these rows dense.
+   A fixed min-width stops the 2-vs-3 character difference from shifting the rows out of line. */
+.settings-notification-grid .settings-toggle {
+  min-width: 78px;
+  height: 30px;
+  padding: 0 8px;
+  gap: 8px;
+}
+.settings-notification-grid .settings-toggle-track { width: 34px; height: 18px; }
+.settings-notification-grid .settings-toggle-thumb { width: 12px; height: 12px; }
+.settings-notification-grid .settings-toggle.on .settings-toggle-thumb { transform: translateX(16px); }
+.settings-notification-grid .settings-toggle-label {
+  font-size: 10px;
+  min-width: 22px;
+  text-align: right;
 }
 
 .settings-switch-row-compact {
@@ -13505,7 +13531,7 @@ img[data-asset-failed='true'] {
   gap: 8px;
   min-width: 0;
 }
-.trade-split-item-copy { min-width: 0; }
+.trade-split-item-copy { min-width: 0; flex: 1; }
 .trade-split-item-name {
   display: block;
   font-size: 12px;
@@ -13907,3 +13933,233 @@ img[data-asset-failed='true'] {
 }
 .trade-hc-factor.pos { color: var(--color-green); }
 .trade-hc-factor.neg { color: var(--color-red); }
+
+/* Recommended-action pill (shown when the recommendation is a hold/wait, not a price change) */
+.trade-hc-rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 11px;
+  border-radius: 7px;
+  color: var(--color-blue);
+  border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.trade-hc-rec.tone-green { color: var(--color-green); }
+.trade-hc-rec.tone-blue { color: var(--color-blue); }
+.trade-hc-rec.tone-amber { color: var(--color-amber); }
+.trade-hc-rec.tone-red { color: var(--color-red); }
+.trade-hc-rec .ti { font-size: 12px; }
+
+/* ============ Smart Manage (Strategy page) ============ */
+.smart-manage-main { display: flex; flex-direction: column; gap: 14px; }
+.smart-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+.smart-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.smart-panel-desc { font-size: 12px; color: var(--text-secondary); margin: 4px 0 0; line-height: 1.5; max-width: 46ch; }
+.smart-master-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.smart-master-toggle.on { color: var(--color-green); border-color: rgba(61,214,140,0.4); }
+.smart-master-toggle-track {
+  width: 30px; height: 16px; border-radius: 9px; background: var(--bg-elevated);
+  position: relative; transition: background 0.15s ease;
+}
+.smart-master-toggle.on .smart-master-toggle-track { background: rgba(61,214,140,0.3); }
+.smart-master-toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text-muted); transition: transform 0.15s ease, background 0.15s ease;
+}
+.smart-master-toggle.on .smart-master-toggle-thumb { transform: translateX(14px); background: var(--color-green); }
+.smart-preview-banner, .smart-live-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 9px; margin-bottom: 16px; font-size: 12px;
+}
+.smart-preview-banner { background: rgba(139,111,255,0.1); border: 1px solid rgba(139,111,255,0.3); }
+.smart-preview-banner .ti { color: var(--color-purple); font-size: 18px; }
+.smart-preview-banner div { display: flex; flex-direction: column; }
+.smart-preview-banner strong { color: var(--text-primary); font-size: 12px; }
+.smart-preview-banner span { color: var(--text-secondary); font-size: 11px; }
+.smart-live-banner { background: rgba(61,214,140,0.08); border: 1px solid rgba(61,214,140,0.3); color: var(--text-secondary); }
+.smart-live-banner .ti { color: var(--color-green); font-size: 16px; }
+.smart-golive-btn, .smart-preview-btn {
+  margin-left: auto; flex-shrink: 0;
+  border: none; border-radius: 7px; padding: 6px 13px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.smart-golive-btn { background: var(--color-purple); color: #14082e; }
+.smart-preview-btn { background: transparent; border: 1px solid var(--border-strong); color: var(--text-secondary); }
+.smart-field { margin-bottom: 16px; }
+.smart-seg {
+  display: inline-flex; margin-top: 8px; border: 1px solid var(--border-strong);
+  border-radius: 8px; overflow: hidden;
+}
+.smart-seg-btn {
+  padding: 7px 16px; border: none; background: transparent; color: var(--text-secondary);
+  font-size: 12px; font-weight: 500; cursor: pointer; transition: background 0.12s, color 0.12s;
+}
+.smart-seg-btn + .smart-seg-btn { border-left: 1px solid var(--border-strong); }
+.smart-seg-btn.active { background: rgba(74,158,255,0.16); color: var(--color-blue); }
+.smart-numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px; }
+.smart-feed {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+}
+.smart-feed-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.smart-feed-list { display: flex; flex-direction: column; }
+.smart-feed-row {
+  display: flex; align-items: center; gap: 12px; padding: 9px 4px;
+  border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.smart-feed-row:last-child { border-bottom: none; }
+.smart-feed-dir { width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.smart-feed-dir.up { color: var(--color-green); background: rgba(61,214,140,0.12); }
+.smart-feed-dir.down { color: var(--color-blue); background: rgba(74,158,255,0.12); }
+.smart-feed-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.smart-feed-item { font-weight: 600; text-transform: capitalize; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.smart-feed-reason { font-size: 10px; color: var(--text-muted); }
+.smart-feed-prices { font-family: 'JetBrains Mono','Noto Sans SC',monospace; font-size: 12px; white-space: nowrap; color: var(--text-secondary); }
+.smart-feed-prices strong { color: var(--text-primary); }
+.smart-feed-tag {
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace; font-size: 9px; padding: 2px 7px;
+  border-radius: 5px; flex-shrink: 0;
+}
+.smart-feed-tag.preview { color: var(--color-purple); background: rgba(139,111,255,0.14); }
+.smart-feed-tag.applied { color: var(--color-green); background: rgba(61,214,140,0.14); }
+.smart-feed-tag.failed { color: var(--color-red); background: rgba(240,79,88,0.14); }
+.smart-feed-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+@media (max-width: 720px) { .smart-numbers { grid-template-columns: 1fr; } }
+
+/* Per-listing Auto chip/toggle (orders + health) */
+.trade-auto-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace; font-size: 9px; font-weight: 600;
+  letter-spacing: 0.04em; white-space: nowrap;
+  padding: 3px 7px; border-radius: 5px; border: 1px solid; cursor: pointer;
+  background: transparent; transition: background 0.12s, color 0.12s;
+}
+.trade-auto-chip.on { color: var(--color-purple); border-color: rgba(139,111,255,0.45); background: rgba(139,111,255,0.12); }
+.trade-auto-chip.off { color: var(--text-muted); border-color: var(--border-strong); }
+.trade-auto-chip .ti { font-size: 11px; }
+
+/* Smart Manage go-live confirmation */
+.smart-golive-modal { max-width: 420px; }
+.smart-golive-copy { font-size: 13px; color: var(--text-secondary); line-height: 1.55; margin: 0 0 12px; }
+.smart-golive-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.smart-golive-list li { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.smart-golive-confirm { background: var(--color-purple); color: #14082e; border-color: var(--color-purple); }
+.smart-feed-dir.hold { color: var(--text-muted); background: var(--bg-elevated); }
+.smart-feed-tag.held { color: var(--text-muted); background: var(--bg-elevated); }
+
+/* Smart Manage — Phase 2 results panel */
+.smart-impact {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+.smart-impact-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+.smart-impact-sub { font-size: 11px; color: var(--text-muted); }
+.smart-impact-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.smart-impact-stat { background: var(--bg-base); border-radius: 9px; padding: 10px 12px; }
+.smart-impact-stat span {
+  display: block;
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace;
+  font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted);
+}
+.smart-impact-stat strong {
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace;
+  font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.smart-impact-stat strong.pos { color: var(--color-green); }
+.smart-impact-stat strong.neg { color: var(--color-red); }
+.smart-impact-note { font-size: 11px; color: var(--text-muted); margin: 10px 0 0; line-height: 1.45; }
+@media (max-width: 720px) { .smart-impact-grid { grid-template-columns: 1fr; } }
+
+/* Per-listing Smart Manage strategy popover, anchored to the row's adjustments chip. */
+.smart-strategy-anchor { position: relative; display: inline-flex; margin-left: auto; flex: none; }
+.smart-strategy-pop {
+  /* Positioned in viewport coordinates by useAnchoredPopover and portaled to <body>, so it can
+     never be clipped by the scrolling trade list. Position/top/left come from inline style. */
+  z-index: 220;
+  width: 260px; display: flex; flex-direction: column; gap: 10px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+}
+.smart-strategy-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace;
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted);
+}
+/* On/off lives at the top of the popover — the chip only opens it now. */
+.smart-strategy-switch {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.smart-strategy-switch-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.smart-strategy-switch-label { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.smart-strategy-switch-help { font-size: 10px; color: var(--text-muted); line-height: 1.4; }
+
+.smart-strategy-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.smart-strategy-field > span {
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace;
+  font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted);
+}
+.smart-strategy-field select,
+.smart-strategy-field input {
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-primary); padding: 6px 8px; font-size: 12px; width: 100%;
+}
+.smart-strategy-bounds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.smart-strategy-note { font-size: 10px; color: var(--text-muted); margin: 0; line-height: 1.45; }
+.smart-strategy-error { font-size: 10px; color: var(--color-red); margin: 0; }
+.smart-strategy-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* Circuit-breaker banner: listings Smart Manage gave up on after repeated failed updates. */
+.smart-stuck {
+  background: color-mix(in srgb, var(--color-amber) 8%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--color-amber) 35%, transparent);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.smart-stuck-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.smart-stuck-title {
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--color-amber);
+}
+.smart-stuck-sub { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
+.smart-stuck-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.smart-stuck-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--bg-base); border-radius: 9px; padding: 8px 10px;
+}
+.smart-stuck-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.smart-stuck-item strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.smart-stuck-reason {
+  font-family: 'JetBrains Mono','Noto Sans SC',monospace;
+  font-size: 10px; color: var(--text-muted);
+}

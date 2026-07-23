@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useModalA11y } from '../../hooks/useModalA11y';
+import { createPortal } from 'react-dom';
+import { useSmartManageStates } from '../../hooks/useSmartManageStates';
+import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import { formatTradesErrorMessage } from '../../lib/tradesErrorHandling';
 import {
   closeWfmSellOrder,
@@ -41,6 +44,8 @@ import type {
   TradeOverview,
   TradeSellOrder,
   TradeUpdateListingInput,
+  SmartAggressiveness,
+  SmartListingOverrides,
   WfmAutocompleteItem,
   SellerMode,
   TradeListingHealth,
@@ -273,6 +278,9 @@ function useTradeSellHealthRefresh({
               order.bulkTradable ? order.perTrade : null,
               order.orderId,
               order.wfmId,
+              order.quantity,
+              order.visible,
+              order.bulkTradable,
             )
           : getTradeBuyOrderHealth(
               order.itemId,
@@ -371,6 +379,145 @@ async function loadTradeOverviewSnapshot(sellerMode: SellerMode): Promise<TradeO
 
   tradeOverviewLoadPromises.set(sellerMode, loadPromise);
   return loadPromise;
+}
+
+/**
+ * Per-listing Smart Manage strategy. A cheap fast-moving part and an expensive slow set want
+ * different behaviour, so each listing can override the global preset and pin hard price bounds.
+ * Empty fields inherit / mean "no bound" — nothing here is required.
+ */
+function SmartListingStrategyPopover({
+  initial,
+  enabled,
+  anchorEl,
+  onToggleEnabled,
+  onClose,
+  onSave,
+}: {
+  initial: SmartListingOverrides;
+  enabled: boolean;
+  anchorEl: HTMLElement | null;
+  onToggleEnabled: () => void;
+  onClose: () => void;
+  onSave: (next: SmartListingOverrides) => void;
+}) {
+  const { t } = useTranslation();
+  const { popoverRef, style } = useAnchoredPopover(anchorEl, true, onClose);
+  const [draft, setDraft] = useState<SmartListingOverrides>(initial);
+  const [error, setError] = useState<string | null>(null);
+
+  const parseBound = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const value = Number.parseInt(trimmed, 10);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+
+  const handleSave = () => {
+    if (draft.minPrice !== null && draft.maxPrice !== null && draft.maxPrice < draft.minPrice) {
+      setError(t('smart.boundsInvalid'));
+      return;
+    }
+    onSave(draft);
+    onClose();
+  };
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      style={style}
+      className="smart-strategy-pop"
+      role="dialog"
+      aria-label={t('smart.perListingTitle')}
+    >
+      <div className="smart-strategy-head">
+        <span>{t('smart.perListingTitle')}</span>
+        <button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}>
+          <i className="ti ti-x" aria-hidden="true" />
+        </button>
+      </div>
+
+      <label className="smart-strategy-switch">
+        <span className="smart-strategy-switch-copy">
+          <span className="smart-strategy-switch-label">{t('smart.enableAuto')}</span>
+          <span className="smart-strategy-switch-help">
+            {enabled ? t('smart.autoOnHelp') : t('smart.autoOffHelp')}
+          </span>
+        </span>
+        <button
+          className={`settings-toggle${enabled ? ' on' : ''}`}
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          onClick={onToggleEnabled}
+        >
+          <span className="settings-toggle-track">
+            <span className="settings-toggle-thumb" />
+          </span>
+        </button>
+      </label>
+
+      <label className="smart-strategy-field">
+        <span>{t('smart.aggressiveness')}</span>
+        <select
+          value={draft.aggressiveness ?? ''}
+          onChange={(event) =>
+            setDraft((current: SmartListingOverrides) => ({
+              ...current,
+              aggressiveness: (event.target.value || null) as SmartAggressiveness | null,
+            }))
+          }
+        >
+          <option value="">{t('smart.inheritGlobal')}</option>
+          <option value="conservative">{t('smart.agg.conservative')}</option>
+          <option value="balanced">{t('smart.agg.balanced')}</option>
+          <option value="aggressive">{t('smart.agg.aggressive')}</option>
+        </select>
+      </label>
+
+      <div className="smart-strategy-bounds">
+        <label className="smart-strategy-field">
+          <span>{t('smart.minPrice')}</span>
+          <input
+            type="number"
+            min={1}
+            inputMode="numeric"
+            value={draft.minPrice ?? ''}
+            placeholder={t('smart.noBound')}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, minPrice: parseBound(event.target.value) }))
+            }
+          />
+        </label>
+        <label className="smart-strategy-field">
+          <span>{t('smart.maxPrice')}</span>
+          <input
+            type="number"
+            min={1}
+            inputMode="numeric"
+            value={draft.maxPrice ?? ''}
+            placeholder={t('smart.noBound')}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, maxPrice: parseBound(event.target.value) }))
+            }
+          />
+        </label>
+      </div>
+
+      {error ? <p className="smart-strategy-error">{error}</p> : null}
+      <p className="smart-strategy-note">{t('smart.perListingNote')}</p>
+
+      <div className="smart-strategy-actions">
+        <button type="button" className="act-btn" onClick={onClose}>
+          {t('common.close')}
+        </button>
+        <button type="button" className="settings-primary-btn" onClick={handleSave}>
+          {t('common.save')}
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 function buildItemFromOrder(order: TradeSellOrder): WfmAutocompleteItem {
@@ -1269,6 +1416,19 @@ function HealthCard({
     </button>
   ) : null;
 
+  // The recommended action, always shown: the one-click apply button when it's a price change,
+  // otherwise a labeled pill for a hold/wait recommendation — so no listing ever looks like it
+  // has "no recommendation" when the engine is deliberately telling you to hold.
+  const actionToneClass = getTradeHealthToneClass(health?.actionTone ?? 'blue');
+  const actionEl =
+    applyBtn ??
+    (health ? (
+      <span className={`trade-hc-rec ${actionToneClass}`}>
+        <i className="ti ti-player-pause" aria-hidden="true" />
+        {tHealth(t, health.actionLabel) || t('trades.health.noAction')}
+      </span>
+    ) : null);
+
   return (
     <div className={`trade-hc ${toneClass}${expanded ? ' expanded' : ''}`}>
       <span className="trade-hc-accent" />
@@ -1334,7 +1494,7 @@ function HealthCard({
             ) : null}
 
             <div className="trade-hc-actions">
-              {applyBtn}
+              {actionEl}
               <button type="button" className="trade-hc-edit" onClick={() => onEdit(order)}>
                 {t('trades.row.edit')}
               </button>
@@ -1361,12 +1521,7 @@ function HealthCard({
           </>
         ) : (
           <div className="trade-hc-compact-foot">
-            {applyBtn ?? (
-              <span className={`trade-hc-ok ${toneClass}`}>
-                <i className="ti ti-check" aria-hidden="true" />
-                {tHealth(t, health?.actionLabel) || t('trades.health.noAction')}
-              </span>
-            )}
+            {actionEl}
             {!applyBtn ? (
               <button type="button" className="trade-hc-edit" onClick={() => onEdit(order)}>
                 {t('trades.row.edit')}
@@ -1385,6 +1540,7 @@ function HealthTab() {
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const syncWatchlistTradeOverview = useAppStore((s) => s.syncWatchlistTradeOverview);
   const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
+  const tradeOverviewReloadNonce = useAppStore((s) => s.tradeOverviewReloadNonce);
   const sellerMode = useAppStore((s) => s.sellerMode);
   const [overview, setOverview] = useState<TradeOverview | null>(() => tradeOverviewCache.get(sellerMode) ?? null);
   const [loading, setLoading] = useState(false);
@@ -1436,7 +1592,7 @@ function HealthTab() {
     return () => {
       cancelled = true;
     };
-  }, [loadTradeAccount, sellerMode, syncWatchlistTradeOverview, tradeAccount]);
+  }, [loadTradeAccount, sellerMode, syncWatchlistTradeOverview, tradeAccount, tradeOverviewReloadNonce]);
 
   sellOrdersRef.current = overview?.sellOrders ?? [];
   buyOrdersRef.current = overview?.buyOrders ?? [];
@@ -1642,6 +1798,10 @@ function HealthTab() {
 
 function ListingsTab() {
   const { t } = useTranslation();
+  const smartStates = useSmartManageStates();
+  const [strategyPopoverId, setStrategyPopoverId] = useState<string | null>(null);
+  const [strategyAnchorEl, setStrategyAnchorEl] = useState<HTMLElement | null>(null);
+  const tradeOverviewReloadNonce = useAppStore((s) => s.tradeOverviewReloadNonce);
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const pushToast = useAppStore((s) => s.pushToast);
@@ -1775,7 +1935,7 @@ function ListingsTab() {
     return () => {
       cancelled = true;
     };
-  }, [loadTradeAccount, sellerMode, syncWatchlistTradeOverview, tradeAccount]);
+  }, [loadTradeAccount, sellerMode, syncWatchlistTradeOverview, tradeAccount, tradeOverviewReloadNonce]);
 
   useEffect(() => {
     if (!tradeAccount) {
@@ -2122,6 +2282,8 @@ function ListingsTab() {
       setListingModal(null);
       setListingAnalysis(null);
       setListingActionPending(false);
+      // An edit hands manual control back to the user — resync the per-listing Auto chips.
+      smartStates.refresh();
       void applyOverview(nextOverview).catch((error) => {
         setOverviewError(formatTradesErrorMessage('trade-overview-refresh', error));
       });
@@ -2170,8 +2332,8 @@ function ListingsTab() {
   // gets repriced to the recommended exit (market low / trim target), a buy gets raised to the
   // recommended bid (match top bid). Falls back to market low for sells with no explicit target.
   const handleApplyRecommended = async (order: TradeSellOrder) => {
-    const target = order.health?.recommendedPrice
-      ?? (order.orderType === 'sell' ? order.marketLow ?? null : null);
+    // Apply exactly the engine's recommended price (reprice/trim/match) — no floor fallback.
+    const target = order.health?.recommendedPrice ?? null;
     if (target === null || target === undefined || target <= 0 || target === order.yourPrice) {
       return;
     }
@@ -2193,6 +2355,10 @@ function ListingsTab() {
         sellerMode,
       );
       await applyOverview(nextOverview);
+      // A manual sell update flips this listing to manual on the backend — resync the chip.
+      if (order.orderType === 'sell') {
+        smartStates.refresh();
+      }
     } catch (error) {
       handleTradeActionFailure(error);
     } finally {
@@ -2235,8 +2401,9 @@ function ListingsTab() {
 
   const renderOrderRow = (order: TradeSellOrder, type: TradeListingKind) => {
     const pending = isOrderPending(order.orderId);
-    const recommendedPrice = order.health?.recommendedPrice
-      ?? (type === 'sell' && (order.priceGap ?? 0) > 0 ? order.marketLow ?? null : null);
+    // Only offer the one-click action when the health engine actually recommends a price change
+    // (reprice / trim / match bid) — never a blind reprice-to-floor just because we're undercut.
+    const recommendedPrice = order.health?.recommendedPrice ?? null;
     const canApplyPrice =
       recommendedPrice !== null && recommendedPrice !== undefined
       && recommendedPrice > 0 && recommendedPrice !== order.yourPrice;
@@ -2290,6 +2457,40 @@ function ListingsTab() {
               ) : null}
             </span>
           </div>
+          {type === 'sell' && order.wfmId ? (
+            <div className="smart-strategy-anchor">
+              <button
+                type="button"
+                className={`trade-auto-chip ${smartStates.isManaged(order.wfmId, order.rank) ? 'on' : 'off'}`}
+                title={t('smart.perListingTitle')}
+                aria-label={t('smart.perListingTitle')}
+                aria-expanded={strategyPopoverId === order.orderId}
+                onClick={(event) => {
+                  const trigger = event.currentTarget;
+                  setStrategyPopoverId((current) => {
+                    const next = current === order.orderId ? null : order.orderId;
+                    setStrategyAnchorEl(next ? trigger : null);
+                    return next;
+                  });
+                }}
+              >
+                <i className="ti ti-robot" aria-hidden="true" />
+                {t('smart.auto')}
+              </button>
+              {strategyPopoverId === order.orderId ? (
+                <SmartListingStrategyPopover
+                  initial={smartStates.overridesFor(order.wfmId, order.rank)}
+                  enabled={smartStates.isManaged(order.wfmId, order.rank)}
+                  anchorEl={strategyAnchorEl}
+                  onToggleEnabled={() => void smartStates.toggle(order.wfmId, order.rank)}
+                  onClose={() => setStrategyPopoverId(null)}
+                  onSave={(next) => {
+                    void smartStates.saveOverrides(order.wfmId, order.rank, next);
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <span className="trade-split-prices">
           {formatPlatinumValue(order.yourPrice)}
@@ -2309,8 +2510,14 @@ function ListingsTab() {
               type="button"
               className="trade-icon-btn trade-icon-btn-warn"
               disabled={pending}
-              title={t('trades.row.reprice', { price: formatPlatinumValue(recommendedPrice ?? 0) })}
-              aria-label={t('trades.row.reprice', { price: formatPlatinumValue(recommendedPrice ?? 0) })}
+              title={t('trades.row.applyAction', {
+                action: tHealth(t, order.health?.actionLabel) || t('trades.health.apply'),
+                price: formatPlatinumValue(recommendedPrice ?? 0),
+              })}
+              aria-label={t('trades.row.applyAction', {
+                action: tHealth(t, order.health?.actionLabel) || t('trades.health.apply'),
+                price: formatPlatinumValue(recommendedPrice ?? 0),
+              })}
               onClick={() => void handleApplyRecommended(order)}
             >
               <BoltIcon />
