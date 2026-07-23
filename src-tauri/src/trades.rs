@@ -1403,6 +1403,61 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
               PRIMARY KEY (username, order_id)
             );
 
+            -- Smart Manage: per-listing auto-manage opt-in, keyed so it survives order recreation.
+            -- A row present means the user explicitly set it; absent means use the global default.
+            -- Manual price edits write an explicit disabled row (user took control).
+            CREATE TABLE IF NOT EXISTS smart_manage_state (
+              username TEXT NOT NULL,
+              wfm_id TEXT NOT NULL,
+              variant_key TEXT NOT NULL,
+              enabled INTEGER NOT NULL DEFAULT 0,
+              updated_at TEXT NOT NULL,
+              -- Per-listing strategy overrides. NULL = inherit the global setting.
+              aggressiveness TEXT,
+              min_price INTEGER,
+              max_price INTEGER,
+              PRIMARY KEY (username, wfm_id, variant_key)
+            );
+
+            -- Smart Manage audit log: every intended/applied price change, for the activity feed.
+            CREATE TABLE IF NOT EXISTS smart_manage_log (
+              log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              username TEXT NOT NULL,
+              order_id TEXT,
+              wfm_id TEXT NOT NULL,
+              variant_key TEXT NOT NULL,
+              slug TEXT NOT NULL,
+              item_name TEXT NOT NULL,
+              at TEXT NOT NULL,
+              old_price INTEGER NOT NULL,
+              new_price INTEGER NOT NULL,
+              action TEXT NOT NULL,
+              reason_code TEXT NOT NULL,
+              applied INTEGER NOT NULL,
+              preview INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_smart_manage_log_user
+              ON smart_manage_log (username, at DESC);
+
+            -- Phase 2 self-calibration: what a Smart-Manage-touched listing actually sold for,
+            -- against the price it sat at before Smart Manage first moved it. This is the honest
+            -- scoreboard — did auto-repricing actually earn plat, or not.
+            CREATE TABLE IF NOT EXISTS smart_manage_outcome (
+              outcome_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              username TEXT NOT NULL,
+              order_id TEXT NOT NULL,
+              slug TEXT NOT NULL,
+              closed_at TEXT NOT NULL,
+              baseline_price INTEGER NOT NULL,
+              sold_price INTEGER NOT NULL,
+              quantity INTEGER NOT NULL,
+              delta_plat INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_smart_manage_outcome_user
+              ON smart_manage_outcome (username, closed_at DESC);
+
             -- Resolved outcomes: how a predicted listing actually performed once it sold.
             CREATE TABLE IF NOT EXISTS health_prediction_outcome (
               outcome_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1422,6 +1477,38 @@ fn initialize_trades_cache_schema(connection: &Connection) -> Result<()> {
 }
 
 fn migrate_trades_cache_schema(connection: &Connection) -> Result<()> {
+    // Smart Manage outcome attribution needs to tie a closed sale back to the price changes made
+    // on that order, so existing installs get the column added in place (legacy rows stay NULL
+    // and are simply not attributable).
+    if let Ok(mut stmt) = connection.prepare("PRAGMA table_info(smart_manage_log)") {
+        let has_order_id = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map(|rows| {
+                rows.filter_map(|r| r.ok()).any(|column| column == "order_id")
+            })
+            .unwrap_or(false);
+        if !has_order_id {
+            let _ = connection.execute("ALTER TABLE smart_manage_log ADD COLUMN order_id TEXT", []);
+        }
+    }
+
+    // Per-listing strategy overrides, added after the table shipped.
+    if let Ok(mut stmt) = connection.prepare("PRAGMA table_info(smart_manage_state)") {
+        let existing: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default();
+        for (column, ddl) in [
+            ("aggressiveness", "ALTER TABLE smart_manage_state ADD COLUMN aggressiveness TEXT"),
+            ("min_price", "ALTER TABLE smart_manage_state ADD COLUMN min_price INTEGER"),
+            ("max_price", "ALTER TABLE smart_manage_state ADD COLUMN max_price INTEGER"),
+        ] {
+            if !existing.iter().any(|name| name == column) {
+                let _ = connection.execute(ddl, []);
+            }
+        }
+    }
+
     let mut statement = connection
         .prepare("PRAGMA table_info(portfolio_trade_log_cache)")
         .context("failed to inspect trade log cache schema")?;
@@ -1978,6 +2065,21 @@ fn load_avg_buy_cost(connection: &Connection, username: &str, slug: &str) -> Opt
     if trimmed.is_empty() {
         return None;
     }
+    if let Some(direct) = load_direct_avg_buy_cost(connection, username, trimmed) {
+        return Some(direct);
+    }
+    // No direct buys — if this is a set, its real cost is what you paid for the parts. Roll the
+    // component buys up so an assembled set still gets loss protection (this is where the most
+    // capital sits, so it's exactly where the cost floor matters most).
+    load_set_component_cost(connection, username, trimmed)
+}
+
+/// Cost basis from buys of this exact slug.
+fn load_direct_avg_buy_cost(
+    connection: &Connection,
+    username: &str,
+    trimmed: &str,
+) -> Option<(i64, i64)> {
     connection
         .query_row(
             "SELECT CAST(ROUND(AVG(platinum)) AS INTEGER), COUNT(*)
@@ -1993,6 +2095,45 @@ fn load_avg_buy_cost(connection: &Connection, username: &str, slug: &str) -> Opt
         )
         .ok()
         .and_then(|(cost, count)| cost.map(|value| (value, count)))
+}
+
+/// Cost basis for an assembled set: sum of (average component buy cost x quantity in set).
+/// Returns None unless we have a logged buy for EVERY component — a partial roll-up would
+/// understate the true cost and weaken the floor rather than protect it. The reported sample
+/// count is the weakest component's, so the caller's confidence rule still applies.
+fn load_set_component_cost(
+    connection: &Connection,
+    username: &str,
+    set_slug: &str,
+) -> Option<(i64, i64)> {
+    let mut stmt = connection
+        .prepare(
+            "SELECT component_slug, quantity_in_set FROM trade_set_component_cache
+             WHERE set_slug = ?1",
+        )
+        .ok()?;
+    let components: Vec<(String, i64)> = stmt
+        .query_map(params![set_slug], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .ok()?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .ok()?;
+    if components.is_empty() {
+        return None;
+    }
+
+    let mut total_cost: i64 = 0;
+    let mut weakest_count = i64::MAX;
+    for (component_slug, quantity) in components {
+        let (cost, count) = load_direct_avg_buy_cost(connection, username, &component_slug)?;
+        total_cost = total_cost.saturating_add(cost.saturating_mul(quantity.max(1)));
+        weakest_count = weakest_count.min(count);
+    }
+    if total_cost <= 0 || weakest_count == i64::MAX {
+        return None;
+    }
+    Some((total_cost, weakest_count))
 }
 
 /// #14 Record the earliest health prediction we've seen for a live listing (INSERT OR IGNORE
@@ -2066,6 +2207,653 @@ fn resolve_health_prediction(conn: &Connection, username: &str, order_id: &str) 
     let _ = conn.execute(
         "DELETE FROM health_prediction WHERE username = ?1 AND order_id = ?2",
         params![username, order_id],
+    );
+}
+
+// ---- Smart Manage: per-listing state + audit log ----
+
+/// RAII in-flight lock so only one health loop can evaluate+apply a given listing at a time.
+/// The key is `username|wfm_id|variant`. Dropping the guard releases the listing.
+fn smart_apply_inflight() -> &'static Mutex<HashSet<String>> {
+    static INFLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    INFLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+struct SmartApplyGuard {
+    key: String,
+}
+
+impl SmartApplyGuard {
+    fn acquire(key: String) -> Option<Self> {
+        let mut set = smart_apply_inflight().lock().ok()?;
+        if set.contains(&key) {
+            return None;
+        }
+        set.insert(key.clone());
+        Some(SmartApplyGuard { key })
+    }
+}
+
+impl Drop for SmartApplyGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = smart_apply_inflight().lock() {
+            set.remove(&self.key);
+        }
+    }
+}
+
+/// One row of the Smart Manage activity feed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartManageLogEntry {
+    pub log_id: i64,
+    pub wfm_id: String,
+    pub variant_key: String,
+    pub slug: String,
+    pub item_name: String,
+    pub at: String,
+    pub old_price: i64,
+    pub new_price: i64,
+    pub action: String,
+    pub reason_code: String,
+    pub applied: bool,
+    pub preview: bool,
+}
+
+/// Explicitly set (or clear) a listing's auto-manage opt-in. `enabled = None` deletes the row so
+/// the listing falls back to the global default.
+fn set_smart_manage_state(
+    conn: &Connection,
+    username: &str,
+    wfm_id: &str,
+    variant_key: &str,
+    enabled: Option<bool>,
+) -> Result<()> {
+    match enabled {
+        Some(value) => {
+            conn.execute(
+                "INSERT INTO smart_manage_state (username, wfm_id, variant_key, enabled, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(username, wfm_id, variant_key)
+                 DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
+                params![username, wfm_id, variant_key, i64::from(value), format_timestamp(now_utc())?],
+            )?;
+        }
+        None => {
+            conn.execute(
+                "DELETE FROM smart_manage_state WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3",
+                params![username, wfm_id, variant_key],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether a listing is auto-managed: an explicit state row wins; otherwise the global default.
+fn is_listing_smart_managed(
+    conn: &Connection,
+    username: &str,
+    wfm_id: &str,
+    variant_key: &str,
+    global_default: bool,
+) -> bool {
+    conn.query_row(
+        "SELECT enabled FROM smart_manage_state WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3",
+        params![username, wfm_id, variant_key],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .map(|value| value == 1)
+    .unwrap_or(global_default)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_smart_manage_log(
+    conn: &Connection,
+    username: &str,
+    order_id: &str,
+    wfm_id: &str,
+    variant_key: &str,
+    slug: &str,
+    item_name: &str,
+    old_price: i64,
+    new_price: i64,
+    action: &str,
+    reason_code: &str,
+    applied: bool,
+    preview: bool,
+) {
+    let _ = conn.execute(
+        "INSERT INTO smart_manage_log
+           (username, order_id, wfm_id, variant_key, slug, item_name, at, old_price, new_price, action, reason_code, applied, preview)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            username, order_id, wfm_id, variant_key, slug, item_name,
+            format_timestamp(now_utc()).unwrap_or_default(),
+            old_price, new_price, action, reason_code,
+            i64::from(applied), i64::from(preview),
+        ],
+    );
+    // Keep the log bounded (most-recent 500 rows per user).
+    let _ = conn.execute(
+        "DELETE FROM smart_manage_log WHERE username = ?1 AND log_id NOT IN (
+           SELECT log_id FROM smart_manage_log WHERE username = ?1 ORDER BY at DESC LIMIT 500
+         )",
+        params![username],
+    );
+}
+
+fn load_smart_manage_log(
+    conn: &Connection,
+    username: &str,
+    limit: i64,
+) -> Result<Vec<SmartManageLogEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT log_id, wfm_id, variant_key, slug, item_name, at, old_price, new_price, action, reason_code, applied, preview
+         FROM smart_manage_log WHERE username = ?1 ORDER BY at DESC LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![username, limit.clamp(1, 500)], |row| {
+            Ok(SmartManageLogEntry {
+                log_id: row.get(0)?,
+                wfm_id: row.get(1)?,
+                variant_key: row.get(2)?,
+                slug: row.get(3)?,
+                item_name: row.get(4)?,
+                at: row.get(5)?,
+                old_price: row.get(6)?,
+                new_price: row.get(7)?,
+                action: row.get(8)?,
+                reason_code: row.get(9)?,
+                applied: row.get::<_, i64>(10)? == 1,
+                preview: row.get::<_, i64>(11)? == 1,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Phase 2 self-calibration: when a Smart-Manage-touched listing sells, record what it actually
+/// sold for against the price it sat at *before* Smart Manage first moved it. That baseline is
+/// the honest counterfactual — "what you'd have sold at if you'd left it alone" — so the running
+/// total answers the only question that matters: did auto-repricing actually earn plat?
+///
+/// Best-effort; a listing Smart Manage never touched simply produces no outcome row.
+fn resolve_smart_manage_outcome(
+    conn: &Connection,
+    username: &str,
+    order_id: &str,
+    quantity: i64,
+) {
+    // First applied change gives the pre-Smart-Manage baseline; the last gives the selling price.
+    let baseline = conn
+        .query_row(
+            "SELECT old_price, slug FROM smart_manage_log
+             WHERE username = ?1 AND order_id = ?2 AND applied = 1
+             ORDER BY at ASC LIMIT 1",
+            params![username, order_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let Some((baseline_price, slug)) = baseline else {
+        return;
+    };
+    let sold_price = conn
+        .query_row(
+            "SELECT new_price FROM smart_manage_log
+             WHERE username = ?1 AND order_id = ?2 AND applied = 1
+             ORDER BY at DESC LIMIT 1",
+            params![username, order_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let Some(sold_price) = sold_price else {
+        return;
+    };
+
+    let units = quantity.max(1);
+    let delta = (sold_price - baseline_price).saturating_mul(units);
+    let _ = conn.execute(
+        "INSERT INTO smart_manage_outcome
+           (username, order_id, slug, closed_at, baseline_price, sold_price, quantity, delta_plat)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            username,
+            order_id,
+            slug,
+            format_timestamp(now_utc()).unwrap_or_default(),
+            baseline_price,
+            sold_price,
+            units,
+            delta,
+        ],
+    );
+}
+
+/// Per-listing strategy overrides. Every field is optional; `None` inherits the global setting.
+#[derive(Debug, Clone, Default)]
+struct SmartListingOverrides {
+    aggressiveness: Option<String>,
+    min_price: Option<i64>,
+    max_price: Option<i64>,
+}
+
+fn load_smart_listing_overrides(
+    conn: &Connection,
+    username: &str,
+    wfm_id: &str,
+    variant_key: &str,
+) -> SmartListingOverrides {
+    conn.query_row(
+        "SELECT aggressiveness, min_price, max_price FROM smart_manage_state
+         WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3",
+        params![username, wfm_id, variant_key],
+        |row| {
+            Ok(SmartListingOverrides {
+                aggressiveness: row.get(0)?,
+                min_price: row.get(1)?,
+                max_price: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .unwrap_or_default()
+}
+
+/// Minimum resolved predictions before we let realized sell times bend the pricing model.
+const MIN_CALIBRATION_SAMPLES: i64 = 8;
+/// Consecutive failed applies on one listing before Smart Manage stops retrying it.
+const SMART_FAILURE_STREAK_LIMIT: i64 = 3;
+
+/// Learns how wrong our sell-time estimates have been for this user: median(actual / predicted)
+/// over resolved predictions. Feeds `SmartInputs::sell_time_calibration` so the pricing model is
+/// corrected by reality instead of trusting its own curve forever. `None` until the sample is big
+/// enough to mean anything.
+fn sell_time_calibration(conn: &Connection, username: &str) -> Option<f64> {
+    let mut ratios: Vec<f64> = conn
+        .prepare(
+            "SELECT actual_hours / est_sell_hours FROM health_prediction_outcome
+             WHERE username = ?1 AND est_sell_hours IS NOT NULL AND est_sell_hours > 0
+               AND actual_hours > 0",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(params![username], |row| row.get::<_, f64>(0))
+                .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+        })
+        .unwrap_or_default();
+    if (ratios.len() as i64) < MIN_CALIBRATION_SAMPLES {
+        return None;
+    }
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(ratios[ratios.len() / 2])
+}
+
+/// How many times in a row we've tried and failed to apply a change to this listing since the
+/// last success. Drives the circuit breaker: a listing WFM keeps rejecting (expired session, a
+/// payload it won't accept) must stop being retried every cycle and start being visible instead.
+fn smart_failure_streak(
+    conn: &Connection,
+    username: &str,
+    wfm_id: &str,
+    variant_key: &str,
+) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM smart_manage_log
+         WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3
+           AND applied = 0 AND new_price <> old_price
+           AND at > COALESCE((SELECT MAX(at) FROM smart_manage_log
+                              WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3
+                                AND applied = 1), '')",
+        params![username, wfm_id, variant_key],
+        |row| row.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
+}
+
+/// Rate-limit inputs: (applied changes today, timestamp of the last applied change) for a listing.
+fn smart_change_rate_state(
+    conn: &Connection,
+    username: &str,
+    wfm_id: &str,
+    variant_key: &str,
+) -> (i64, Option<String>) {
+    let since = format_timestamp(now_utc() - time::Duration::hours(24)).unwrap_or_default();
+    let count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM smart_manage_log
+             WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3 AND applied = 1 AND at >= ?4",
+            params![username, wfm_id, variant_key, since],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    let last = conn
+        .query_row(
+            "SELECT at FROM smart_manage_log
+             WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3 AND applied = 1
+             ORDER BY at DESC LIMIT 1",
+            params![username, wfm_id, variant_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    (count, last)
+}
+
+/// Emitted when Smart Manage changes (or, in preview mode, would change) a listing's price.
+const SMART_MANAGE_EVENT: &str = "wfm-smart-manage-change";
+
+/// Runs the Smart Manage decision for one listing, piggybacking on the live-context already
+/// fetched for health (no extra WFM calls). In preview mode it logs the intended change and
+/// notifies; live, it also applies the new price via the order-update path. All guardrails
+/// (rate limits, cost floor, price-war brake) are enforced here + in `smart_target`.
+#[allow(clippy::too_many_arguments)]
+fn maybe_run_smart_manage(
+    app: &tauri::AppHandle,
+    session: &StoredTradeSession,
+    order_id: &str,
+    wfm_id: &str,
+    slug: &str,
+    rank: Option<i64>,
+    your_price: i64,
+    quantity: i64,
+    per_trade: i64,
+    bulk_tradable: bool,
+    visible: bool,
+    live_context: &TradeHealthLiveContext,
+    cached_context: Option<&crate::market_observatory::CachedTradeHealthContext>,
+    cost_basis: Option<i64>,
+    seller_mode: &str,
+) {
+    let settings = match load_settings_for_internal_use(app) {
+        Ok(s) => s.smart_manage,
+        Err(_) => return,
+    };
+    let Ok(conn) = open_trades_cache_database(app) else {
+        return;
+    };
+    let username = &session.account.name;
+    let variant = crate::recommended_prices::variant_key_for_rank(rank);
+
+    // Global master OR a per-listing opt-in must be on; manual-override rows win.
+    if !is_listing_smart_managed(&conn, username, wfm_id, &variant, settings.enabled) {
+        return;
+    }
+
+    // Competitor prices: everyone but us, outlier-filtered, ascending.
+    let normalized_me = username.trim().to_ascii_lowercase();
+    let mut competitor_prices: Vec<i64> = live_context
+        .sell_orders
+        .iter()
+        .filter(|order| order.username.trim().to_ascii_lowercase() != normalized_me)
+        .map(|order| order.price.round() as i64)
+        .filter(|&price| crate::order_flow::is_plausible_price(wfm_id, &variant, price as f64))
+        .collect();
+    competitor_prices.sort_unstable();
+
+    let is_only_seller = competitor_prices.is_empty();
+    let overrides = load_smart_listing_overrides(&conn, username, wfm_id, &variant);
+    // A per-listing aggressiveness beats the global one: a cheap fast-moving part and an
+    // expensive slow set genuinely want different behaviour.
+    let aggressiveness = crate::smart_manage::Aggressiveness::from_wire(
+        overrides
+            .aggressiveness
+            .as_deref()
+            .unwrap_or(&settings.aggressiveness),
+    );
+
+    // Who holds the floor, and how hard do they defend it? Undercutting a seller who re-lists
+    // every few minutes buys a lead that's gone before it can earn anything.
+    let floor_defender_rate = live_context
+        .sell_orders
+        .iter()
+        .filter(|order| order.username.trim().to_ascii_lowercase() != normalized_me)
+        .min_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal))
+        .and_then(|order| {
+            crate::order_flow::seller_repricing_rate(wfm_id, &variant, &order.username)
+        });
+
+    // Live demand, highest bid first.
+    let mut buy_prices: Vec<i64> = live_context
+        .buy_orders
+        .iter()
+        .map(|order| order.price.round() as i64)
+        .filter(|&price| price > 0)
+        .collect();
+    buy_prices.sort_unstable_by(|a, b| b.cmp(a));
+    let params =
+        crate::smart_manage::SmartParams::from_settings(aggressiveness, settings.min_margin_pct);
+
+    let inputs = crate::smart_manage::SmartInputs {
+        your_price,
+        // The cost floor is not optional: Smart Manage never prices a listing below what it
+        // cost, so a known cost basis always applies.
+        cost_basis,
+        competitor_prices,
+        exit_zone_low: cached_context.and_then(|c| c.exit_zone_low),
+        exit_zone_high: cached_context.and_then(|c| c.exit_zone_high),
+        daily_volume: cached_context.and_then(|c| c.daily_volume),
+        undercut_velocity: cached_context.and_then(|c| c.undercut_velocity),
+        buy_depth: live_context.buy_orders.len() as i64,
+        confidence_level: cached_context
+            .map(|c| c.confidence_level.clone())
+            .unwrap_or_else(|| "low".to_string()),
+        is_only_seller,
+        sell_time_calibration: sell_time_calibration(&conn, username),
+        floor_defender_rate,
+        buy_prices,
+        price_floor_override: overrides.min_price,
+        price_ceiling_override: overrides.max_price,
+    };
+
+    let decision = crate::smart_manage::smart_target(&inputs, &params);
+    let actionable = decision.auto_allowed && decision.should_change;
+
+    // Observability: log the listing's latest conclusion — a real "would/did change", or why it's
+    // holding / lacks data — deduped so an unchanged conclusion isn't re-logged every refresh.
+    // This keeps the activity feed meaningful even when the engine is (correctly) holding, and
+    // runs whether or not we go on to apply below.
+    let already_logged = conn
+        .query_row(
+            "SELECT new_price, action FROM smart_manage_log
+             WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3
+             ORDER BY at DESC LIMIT 1",
+            params![username, wfm_id, variant],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .map(|(price, action)| {
+            if actionable {
+                price == decision.target_price && action == decision.action.as_str()
+            } else {
+                // Non-actionable rows are logged as a hold at the current price.
+                price == your_price && (action == "hold" || action == "insufficient_data")
+            }
+        })
+        .unwrap_or(false);
+
+    // A non-actionable decision is feed-only: record it once and stop. Log it as a *hold at the
+    // current price* rather than as a phantom move — otherwise a sub-threshold "trim 101→71" row
+    // is indistinguishable from a change that was attempted and failed, which is exactly how a
+    // silently-blocked listing ends up looking like a broken WFM request.
+    if !actionable {
+        if !already_logged {
+            let blocked_reason = if decision.action == crate::smart_manage::SmartAction::InsufficientData {
+                decision.reason_code.clone()
+            } else if !decision.should_change {
+                "below_threshold".to_string()
+            } else {
+                "blocked_no_data".to_string()
+            };
+            let log_action = if decision.action == crate::smart_manage::SmartAction::InsufficientData {
+                "insufficient_data"
+            } else {
+                "hold"
+            };
+            insert_smart_manage_log(
+                &conn, username, order_id, wfm_id, &variant, slug, slug,
+                your_price, your_price, log_action,
+                &blocked_reason, false, false,
+            );
+            let _ = app.emit(
+                SMART_MANAGE_EVENT,
+                json!({
+                    "wfmId": wfm_id, "slug": slug, "oldPrice": your_price,
+                    "newPrice": your_price, "action": log_action,
+                    "reasonCode": blocked_reason, "applied": false, "preview": false,
+                }),
+            );
+        }
+        return;
+    }
+
+    // Concurrency guard: the foreground and background health loops can both evaluate the same
+    // listing at once. Hold an in-flight lock across the rate-limit read + apply so two passes
+    // can't race the read-before-write and double-reprice. If we can't get it, another pass owns
+    // this listing right now — skip.
+    let inflight_key = format!("{username}|{wfm_id}|{variant}");
+    let _apply_guard = match SmartApplyGuard::acquire(inflight_key) {
+        Some(guard) => guard,
+        None => return,
+    };
+
+    // Circuit breaker: if WFM has rejected this listing repeatedly, stop hammering it. Retrying
+    // a request that fails deterministically just burns rate-limit budget and buries the real
+    // problem; the listing is reported as stuck instead so the user can see and fix it.
+    if smart_failure_streak(&conn, username, wfm_id, &variant) >= SMART_FAILURE_STREAK_LIMIT {
+        return;
+    }
+
+    // Rate limits are PER ITEM: cap changes/day and enforce a minimum interval between changes on
+    // this specific listing (not a global total).
+    let (count_today, last_at) = smart_change_rate_state(&conn, username, wfm_id, &variant);
+    if count_today >= settings.max_changes_per_day {
+        return;
+    }
+    if let Some(last) = last_at {
+        if let Some(ts) = parse_timestamp(&last) {
+            if (now_utc() - ts).whole_minutes() < settings.min_interval_minutes {
+                return;
+            }
+        }
+    }
+
+    let mut applied = false;
+    let update = TradeUpdateListingInput {
+        order_id: order_id.to_string(),
+        price: decision.target_price,
+        quantity,
+        rank,
+        visible,
+        wfm_id: Some(wfm_id.to_string()),
+        per_trade: if bulk_tradable { Some(per_trade) } else { None },
+    };
+    // Verify rather than assume. `update_order_inner` returns the rebuilt overview, so confirming
+    // that WFM actually holds the new price is free — and a silently coerced or ignored write is
+    // exactly the kind of failure that would otherwise look like a success forever.
+    let mut item_name = slug.to_string();
+    let mut reason_code = decision.reason_code.clone();
+    match update_order_inner(app, &update, "sell", seller_mode, RequestPriority::High) {
+        Ok(overview) => {
+            let confirmed = overview.sell_orders.iter().find(|o| o.order_id == order_id);
+            if let Some(order) = confirmed {
+                item_name = order.name.clone();
+                applied = order.your_price == decision.target_price;
+            } else {
+                // The order vanished from the book — treat as unconfirmed rather than applied.
+                applied = false;
+            }
+            if !applied {
+                reason_code = format!("{reason_code}+unconfirmed");
+                log_feature_error_best_effort(
+                    app,
+                    "smart-manage",
+                    "verify-price",
+                    "Smart Manage sent a price change but WFM did not confirm the new price.",
+                    &anyhow::anyhow!(
+                        "order {order_id} expected {} after update",
+                        decision.target_price
+                    ),
+                );
+            }
+        }
+        Err(error) => {
+            log_feature_error_best_effort(
+                app,
+                "smart-manage",
+                "apply-price",
+                "Smart Manage failed to apply an auto price change.",
+                &error,
+            );
+        }
+    }
+
+    insert_smart_manage_log(
+        &conn,
+        username,
+        order_id,
+        wfm_id,
+        &variant,
+        slug,
+        &item_name,
+        your_price,
+        decision.target_price,
+        decision.action.as_str(),
+        &reason_code,
+        applied,
+        false,
+    );
+
+    // Surface it: an event for the in-app activity feed + notification/Discord if enabled.
+    let _ = app.emit(
+        SMART_MANAGE_EVENT,
+        json!({
+            "wfmId": wfm_id,
+            "slug": slug,
+            "oldPrice": your_price,
+            "newPrice": decision.target_price,
+            "action": decision.action.as_str(),
+            "reasonCode": reason_code,
+            "applied": applied,
+            "preview": false,
+        }),
+    );
+    // Whether this actually reaches Discord is decided by the webhook settings alone
+    // (Settings -> Discord), so there is no second on/off switch for the same thing here.
+    notify_smart_manage_change(
+        app,
+        slug,
+        your_price,
+        decision.target_price,
+        decision.action.as_str(),
+        applied,
+        false,
+    );
+}
+
+/// Backend side of a smart price-change notification: fire the Discord webhook. The in-app /
+/// desktop notification is handled on the frontend via the `SMART_MANAGE_EVENT` listener.
+fn notify_smart_manage_change(
+    app: &tauri::AppHandle,
+    slug: &str,
+    old_price: i64,
+    new_price: i64,
+    action: &str,
+    applied: bool,
+    preview: bool,
+) {
+    let _ = crate::settings::send_smart_manage_discord_notification_inner(
+        app, slug, old_price, new_price, action, applied, preview,
     );
 }
 
@@ -2312,6 +3100,11 @@ fn decide_trade_health(
         ("Hold above cost", "amber", "Repricing would lock a loss", None)
     } else if sellers_ahead >= 6 || quantity_ahead >= 10 || price_gap.unwrap_or_default() >= 4 {
         ("Reprice to market", "red", "Unlikely at current price", market_low)
+    } else if price_gap.unwrap_or_default() > 0 && !reprice_target_loss {
+        // Priced above market but not deep in the queue, not a loss, not a price war: give an
+        // actionable trim toward market rather than a bare "hold" — this is the case that used
+        // to leave a middling listing with no recommendation at all.
+        ("Reprice to market", "amber", "Above market — trim to compete", market_low)
     } else if liquidity_score.unwrap_or(60) < 35 {
         ("Low priority listing", "amber", "Thin market", None)
     } else {
@@ -2590,10 +3383,16 @@ pub async fn get_trade_sell_order_health(
     per_trade: Option<i64>,
     order_id: Option<String>,
     wfm_id: Option<String>,
+    quantity: Option<i64>,
+    visible: Option<bool>,
+    bulk_tradable: Option<bool>,
 ) -> Result<TradeListingHealth, String> {
     let app_for_work = app.clone();
     let health_order_id = order_id;
     let health_wfm_id = wfm_id;
+    let health_quantity = quantity.unwrap_or(1).max(1);
+    let health_visible = visible.unwrap_or(true);
+    let health_bulk = bulk_tradable.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         let per_trade = per_trade.unwrap_or(1).max(1);
         let priority = RequestPriority::from_wire(Some(priority.trim()), RequestPriority::Low);
@@ -2668,6 +3467,31 @@ pub async fn get_trade_sell_order_health(
         let est_sell_hours_at_market = estimate_sell_hours(0, effective_now_volume);
         // #12 Rank/variant: you're the sole seller at your variant when nobody is cheaper or tied.
         let is_only_variant_seller = sellers_ahead == 0 && tie_count == 0 && !live_context.sell_orders.is_empty();
+
+        // Smart Manage: reuse the live context we just fetched to (optionally) auto-reprice this
+        // listing. No extra WFM calls — it rides on the same health refresh, foreground or the
+        // always-on background pass. Best-effort; a smart-manage failure never fails health.
+        if let Some(wfm_id) = health_wfm_id.as_deref() {
+            if let Some(order_id) = health_order_id.as_deref() {
+                maybe_run_smart_manage(
+                    &app_for_work,
+                    &session,
+                    order_id,
+                    wfm_id,
+                    slug.trim(),
+                    rank,
+                    your_price,
+                    health_quantity,
+                    per_trade,
+                    health_bulk,
+                    health_visible,
+                    &live_context,
+                    cached_context.as_ref(),
+                    cost_basis_for_decision,
+                    &seller_mode,
+                );
+            }
+        }
 
         // #14 Capture this prediction so we can later grade it against the real sale time. Keyed
         // by order_id via the caller — here we only have slug, so record under a slug-scoped id
@@ -2877,6 +3701,281 @@ pub async fn get_trade_buy_order_health(
         );
         "Couldn’t refresh bid health right now.".to_string()
     })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartManageStateEntry {
+    pub wfm_id: String,
+    pub variant_key: String,
+    pub enabled: bool,
+    /// Per-listing strategy overrides; `None` means the listing follows the global setting.
+    pub aggressiveness: Option<String>,
+    pub min_price: Option<i64>,
+    pub max_price: Option<i64>,
+}
+
+/// Sets (or clears, with `None`) the per-listing strategy overrides. Kept separate from the
+/// enable toggle so changing a bound never silently flips auto-manage on or off.
+#[tauri::command]
+pub async fn set_smart_manage_overrides(
+    app: tauri::AppHandle,
+    wfm_id: String,
+    variant_key: String,
+    aggressiveness: Option<String>,
+    min_price: Option<i64>,
+    max_price: Option<i64>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_authenticated_session(&app)?;
+        let conn = open_trades_cache_database(&app)?;
+        let username = &session.account.name;
+        // A ceiling below the floor is unsatisfiable — reject rather than quietly clamp, so the
+        // user finds out at the point they set it instead of wondering why nothing happens.
+        if let (Some(min), Some(max)) = (min_price, max_price) {
+            if max < min {
+                return Err(anyhow::anyhow!(
+                    "max price ({max}) cannot be below min price ({min})"
+                ));
+            }
+        }
+        conn.execute(
+            "INSERT INTO smart_manage_state
+               (username, wfm_id, variant_key, enabled, updated_at, aggressiveness, min_price, max_price)
+             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)
+             ON CONFLICT(username, wfm_id, variant_key) DO UPDATE SET
+               updated_at = excluded.updated_at,
+               aggressiveness = excluded.aggressiveness,
+               min_price = excluded.min_price,
+               max_price = excluded.max_price",
+            params![
+                username,
+                wfm_id,
+                variant_key,
+                format_timestamp(now_utc())?,
+                aggressiveness,
+                min_price,
+                max_price,
+            ],
+        )?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// Set (or clear) a listing's explicit auto-manage opt-in. `enabled = None` clears the override
+/// so the listing follows the global default again.
+#[tauri::command]
+pub async fn set_smart_manage_for_listing(
+    app: tauri::AppHandle,
+    wfm_id: String,
+    rank: Option<i64>,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_authenticated_session(&app)?;
+        let conn = open_trades_cache_database(&app)?;
+        let variant = crate::recommended_prices::variant_key_for_rank(rank);
+        set_smart_manage_state(&conn, &session.account.name, wfm_id.trim(), &variant, enabled)?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// All explicit per-listing smart-manage overrides for the signed-in user (the frontend applies
+/// the global default to any listing not present here).
+#[tauri::command]
+pub async fn get_smart_manage_states(
+    app: tauri::AppHandle,
+) -> Result<Vec<SmartManageStateEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_authenticated_session(&app)?;
+        let conn = open_trades_cache_database(&app)?;
+        let mut stmt = conn.prepare(
+            "SELECT wfm_id, variant_key, enabled, aggressiveness, min_price, max_price
+               FROM smart_manage_state WHERE username = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![session.account.name], |row| {
+                Ok(SmartManageStateEntry {
+                    wfm_id: row.get(0)?,
+                    variant_key: row.get(1)?,
+                    enabled: row.get::<_, i64>(2)? == 1,
+                    aggressiveness: row.get(3)?,
+                    min_price: row.get(4)?,
+                    max_price: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok::<_, anyhow::Error>(rows)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// The Smart Manage activity feed (most recent first).
+#[tauri::command]
+pub async fn get_smart_manage_log(
+    app: tauri::AppHandle,
+    limit: Option<i64>,
+) -> Result<Vec<SmartManageLogEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_authenticated_session(&app)?;
+        let conn = open_trades_cache_database(&app)?;
+        load_smart_manage_log(&conn, &session.account.name, limit.unwrap_or(50))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// Realized impact of Smart Manage: how the prices it set compare to what the listings sat at
+/// before it touched them, across closed sales.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartManageImpact {
+    pub sample_count: i64,
+    pub total_delta_plat: i64,
+    pub avg_delta_plat: f64,
+    pub wins: i64,
+    pub losses: i64,
+    /// Listings the circuit breaker has given up on. Surfaced so a persistently failing write
+    /// becomes visible instead of quietly retrying forever.
+    pub stuck: Vec<SmartManageStuckListing>,
+    /// The learned sell-time correction currently bending the model, once enough sales resolved.
+    pub sell_time_calibration: Option<f64>,
+}
+
+/// A listing Smart Manage has stopped trying to update after repeated failures.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartManageStuckListing {
+    pub wfm_id: String,
+    pub variant_key: String,
+    pub slug: String,
+    pub item_name: String,
+    pub failures: i64,
+    pub last_reason: String,
+    pub last_at: String,
+}
+
+#[tauri::command]
+pub async fn get_smart_manage_impact(
+    app: tauri::AppHandle,
+) -> Result<SmartManageImpact, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_authenticated_session(&app)?;
+        let conn = open_trades_cache_database(&app)?;
+        let (sample_count, total_delta): (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(delta_plat), 0) FROM smart_manage_outcome
+                 WHERE username = ?1",
+                params![session.account.name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap_or((0, 0));
+        let wins: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM smart_manage_outcome WHERE username = ?1 AND delta_plat > 0",
+                params![session.account.name],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let losses: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM smart_manage_outcome WHERE username = ?1 AND delta_plat < 0",
+                params![session.account.name],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let avg_delta_plat = if sample_count > 0 {
+            total_delta as f64 / sample_count as f64
+        } else {
+            0.0
+        };
+        // Listings whose failure streak has hit the breaker limit.
+        let stuck = conn
+            .prepare(
+                "SELECT wfm_id, variant_key, slug, item_name, COUNT(*) AS failures,
+                        MAX(at) AS last_at,
+                        (SELECT reason_code FROM smart_manage_log inner_log
+                          WHERE inner_log.username = outer_log.username
+                            AND inner_log.wfm_id = outer_log.wfm_id
+                            AND inner_log.variant_key = outer_log.variant_key
+                          ORDER BY at DESC LIMIT 1) AS last_reason
+                   FROM smart_manage_log outer_log
+                  WHERE username = ?1 AND applied = 0 AND new_price <> old_price
+                    AND at > COALESCE((SELECT MAX(at) FROM smart_manage_log ok_log
+                                        WHERE ok_log.username = outer_log.username
+                                          AND ok_log.wfm_id = outer_log.wfm_id
+                                          AND ok_log.variant_key = outer_log.variant_key
+                                          AND ok_log.applied = 1), '')
+                  GROUP BY wfm_id, variant_key
+                 HAVING failures >= ?2
+                  ORDER BY last_at DESC",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map(params![session.account.name, SMART_FAILURE_STREAK_LIMIT], |row| {
+                    Ok(SmartManageStuckListing {
+                        wfm_id: row.get(0)?,
+                        variant_key: row.get(1)?,
+                        slug: row.get(2)?,
+                        item_name: row.get(3)?,
+                        failures: row.get(4)?,
+                        last_at: row.get(5)?,
+                        last_reason: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                    })
+                })
+                .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+            })
+            .unwrap_or_default();
+
+        Ok::<_, anyhow::Error>(SmartManageImpact {
+            sample_count,
+            total_delta_plat: total_delta,
+            avg_delta_plat,
+            wins,
+            losses,
+            stuck,
+            sell_time_calibration: sell_time_calibration(&conn, &session.account.name),
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+/// Resets the circuit breaker for one listing so Smart Manage will try it again. Clears the
+/// failure rows themselves rather than faking a success, so the streak restarts honestly and the
+/// per-day change budget isn't consumed by a retry.
+#[tauri::command]
+pub async fn clear_smart_manage_failures(
+    app: tauri::AppHandle,
+    wfm_id: String,
+    variant_key: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = ensure_authenticated_session(&app)?;
+        let conn = open_trades_cache_database(&app)?;
+        conn.execute(
+            "DELETE FROM smart_manage_log
+              WHERE username = ?1 AND wfm_id = ?2 AND variant_key = ?3
+                AND applied = 0 AND new_price <> old_price
+                AND at > COALESCE((SELECT MAX(at) FROM smart_manage_log ok_log
+                                    WHERE ok_log.username = ?1 AND ok_log.wfm_id = ?2
+                                      AND ok_log.variant_key = ?3 AND ok_log.applied = 1), '')",
+            params![session.account.name, wfm_id, variant_key],
+        )?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -7699,7 +8798,13 @@ fn handle_new_order_event(app: &tauri::AppHandle, payload: &Value) {
         // A visible sell that undercuts an item we have a live listing on → nudge its health to
         // refresh now rather than waiting for the next poll.
         let was_undercut =
-            crate::order_flow::record_order(item_id, &variant_key, side, order.platinum);
+            crate::order_flow::record_order(
+                item_id,
+                &variant_key,
+                side,
+                order.platinum,
+                order.user.as_ref().and_then(|user| user.ingame_name.as_deref()),
+            );
         if was_undercut && order.order_type == "sell" && order.visible != Some(false) {
             let _ = app.emit(TRADE_HEALTH_STALE_EVENT, json!({ "itemId": item_id }));
         }
@@ -8792,11 +9897,18 @@ fn create_order_inner(
     build_trade_overview_inner(app, seller_mode)
 }
 
+/// Applies a price/quantity/visibility update to a WFM order.
+///
+/// `priority` separates human intent from automation: a user click passes `Instant` so it never
+/// queues behind background work, while Smart Manage passes `High` — prompt, but always yielding
+/// to the user. (Priority only orders the queue; the scheduler's 3 req/s ceiling applies to every
+/// tier, so this can't be used to push more throughput.)
 fn update_order_inner(
     app: &tauri::AppHandle,
     input: &TradeUpdateListingInput,
     order_type: &str,
     seller_mode: &str,
+    priority: RequestPriority,
 ) -> Result<TradeOverview> {
     let session = ensure_authenticated_session(app)?;
     let client = shared_wfm_client()?;
@@ -8838,7 +9950,7 @@ fn update_order_inner(
         )
         .json(&payload),
         &format!("update {order_type} order"),
-        RequestPriority::Instant,
+        priority,
     );
     if let Err(ref error) = result {
         if should_attempt_trade_session_reauth(error) {
@@ -8945,6 +10057,8 @@ fn close_order_inner(
     if order_type == "sell" {
         if let Ok(conn) = open_trades_cache_database(app) {
             resolve_health_prediction(&conn, &session.account.name, order_id);
+            // Phase 2: score what Smart Manage actually earned (or cost) on this sale.
+            resolve_smart_manage_outcome(&conn, &session.account.name, order_id, quantity);
         }
     }
 
@@ -9484,7 +10598,19 @@ pub async fn update_wfm_sell_order(
     seller_mode: String,
 ) -> Result<TradeOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        update_order_inner(&app, &input, "sell", seller_mode.trim())
+        let overview = update_order_inner(&app, &input, "sell", seller_mode.trim(), RequestPriority::Instant)?;
+        // Manual edit = you took the wheel: disable auto-manage for this listing until you
+        // explicitly resume it. (Auto-apply uses `update_order_inner` directly, not this command,
+        // so it never trips this.)
+        if let (Some(wfm_id), Ok(session), Ok(conn)) = (
+            input.wfm_id.as_deref(),
+            ensure_authenticated_session(&app),
+            open_trades_cache_database(&app),
+        ) {
+            let variant = crate::recommended_prices::variant_key_for_rank(input.rank);
+            let _ = set_smart_manage_state(&conn, &session.account.name, wfm_id, &variant, Some(false));
+        }
+        Ok(overview)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -9498,7 +10624,7 @@ pub async fn update_wfm_buy_order(
     seller_mode: String,
 ) -> Result<TradeOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        update_order_inner(&app, &input, "buy", seller_mode.trim())
+        update_order_inner(&app, &input, "buy", seller_mode.trim(), RequestPriority::Instant)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -10782,6 +11908,7 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Balanced".to_string(),
             exit_zone_low: Some(118.0),
+            exit_zone_high: Some(140.0),
             daily_volume: Some(6.0),
             current_hour_volume_factor: None,
             undercut_velocity: None,
@@ -10805,6 +11932,7 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Exit Pressure".to_string(),
             exit_zone_low: Some(90.0),
+            exit_zone_high: Some(110.0),
             daily_volume: Some(4.0),
             current_hour_volume_factor: None,
             undercut_velocity: None,
@@ -10827,6 +11955,7 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Balanced".to_string(),
             exit_zone_low: None,
+            exit_zone_high: None,
             daily_volume: Some(5.0),
             current_hour_volume_factor: None,
             undercut_velocity: None,
@@ -10851,6 +11980,7 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Exit Pressure".to_string(),
             exit_zone_low: None,
+            exit_zone_high: None,
             daily_volume: Some(5.0),
             current_hour_volume_factor: None,
             undercut_velocity: None,
@@ -10873,6 +12003,7 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Balanced".to_string(),
             exit_zone_low: None,
+            exit_zone_high: None,
             daily_volume: Some(5.0),
             current_hour_volume_factor: None,
             undercut_velocity: Some(0.9), // fast race to the bottom
@@ -10895,6 +12026,7 @@ mod tests {
             liquidity_label: "Tradable".to_string(),
             pressure_label: "Balanced".to_string(),
             exit_zone_low: None,
+            exit_zone_high: None,
             daily_volume: Some(5.0),
             current_hour_volume_factor: None,
             undercut_velocity: None,

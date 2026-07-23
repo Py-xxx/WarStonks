@@ -24,6 +24,10 @@ const FLOW_WINDOW_SECONDS: f64 = 6.0 * 3600.0;
 /// Hard cap on retained events per (item, variant) so a busy item can't grow unbounded.
 const MAX_EVENTS_PER_KEY: usize = 240;
 /// A firehose price below `recommended * this` is treated as a troll/typo and dropped.
+/// Minimum observation window before a per-seller rate is reported (avoids "1 order in 20
+/// seconds = 180/hour").
+const MIN_RATE_SAMPLE_SECONDS: f64 = 900.0;
+
 const OUTLIER_LOW_RATIO: f64 = 0.1;
 /// A firehose price above `recommended * this` is treated as a troll/typo and dropped.
 const OUTLIER_HIGH_RATIO: f64 = 10.0;
@@ -34,13 +38,16 @@ pub enum FlowSide {
     Buy,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct FlowEvent {
     at_epoch: f64,
     side: FlowSide,
     price: f64,
     /// True when this sell arrival set or matched a new running floor (an undercut).
     undercut: bool,
+    /// Who posted it, when the firehose told us. Lets us tell an actively-defended floor (one
+    /// seller re-listing over and over) from a floor that simply happens to be low.
+    seller: Option<String>,
 }
 
 #[derive(Default)]
@@ -137,6 +144,7 @@ pub fn record_order(
     variant_key: &str,
     side: FlowSide,
     price: f64,
+    seller: Option<&str>,
 ) -> bool {
     if !is_plausible_price(item_id, variant_key, price) {
         return false;
@@ -168,6 +176,7 @@ pub fn record_order(
         side,
         price,
         undercut: is_undercut,
+        seller: seller.map(|name| name.trim().to_ascii_lowercase()),
     });
     prune(state, now);
     is_undercut
@@ -217,6 +226,32 @@ fn stats_from_state(state: &FlowState, now: f64) -> Option<FlowStats> {
 }
 
 /// Current aggregated flow for an item, if we've recorded anything for it.
+/// Sell arrivals per hour posted by one specific seller on this item. A high rate means an
+/// active repricer (often a bot): a lead taken by undercutting them lasts minutes, not hours, so
+/// the pricing model must discount how much that lead is worth. `None` until the observation
+/// window is long enough for a rate to mean anything.
+pub fn seller_repricing_rate(item_id: &str, variant_key: &str, seller: &str) -> Option<f64> {
+    let needle = seller.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let store = flow_store().lock().ok()?;
+    let state = store.get(&(item_id.to_string(), variant_key.to_string()))?;
+    let now = now_epoch();
+    let oldest = state.events.first()?.at_epoch;
+    let sample_seconds = (now - oldest).max(1.0);
+    if sample_seconds < MIN_RATE_SAMPLE_SECONDS {
+        return None;
+    }
+    let count = state
+        .events
+        .iter()
+        .filter(|event| event.side == FlowSide::Sell)
+        .filter(|event| event.seller.as_deref() == Some(needle.as_str()))
+        .count() as f64;
+    Some(count / (sample_seconds / 3600.0))
+}
+
 pub fn flow_stats(item_id: &str, variant_key: &str) -> Option<FlowStats> {
     let now = now_epoch();
     let mut store = flow_store().lock().ok()?;
@@ -284,10 +319,10 @@ mod tests {
     fn records_flow_and_counts_undercuts() {
         let item = "flow-record";
         // No recommended price → all plausible.
-        assert!(record_order(item, "base", FlowSide::Sell, 50.0)); // first sell = undercut
-        assert!(record_order(item, "base", FlowSide::Sell, 45.0)); // lower = undercut
-        assert!(!record_order(item, "base", FlowSide::Sell, 60.0)); // higher = not undercut
-        record_order(item, "base", FlowSide::Buy, 40.0);
+        assert!(record_order(item, "base", FlowSide::Sell, 50.0, None)); // first sell = undercut
+        assert!(record_order(item, "base", FlowSide::Sell, 45.0, None)); // lower = undercut
+        assert!(!record_order(item, "base", FlowSide::Sell, 60.0, None)); // higher = not undercut
+        record_order(item, "base", FlowSide::Buy, 40.0, None);
         let stats = flow_stats(item, "base").expect("stats present");
         assert_eq!(stats.sell_count, 3);
         assert_eq!(stats.buy_count, 1);

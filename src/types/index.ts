@@ -712,6 +712,7 @@ export interface DiscordWebhookNotificationSettings {
   watchlistFound: boolean;
   tradeDetected: boolean;
   underpricedListing: boolean;
+  priceChange: boolean;
 }
 
 /** Opportunities-engine tunables, edited on the Strategy tab. */
@@ -722,10 +723,76 @@ export interface StrategySettings {
   tradeValuePlat: number;
 }
 
+export type SmartAggressiveness = 'conservative' | 'balanced' | 'aggressive';
+
+/** Global config for Smart Manage — optional auto-repricing of sell listings. */
+export interface SmartManageSettings {
+  enabled: boolean;
+  aggressiveness: SmartAggressiveness;
+  minMarginPct: number;
+  maxChangesPerDay: number;
+  minIntervalMinutes: number;
+}
+
+export interface SmartManageStateEntry {
+  wfmId: string;
+  variantKey: string;
+  enabled: boolean;
+  /** Per-listing overrides; null means the listing follows the global setting. */
+  aggressiveness: SmartAggressiveness | null;
+  minPrice: number | null;
+  maxPrice: number | null;
+}
+
+/** Per-listing strategy overrides, as edited in the Trades row popover. */
+export interface SmartListingOverrides {
+  aggressiveness: SmartAggressiveness | null;
+  minPrice: number | null;
+  maxPrice: number | null;
+}
+
+export interface SmartManageImpact {
+  sampleCount: number;
+  totalDeltaPlat: number;
+  avgDeltaPlat: number;
+  wins: number;
+  losses: number;
+  /** Listings the circuit breaker stopped retrying after repeated failed price updates. */
+  stuck: SmartManageStuckListing[];
+  /** Learned median(actual / predicted) sell time; >1 means sales run slower than modelled. */
+  sellTimeCalibration: number | null;
+}
+
+export interface SmartManageStuckListing {
+  wfmId: string;
+  variantKey: string;
+  slug: string;
+  itemName: string;
+  failures: number;
+  lastReason: string;
+  lastAt: string;
+}
+
+export interface SmartManageLogEntry {
+  logId: number;
+  wfmId: string;
+  variantKey: string;
+  slug: string;
+  itemName: string;
+  at: string;
+  oldPrice: number;
+  newPrice: number;
+  action: string;
+  reasonCode: string;
+  applied: boolean;
+  preview: boolean;
+}
+
 export interface AppSettings {
   alecaframe: AlecaframeSettings;
   discordWebhook: DiscordWebhookSettings;
   strategy: StrategySettings;
+  smartManage: SmartManageSettings;
 }
 
 export type RingtoneId = 'chime' | 'ping' | 'coin' | 'arpeggio' | 'alert' | 'bell';
@@ -749,6 +816,8 @@ export interface NotificationSettings {
     underpricedListing: boolean;
     /** Proactive alert when several listings need action (reprice / outbid). Opt-in. */
     listingHealth: boolean;
+    /** Smart Manage auto price changes. */
+    priceChange: boolean;
   };
 }
 

@@ -28,6 +28,7 @@ export function DiscordWebhookModal() {
   const [watchlistFound, setWatchlistFound] = useState(true);
   const [tradeDetected, setTradeDetected] = useState(true);
   const [underpricedListing, setUnderpricedListing] = useState(true);
+  const [priceChange, setPriceChange] = useState(true);
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -40,6 +41,7 @@ export function DiscordWebhookModal() {
     setWatchlistFound(appSettings.discordWebhook.notifications.watchlistFound);
     setTradeDetected(appSettings.discordWebhook.notifications.tradeDetected);
     setUnderpricedListing(appSettings.discordWebhook.notifications.underpricedListing);
+    setPriceChange(appSettings.discordWebhook.notifications.priceChange);
     setLocalError(null);
     clearSettingsError();
   }, [appSettings.discordWebhook, clearSettingsError, modalOpen]);
@@ -61,6 +63,7 @@ export function DiscordWebhookModal() {
           watchlistFound,
           tradeDetected,
           underpricedListing,
+          priceChange,
         },
       });
     } catch (error) {
@@ -133,10 +136,12 @@ export function DiscordWebhookModal() {
             </label>
 
             <div className="settings-notification-grid">
-              <label className="settings-switch-row settings-switch-row-compact">
+              <label
+                className="settings-switch-row settings-switch-row-compact"
+                title={t('discord.event.watchlist.help')}
+              >
                 <span className="settings-field-copy">
                   <span className="settings-field-label">{t('discord.event.watchlist.label')}</span>
-                  <span className="settings-field-help">{t('discord.event.watchlist.help')}</span>
                 </span>
                 <button
                   className={`settings-toggle${watchlistFound ? ' on' : ''}`}
@@ -149,13 +154,18 @@ export function DiscordWebhookModal() {
                   <span className="settings-toggle-track">
                     <span className="settings-toggle-thumb" />
                   </span>
+                  <span className="settings-toggle-label">
+                    {watchlistFound ? t('common.on') : t('common.off')}
+                  </span>
                 </button>
               </label>
 
-              <label className="settings-switch-row settings-switch-row-compact">
+              <label
+                className="settings-switch-row settings-switch-row-compact"
+                title={t('discord.event.trades.help')}
+              >
                 <span className="settings-field-copy">
                   <span className="settings-field-label">{t('discord.event.trades.label')}</span>
-                  <span className="settings-field-help">{t('discord.event.trades.help')}</span>
                 </span>
                 <button
                   className={`settings-toggle${tradeDetected ? ' on' : ''}`}
@@ -171,10 +181,12 @@ export function DiscordWebhookModal() {
                 </button>
               </label>
 
-              <label className="settings-switch-row settings-switch-row-compact">
+              <label
+                className="settings-switch-row settings-switch-row-compact"
+                title={t('discord.event.underpriced.help')}
+              >
                 <span className="settings-field-copy">
                   <span className="settings-field-label">{t('discord.event.underpriced.label')}</span>
-                  <span className="settings-field-help">{t('discord.event.underpriced.help')}</span>
                 </span>
                 <button
                   className={`settings-toggle${underpricedListing ? ' on' : ''}`}
@@ -186,6 +198,33 @@ export function DiscordWebhookModal() {
                 >
                   <span className="settings-toggle-track">
                     <span className="settings-toggle-thumb" />
+                  </span>
+                  <span className="settings-toggle-label">
+                    {underpricedListing ? t('common.on') : t('common.off')}
+                  </span>
+                </button>
+              </label>
+
+              <label
+                className="settings-switch-row settings-switch-row-compact"
+                title={t('discord.event.priceChange.help')}
+              >
+                <span className="settings-field-copy">
+                  <span className="settings-field-label">{t('discord.event.priceChange.label')}</span>
+                </span>
+                <button
+                  className={`settings-toggle${priceChange ? ' on' : ''}`}
+                  type="button"
+                  role="switch"
+                  aria-checked={priceChange}
+                  aria-label={t('discord.event.priceChange.aria')}
+                  onClick={() => setPriceChange((current) => !current)}
+                >
+                  <span className="settings-toggle-track">
+                    <span className="settings-toggle-thumb" />
+                  </span>
+                  <span className="settings-toggle-label">
+                    {priceChange ? t('common.on') : t('common.off')}
                   </span>
                 </button>
               </label>

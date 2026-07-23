@@ -51,6 +51,11 @@ const EVENT_ROWS: EventRow[] = [
     helpKey: 'notif.event.listingHealth.help',
   },
   {
+    key: 'priceChange',
+    labelKey: 'notif.event.priceChange.label',
+    helpKey: 'notif.event.priceChange.help',
+  },
+  {
     key: 'scannerStale',
     labelKey: 'notif.event.scannerStale.label',
     helpKey: 'notif.event.scannerStale.help',
@@ -223,14 +228,18 @@ export function NotificationsModal() {
             <span className="settings-field-label">{t('notif.notifyAbout')}</span>
             <div className="settings-notification-grid">
               {EVENT_ROWS.map((row) => (
-                <label key={row.key} className="settings-switch-row settings-switch-row-compact">
+                <label
+                  key={row.key}
+                  className="settings-switch-row settings-switch-row-compact"
+                  title={t(row.helpKey)}
+                >
                   <span className="settings-field-copy">
                     <span className="settings-field-label">{t(row.labelKey)}</span>
-                    <span className="settings-field-help">{t(row.helpKey)}</span>
                   </span>
                   <Toggle
                     on={settings.events[row.key]}
                     onClick={() => updateEvent(row.key, !settings.events[row.key])}
+                    label={settings.events[row.key] ? t('common.on') : t('common.off')}
                   />
                 </label>
               ))}

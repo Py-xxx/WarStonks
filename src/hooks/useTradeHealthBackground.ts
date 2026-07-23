@@ -52,6 +52,9 @@ export function useTradeHealthBackground(): void {
             order.bulkTradable ? order.perTrade : null,
             order.orderId,
             order.wfmId,
+            order.quantity,
+            order.visible,
+            order.bulkTradable,
           );
         }
         return await getTradeBuyOrderHealth(
