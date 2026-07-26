@@ -17,6 +17,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   underpricedMinPctBelow: 10,
   events: {
     watchlistAlert: true,
+    tradeDetected: true,
     scannerStale: true,
     appUpdate: true,
     underpricedListing: true,
@@ -146,6 +147,7 @@ export async function sendTestDesktopNotification(): Promise<boolean> {
 
 export type NotificationEventKind =
   | 'watchlistAlert'
+  | 'tradeDetected'
   | 'scannerStale'
   | 'appUpdate'
   | 'underpricedListing'

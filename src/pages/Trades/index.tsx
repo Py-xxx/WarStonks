@@ -520,6 +520,22 @@ function SmartListingStrategyPopover({
   );
 }
 
+const EyeIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const EyeOffIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+    <path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+    <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+    <path d="m2 2 20 20" />
+  </svg>
+);
+
 function buildItemFromOrder(order: TradeSellOrder): WfmAutocompleteItem {
   return {
     itemId: order.itemId ?? 0,
@@ -2415,13 +2431,25 @@ function ListingsTab() {
         className={`trade-split-row${order.visible ? '' : ' trade-row-hidden'}`}
       >
         <div className="trade-split-item">
-          <span className="item-thumb trade-item-thumb">
-            {resolveWfmAssetUrl(order.imagePath) ? (
-              <img src={resolveWfmAssetUrl(order.imagePath) ?? undefined} alt="" />
-            ) : (
-              <span>{order.name.slice(0, 1)}</span>
-            )}
-          </span>
+          <button
+            type="button"
+            className="item-thumb trade-item-thumb trade-thumb-toggle"
+            disabled={pending}
+            title={order.visible ? t('trades.row.hideListing') : t('trades.row.showListing')}
+            aria-label={order.visible ? t('trades.row.hideListing') : t('trades.row.showListing')}
+            onClick={() => void handleToggleOrderVisibility(order)}
+          >
+            <span className="trade-thumb-art" aria-hidden="true">
+              {resolveWfmAssetUrl(order.imagePath) ? (
+                <img src={resolveWfmAssetUrl(order.imagePath) ?? undefined} alt="" />
+              ) : (
+                <span>{order.name.slice(0, 1)}</span>
+              )}
+            </span>
+            <span className="trade-thumb-eye" aria-hidden="true">
+              {order.visible ? <EyeIcon /> : <EyeOffIcon />}
+            </span>
+          </button>
           <div className="trade-split-item-copy">
             <ItemName
               className="item-name trade-split-item-name"

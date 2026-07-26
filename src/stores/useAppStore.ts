@@ -22,10 +22,11 @@ import {
   getWfmTopSellOrders,
   saveAlecaframeSettings,
   saveDiscordWebhookSettings,
-  saveStrategySettings,
   saveSmartManageSettings,
   sendWatchlistFoundDiscordNotification,
   sendUnderpricedListingDiscordNotification,
+  sendScannerStaleDiscordNotification,
+  isTauriRuntime,
   signInWfmTradeAccount,
   signOutWfmTradeAccount,
   stopMarketTracking,
@@ -127,7 +128,6 @@ import type {
   WfstatVoidTrader,
   WfstatWorldStateEvent,
   AlecaframeSettingsInput,
-  StrategySettings,
   SmartManageSettings,
   AppSettings,
   AppUpdateInstallState,
@@ -230,12 +230,11 @@ const defaultAppSettings: AppSettings = {
       tradeDetected: true,
       underpricedListing: true,
       priceChange: true,
+      listingHealth: true,
+      scannerStale: true,
+      appUpdate: true,
     },
     lastValidatedAt: null,
-  },
-  strategy: {
-    minEdgePlat: 10,
-    tradeValuePlat: 10,
   },
   smartManage: {
     enabled: false,
@@ -822,6 +821,13 @@ function upsertScannerStaleSystemAlert(
       'Scanner data is stale',
       'The latest scanner run is over 48 hours old. A rescan is recommended.',
     );
+    // Discord (gated backend-side on discord.enabled && scanner_stale).
+    if (isTauriRuntime()) {
+      void sendScannerStaleDiscordNotification({
+        scannerName: tActive('sys.scannerStaleTitle'),
+        minutesStale: null,
+      }).catch(() => undefined);
+    }
   }
 
   return [buildScannerStaleSystemAlert(scanFinishedAt), ...filteredAlerts];
@@ -1461,7 +1467,6 @@ interface AppStore {
   refreshWalletSnapshotSilently: () => Promise<void>;
   saveAlecaframeConfiguration: (input: AlecaframeSettingsInput) => Promise<void>;
   saveDiscordWebhookConfiguration: (input: DiscordWebhookSettingsInput) => Promise<void>;
-  saveStrategyConfiguration: (input: StrategySettings) => Promise<void>;
   saveSmartManageConfiguration: (input: SmartManageSettings) => Promise<void>;
   refreshWorldStateEvents: () => Promise<void>;
   refreshWorldStateAlerts: () => Promise<void>;
@@ -2113,24 +2118,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         settingsLoading: false,
         settingsError: formatSettingsErrorMessage('discord-webhook-save', error),
-      });
-      throw error;
-    }
-  },
-  saveStrategyConfiguration: async (input) => {
-    set({ settingsLoading: true, settingsError: null });
-
-    try {
-      const settings = await saveStrategySettings(input);
-      set({
-        appSettings: settings,
-        settingsLoading: false,
-        settingsError: null,
-      });
-    } catch (error) {
-      set({
-        settingsLoading: false,
-        settingsError: formatSettingsErrorMessage('strategy-save', error),
       });
       throw error;
     }

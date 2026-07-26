@@ -76,6 +76,19 @@ pub struct DiscordWebhookNotificationSettings {
     pub underpriced_listing: bool,
     /// Smart Manage auto price changes (and preview intents).
     pub price_change: bool,
+    /// Proactive "listings need action" alert (reprice / outbid).
+    #[serde(default = "default_true")]
+    pub listing_health: bool,
+    /// Scanner data has gone stale.
+    #[serde(default = "default_true")]
+    pub scanner_stale: bool,
+    /// A new app version is available.
+    #[serde(default = "default_true")]
+    pub app_update: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for DiscordWebhookNotificationSettings {
@@ -85,29 +98,14 @@ impl Default for DiscordWebhookNotificationSettings {
             trade_detected: true,
             underpriced_listing: true,
             price_change: true,
+            listing_health: true,
+            scanner_stale: true,
+            app_update: true,
         }
     }
 }
 
 /// Tunables for the Opportunities engine's Set Decision Engine, edited on the Strategy tab.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct StrategySettings {
-    /// Minimum plat edge required before completing a set is preferred over selling its parts.
-    pub min_edge_plat: f64,
-    /// Assumed plat value of one WFM trade slot; scales the edge by trades saved/spent.
-    pub trade_value_plat: f64,
-}
-
-impl Default for StrategySettings {
-    fn default() -> Self {
-        Self {
-            min_edge_plat: 10.0,
-            trade_value_plat: 10.0,
-        }
-    }
-}
-
 /// Global config for Smart Manage — optional auto-repricing of your sell listings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -144,8 +142,6 @@ pub struct AppSettings {
     pub warstonks_version: Option<String>,
     pub alecaframe: AlecaframeSettings,
     pub discord_webhook: DiscordWebhookSettings,
-    #[serde(default)]
-    pub strategy: StrategySettings,
     #[serde(default)]
     pub smart_manage: SmartManageSettings,
 }
@@ -234,6 +230,41 @@ pub struct DiscordTradeDetectedNotificationInput {
     pub closed_at: String,
     pub summary_label: String,
     pub items: Vec<DiscordTradeNotificationItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordListingHealthNotificationInput {
+    /// How many listings currently need action (reprice / outbid).
+    pub count: i64,
+    /// A few of the worst offenders, worst first, for the embed body.
+    pub examples: Vec<DiscordListingHealthItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordListingHealthItem {
+    pub item_name: String,
+    pub your_price: i64,
+    pub market_low: Option<i64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordScannerStaleNotificationInput {
+    /// Which scanner went stale (e.g. "Underpriced radar").
+    pub scanner_name: String,
+    /// Minutes since the last successful scan, if known.
+    pub minutes_stale: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordAppUpdateNotificationInput {
+    pub version: String,
+    pub current_version: Option<String>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -466,20 +497,61 @@ fn build_wfm_asset_url(asset_path: Option<&str>) -> Option<String> {
     Some(format!("https://warframe.market/{normalized_path}"))
 }
 
+// ---- Shared embed styling ------------------------------------------------------------------
+// Every WarStonks embed shares one visual language: a small author line, an accent color keyed
+// to the alert category, a divider before the stat fields, and a footer that names the section.
+// The builders below assemble that envelope so the alerts read as one coherent product.
+
+/// WarStonks brand icon, hosted on the public marketing site so Discord can fetch it.
+const DISCORD_BRAND_ICON: &str = "https://warstonks.app/icon.png";
+const WARSTONKS_SITE: &str = "https://warstonks.app";
+
+// Category accent colors, mirroring the in-app palette.
+const COLOR_GREEN: u32 = 0x3D_D6_8C;
+const COLOR_RED: u32 = 0xF0_4F_58;
+const COLOR_AMBER: u32 = 0xF0_A0_30;
+const COLOR_BLUE: u32 = 0x4A_9E_FF;
+const COLOR_PURPLE: u32 = 0x8B_6F_FF;
+
+/// The author block shown at the top of every embed — a consistent brand signature.
+fn brand_author() -> serde_json::Value {
+    json!({ "name": "WarStonks", "url": WARSTONKS_SITE, "icon_url": DISCORD_BRAND_ICON })
+}
+
+/// A footer naming the alert's section, with the brand mark.
+fn brand_footer(section: &str) -> serde_json::Value {
+    json!({ "text": format!("WarStonks · {section}"), "icon_url": DISCORD_BRAND_ICON })
+}
+
+/// A zero-width divider field, used to separate the description from the stat grid so the numbers
+/// sit in their own visual band.
+fn divider_field() -> serde_json::Value {
+    json!({ "name": "\u{200b}", "value": "\u{200b}", "inline": false })
+}
+
 fn build_discord_test_payload() -> serde_json::Value {
     json!({
       "username": "WarStonks",
       "embeds": [{
-        "title": "🧪 WarStonks Discord Webhook Connected",
-        "description": "Your Discord webhook is active and ready to receive WarStonks alerts.",
-        "color": 0x3D7BFF,
+        "author": brand_author(),
+        "title": "✅ Webhook Connected",
+        "description": "Your Discord webhook is live. Market alerts, trade detections, and Smart Manage updates will now arrive right here.",
+        "color": COLOR_BLUE,
         "fields": [
-          { "name": "Notification Type", "value": "Test Notification", "inline": true },
-          { "name": "Source", "value": "Settings Save", "inline": true }
+          { "name": "Status", "value": "🟢 Active", "inline": true },
+          { "name": "Source", "value": "Settings", "inline": true }
         ],
-        "footer": { "text": "WarStonks • Discord integration" }
+        "footer": brand_footer("Discord integration"),
+        "timestamp": now_iso8601()
       }]
     })
+}
+
+/// Current time as an ISO-8601 string for embed timestamps.
+fn now_iso8601() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 fn build_watchlist_found_payload(input: &DiscordWatchlistNotificationInput) -> serde_json::Value {
@@ -489,24 +561,30 @@ fn build_watchlist_found_payload(input: &DiscordWatchlistNotificationInput) -> s
         .unwrap_or_else(|| "—".to_string());
     let image_url = build_wfm_asset_url(input.item_image_path.as_deref());
 
+    let market_url = format!("https://warframe.market/items/{}", input.item_slug);
+    let savings = (input.target_price - input.current_price).max(0);
+
     json!({
       "username": "WarStonks",
       "embeds": [{
-        "title": "🔔 Watchlist Hit",
-        "description": format!("{} is now at or below your target price.", input.item_name),
-        "color": 0x3DD68C,
+        "author": brand_author(),
+        "title": format!("🎯 {} hit your target", input.item_name),
+        "url": market_url,
+        "description": format!(
+            "Now listed at **{}p** — that's **{}p** under your **{}p** target.",
+            input.current_price, savings, input.target_price
+        ),
+        "color": COLOR_GREEN,
         "thumbnail": image_url.as_ref().map(|url| json!({ "url": url })),
         "fields": [
-          { "name": "Item", "value": input.item_name, "inline": true },
-          { "name": "Seller", "value": input.username, "inline": true },
-          { "name": "Current Price", "value": format!("{}p", input.current_price), "inline": true },
-          { "name": "Desired Price", "value": format!("{}p", input.target_price), "inline": true },
-          { "name": "Gap", "value": format!("{}p", input.target_price - input.current_price), "inline": true },
-          { "name": "Quantity", "value": input.quantity.to_string(), "inline": true },
-          { "name": "Rank", "value": rank_value, "inline": true },
-          { "name": "Order", "value": input.order_id, "inline": false }
+          { "name": "💰 Listed", "value": format!("**{}p**", input.current_price), "inline": true },
+          { "name": "🎯 Target", "value": format!("{}p", input.target_price), "inline": true },
+          { "name": "📉 You save", "value": format!("{}p", savings), "inline": true },
+          { "name": "👤 Seller", "value": input.username, "inline": true },
+          { "name": "📦 Qty", "value": input.quantity.to_string(), "inline": true },
+          { "name": "🏅 Rank", "value": rank_value, "inline": true }
         ],
-        "footer": { "text": "WarStonks • Watchlist alert" },
+        "footer": brand_footer("Watchlist alert"),
         "timestamp": input.created_at
       }]
     })
@@ -521,25 +599,28 @@ fn build_underpriced_listing_payload(
         .unwrap_or_else(|| "—".to_string());
     let market_url = format!("https://warframe.market/items/{}", input.item_slug);
 
+    let profit = (input.recommended_price - input.listed_price).max(0);
+
     json!({
       "username": "WarStonks",
       "embeds": [{
-        "title": "💸 Underpriced Listing",
+        "author": brand_author(),
+        "title": format!("💸 {} is underpriced", input.item_name),
         "description": format!(
-            "{} is listed at **{}p** — {}% below its recommended entry of {}p.",
-            input.item_name, input.listed_price, input.pct_below, input.recommended_price
+            "Listed at **{}p**, **{}%** below the **{}p** recommended price. Flip potential: **~{}p**.",
+            input.listed_price, input.pct_below, input.recommended_price, profit
         ),
         "url": market_url,
-        "color": 0xF0A030,
+        "color": COLOR_AMBER,
         "fields": [
-          { "name": "Item", "value": input.item_name, "inline": true },
-          { "name": "Seller", "value": input.username, "inline": true },
-          { "name": "Listed", "value": format!("{}p", input.listed_price), "inline": true },
-          { "name": "Recommended", "value": format!("{}p", input.recommended_price), "inline": true },
-          { "name": "Below Rec", "value": format!("{}%", input.pct_below), "inline": true },
-          { "name": "Rank", "value": rank_value, "inline": true }
+          { "name": "🏷️ Listed", "value": format!("**{}p**", input.listed_price), "inline": true },
+          { "name": "📊 Recommended", "value": format!("{}p", input.recommended_price), "inline": true },
+          { "name": "📈 Upside", "value": format!("~{}p ({}%)", profit, input.pct_below), "inline": true },
+          { "name": "👤 Seller", "value": input.username, "inline": true },
+          { "name": "🏅 Rank", "value": rank_value, "inline": true }
         ],
-        "footer": { "text": "WarStonks • Underpriced listings radar" }
+        "footer": brand_footer("Underpriced radar"),
+        "timestamp": now_iso8601()
       }]
     })
 }
@@ -584,20 +665,26 @@ fn build_trade_detected_payload(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let is_buy = input.order_type.eq_ignore_ascii_case("buy");
+    let items_label = if is_buy { "📥 Received" } else { "📤 Given" };
+    let item_count: i64 = input.items.iter().map(|item| item.quantity.max(1)).sum();
+
     json!({
       "username": "WarStonks",
       "embeds": [{
-        "title": format!("{title_icon} New {order_type_label} Trade Detected"),
+        "author": brand_author(),
+        "title": format!("{title_icon} {order_type_label} trade — {}p", input.total_platinum),
         "description": input.summary_label,
-        "color": if input.order_type.eq_ignore_ascii_case("buy") { 0x3D7BFF } else { 0x3DD68C },
+        "color": if is_buy { COLOR_BLUE } else { COLOR_GREEN },
         "thumbnail": image_url.as_ref().map(|url| json!({ "url": url })),
         "fields": [
-          { "name": "Trade Type", "value": order_type_label, "inline": true },
-          { "name": "Source", "value": source_label, "inline": true },
-          { "name": "Price", "value": format!("{}p", input.total_platinum), "inline": true },
-          { "name": if input.order_type.eq_ignore_ascii_case("buy") { "Items Received" } else { "Items Given" }, "value": item_lines, "inline": false }
+          { "name": "💠 Platinum", "value": format!("**{}p**", input.total_platinum), "inline": true },
+          { "name": "📦 Items", "value": item_count.to_string(), "inline": true },
+          { "name": "🔗 Source", "value": source_label, "inline": true },
+          divider_field(),
+          { "name": items_label, "value": item_lines, "inline": false }
         ],
-        "footer": { "text": "WarStonks • Trade detection" },
+        "footer": brand_footer("Trade detection"),
         "timestamp": input.closed_at
       }]
     })
@@ -1200,51 +1287,6 @@ pub fn save_smart_manage_settings(
     Ok(settings)
 }
 
-#[tauri::command]
-pub fn save_strategy_settings(
-    app: tauri::AppHandle,
-    input: StrategySettings,
-) -> Result<AppSettings, String> {
-    // Serialize the whole load→modify→save against the other settings-mutating commands so a
-    // concurrent save can't clobber the section this one isn't touching.
-    let _settings_guard = lock_settings_file().map_err(|error| error.to_string())?;
-    let mut settings = load_settings_inner(&app).map_err(|error| {
-        log_settings_error_and_build_message(
-            &app,
-            "settings",
-            "load-for-strategy-save",
-            "Failed to load settings before saving strategy configuration.",
-            "Couldn’t save strategy settings right now. Please try again.",
-            "STRATEGY-SAVE-LOAD-01",
-            &error,
-        )
-    })?;
-
-    if !input.min_edge_plat.is_finite() || !input.trade_value_plat.is_finite() {
-        return Err("Strategy values must be numbers.".to_string());
-    }
-
-    settings.strategy = StrategySettings {
-        // Clamp to a sane band — 0 disables the knob, 500p covers any realistic tuning.
-        min_edge_plat: input.min_edge_plat.clamp(0.0, 500.0),
-        trade_value_plat: input.trade_value_plat.clamp(0.0, 500.0),
-    };
-
-    save_settings_inner(&app, &settings).map_err(|error| {
-        log_settings_error_and_build_message(
-            &app,
-            "settings",
-            "save-strategy-settings",
-            "Failed to persist strategy settings to app storage.",
-            "Couldn’t save strategy settings right now. Please try again.",
-            "STRATEGY-SAVE-STORE-01",
-            &error,
-        )
-    })?;
-
-    Ok(settings)
-}
-
 pub(crate) fn send_watchlist_found_discord_notification_inner(
     app: &tauri::AppHandle,
     input: &DiscordWatchlistNotificationInput,
@@ -1338,31 +1380,142 @@ fn build_smart_manage_payload(
     preview: bool,
 ) -> serde_json::Value {
     let market_url = format!("https://warframe.market/items/{item_slug}");
-    let direction = if new_price > old_price { "Raised" } else { "Trimmed" };
+    let raised = new_price > old_price;
+    let arrow = if raised { "📈" } else { "📉" };
+    let direction = if raised { "Raised" } else { "Trimmed" };
+    let pretty_name = prettify_slug(item_slug);
+    let delta = (new_price - old_price).abs();
     let verb = if preview {
         "would be"
     } else if applied {
         "was"
     } else {
-        "failed to be"
+        "couldn't be"
     };
-    let color = if new_price > old_price { 0x3DD68C } else { 0x4A9EFF };
+    let color = if !applied && !preview {
+        COLOR_RED
+    } else if raised {
+        COLOR_GREEN
+    } else {
+        COLOR_BLUE
+    };
     json!({
       "username": "WarStonks",
       "embeds": [{
-        "title": format!("🤖 Smart Manage — {direction}"),
+        "author": brand_author(),
+        "title": format!("🤖 {arrow} {direction} {pretty_name}"),
         "description": format!(
-            "**{item_slug}** {verb} repriced {old_price}p → **{new_price}p** ({action}).{}",
-            if preview { "\n_Preview mode — no change applied._" } else { "" }
+            "Price {verb} moved **{old_price}p → {new_price}p** ({}{delta}p).{}",
+            if raised { "+" } else { "−" },
+            if preview { "\n> _Preview only — no change applied._" } else { "" }
         ),
         "url": market_url,
         "color": color,
         "fields": [
-          { "name": "Old", "value": format!("{old_price}p"), "inline": true },
-          { "name": "New", "value": format!("{new_price}p"), "inline": true },
-          { "name": "Action", "value": action, "inline": true }
+          { "name": "Was", "value": format!("{old_price}p"), "inline": true },
+          { "name": "Now", "value": format!("**{new_price}p**"), "inline": true },
+          { "name": "Reason", "value": action, "inline": true }
         ],
-        "footer": { "text": "WarStonks • Smart Manage" }
+        "footer": brand_footer("Smart Manage"),
+        "timestamp": now_iso8601()
+      }]
+    })
+}
+
+/// Turns a WFM slug ("mirage_prime_set") into a readable name ("Mirage Prime Set").
+fn prettify_slug(slug: &str) -> String {
+    slug.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn build_listing_health_payload(
+    input: &DiscordListingHealthNotificationInput,
+) -> serde_json::Value {
+    let lines = if input.examples.is_empty() {
+        "_Open the Trades tab to review._".to_string()
+    } else {
+        input
+            .examples
+            .iter()
+            .map(|item| {
+                let market = item
+                    .market_low
+                    .map(|low| format!(" · market **{low}p**"))
+                    .unwrap_or_default();
+                format!("• **{}** — yours {}p{}", item.item_name, item.your_price, market)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "author": brand_author(),
+        "title": format!("🩺 {} listing{} need attention", input.count, if input.count == 1 { "" } else { "s" }),
+        "description": format!(
+            "Some of your sell orders have slipped out of a competitive spot.\n\n{lines}"
+        ),
+        "color": COLOR_AMBER,
+        "footer": brand_footer("Listing health"),
+        "timestamp": now_iso8601()
+      }]
+    })
+}
+
+fn build_scanner_stale_payload(
+    input: &DiscordScannerStaleNotificationInput,
+) -> serde_json::Value {
+    let age = input
+        .minutes_stale
+        .map(|mins| format!("Last successful scan was **{mins} min** ago."))
+        .unwrap_or_else(|| "It hasn't refreshed in a while.".to_string());
+
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "author": brand_author(),
+        "title": format!("⚠️ {} has gone stale", input.scanner_name),
+        "description": format!("{age}\nOpportunities may be out of date until it refreshes."),
+        "color": COLOR_RED,
+        "footer": brand_footer("Scanner status"),
+        "timestamp": now_iso8601()
+      }]
+    })
+}
+
+fn build_app_update_payload(input: &DiscordAppUpdateNotificationInput) -> serde_json::Value {
+    let from = input
+        .current_version
+        .as_ref()
+        .map(|current| format!("{current} → "))
+        .unwrap_or_default();
+    let notes = input
+        .notes
+        .as_ref()
+        .filter(|notes| !notes.trim().is_empty())
+        .map(|notes| format!("\n\n{notes}"))
+        .unwrap_or_default();
+
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "author": brand_author(),
+        "title": format!("🚀 WarStonks {} is available", input.version),
+        "description": format!("A new version is ready to install: **{from}{}**.{notes}", input.version),
+        "url": WARSTONKS_SITE,
+        "color": COLOR_PURPLE,
+        "footer": brand_footer("App update"),
+        "timestamp": now_iso8601()
       }]
     })
 }
@@ -1374,6 +1527,75 @@ pub fn send_underpriced_listing_discord_notification(
 ) -> Result<bool, String> {
     send_underpriced_listing_discord_notification_inner(&app, &input)
         .map_err(|error| error.to_string())
+}
+
+pub(crate) fn send_listing_health_discord_notification_inner(
+    app: &tauri::AppHandle,
+    input: &DiscordListingHealthNotificationInput,
+) -> Result<bool> {
+    let discord = load_settings_inner(app)?.discord_webhook;
+    if !discord.enabled || !discord.notifications.listing_health {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+    post_discord_webhook_payload(&webhook_url, build_listing_health_payload(input))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn send_listing_health_discord_notification(
+    app: tauri::AppHandle,
+    input: DiscordListingHealthNotificationInput,
+) -> Result<bool, String> {
+    send_listing_health_discord_notification_inner(&app, &input).map_err(|error| error.to_string())
+}
+
+pub(crate) fn send_scanner_stale_discord_notification_inner(
+    app: &tauri::AppHandle,
+    input: &DiscordScannerStaleNotificationInput,
+) -> Result<bool> {
+    let discord = load_settings_inner(app)?.discord_webhook;
+    if !discord.enabled || !discord.notifications.scanner_stale {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+    post_discord_webhook_payload(&webhook_url, build_scanner_stale_payload(input))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn send_scanner_stale_discord_notification(
+    app: tauri::AppHandle,
+    input: DiscordScannerStaleNotificationInput,
+) -> Result<bool, String> {
+    send_scanner_stale_discord_notification_inner(&app, &input).map_err(|error| error.to_string())
+}
+
+pub(crate) fn send_app_update_discord_notification_inner(
+    app: &tauri::AppHandle,
+    input: &DiscordAppUpdateNotificationInput,
+) -> Result<bool> {
+    let discord = load_settings_inner(app)?.discord_webhook;
+    if !discord.enabled || !discord.notifications.app_update {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+    post_discord_webhook_payload(&webhook_url, build_app_update_payload(input))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn send_app_update_discord_notification(
+    app: tauri::AppHandle,
+    input: DiscordAppUpdateNotificationInput,
+) -> Result<bool, String> {
+    send_app_update_discord_notification_inner(&app, &input).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1451,7 +1673,7 @@ mod tests {
         decode_alecaframe_relic_inventory_payload, extract_public_token, load_settings_from_path,
         map_currency_balance, parse_alecaframe_relic_inventory, save_settings_to_path,
         select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings, AppSettings,
-        DiscordWebhookNotificationSettings, DiscordWebhookSettings, StrategySettings,
+        DiscordWebhookNotificationSettings, DiscordWebhookSettings,
         BASE64_STANDARD,
     };
     use base64::Engine;
@@ -1534,7 +1756,6 @@ mod tests {
                 notifications: DiscordWebhookNotificationSettings::default(),
                 last_validated_at: None,
             },
-            strategy: StrategySettings::default(),
             smart_manage: super::SmartManageSettings::default(),
         };
 

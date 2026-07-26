@@ -95,11 +95,6 @@ const mainSections: SectionConfig[] = [
     descKey: 'settings.section.alecaframe.desc',
   },
   {
-    id: 'discord-webhook',
-    labelKey: 'settings.section.discord.label',
-    descKey: 'settings.section.discord.desc',
-  },
-  {
     id: 'notifications',
     labelKey: 'settings.section.notifications.label',
     descKey: 'settings.section.notifications.desc',
@@ -123,7 +118,6 @@ export function SettingsSidebar() {
   const closeSidebar = useAppStore((state) => state.closeSettingsSidebar);
   const setSection = useAppStore((state) => state.setSettingsSection);
   const openAlecaframeModal = useAppStore((state) => state.openAlecaframeModal);
-  const openDiscordWebhookModal = useAppStore((state) => state.openDiscordWebhookModal);
   const openNotificationsModal = useAppStore((state) => state.openNotificationsModal);
   const openImportExportModal = useAppStore((state) => state.openImportExportModal);
   const openLanguageModal = useAppStore((state) => state.openLanguageModal);
@@ -186,18 +180,6 @@ export function SettingsSidebar() {
     walletSnapshot.errorMessage,
   ]);
 
-  const discordStatus = useMemo<TranslationKey>(() => {
-    if (!appSettings.discordWebhook.enabled) {
-      return 'status.disabled';
-    }
-
-    if (!appSettings.discordWebhook.webhookUrl) {
-      return 'status.missingUrl';
-    }
-
-    return 'status.enabled';
-  }, [appSettings.discordWebhook.enabled, appSettings.discordWebhook.webhookUrl]);
-
   if (!sidebarOpen) {
     return null;
   }
@@ -235,11 +217,9 @@ export function SettingsSidebar() {
             const statusKey: TranslationKey | null =
               section.id === 'alecaframe'
                 ? alecaframeStatus
-                : section.id === 'discord-webhook'
-                  ? discordStatus
-                  : section.id === 'notifications'
-                    ? notificationsStatus
-                    : null;
+                : section.id === 'notifications'
+                  ? notificationsStatus
+                  : null;
 
             const statusClassName =
               statusKey === 'status.enabled'
@@ -257,8 +237,6 @@ export function SettingsSidebar() {
                   setSection(section.id);
                   if (section.id === 'alecaframe') {
                     openAlecaframeModal();
-                  } else if (section.id === 'discord-webhook') {
-                    openDiscordWebhookModal();
                   } else if (section.id === 'notifications') {
                     openNotificationsModal();
                   } else if (section.id === 'import-export') {
@@ -289,12 +267,6 @@ export function SettingsSidebar() {
                     <span className="settings-nav-subtext">
                       {t('settings.lastValidation')}{' '}
                       {formatShortLocalDateTime(appSettings.alecaframe.lastValidatedAt)}
-                    </span>
-                  ) : null}
-                  {section.id === 'discord-webhook' ? (
-                    <span className="settings-nav-subtext">
-                      {t('settings.lastValidation')}{' '}
-                      {formatShortLocalDateTime(appSettings.discordWebhook.lastValidatedAt)}
                     </span>
                   ) : null}
                 </span>

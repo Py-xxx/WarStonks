@@ -916,6 +916,70 @@ textarea:focus-visible,
 }
 
 /* Notifications settings: ringtone selector + preview */
+
+/* ---- Merged notifications modal: shared small toggles + Desktop|Discord matrix ---- */
+/* Every toggle in this modal (the three channel switches AND the matrix cells) uses the same
+   compact size, so nothing feels oversized next to the event list. */
+.settings-modal-body.notif-body { grid-template-columns: 1fr; max-width: 640px; margin: 0 auto; gap: 16px; }
+.notif-body .settings-toggle {
+  min-width: 78px;
+  height: 30px;
+  padding: 0 8px;
+  gap: 8px;
+}
+.notif-body .settings-toggle-track { width: 34px; height: 18px; }
+.notif-body .settings-toggle-thumb { width: 12px; height: 12px; }
+.notif-body .settings-toggle.on .settings-toggle-thumb { transform: translateX(16px); }
+.notif-body .settings-toggle-label { font-size: 10px; min-width: 22px; text-align: right; }
+
+/* Ringtone + webhook URL share one row so the config stays compact. */
+.notif-body > .settings-form-card:first-child .settings-notification-grid {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+@media (max-width: 560px) {
+  .notif-body > .settings-form-card:first-child .settings-notification-grid { grid-template-columns: 1fr; }
+}
+.notif-config-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+  align-items: end;
+}
+@media (max-width: 640px) { .notif-config-row { grid-template-columns: 1fr; } }
+
+/* The event matrix: label + a Desktop and a Discord toggle per row. */
+.notif-matrix { display: flex; flex-direction: column; gap: 2px; }
+.notif-matrix-head,
+.notif-matrix-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 84px 84px;
+  align-items: center;
+  gap: 8px;
+}
+.notif-matrix-head {
+  padding: 0 10px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 4px;
+}
+.notif-matrix-head span {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-muted); text-align: center;
+}
+.notif-matrix-head span:first-child { text-align: left; }
+.notif-matrix-row {
+  padding: 9px 10px;
+  border-radius: 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.notif-matrix-row:last-child { border-bottom: none; }
+.notif-matrix-row:hover { background: rgba(255, 255, 255, 0.03); }
+.notif-matrix-row .settings-toggle { justify-self: center; }
+
+/* Save row: the hint explains that Discord toggles only persist on Save. */
+.notif-save-row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+
 .notif-ringtone-row {
   display: flex;
   gap: 8px;
@@ -4463,6 +4527,12 @@ body {
   flex-wrap: wrap;
 }
 
+.settings-subhead {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .settings-notification-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -7533,6 +7603,35 @@ body {
 .trade-item-thumb {
   background: linear-gradient(180deg, rgba(22, 26, 34, 0.98), rgba(12, 14, 19, 0.98));
 }
+
+/* Thumbnail doubles as a quick visibility toggle: hovering fades the item art out to an eye. */
+.trade-thumb-toggle {
+  position: relative;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+}
+.trade-thumb-toggle:disabled { cursor: default; }
+.trade-thumb-art,
+.trade-thumb-eye {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.16s ease;
+}
+.trade-thumb-art img { width: 100%; height: 100%; object-fit: contain; }
+.trade-thumb-eye {
+  opacity: 0;
+  color: #e6e9ef;
+  background: rgba(12, 14, 19, 0.62);
+}
+.trade-thumb-eye svg { display: block; }
+.trade-thumb-toggle:hover:not(:disabled) .trade-thumb-art,
+.trade-thumb-toggle:focus-visible .trade-thumb-art { opacity: 0.12; }
+.trade-thumb-toggle:hover:not(:disabled) .trade-thumb-eye,
+.trade-thumb-toggle:focus-visible .trade-thumb-eye { opacity: 1; }
 .item-name { font-weight: 600; color: var(--text-primary); font-size: 12px; }
 .item-id { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 9px; color: var(--text-muted); margin-top: 2px; }
 
@@ -13414,35 +13513,39 @@ img[data-asset-failed='true'] {
 }
 
 /* Strategy tab */
-.strategy-layout {
-  display: flex;
+/* The Strategy tab body: settings on the left, a scrollable activity panel on the right. */
+.strategy-tab-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
   gap: 16px;
-  align-items: flex-start;
+  align-items: start;
 }
-.strategy-main {
-  flex: 1;
-  min-width: 0;
-  min-height: 320px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.strategy-side {
-  flex: 0 0 300px;
-  max-width: 300px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px;
+.strategy-col-left {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
 }
-.strategy-side-header p {
-  margin-top: 6px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--text-secondary);
+/* Sticky so the activity panel stays put while the settings column scrolls, and caps its own
+   height so a long feed scrolls internally instead of stretching the page. */
+.strategy-col-right {
+  position: sticky;
+  top: 0;
+  min-width: 0;
+}
+.strategy-col-right .smart-feed {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 140px);
+}
+.strategy-col-right .smart-feed-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .strategy-tab-body { grid-template-columns: minmax(0, 1fr); }
+  .strategy-col-right { position: static; }
+  .strategy-col-right .smart-feed { max-height: 520px; }
 }
 .strategy-number-input {
   max-width: 120px;

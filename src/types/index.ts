@@ -713,16 +713,35 @@ export interface DiscordWebhookNotificationSettings {
   tradeDetected: boolean;
   underpricedListing: boolean;
   priceChange: boolean;
+  listingHealth: boolean;
+  scannerStale: boolean;
+  appUpdate: boolean;
+}
+
+export interface DiscordListingHealthItem {
+  itemName: string;
+  yourPrice: number;
+  marketLow: number | null;
+  status: string;
+}
+
+export interface DiscordListingHealthNotificationInput {
+  count: number;
+  examples: DiscordListingHealthItem[];
+}
+
+export interface DiscordScannerStaleNotificationInput {
+  scannerName: string;
+  minutesStale: number | null;
+}
+
+export interface DiscordAppUpdateNotificationInput {
+  version: string;
+  currentVersion: string | null;
+  notes: string | null;
 }
 
 /** Opportunities-engine tunables, edited on the Strategy tab. */
-export interface StrategySettings {
-  /** Minimum plat edge before completing a set beats selling its parts. */
-  minEdgePlat: number;
-  /** Assumed plat value of one WFM trade slot (scales the edge by trades saved/spent). */
-  tradeValuePlat: number;
-}
-
 export type SmartAggressiveness = 'conservative' | 'balanced' | 'aggressive';
 
 /** Global config for Smart Manage — optional auto-repricing of sell listings. */
@@ -791,7 +810,6 @@ export interface SmartManageLogEntry {
 export interface AppSettings {
   alecaframe: AlecaframeSettings;
   discordWebhook: DiscordWebhookSettings;
-  strategy: StrategySettings;
   smartManage: SmartManageSettings;
 }
 
@@ -811,6 +829,7 @@ export interface NotificationSettings {
   underpricedMinPctBelow: number;
   events: {
     watchlistAlert: boolean;
+    tradeDetected: boolean;
     scannerStale: boolean;
     appUpdate: boolean;
     underpricedListing: boolean;

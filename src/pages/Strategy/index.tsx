@@ -20,70 +20,7 @@ function reasonLabel(t: ReturnType<typeof useTranslation>['t'], code: string): s
   return label === key ? code : label;
 }
 
-function StrategyEnginePanel() {
-  const { t } = useTranslation();
-  const strategy = useAppStore((s) => s.appSettings.strategy);
-  const settingsLoading = useAppStore((s) => s.settingsLoading);
-  const settingsError = useAppStore((s) => s.settingsError);
-  const saveStrategyConfiguration = useAppStore((s) => s.saveStrategyConfiguration);
-
-  const [minEdgeInput, setMinEdgeInput] = useState(String(strategy.minEdgePlat));
-  const [tradeValueInput, setTradeValueInput] = useState(String(strategy.tradeValuePlat));
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    setMinEdgeInput(String(strategy.minEdgePlat));
-    setTradeValueInput(String(strategy.tradeValuePlat));
-  }, [strategy.minEdgePlat, strategy.tradeValuePlat]);
-
-  const handleSave = async () => {
-    const minEdgePlat = Number.parseFloat(minEdgeInput);
-    const tradeValuePlat = Number.parseFloat(tradeValueInput);
-    if (!Number.isFinite(minEdgePlat) || !Number.isFinite(tradeValuePlat) || minEdgePlat < 0 || tradeValuePlat < 0) {
-      setLocalError(t('strategy.invalidNumbers'));
-      setSaved(false);
-      return;
-    }
-    setLocalError(null);
-    setSaved(false);
-    try {
-      await saveStrategyConfiguration({ minEdgePlat, tradeValuePlat });
-      setSaved(true);
-    } catch {
-      // Store surfaces the error via settingsError.
-    }
-  };
-
-  return (
-    <aside className="strategy-side" aria-label={t('strategy.engineTitle')}>
-      <div className="strategy-side-header">
-        <span className="panel-title-eyebrow">{t('strategy.engineTitle')}</span>
-        <p>{t('strategy.engineDesc')}</p>
-      </div>
-      <label className="settings-field">
-        <span className="settings-field-label">{t('strategy.minEdgeLabel')}</span>
-        <span className="settings-field-help">{t('strategy.minEdgeHelp')}</span>
-        <input className="settings-input strategy-number-input" type="number" min="0" step="1" inputMode="numeric"
-          value={minEdgeInput} onChange={(e) => setMinEdgeInput(e.target.value)} />
-      </label>
-      <label className="settings-field">
-        <span className="settings-field-label">{t('strategy.tradeValueLabel')}</span>
-        <span className="settings-field-help">{t('strategy.tradeValueHelp')}</span>
-        <input className="settings-input strategy-number-input" type="number" min="0" step="1" inputMode="numeric"
-          value={tradeValueInput} onChange={(e) => setTradeValueInput(e.target.value)} />
-      </label>
-      {localError ? <div className="settings-inline-error">{localError}</div> : null}
-      {settingsError && !localError ? <div className="settings-inline-error">{settingsError}</div> : null}
-      {saved && !localError && !settingsError ? <div className="settings-inline-success">{t('strategy.saved')}</div> : null}
-      <div className="settings-form-actions">
-        <button type="button" className="settings-primary-btn" disabled={settingsLoading} onClick={() => void handleSave()}>
-          {settingsLoading ? t('common.saving') : t('common.save')}
-        </button>
-      </div>
-    </aside>
-  );
-}
+type StrategyTab = 'smart-trade';
 
 export function StrategyPage() {
   const { t } = useTranslation();
@@ -138,16 +75,29 @@ export function StrategyPage() {
     }
   };
 
+  const [activeTab] = useState<StrategyTab>('smart-trade');
+
   return (
     <>
       <div className="subnav">
         <div className="subnav-left">
           <span className="page-title">{t('strategy.title')}</span>
+          <div className="subnav-tabs" role="tablist" aria-label={t('strategy.title')}>
+            <button
+              type="button"
+              className={`subtab${activeTab === 'smart-trade' ? ' active' : ''}`}
+              role="tab"
+              aria-selected={activeTab === 'smart-trade'}
+            >
+              {t('strategy.tab.smartTrade')}
+              <span className="subtab-beta-badge">{t('opp.beta')}</span>
+            </button>
+          </div>
         </div>
       </div>
       <div className="page-content">
-        <div className="strategy-layout">
-          <div className="strategy-main smart-manage-main">
+        <div className="strategy-tab-body">
+          <div className="strategy-col-left">
             <div className="smart-panel">
               <div className="smart-panel-head">
                 <div>
@@ -294,7 +244,9 @@ export function StrategyPage() {
                 ) : null}
               </div>
             ) : null}
+          </div>
 
+          <div className="strategy-col-right">
             <div className="smart-feed">
               <div className="smart-feed-head">
                 <span className="panel-title-eyebrow">{t('smart.activity')}</span>
@@ -345,11 +297,8 @@ export function StrategyPage() {
               )}
             </div>
           </div>
-
-          <StrategyEnginePanel />
         </div>
       </div>
-
     </>
   );
 }

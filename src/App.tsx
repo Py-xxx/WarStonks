@@ -13,7 +13,6 @@ import { GuidePage } from './pages/Guide';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsSidebar } from './components/SettingsSidebar';
 import { AlecaframeModal } from './components/AlecaframeModal';
-import { DiscordWebhookModal } from './components/DiscordWebhookModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { ImportExportModal } from './components/ImportExportModal';
 import { LanguageModal } from './components/LanguageModal';
@@ -37,6 +36,7 @@ import { useAutoScanScheduler } from './hooks/useAutoScanScheduler';
 import { useTradeDetection } from './hooks/useTradeDetection';
 import { useTradeHealthBackground } from './hooks/useTradeHealthBackground';
 import { useSmartManageAlerts } from './hooks/useSmartManageAlerts';
+import { useTradeDetectedAlerts } from './hooks/useTradeDetectedAlerts';
 import { useTradePresence } from './hooks/useTradePresence';
 import { useAppUpdater } from './hooks/useAppUpdater';
 
@@ -113,6 +113,7 @@ function AppShell() {
   useTradeDetection();
   useTradeHealthBackground();
   useSmartManageAlerts();
+  useTradeDetectedAlerts();
   useTradePresence();
   useAppUpdater();
   useIntegrationSettings();
@@ -135,7 +136,6 @@ function AppShell() {
       </div>
       <SettingsSidebar />
       <AlecaframeModal />
-      <DiscordWebhookModal />
       <NotificationsModal />
       <ImportExportModal />
       <LanguageModal />

@@ -184,8 +184,101 @@ const MAX_CALIBRATION: f64 = 2.0;
 
 const ABS_MIN_PRICE: i64 = 1;
 
+/// How many listings must sit at or below a price before we treat it as the *real* market floor
+/// rather than a lone undercut. One cheap listing below a wall of higher ones is almost always a
+/// troll / accident / someone dumping a single copy — it reverts, so chasing it is churn.
+pub(crate) const MIN_CLUSTER_DEPTH: usize = 2;
+
 fn round_f64(value: f64) -> i64 {
     value.round() as i64
+}
+
+/// The price the market actually holds at, ignoring lone undercuts. Given competitor prices
+/// sorted ascending, it's the `min_depth`-th cheapest listing: everything below it is thinner
+/// than `min_depth` listings and treated as noise. On a book too thin to reach `min_depth`, the
+/// cheapest available price is used (there's no cluster to speak of).
+pub(crate) fn cluster_floor(sorted_prices_ascending: &[i64], min_depth: usize) -> Option<i64> {
+    if sorted_prices_ascending.is_empty() {
+        return None;
+    }
+    let depth = min_depth.max(1);
+    let index = depth.min(sorted_prices_ascending.len()) - 1;
+    Some(sorted_prices_ascending[index])
+}
+
+/// A read of where a listing stands against the live book and the fair-value zone. Both the health
+/// engine and Smart Manage consume this so they never give contradictory advice: the difference
+/// between "a lone undercut you should ignore" and "the market genuinely moved" is decided once,
+/// here, rather than reinvented in each feature.
+#[derive(Debug, Clone)]
+pub(crate) struct MarketPosture {
+    /// The market's real floor, ignoring lone undercuts (see [`cluster_floor`]).
+    pub cluster_floor: Option<i64>,
+    /// The single cheapest competitor — the raw floor, kept for reference / display / callers that
+    /// want to show "one listing at Xp below the market".
+    #[allow(dead_code)]
+    pub market_low: Option<i64>,
+    /// The cheapest listing sits below the cluster floor: a lone undercut that will most likely
+    /// revert. This is the "someone listed one at 57p under a wall of 60p" case.
+    pub is_lone_undercut: bool,
+    /// Your price is inside the fair-value exit zone (a healthy, reliable spot).
+    pub in_exit_zone: bool,
+    /// The entire fair-value zone now sits below your price — a genuine downward market move, not
+    /// one cheap listing. This is the case that actually warrants "reprice to market".
+    pub zone_shifted_below: bool,
+    /// Probability you sell within the horizon at your current price & queue position (0..1).
+    pub sell_probability: f64,
+    /// How competitive your price is vs the *cluster* floor (0..1) — being above a lone undercut
+    /// no longer tanks this, only being above the real market does. Exposed for callers that want
+    /// to surface it; the engine folds the same term into `expected_value` directly.
+    #[allow(dead_code)]
+    pub competitiveness: f64,
+}
+
+/// Assess a listing's standing. `competitor_prices` must be ascending, outlier-filtered, and
+/// exclude your own listing.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assess_market_posture(
+    your_price: i64,
+    competitor_prices: &[i64],
+    exit_zone_low: Option<f64>,
+    exit_zone_high: Option<f64>,
+    daily_volume: Option<f64>,
+    horizon_hours: f64,
+    min_cluster_depth: usize,
+) -> MarketPosture {
+    let market_low = competitor_prices.first().copied();
+    let cluster = cluster_floor(competitor_prices, min_cluster_depth);
+
+    // A lone undercut = the cheapest listing is below the cluster floor (fewer than min_depth
+    // listings reach that low). Requires an actual cluster above it, so a genuinely thin/collapsed
+    // book (everything at the new low) is not misread as "lone".
+    let is_lone_undercut = matches!((market_low, cluster), (Some(low), Some(floor)) if low < floor);
+
+    let in_exit_zone = match (exit_zone_low, exit_zone_high) {
+        (Some(low), Some(high)) if high > 0.0 => {
+            your_price >= round_f64(low) && your_price <= round_f64(high)
+        }
+        _ => false,
+    };
+    // The whole zone is below us: our price is above the fair-value band's top.
+    let zone_shifted_below = matches!(exit_zone_high, Some(high) if high > 0.0 && your_price > round_f64(high));
+
+    let units_ahead = units_ahead_at(your_price, competitor_prices);
+    let sell_prob = sell_probability(units_ahead, daily_volume, horizon_hours);
+    // Judge competitiveness against the cluster floor, not the raw low — this is what stops a lone
+    // 57p undercut from making a healthy 60p listing look uncompetitive.
+    let competitiveness = price_competitiveness(your_price, cluster);
+
+    MarketPosture {
+        cluster_floor: cluster,
+        market_low,
+        is_lone_undercut,
+        in_exit_zone,
+        zone_shifted_below,
+        sell_probability: sell_prob,
+        competitiveness,
+    }
 }
 
 /// Sell-probability model: monotonically decreasing in the estimated hours-to-sell at a given
@@ -266,10 +359,13 @@ fn expected_value(price: i64, inputs: &SmartInputs, horizon_hours: f64) -> f64 {
     }
     let competitor_prices = &inputs.competitor_prices;
     let units_ahead = units_ahead_at(price, competitor_prices);
-    let market_low = competitor_prices.first().copied();
+    // Judge competitiveness against the cluster floor, not the single cheapest listing: a lone
+    // undercut must not make an otherwise-competitive price look unsellable (or Smart Manage would
+    // chase a 57p troll down the same way the old health engine did).
+    let anchor = cluster_floor(competitor_prices, MIN_CLUSTER_DEPTH);
     margin
         * sell_probability(units_ahead, inputs.daily_volume, horizon_hours)
-        * price_competitiveness(price, market_low)
+        * price_competitiveness(price, anchor)
         * lead_durability(price, competitor_prices, inputs.floor_defender_rate, horizon_hours)
         * demand_support(price, &inputs.buy_prices)
 }
@@ -428,10 +524,12 @@ pub fn smart_target(inputs: &SmartInputs, params: &SmartParams) -> SmartDecision
     };
 
     // ---- Candidate prices to evaluate, all clamped into [floor, raise_cap]. ----
+    // Anchor to the cluster floor (where the market really holds), not a lone undercut — matching
+    // or undercutting the *cluster* competes for real, without chasing a single troll's price.
     let mut candidates: Vec<i64> = vec![current, floor, raise_cap];
-    if let Some(&l1) = inputs.competitor_prices.first() {
-        candidates.push(l1); // match the floor seller
-        candidates.push(l1 - 1); // undercut by 1
+    if let Some(anchor) = cluster_floor(&inputs.competitor_prices, MIN_CLUSTER_DEPTH) {
+        candidates.push(anchor); // match the cluster
+        candidates.push(anchor - 1); // undercut the cluster by 1
     }
     // Normalize: clamp to band, drop non-positive, dedupe.
     let mut seen = std::collections::BTreeSet::new();
@@ -561,6 +659,76 @@ mod tests {
             price_ceiling_override: None,
             is_only_seller: false,
         }
+    }
+
+    #[test]
+    fn cluster_floor_ignores_a_lone_undercut() {
+        // Wall of 60s with one troll at 57 → the real floor is 60.
+        assert_eq!(cluster_floor(&[57, 60, 60, 60, 60], MIN_CLUSTER_DEPTH), Some(60));
+        // A genuine move: three sellers at 55 → the floor really is 55.
+        assert_eq!(cluster_floor(&[55, 55, 55, 60], MIN_CLUSTER_DEPTH), Some(55));
+        // Thin book: nothing to cluster, use what's there.
+        assert_eq!(cluster_floor(&[42], MIN_CLUSTER_DEPTH), Some(42));
+        assert_eq!(cluster_floor(&[], MIN_CLUSTER_DEPTH), None);
+    }
+
+    #[test]
+    fn posture_flags_a_lone_undercut_and_keeps_us_in_zone() {
+        // Ten at 60, us at 60, one troll at 57. Zone is 55-65.
+        let prices = vec![57, 60, 60, 60, 60, 60, 60, 60, 60, 60];
+        let posture = assess_market_posture(
+            60,
+            &prices,
+            Some(55.0),
+            Some(65.0),
+            Some(6.0),
+            36.0,
+            MIN_CLUSTER_DEPTH,
+        );
+        assert_eq!(posture.cluster_floor, Some(60));
+        assert_eq!(posture.market_low, Some(57));
+        assert!(posture.is_lone_undercut, "one listing below the wall is a lone undercut");
+        assert!(posture.in_exit_zone, "60 sits inside the 55-65 zone");
+        assert!(!posture.zone_shifted_below);
+        // Competitiveness is judged vs the cluster (60), so being 'above' the 57 troll is a non-issue.
+        assert!(posture.competitiveness >= 0.99);
+    }
+
+    #[test]
+    fn smart_manage_anchors_to_the_cluster_not_a_lone_undercut() {
+        // Ten sellers at 60, us at 60, one troll drops to 57. Zone 58-64, cost basis 50. The engine
+        // may compete with the cluster (match 60 / lead at 59) but must never chase the lone troll
+        // down toward 57/56 — that's the whole point of anchoring to the cluster floor.
+        let mut inputs = base(60);
+        inputs.competitor_prices = vec![57, 60, 60, 60, 60, 60, 60, 60, 60, 60];
+        inputs.exit_zone_low = Some(58.0);
+        inputs.exit_zone_high = Some(64.0);
+        inputs.cost_basis = Some(50);
+        let decision = smart_target(&inputs, &balanced());
+        assert!(
+            decision.target_price >= 59,
+            "must anchor to the cluster (>=59), not chase the 57p troll (got {})",
+            decision.target_price
+        );
+    }
+
+    #[test]
+    fn posture_detects_a_real_downward_move() {
+        // Three sellers genuinely at 55, us stuck at 60, zone has dropped to 50-56.
+        let prices = vec![55, 55, 55, 60];
+        let posture = assess_market_posture(
+            60,
+            &prices,
+            Some(50.0),
+            Some(56.0),
+            Some(6.0),
+            36.0,
+            MIN_CLUSTER_DEPTH,
+        );
+        assert_eq!(posture.cluster_floor, Some(55));
+        assert!(!posture.is_lone_undercut, "the cheapest is part of a real cluster");
+        assert!(!posture.in_exit_zone, "60 is above the 50-56 zone");
+        assert!(posture.zone_shifted_below, "the whole zone is now below us");
     }
 
     #[test]

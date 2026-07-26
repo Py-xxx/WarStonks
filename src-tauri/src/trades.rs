@@ -57,6 +57,18 @@ const TRADE_LOG_DERIVED_VERSION: i64 = 3;
 const PORTFOLIO_PNL_CHART_BUCKET_LIMIT: usize = 90;
 const PORTFOLIO_PROFIT_POINT_LIMIT: usize = 12;
 const TRADE_TIME_DUPLICATE_WINDOW_SECONDS: i64 = 60;
+/// Wider window used only for cross-source set dedup (WFM order-close vs AlecaFrame in-game trade
+/// vs manual mark-sold), which timestamp the same physical sale minutes apart.
+const TRADE_CROSS_SOURCE_DUPLICATE_WINDOW_SECONDS: i64 = 5 * 60;
+/// Horizon the health engine judges "will this sell?" over — a couple of days. Shorter than a
+/// Conservative auto-trade horizon: health advice should react before a listing goes truly stale.
+const HEALTH_SELL_HORIZON_HOURS: f64 = 48.0;
+/// Below this sell-probability at the current price, a listing is genuinely unlikely to move and a
+/// reprice is warranted (not just cosmetic queue-jumping).
+const HEALTH_LOW_SELL_PROBABILITY: f64 = 0.35;
+/// A trim is only worth recommending once we're at least this far above the real market floor —
+/// below it, matching would be churn for a 1-2p gain that a lone undercut would erase anyway.
+const HEALTH_MEANINGFUL_GAP: i64 = 3;
 const WFM_TRADE_LOG_LOCK_DAYS: i64 = 80;
 const PENDING_NOTIFICATION_WINDOW_MINUTES: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
@@ -2986,6 +2998,7 @@ fn derive_trade_health_reason(
 fn decide_trade_health(
     your_price: i64,
     market_low: Option<i64>,
+    competitor_prices: &[i64],
     sellers_ahead: i64,
     quantity_ahead: i64,
     tie_count: i64,
@@ -2995,7 +3008,21 @@ fn decide_trade_health(
     buy_depth: i64,
     per_trade: i64,
 ) -> TradeHealthDecision {
-    let price_gap = market_low.map(|value| your_price - value);
+    // Read the listing's standing once, using the same shared brain as Smart Manage. The key is
+    // the *cluster* floor (where the market really holds) rather than the single cheapest listing,
+    // so a lone undercut can't tank the score or trigger a pointless "trim to market".
+    let posture = crate::smart_manage::assess_market_posture(
+        your_price,
+        competitor_prices,
+        context.and_then(|entry| entry.exit_zone_low),
+        context.and_then(|entry| entry.exit_zone_high),
+        context.and_then(|entry| entry.daily_volume),
+        HEALTH_SELL_HORIZON_HOURS,
+        crate::smart_manage::MIN_CLUSTER_DEPTH,
+    );
+    // Everything below scores/recommends against the cluster floor, not the raw floor.
+    let effective_floor = posture.cluster_floor.or(market_low);
+    let price_gap = effective_floor.map(|value| your_price - value);
     let market_direction = context
         .map(|entry| entry.trend_direction.as_str())
         .unwrap_or("Flat");
@@ -3063,52 +3090,56 @@ fn decide_trade_health(
         "Buried"
     };
 
-    let weak_exit_zone = match (context, market_low) {
-        (Some(entry), Some(low))
-            if entry.exit_zone_low.is_some() && low + 3 < entry.exit_zone_low.unwrap_or(low as f64).round() as i64 =>
-        {
-            true
-        }
-        _ => false,
-    };
-
-    // Would the natural reprice target (market low) sell below what we paid?
-    let reprice_target_loss = matches!((cost_basis, market_low), (Some(cost), Some(low)) if low < cost);
+    // The realistic price to reprice *to* when a move is warranted: the real market floor
+    // (the cluster), not a lone undercut. We match the wall rather than chase a troll's price.
+    let reprice_target = posture.cluster_floor.filter(|&floor| floor < your_price);
+    // Would repricing to the real market lock in a loss vs what we paid?
+    let reprice_target_loss =
+        matches!((cost_basis, reprice_target), (Some(cost), Some(target)) if target < cost);
+    let cluster_gap = price_gap.unwrap_or_default(); // your_price - cluster floor
+    let unlikely_to_sell = posture.sell_probability < HEALTH_LOW_SELL_PROBABILITY;
+    // The real market floor has dipped below the fair-value zone: the whole market is temporarily
+    // underpriced, so chasing it down just locks in the dip. Wait for it to normalize instead.
+    let floor_below_fair_value = matches!(
+        (context.and_then(|entry| entry.exit_zone_low), posture.cluster_floor),
+        (Some(zone_low), Some(floor)) if (floor as f64) + 3.0 < zone_low
+    );
 
     let (action_label, action_tone, outlook_label, recommended_price) = if market_low.is_none() {
         ("Reprice to market", "amber", "Needs a refresh", None)
-    } else if is_price_war && price_gap.unwrap_or_default() > 0 && market_direction != "Rising" {
+    } else if is_price_war && cluster_gap > 0 && market_direction != "Rising" {
         // A live race to the bottom: don't chase the floor down — sit out the war.
         ("Wait out price war", "amber", "Floor is dropping fast", None)
-    } else if weak_exit_zone && market_direction != "Rising" {
-        ("Wait for normalization", "amber", "Do not chase down", None)
-    } else if sellers_ahead == 0 && price_gap.unwrap_or_default() <= 0 {
-        ("Hold", "green", "Likely soon", None)
-    } else if sellers_ahead <= 2 && price_gap.unwrap_or(99) <= 2 {
-        (
-            "Trim by 1-2p",
-            "blue",
-            "Competitive, but may take time",
-            Some(your_price.saturating_sub(price_gap.unwrap_or_default().clamp(1, 2))),
-        )
-    } else if (sellers_ahead >= 6 || quantity_ahead >= 10 || price_gap.unwrap_or_default() >= 4)
-        && reprice_target_loss
-        && market_direction != "Falling"
-    {
-        // The queue says "reprice to market", but doing so locks in a loss and the market
-        // isn't actively falling — holding for a better exit is the defensible call.
+    } else if cluster_gap <= 0 {
+        // At or below where the market really holds — a healthy, reliable spot. A cheaper listing
+        // may exist, but it's a lone undercut that reverts; jumping under it is pure churn.
+        if posture.is_lone_undercut {
+            ("Hold", "green", "Lone undercut — price reverts", None)
+        } else if posture.in_exit_zone {
+            ("Hold", "green", "Sells reliably here", None)
+        } else {
+            ("Hold", "green", "At the market floor", None)
+        }
+    } else if floor_below_fair_value && market_direction != "Rising" {
+        // The market dipped below fair value — don't chase it down, wait for it to recover.
+        ("Wait for normalization", "amber", "Do not chase a dip", None)
+    } else if reprice_target_loss && market_direction != "Falling" {
+        // The market genuinely sits below us, but matching it locks a loss and it isn't actively
+        // falling — hold for a better exit rather than sell at a loss.
         ("Hold above cost", "amber", "Repricing would lock a loss", None)
-    } else if sellers_ahead >= 6 || quantity_ahead >= 10 || price_gap.unwrap_or_default() >= 4 {
-        ("Reprice to market", "red", "Unlikely at current price", market_low)
-    } else if price_gap.unwrap_or_default() > 0 && !reprice_target_loss {
-        // Priced above market but not deep in the queue, not a loss, not a price war: give an
-        // actionable trim toward market rather than a bare "hold" — this is the case that used
-        // to leave a middling listing with no recommendation at all.
-        ("Reprice to market", "amber", "Above market — trim to compete", market_low)
+    } else if posture.zone_shifted_below || unlikely_to_sell || cluster_gap >= 6 {
+        // The market really moved: the whole fair-value zone is now below us, or we're unlikely to
+        // sell at this price, or we're well above the real floor. This is what "reprice" is for.
+        ("Reprice to market", "red", "Market moved — unlikely to sell", reprice_target)
+    } else if cluster_gap >= HEALTH_MEANINGFUL_GAP {
+        // Modestly above the real market (not a lone undercut): a realistic trim to compete —
+        // toward the cluster floor, never toward a troll's price.
+        ("Trim to compete", "amber", "Above the real market", reprice_target)
     } else if liquidity_score.unwrap_or(60) < 35 {
         ("Low priority listing", "amber", "Thin market", None)
     } else {
-        ("Hold", "blue", "Needs patience", None)
+        // A hair above the floor (1-2p) with a healthy book: not worth churning over.
+        ("Hold", "blue", "Close enough — hold", None)
     };
 
     let would_realize_loss =
@@ -3433,9 +3464,29 @@ pub async fn get_trade_sell_order_health(
         let (sellers_ahead, quantity_ahead, tie_count) =
             count_queue_ahead(&live_context.sell_orders, your_price, &session.account.name);
         let buy_depth = live_context.buy_orders.len() as i64;
+        // Competitor ask prices — own listing excluded, outlier-filtered, ascending — so the
+        // decision can reason about the price *cluster*, not just the single cheapest listing.
+        let normalized_me = session.account.name.trim().to_ascii_lowercase();
+        let health_variant = crate::recommended_prices::variant_key_for_rank(rank);
+        let mut competitor_prices: Vec<i64> = live_context
+            .sell_orders
+            .iter()
+            .filter(|order| order.username.trim().to_ascii_lowercase() != normalized_me)
+            .map(|order| order.price.round() as i64)
+            .filter(|&price| {
+                health_wfm_id
+                    .as_deref()
+                    .map(|wfm_id| {
+                        crate::order_flow::is_plausible_price(wfm_id, &health_variant, price as f64)
+                    })
+                    .unwrap_or(true)
+            })
+            .collect();
+        competitor_prices.sort_unstable();
         let decision = decide_trade_health(
             your_price,
             live_context.market_low,
+            &competitor_prices,
             sellers_ahead,
             quantity_ahead,
             tie_count,
@@ -4681,7 +4732,21 @@ fn send_trade_notification_candidates_inner(
             continue;
         }
 
-        let sent = send_trade_detected_discord_notification_inner(
+        // Desktop notification: emit for the frontend regardless of Discord config, so a detected
+        // trade pops a native alert (opt-in via the tradeDetected event) the same way Discord does.
+        let _ = app.emit(
+            TRADE_DETECTED_EVENT,
+            json!({
+                "orderType": candidate.order_type,
+                "totalPlatinum": candidate.total_platinum,
+                "summary": candidate.summary_label,
+                "itemName": candidate.items.first().map(|item| item.item_name.clone()),
+                "itemCount": candidate.items.iter().map(|item| item.quantity.max(1)).sum::<i64>(),
+                "source": candidate.source,
+            }),
+        );
+
+        let _sent = send_trade_detected_discord_notification_inner(
             app,
             &DiscordTradeDetectedNotificationInput {
                 source: candidate.source.clone(),
@@ -4693,16 +4758,16 @@ fn send_trade_notification_candidates_inner(
             },
         )?;
 
-        if sent {
-            persist_trade_notification_fingerprint_inner(
-                connection,
-                username,
-                &candidate.fingerprint,
-                &candidate.source,
-                &candidate.closed_at,
-            )?;
-            sent_count += 1;
-        }
+        // A detected trade is handled once we've notified (desktop always fires), so fingerprint it
+        // regardless of whether Discord is configured — otherwise the same trade re-notifies.
+        persist_trade_notification_fingerprint_inner(
+            connection,
+            username,
+            &candidate.fingerprint,
+            &candidate.source,
+            &candidate.closed_at,
+        )?;
+        sent_count += 1;
     }
 
     Ok(sent_count)
@@ -4723,6 +4788,7 @@ fn find_duplicate_trade_record(
     item_name: &str,
     quantity: i64,
     closed_at: &OffsetDateTime,
+    source: &str,
 ) -> bool {
     existing.iter().any(|record| {
         if record.order_type != order_type || record.quantity != quantity {
@@ -4735,11 +4801,17 @@ fn find_duplicate_trade_record(
             return false;
         }
 
+        // Cross-source matches (WFM order-close vs AlecaFrame in-game trade) describe one physical
+        // sale timestamped minutes apart, so they get the wider window; two same-source sales of
+        // the same item stay on the tight window so genuine repeat sales aren't merged.
+        let window = if record.source == source {
+            TRADE_TIME_DUPLICATE_WINDOW_SECONDS
+        } else {
+            TRADE_CROSS_SOURCE_DUPLICATE_WINDOW_SECONDS
+        };
+
         parse_timestamp(&record.closed_at)
-            .map(|existing_time| {
-                (existing_time - *closed_at).whole_seconds().abs()
-                    <= TRADE_TIME_DUPLICATE_WINDOW_SECONDS
-            })
+            .map(|existing_time| (existing_time - *closed_at).whole_seconds().abs() <= window)
             .unwrap_or(false)
     })
 }
@@ -4861,9 +4933,18 @@ fn collapse_grouped_trade_sets(
             total_platinum
         };
 
+        // Skip adding this collapsed set if the SAME sale was already logged by another source
+        // (WFM order close, or a manual "mark as sold" that WFM then reports). This is the
+        // cross-source dedup that stops one physical set sale showing up twice.
+        //
+        // It uses a wider window than the same-source import dedup: WFM's order-close time, the
+        // in-game trade time AlecaFrame reports, and a manual mark-sold click can legitimately be
+        // minutes apart for one sale. Guarded to a *different* source so two genuine same-source
+        // set sales of the same quantity are never merged.
         let duplicate_exists = records
             .iter()
             .filter(|candidate| candidate.group_id.as_deref() != Some(group_id.as_str()))
+            .filter(|candidate| candidate.source != group[0].source)
             .any(|candidate| {
                 candidate.order_type == group[0].order_type
                     && candidate.quantity == matched_set.quantity
@@ -4873,7 +4954,7 @@ fn collapse_grouped_trade_sets(
                             parse_timestamp(&group[0].closed_at)
                                 .map(|group_time| {
                                     (candidate_time - group_time).whole_seconds().abs()
-                                        <= TRADE_TIME_DUPLICATE_WINDOW_SECONDS
+                                        <= TRADE_CROSS_SOURCE_DUPLICATE_WINDOW_SECONDS
                                 })
                                 .unwrap_or(false)
                         })
@@ -4997,14 +5078,14 @@ fn build_alecaframe_trade_entries_from_payload(
 
         let group_is_duplicate = if preview_rows.len() > 1 {
             preview_rows.iter().all(|(item_name, quantity)| {
-                find_duplicate_trade_record(existing, order_type, item_name, *quantity, &closed_at)
+                find_duplicate_trade_record(existing, order_type, item_name, *quantity, &closed_at, "alecaframe")
             })
         } else {
             preview_rows
                 .first()
                 .map(|(item_name, quantity)| {
                     find_duplicate_trade_record(
-                        existing, order_type, item_name, *quantity, &closed_at,
+                        existing, order_type, item_name, *quantity, &closed_at, "alecaframe",
                     )
                 })
                 .unwrap_or(false)
@@ -5061,7 +5142,7 @@ fn build_alecaframe_trade_entries_from_payload(
             let quantity = item.cnt.max(1);
             if group_id.is_none()
                 && find_duplicate_trade_record(
-                    existing, order_type, &item_name, quantity, &closed_at,
+                    existing, order_type, &item_name, quantity, &closed_at, "alecaframe",
                 )
             {
                 continue;
@@ -5385,6 +5466,7 @@ fn trade_record_matches_existing_duplicate(
         &entry.item_name,
         entry.quantity,
         &closed_at,
+        &entry.source,
     )
 }
 
@@ -5909,6 +5991,14 @@ fn load_trade_set_components_for_slug(
             persist_trade_set_component_cache(&cache_connection, set_slug, &observatory_rows)?;
             return Ok(observatory_rows);
         }
+    }
+
+    // Last resort: a stale cache still describes the set correctly — a set's component composition
+    // never changes once it exists. Returning it (instead of empty) keeps set collapse working
+    // when the observatory can't refresh the mapping; otherwise a set trade silently stops
+    // collapsing into its set and shows up as loose components + a duplicate sale.
+    if !cached.is_empty() {
+        return Ok(cached);
     }
 
     Ok(Vec::new())
@@ -8273,6 +8363,7 @@ const UNDERPRICED_LISTING_EVENT: &str = "wfm-underpriced-listing";
 /// Emitted when the firehose sees a live undercut on an item the user has a listing on, so the
 /// frontend can refresh that listing's health immediately instead of waiting for the poll.
 const TRADE_HEALTH_STALE_EVENT: &str = "wfm-trade-health-stale";
+const TRADE_DETECTED_EVENT: &str = "wfm-trade-detected";
 
 /// The discount needed to flag a listing scales with the item's value: cheap items must be
 /// discounted hard before they're worth a ping, while expensive items fire on a shallower
@@ -10696,7 +10787,8 @@ mod tests {
         build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
         build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
         compute_current_value_coverage, decide_trade_health, estimate_sell_hours,
-        derive_trade_log_entries_with_components, initialize_trades_cache_schema,
+        derive_trade_log_entries_with_components, find_duplicate_trade_record,
+        initialize_trades_cache_schema, parse_timestamp,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         map_trade_set_components_from_file, merge_wfm_trade_log_entries,
         normalize_alecaframe_trade_payload, normalize_avatar_url, normalize_status_set_request,
@@ -11355,6 +11447,123 @@ mod tests {
         assert!(collapsed[0].keep_item);
     }
 
+    // Shared fixtures for the cross-source dedup tests below.
+    fn duo_set_definition() -> Vec<(TradeSetRootRecord, Vec<TradeSetComponentRecord>)> {
+        vec![(
+            TradeSetRootRecord {
+                slug: "bronco_prime_set".to_string(),
+                name: "Bronco Prime Set".to_string(),
+                image_path: None,
+            },
+            vec![
+                TradeSetComponentRecord {
+                    component_slug: "bronco_prime_barrel".to_string(),
+                    quantity_in_set: 1,
+                    fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                },
+                TradeSetComponentRecord {
+                    component_slug: "bronco_prime_blueprint".to_string(),
+                    quantity_in_set: 1,
+                    fetched_at: "2026-03-10T07:00:00.000+00:00".to_string(),
+                },
+            ],
+        )]
+    }
+
+    fn stored_record(
+        id: &str,
+        slug: &str,
+        source: &str,
+        group_id: Option<&str>,
+        closed_at: &str,
+    ) -> StoredTradeLogRecord {
+        StoredTradeLogRecord {
+            id: id.to_string(),
+            item_name: slug.to_string(),
+            slug: slug.to_string(),
+            image_path: None,
+            order_type: "sell".to_string(),
+            source: source.to_string(),
+            platinum: 4,
+            quantity: 1,
+            rank: None,
+            closed_at: closed_at.to_string(),
+            updated_at: closed_at.to_string(),
+            keep_item: false,
+            group_id: group_id.map(|value| value.to_string()),
+            group_label: group_id.map(|_| "Multiple Item Trade".to_string()),
+            group_total_platinum: group_id.map(|_| 7),
+            group_item_count: group_id.map(|_| 2),
+            allocation_total_platinum: Some(4),
+            group_sort_order: group_id.map(|_| 0),
+        }
+    }
+
+    #[test]
+    fn cross_source_set_sale_is_deduped_across_a_minutes_gap() {
+        // WFM logged the set sale at 09:00; AlecaFrame reports the same in-game trade as two loose
+        // components at 09:05 — five minutes later. The collapsed set must be recognised as the
+        // same sale and dropped, which the old 60s window failed to do.
+        let records = vec![
+            stored_record("wfm-set", "bronco_prime_set", "wfm", None, "2026-03-10T09:00:00.000+00:00"),
+            stored_record("af-1", "bronco_prime_barrel", "alecaframe", Some("g1"), "2026-03-10T09:05:00.000+00:00"),
+            stored_record("af-2", "bronco_prime_blueprint", "alecaframe", Some("g1"), "2026-03-10T09:05:00.000+00:00"),
+        ];
+        let (collapsed, changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        assert!(changed);
+        // Only the pre-existing WFM set row survives — the AlecaFrame collapse is deduped away.
+        let set_rows = collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count();
+        assert_eq!(set_rows, 1, "expected exactly one set row after cross-source dedup");
+        assert!(collapsed.iter().any(|r| r.id == "wfm-set"));
+    }
+
+    #[test]
+    fn duplicate_window_is_wide_cross_source_but_tight_same_source() {
+        // Existing AlecaFrame single-item sale at 09:00.
+        let existing = vec![stored_record(
+            "af",
+            "bronco_prime_barrel",
+            "alecaframe",
+            None,
+            "2026-03-10T09:00:00.000+00:00",
+        )];
+        let five_min_later =
+            parse_timestamp("2026-03-10T09:05:00.000+00:00").expect("timestamp parses");
+
+        // A WFM record of the same sale five minutes later dedupes (cross-source wide window)...
+        assert!(find_duplicate_trade_record(
+            &existing,
+            "sell",
+            "bronco_prime_barrel",
+            1,
+            &five_min_later,
+            "wfm",
+        ));
+        // ...but a second AlecaFrame sale five minutes later is a genuine repeat, not a duplicate.
+        assert!(!find_duplicate_trade_record(
+            &existing,
+            "sell",
+            "bronco_prime_barrel",
+            1,
+            &five_min_later,
+            "alecaframe",
+        ));
+    }
+
+    #[test]
+    fn two_same_source_set_sales_are_not_merged() {
+        // A prior AlecaFrame set sale and a new AlecaFrame set sale of the same set are two real
+        // trades — the same-source guard must keep both rather than deduping one away.
+        let records = vec![
+            stored_record("af-old-set", "bronco_prime_set", "alecaframe", None, "2026-03-10T09:00:00.000+00:00"),
+            stored_record("af-1", "bronco_prime_barrel", "alecaframe", Some("g1"), "2026-03-10T09:03:00.000+00:00"),
+            stored_record("af-2", "bronco_prime_blueprint", "alecaframe", Some("g1"), "2026-03-10T09:03:00.000+00:00"),
+        ];
+        let (collapsed, _changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        let set_rows = collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count();
+        assert_eq!(set_rows, 2, "same-source set sales must not be merged");
+    }
+
     #[test]
     fn computes_margin_for_partial_sold_as_set_cost_basis() {
         let records = vec![
@@ -11917,10 +12126,66 @@ mod tests {
             is_degraded: false,
         };
 
-        let decision = decide_trade_health(120, Some(120), 0, 0, 0, Some(&context), None, None, 2, 1);
+        let decision =
+            decide_trade_health(120, Some(120), &[120, 120], 0, 0, 0, Some(&context), None, None, 2, 1);
         assert_eq!(decision.action_label, "Hold");
-        assert_eq!(decision.outlook_label, "Likely soon");
+        assert_eq!(decision.outlook_label, "Sells reliably here");
         assert!(decision.score >= 70);
+    }
+
+    fn zone_context(zone_low: f64, zone_high: f64) -> CachedTradeHealthContext {
+        CachedTradeHealthContext {
+            trend_direction: "Flat".to_string(),
+            trend_summary: "Stable.".to_string(),
+            liquidity_score: Some(65.0),
+            liquidity_label: "Tradable".to_string(),
+            pressure_label: "Balanced".to_string(),
+            exit_zone_low: Some(zone_low),
+            exit_zone_high: Some(zone_high),
+            daily_volume: Some(6.0),
+            current_hour_volume_factor: None,
+            undercut_velocity: None,
+            confidence_level: "high".to_string(),
+            confidence_label: "High confidence".to_string(),
+            is_degraded: false,
+        }
+    }
+
+    #[test]
+    fn decide_trade_health_holds_through_a_lone_undercut() {
+        // The user's case: ten listings at 60, us at 60, one troll drops to 57. Fair zone 55-65.
+        // Health must HOLD (the undercut reverts), not tell us to chase it to 57.
+        let context = zone_context(55.0, 65.0);
+        let book = [57, 60, 60, 60, 60, 60, 60, 60, 60, 60];
+        let decision =
+            decide_trade_health(60, Some(57), &book, 1, 1, 0, Some(&context), None, None, 4, 1);
+        assert_eq!(decision.action_label, "Hold");
+        assert_eq!(decision.action_tone, "green");
+        assert!(decision.recommended_price.is_none(), "must not recommend chasing the undercut");
+    }
+
+    #[test]
+    fn decide_trade_health_reprices_on_a_real_downward_move() {
+        // Three sellers genuinely at 55 and the fair zone has dropped to 50-56, but we're stuck at
+        // 60. This is a real move — reprice to the actual market (55), not a hold.
+        let context = zone_context(50.0, 56.0);
+        let book = [55, 55, 55, 60];
+        let decision =
+            decide_trade_health(60, Some(55), &book, 3, 3, 0, Some(&context), None, None, 4, 1);
+        assert_eq!(decision.action_label, "Reprice to market");
+        assert_eq!(decision.recommended_price, Some(55));
+    }
+
+    #[test]
+    fn decide_trade_health_trims_toward_the_cluster_not_the_troll() {
+        // We're clearly above the real market (cluster 60) at 64, with one troll at 57. The trim
+        // target must be the cluster (60), never the troll's 57.
+        let context = zone_context(58.0, 66.0);
+        let book = [57, 60, 60, 60, 60];
+        let decision =
+            decide_trade_health(64, Some(57), &book, 1, 1, 0, Some(&context), None, None, 4, 1);
+        assert_eq!(decision.action_label, "Trim to compete");
+        assert_eq!(decision.recommended_price, Some(60));
     }
 
     #[test]
@@ -11941,7 +12206,9 @@ mod tests {
             is_degraded: false,
         };
 
-        let decision = decide_trade_health(88, Some(82), 3, 5, 1, Some(&context), None, None, 1, 1);
+        let decision = decide_trade_health(
+            88, Some(82), &[82, 84, 86, 87], 3, 5, 1, Some(&context), None, None, 1, 1,
+        );
         assert_eq!(decision.action_label, "Wait for normalization");
         assert_eq!(decision.action_tone, "amber");
     }
@@ -11965,8 +12232,9 @@ mod tests {
         };
         // Deep in the queue (would normally say "Reprice to market"), but market low (40) is
         // below our 50p cost basis and the market isn't falling → hold above cost.
-        let decision =
-            decide_trade_health(60, Some(40), 7, 12, 0, Some(&context), Some(50), None, 2, 1);
+        let decision = decide_trade_health(
+            60, Some(40), &[40, 42, 44, 46, 48, 50, 52], 7, 12, 0, Some(&context), Some(50), None, 2, 1,
+        );
         assert_eq!(decision.action_label, "Hold above cost");
         assert!(!decision.would_realize_loss);
     }
@@ -11988,8 +12256,9 @@ mod tests {
             confidence_label: "Medium confidence".to_string(),
             is_degraded: false,
         };
-        let decision =
-            decide_trade_health(60, Some(40), 7, 12, 0, Some(&context), Some(50), None, 2, 1);
+        let decision = decide_trade_health(
+            60, Some(40), &[40, 42, 44, 46, 48, 50, 52], 7, 12, 0, Some(&context), Some(50), None, 2, 1,
+        );
         assert_eq!(decision.action_label, "Reprice to market");
         assert!(decision.would_realize_loss);
     }
@@ -12011,8 +12280,9 @@ mod tests {
             confidence_label: "Medium confidence".to_string(),
             is_degraded: false,
         };
-        let decision =
-            decide_trade_health(80, Some(70), 4, 6, 0, Some(&context), None, None, 0, 1);
+        let decision = decide_trade_health(
+            80, Some(70), &[70, 72, 74, 76], 4, 6, 0, Some(&context), None, None, 0, 1,
+        );
         assert!(decision.is_price_war);
         assert_eq!(decision.action_label, "Wait out price war");
     }
@@ -12035,9 +12305,9 @@ mod tests {
             is_degraded: false,
         };
         let with_demand =
-            decide_trade_health(60, Some(60), 0, 0, 0, Some(&context), None, None, 10, 1);
+            decide_trade_health(60, Some(60), &[60, 60], 0, 0, 0, Some(&context), None, None, 10, 1);
         let no_demand =
-            decide_trade_health(60, Some(60), 0, 0, 0, Some(&context), None, None, 0, 1);
+            decide_trade_health(60, Some(60), &[60, 60], 0, 0, 0, Some(&context), None, None, 0, 1);
         assert!(with_demand.score > no_demand.score);
     }
 

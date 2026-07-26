@@ -11,11 +11,13 @@ import type {
   DiscordWebhookSettingsInput,
   DiscordWatchlistNotificationInput,
   DiscordUnderpricedNotificationInput,
+  DiscordListingHealthNotificationInput,
+  DiscordScannerStaleNotificationInput,
+  DiscordAppUpdateNotificationInput,
   ArbitrageScannerResponse,
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
   AppSettings,
-  StrategySettings,
   SmartManageSettings,
   SmartManageStateEntry,
   SmartManageLogEntry,
@@ -186,12 +188,6 @@ export async function saveDiscordWebhookSettings(
   return invoke<AppSettings>('save_discord_webhook_settings', { input });
 }
 
-export async function saveStrategySettings(
-  input: StrategySettings,
-): Promise<AppSettings> {
-  return invoke<AppSettings>('save_strategy_settings', { input });
-}
-
 export async function saveSmartManageSettings(
   input: SmartManageSettings,
 ): Promise<AppSettings> {
@@ -252,6 +248,29 @@ export interface SmartManageChange {
   preview: boolean;
 }
 
+export interface TradeDetectedEvent {
+  orderType: string;
+  totalPlatinum: number;
+  summary: string;
+  itemName: string | null;
+  itemCount: number;
+  source: string;
+}
+
+export async function subscribeToTradeDetected(
+  onDetected: (event: TradeDetectedEvent) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<TradeDetectedEvent>('wfm-trade-detected', (event) => {
+    if (event.payload) {
+      onDetected(event.payload);
+    }
+  });
+}
+
 export async function subscribeToSmartManageChanges(
   onChange: (change: SmartManageChange) => void,
 ): Promise<() => void> {
@@ -276,6 +295,24 @@ export async function sendUnderpricedListingDiscordNotification(
   input: DiscordUnderpricedNotificationInput,
 ): Promise<boolean> {
   return invoke<boolean>('send_underpriced_listing_discord_notification', { input });
+}
+
+export async function sendListingHealthDiscordNotification(
+  input: DiscordListingHealthNotificationInput,
+): Promise<boolean> {
+  return invoke<boolean>('send_listing_health_discord_notification', { input });
+}
+
+export async function sendScannerStaleDiscordNotification(
+  input: DiscordScannerStaleNotificationInput,
+): Promise<boolean> {
+  return invoke<boolean>('send_scanner_stale_discord_notification', { input });
+}
+
+export async function sendAppUpdateDiscordNotification(
+  input: DiscordAppUpdateNotificationInput,
+): Promise<boolean> {
+  return invoke<boolean>('send_app_update_discord_notification', { input });
 }
 
 export async function getCurrencyBalances(): Promise<WalletSnapshot> {

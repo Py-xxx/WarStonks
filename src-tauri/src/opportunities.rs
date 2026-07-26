@@ -115,12 +115,6 @@ pub struct SetEvalInput {
 pub struct EvalConfig {
     /// Only suggest *completion* when at most this many distinct parts are missing (≈ "close").
     pub max_missing_distinct: i64,
-    /// Ignore an edge (completing vs. selling parts) smaller than this.
-    pub min_edge_plat: f64,
-    /// Assumed plat value of one WFM trade slot — trades are a scarce, rate-limited resource, so
-    /// completing a set that costs fewer total trades than selling its parts individually should
-    /// win on a smaller profit edge (or even a slightly negative one), and vice versa.
-    pub trade_value_plat: f64,
     /// Ignore opportunities worth less than this.
     pub min_value_plat: f64,
     /// A held position must be up at least this fraction of its cost to flag a "good exit".
@@ -150,8 +144,6 @@ impl Default for EvalConfig {
         // Balanced defaults; the future Strategy tab will let the user tune these.
         Self {
             max_missing_distinct: 2,
-            min_edge_plat: 10.0,
-            trade_value_plat: 10.0,
             min_value_plat: 15.0,
             holding_min_profit_pct: 0.25,
             holding_min_profit_plat: 15,
@@ -675,28 +667,12 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
         None
     };
 
-    // Decide the winner. The min-edge buffer exists to justify the cost/risk of BUYING missing
-    // parts — when you already own the full set there's nothing to buy, so building & selling the
-    // set wins whenever it's worth at least as much as dumping the parts.
-    //
-    // Trades are a scarce, rate-limited resource, so the buffer also scales with how many WFM
-    // trades each strategy actually costs: selling parts individually costs one trade per distinct
-    // owned part, while completing costs one buy per missing non-farmable part plus one final sell.
-    // Every trade the completion path SAVES relative to selling parts knocks a `trade_value_plat`
-    // chunk off the required edge (floored at 0); every extra trade completion COSTS raises it —
-    // e.g. owning 4/5 parts of a set only needs 2 trades to complete (buy + sell) vs. 4 to sell
-    // everything individually, so completing should win even on a fairly small profit edge.
-    let buy_trades = plan.missing.iter().filter(|part| !part.farmable).count() as i64;
-    let complete_trades = buy_trades + 1;
-    let sell_trades = owned_distinct;
-    let edge_threshold = if missing_distinct == 0 {
-        0.0
-    } else {
-        let trades_saved = sell_trades - complete_trades;
-        (config.min_edge_plat - trades_saved as f64 * config.trade_value_plat).max(0.0)
-    };
+    // Completing and selling the set is the default play — building the set is usually the stronger
+    // long game. We only recommend dumping the parts you already own when they're worth at least
+    // PARTS_BEAT_SET_MARGIN *more* than completing the set: a real margin, not a coin-flip. So the
+    // parts have to clearly beat the set before we stop recommending completion.
     let prefer_complete = match (complete_value, sell_value) {
-        (Some(a), Some(b)) => a >= b + edge_threshold,
+        (Some(complete), Some(sell)) => sell < complete * (1.0 + PARTS_BEAT_SET_MARGIN),
         (Some(_), None) => true,
         (None, _) => false,
     };
@@ -769,20 +745,6 @@ pub fn evaluate_set(input: &SetEvalInput, config: &EvalConfig) -> Option<Opportu
                 source: "market".into(),
             },
         });
-        // Surface the trade-count tiebreaker so a completion pick on a slim plat edge is
-        // self-evident — trades are rate-limited, and this path may be winning on trades saved.
-        if sell_trades > 0 && complete_trades != sell_trades {
-            reasons.push(OpportunityReason {
-                icon: "math".into(),
-                text_key: "opp.reasonTradeCount".into(),
-                text_params: params(&[
-                    ("complete", complete_trades.to_string()),
-                    ("sell", sell_trades.to_string()),
-                ]),
-                source: "math".into(),
-            });
-        }
-
         let mut actions: Vec<OpportunityAction> = plan
             .missing
             .iter()
@@ -1028,13 +990,7 @@ pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Oppor
         })
         .unwrap_or_default();
 
-    // Strategy-tab overrides on top of the balanced defaults; best-effort so a missing/corrupt
-    // settings file never blocks the board.
-    let mut config = EvalConfig::default();
-    if let Ok(settings) = crate::settings::load_settings_for_internal_use(app) {
-        config.min_edge_plat = settings.strategy.min_edge_plat;
-        config.trade_value_plat = settings.strategy.trade_value_plat;
-    }
+    let config = EvalConfig::default();
     let mut opportunities = Vec::new();
 
     for set in &scanner.results {
@@ -1183,6 +1139,11 @@ pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Oppor
 /// Event emitted when an input the board depends on changes (owned parts, relics, a fresh scan),
 /// so the always-on frontend sync can recompute promptly instead of waiting for the poll.
 pub const OPPORTUNITIES_STALE_EVENT: &str = "opportunities-stale";
+
+/// How much more the parts you already own must be worth than completing-and-selling the set
+/// before we recommend selling the parts instead. Completing is the default; the parts have to
+/// clearly win (by this fraction) to override it.
+const PARTS_BEAT_SET_MARGIN: f64 = 0.10;
 
 /// Signals (best-effort) that the opportunity board is stale and should be recomputed.
 pub fn signal_stale(app: &tauri::AppHandle) {
@@ -1397,23 +1358,37 @@ mod tests {
     }
 
     #[test]
-    fn still_prefers_selling_parts_when_trades_dont_favor_completing() {
-        // Own 1/3 parts — completing costs 3 trades (2 buys + 1 sell) vs. 1 trade to sell the part
-        // you hold. Even a tied edge shouldn't flip this: completing costs more trades than it
-        // saves, so the raised threshold keeps it on "sell parts".
+    fn recommends_selling_parts_only_when_they_beat_the_set_by_ten_percent() {
+        // Own 2/3 parts (sell for 40 + 38 = 78), missing one that costs 10 to buy; the set sells
+        // for 80, so completing nets 70. Parts (78) beat completing (70) by >10% → sell the parts.
         let input = set(
             vec![
-                component("a", 1, 1, Some(12.0), Some(27.0)),
-                component("b", 1, 0, Some(12.0), Some(12.0)),
-                component("c", 1, 0, Some(12.0), Some(12.0)),
+                component("a", 1, 1, Some(10.0), Some(40.0)),
+                component("b", 1, 1, Some(10.0), Some(38.0)),
+                component("c", 1, 0, Some(10.0), Some(10.0)),
             ],
-            Some(51.0),
+            Some(80.0),
         );
         let opp = evaluate_set(&input, &EvalConfig::default()).expect("should produce a play");
-        // Complete nets 51 - 24 = 27, tied with selling the one owned part for 27 — but completing
-        // costs 2 more trades than it saves (trades_saved = 1 - 3 = -2), raising the required edge.
         assert_eq!(opp.category, "sellInventory");
-        assert_eq!(opp.est_value, 27);
+        assert_eq!(opp.est_value, 78);
+    }
+
+    #[test]
+    fn completes_the_set_when_parts_only_tie_it() {
+        // Own 2/3 parts (sell for 30 + 30 = 60), missing one costing 10; set sells for 70, so
+        // completing nets 60 — exactly tied with the parts. A tie isn't a 10% win, so complete.
+        let input = set(
+            vec![
+                component("a", 1, 1, Some(10.0), Some(30.0)),
+                component("b", 1, 1, Some(10.0), Some(30.0)),
+                component("c", 1, 0, Some(10.0), Some(10.0)),
+            ],
+            Some(70.0),
+        );
+        let opp = evaluate_set(&input, &EvalConfig::default()).expect("should produce a play");
+        assert_eq!(opp.category, "setCompletion");
+        assert_eq!(opp.est_value, 60);
     }
 
     #[test]
