@@ -432,30 +432,28 @@ function SmartListingStrategyPopover({
     >
       <div className="smart-strategy-head">
         <span>{t('smart.perListingTitle')}</span>
-        <button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}>
+        <button type="button" className="smart-strategy-close" onClick={onClose} aria-label={t('common.close')}>
           <i className="ti ti-x" aria-hidden="true" />
         </button>
       </div>
 
-      <label className="smart-strategy-switch">
-        <span className="smart-strategy-switch-copy">
-          <span className="smart-strategy-switch-label">{t('smart.enableAuto')}</span>
-          <span className="smart-strategy-switch-help">
-            {enabled ? t('smart.autoOnHelp') : t('smart.autoOffHelp')}
+      <button
+        type="button"
+        className={`smart-strategy-toggle${enabled ? ' on' : ''}`}
+        role="switch"
+        aria-checked={enabled}
+        onClick={onToggleEnabled}
+      >
+        <span className="smart-strategy-toggle-label">{t('smart.enableAuto')}</span>
+        <span className="smart-strategy-toggle-state">
+          {enabled ? t('common.on') : t('common.off')}
+          <span className="smart-strategy-toggle-track">
+            <span className="smart-strategy-toggle-thumb" />
           </span>
         </span>
-        <button
-          className={`settings-toggle${enabled ? ' on' : ''}`}
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          onClick={onToggleEnabled}
-        >
-          <span className="settings-toggle-track">
-            <span className="settings-toggle-thumb" />
-          </span>
-        </button>
-      </label>
+      </button>
+
+      <p className="smart-strategy-note">{t('smart.perListingNote')}</p>
 
       <label className="smart-strategy-field">
         <span>{t('smart.aggressiveness')}</span>
@@ -478,40 +476,45 @@ function SmartListingStrategyPopover({
       <div className="smart-strategy-bounds">
         <label className="smart-strategy-field">
           <span>{t('smart.minPrice')}</span>
-          <input
-            type="number"
-            min={1}
-            inputMode="numeric"
-            value={draft.minPrice ?? ''}
-            placeholder={t('smart.noBound')}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, minPrice: parseBound(event.target.value) }))
-            }
-          />
+          <div className="smart-strategy-price-input">
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={draft.minPrice ?? ''}
+              placeholder={t('smart.noBound')}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, minPrice: parseBound(event.target.value) }))
+              }
+            />
+            <span>p</span>
+          </div>
         </label>
         <label className="smart-strategy-field">
           <span>{t('smart.maxPrice')}</span>
-          <input
-            type="number"
-            min={1}
-            inputMode="numeric"
-            value={draft.maxPrice ?? ''}
-            placeholder={t('smart.noBound')}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, maxPrice: parseBound(event.target.value) }))
-            }
-          />
+          <div className="smart-strategy-price-input">
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={draft.maxPrice ?? ''}
+              placeholder={t('smart.noBound')}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, maxPrice: parseBound(event.target.value) }))
+              }
+            />
+            <span>p</span>
+          </div>
         </label>
       </div>
 
       {error ? <p className="smart-strategy-error">{error}</p> : null}
-      <p className="smart-strategy-note">{t('smart.perListingNote')}</p>
 
       <div className="smart-strategy-actions">
-        <button type="button" className="act-btn" onClick={onClose}>
+        <button type="button" className="smart-strategy-btn secondary" onClick={onClose}>
           {t('common.close')}
         </button>
-        <button type="button" className="settings-primary-btn" onClick={handleSave}>
+        <button type="button" className="smart-strategy-btn primary" onClick={handleSave}>
           {t('common.save')}
         </button>
       </div>

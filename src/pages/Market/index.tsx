@@ -3206,7 +3206,7 @@ function AnalysisTab() {
                       <div
                         key={cell.bucketIndex}
                         className={`market-tod-cell${cell.sampleCount > 0 ? '' : ' is-empty'}`}
-                        style={{ '--heat-strength': `${Math.round((cell.heatScore ?? 0) * 100)}%` } as CSSProperties}
+                        style={{ '--heat-strength': cell.heatScore ?? 0 } as CSSProperties}
                         title={[
                           `${row.label} ${cell.label} (UTC)`,
                           `${t('mkt.heat')} ${formatPercent((cell.heatScore ?? 0) * 100)}`,
