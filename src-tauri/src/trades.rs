@@ -10788,7 +10788,8 @@ mod tests {
         build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
         compute_current_value_coverage, decide_trade_health, estimate_sell_hours,
         derive_trade_log_entries_with_components, find_duplicate_trade_record,
-        initialize_trades_cache_schema, parse_timestamp,
+        initialize_trades_cache_schema, insert_smart_manage_log, parse_timestamp,
+        smart_change_rate_state, smart_failure_streak,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         map_trade_set_components_from_file, merge_wfm_trade_log_entries,
         normalize_alecaframe_trade_payload, normalize_avatar_url, normalize_status_set_request,
@@ -11105,6 +11106,45 @@ mod tests {
         );
         // A huge float (valid JSON) would saturate to garbage under `as i64`; reject instead.
         assert!(serde_json::from_str::<Probe>("{\"value\": 1e30}").is_err());
+    }
+
+    #[test]
+    fn a_hold_is_not_counted_as_a_change() {
+        // A "Hold" makes no real change to the listing, so it must never consume the per-day change
+        // budget, reset the min-interval clock, or count toward the failure streak. Only genuine
+        // applied price changes (applied = 1) should.
+        let connection = Connection::open_in_memory().expect("in-memory trades cache");
+        initialize_trades_cache_schema(&connection).expect("schema");
+        let (user, wfm, variant) = ("me", "wfm-1", "base");
+
+        // Log several holds (logged at the current price, applied = false) …
+        for _ in 0..5 {
+            insert_smart_manage_log(
+                &connection, user, "order-1", wfm, variant, "mirage_prime_set", "Mirage Prime Set",
+                60, 60, "hold", "below_threshold", false, false,
+            );
+        }
+        // … plus one hold logged as insufficient-data, also at the current price.
+        insert_smart_manage_log(
+            &connection, user, "order-1", wfm, variant, "mirage_prime_set", "Mirage Prime Set",
+            60, 60, "insufficient_data", "no_zone", false, false,
+        );
+
+        // No applied change yet → zero counted changes and no last-change timestamp.
+        let (count, last) = smart_change_rate_state(&connection, user, wfm, variant);
+        assert_eq!(count, 0, "holds must not count toward the per-day change budget");
+        assert!(last.is_none(), "holds must not set the last-change timestamp / min-interval clock");
+        // Holds are not failed applies, so the circuit breaker must stay at zero.
+        assert_eq!(smart_failure_streak(&connection, user, wfm, variant), 0);
+
+        // A genuine applied change is the only thing that counts.
+        insert_smart_manage_log(
+            &connection, user, "order-1", wfm, variant, "mirage_prime_set", "Mirage Prime Set",
+            60, 57, "trim", "trim_to_compete", true, false,
+        );
+        let (count, last) = smart_change_rate_state(&connection, user, wfm, variant);
+        assert_eq!(count, 1, "only the real applied change counts");
+        assert!(last.is_some());
     }
 
     #[test]
