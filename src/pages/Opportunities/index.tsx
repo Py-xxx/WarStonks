@@ -53,6 +53,7 @@ import type {
   RelicRoiEntry,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
+  FarmingSessionDrop,
 } from '../../types';
 
 type OppTab = 'opportunities' | 'farm-now' | 'set-planner' | 'owned-relics' | 'inventory';
@@ -561,6 +562,15 @@ function RefinementGuidancePanel({
   );
 }
 
+/** Placeholder slug for the synthetic "nothing I need" option when a relic lists no Forma. */
+const FILLER_DROP_SLUG = '__forma_filler__';
+
+/** Forma is the universal "got nothing worth keeping" reward — logged for run-count accuracy but
+ *  never added to the parts inventory. */
+function isFillerDropName(name: string): boolean {
+  return name.trim().toLowerCase().includes('forma');
+}
+
 function parseRelicTierCode(name: string): { tier: string; code: string } | null {
   const tokens = name.trim().split(/\s+/);
   if (tokens.length < 2) {
@@ -662,6 +672,7 @@ function SetPlannerRow({
   recentlyAddedKeys,
   onTargetChange,
   onAddToWatchlist,
+  onFarmComponent,
 }: {
   planner: PlannerSetEntry;
   expanded: boolean;
@@ -671,6 +682,7 @@ function SetPlannerRow({
   recentlyAddedKeys: Record<string, boolean>;
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
+  onFarmComponent: (component: ArbitrageScannerComponentEntry) => void;
 }) {
   const localizeName = useLocalizedName();
   const { t } = useTranslation();
@@ -723,9 +735,14 @@ function SetPlannerRow({
             {relicHints.length > 0 ? (
               <>
                 {' · '}
-                <span className="sp-part-relics" title={relicHints.map((r) => r.fullName).join(', ')}>
+                <button
+                  type="button"
+                  className="sp-part-relics"
+                  title={t('opp.farmThisItemHint', { item: component.name })}
+                  onClick={() => onFarmComponent(component)}
+                >
                   {t('opp.relicsOwnedShort', { n: relicHints.reduce((sum, r) => sum + r.totalCount, 0) })}
-                </span>
+                </button>
               </>
             ) : null}
           </span>
@@ -1213,6 +1230,56 @@ export function OpportunitiesPage({
   const clearRequestedOpportunitiesTab = useAppStore(
     (state) => state.clearRequestedOpportunitiesTab,
   );
+  const requestOpportunitiesTab = useAppStore((state) => state.requestOpportunitiesTab);
+  const startFarmingSession = useAppStore((state) => state.startFarmingSession);
+  const activeFarmingRelicSlug = useAppStore((state) => state.farmingSession?.relicSlug ?? null);
+
+  /** Starts a "now farming" session for a relic: the drop list is snapshotted so the panel keeps
+   *  working on any tab, and Forma is always offered as the "got nothing I need" option. */
+  const beginFarmingRelic = (row: FarmNowRelicRow | FarmNowSetCompletionRow) => {
+    const parsed = parseRelicTierCode(row.relic.name);
+    const drops: FarmingSessionDrop[] = row.drops.map((entry) => {
+      // The two row shapes carry chance differently: part-profit precomputes it, set-completion
+      // reads it off the drop's profile at the recommended refinement.
+      const rawChance =
+        'chance' in entry && entry.chance !== null
+          ? entry.chance
+          : chanceForRefinement(entry.drop.chanceProfile, row.guidance.bestKey);
+      return {
+        itemId: entry.drop.itemId,
+        slug: entry.drop.slug,
+        name: entry.drop.name,
+        imagePath: entry.drop.imagePath,
+        rarity: entry.drop.rarity,
+        // Scanner chances are percentages; the session stores 0..1 for the odds math.
+        chance: rawChance !== null ? rawChance / 100 : null,
+        recommendedExitPrice: entry.drop.recommendedExitPrice,
+        isFiller: isFillerDropName(entry.drop.name),
+      };
+    });
+    // Guarantee a "nothing I need" choice even when the relic's table has no Forma entry.
+    if (!drops.some((drop) => drop.isFiller)) {
+      drops.push({
+        itemId: null,
+        slug: FILLER_DROP_SLUG,
+        name: 'Forma Blueprint',
+        imagePath: null,
+        rarity: null,
+        chance: null,
+        recommendedExitPrice: null,
+        isFiller: true,
+      });
+    }
+    startFarmingSession({
+      relicSlug: row.relic.slug,
+      relicName: localizeName(row.relic),
+      relicImagePath: row.relic.imagePath,
+      tier: parsed?.tier ?? '',
+      code: parsed?.code ?? '',
+      refinement: row.guidance.bestLabel,
+      drops,
+    });
+  };
   const [farmNowSearch, setFarmNowSearch] = useState('');
   useEffect(() => {
     const validTabs: OppTab[] =
@@ -2596,6 +2663,11 @@ export function OpportunitiesPage({
                       onAddToWatchlist={(component) =>
                         handleAddMissingComponentToWatchlist(component, planner.entry.slug)
                       }
+                      onFarmComponent={(component) =>
+                        // Jump to Opportunities → What to farm now with this part searched, so the
+                        // odds panel immediately shows what your relics give you for it.
+                        requestOpportunitiesTab('farm-now', component.name)
+                      }
                     />
                   ))}
                 </div>
@@ -3393,6 +3465,19 @@ export function OpportunitiesPage({
 
                           {expanded ? (
                             <div className="sp-set-body">
+                              <div className="fn-farm-this-row">
+                                <button
+                                  type="button"
+                                  className="fn-farm-this-btn"
+                                  disabled={activeFarmingRelicSlug === row.relic.slug}
+                                  onClick={() => beginFarmingRelic(row)}
+                                >
+                                  <i className="ti ti-flame" aria-hidden="true" />
+                                  {activeFarmingRelicSlug === row.relic.slug
+                                    ? t('farm.nowFarming')
+                                    : t('farm.farmThis')}
+                                </button>
+                              </div>
                               <RefinementGuidancePanel guidance={row.guidance} unit="pct" />
                               {(() => {
                                 const needed = row.drops.filter((entry) => entry.isNeeded);
@@ -3602,6 +3687,19 @@ export function OpportunitiesPage({
 
                         {expanded ? (
                           <div className="sp-set-body">
+                            <div className="fn-farm-this-row">
+                              <button
+                                type="button"
+                                className="fn-farm-this-btn"
+                                disabled={activeFarmingRelicSlug === row.relic.slug}
+                                onClick={() => beginFarmingRelic(row)}
+                              >
+                                <i className="ti ti-flame" aria-hidden="true" />
+                                {activeFarmingRelicSlug === row.relic.slug
+                                  ? t('farm.nowFarming')
+                                  : t('farm.farmThis')}
+                              </button>
+                            </div>
                             <RefinementGuidancePanel
                               guidance={row.guidance}
                               unit={row.targetedDropName ? 'pct' : 'plat'}

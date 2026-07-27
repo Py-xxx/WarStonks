@@ -26,6 +26,8 @@ import {
   sendWatchlistFoundDiscordNotification,
   sendUnderpricedListingDiscordNotification,
   sendScannerStaleDiscordNotification,
+  getSetCompletionOwnedItems,
+  setSetCompletionOwnedItemQuantity,
   isTauriRuntime,
   signInWfmTradeAccount,
   signOutWfmTradeAccount,
@@ -138,6 +140,9 @@ import type {
   TradeDetectedBuy,
   WalletSnapshot,
   WfmAutocompleteItem,
+  FarmingSession,
+  FarmingSessionDrop,
+  FarmingSessionRun,
   WfmTopSellOrder,
   NotificationSettings,
 } from '../types';
@@ -276,6 +281,7 @@ interface PersistedWatchlistState {
     maxRank: number | null;
     ignoredUserKeys: string[];
     linkedBuyOrderId: string | null;
+    quantity?: number;
   }>;
   selectedWatchlistId: string | null;
 }
@@ -353,6 +359,7 @@ function writePersistedWatchlistState(
       maxRank: item.maxRank,
       ignoredUserKeys: item.ignoredUserKeys,
       linkedBuyOrderId: item.linkedBuyOrderId,
+      quantity: item.quantity,
     })),
     selectedWatchlistId,
   };
@@ -385,6 +392,36 @@ function writePersistedRecentItems(items: WfmAutocompleteItem[]): void {
     window.localStorage.setItem(RECENT_ITEMS_STORAGE_KEY, JSON.stringify(items.slice(0, RECENT_ITEMS_LIMIT)));
   } catch (error) {
     console.error('[recents] failed to persist recent items', error);
+  }
+}
+
+const FARMING_SESSION_STORAGE_KEY = 'warstonks.farmingSession.v1';
+
+function readPersistedFarmingSession(): FarmingSession | null {
+  try {
+    const raw = window.localStorage.getItem(FARMING_SESSION_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as FarmingSession;
+    // Guard against a malformed/older shape rather than rendering a broken panel.
+    return parsed && typeof parsed.relicSlug === 'string' && Array.isArray(parsed.drops)
+      ? { ...parsed, runs: Array.isArray(parsed.runs) ? parsed.runs : [] }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedFarmingSession(session: FarmingSession | null): void {
+  try {
+    if (session) {
+      window.localStorage.setItem(FARMING_SESSION_STORAGE_KEY, JSON.stringify(session));
+    } else {
+      window.localStorage.removeItem(FARMING_SESSION_STORAGE_KEY);
+    }
+  } catch (error) {
+    console.error('[farming] failed to persist farming session', error);
   }
 }
 
@@ -918,6 +955,7 @@ function createWatchlistItem(
   currentCount: number,
   ignoredUserKeys: string[] = [],
   linkedBuyOrderId: string | null = null,
+  quantity = 1,
 ): WatchlistItem {
   const nextScanAt = currentOrder
     ? Date.now() + getWatchlistPollIntervalMs(currentCount)
@@ -925,6 +963,7 @@ function createWatchlistItem(
 
   return {
     id: `${buildWatchlistId(item)}:${variantKey}`,
+    quantity: Math.max(1, Math.round(quantity)),
     itemId: item.itemId,
     name: item.name,
     displayName: buildMarketDisplayName(item.name, variantLabel),
@@ -976,6 +1015,8 @@ function restorePersistedWatchlistItems(entries: PersistedWatchlistState['watchl
       currentCount,
       entry.ignoredUserKeys,
       entry.linkedBuyOrderId,
+      // Saves from before quantity existed default to 1.
+      entry.quantity ?? 1,
     ),
   );
 }
@@ -1008,6 +1049,7 @@ function createWatchlistItemFromTradeBuyOrder(
     currentCount,
     [],
     order.orderId,
+    order.quantity,
   );
 }
 
@@ -1022,9 +1064,11 @@ function mergeWatchlistWithTradeBuyOrders(
       return item.linkedBuyOrderId ? { ...item, linkedBuyOrderId: null } : item;
     }
 
+    const orderQuantity = Math.max(1, matchingOrder.quantity);
     if (
       item.targetPrice === matchingOrder.yourPrice
       && item.linkedBuyOrderId === matchingOrder.orderId
+      && item.quantity === orderQuantity
       && item.imagePath === (matchingOrder.imagePath ?? item.imagePath)
     ) {
       return item;
@@ -1034,6 +1078,8 @@ function mergeWatchlistWithTradeBuyOrders(
       ...item,
       targetPrice: matchingOrder.yourPrice,
       linkedBuyOrderId: matchingOrder.orderId,
+      // Mirror the order's quantity so "mark as bought" knows how many units are outstanding.
+      quantity: orderQuantity,
       imagePath: matchingOrder.imagePath ?? item.imagePath,
     };
   });
@@ -1509,6 +1555,7 @@ interface AppStore {
   markWatchlistItemBought: (
     id: string,
     price: number,
+    quantity?: number,
   ) => Promise<{ confirmationMessage: string }>;
   handleDetectedTradeBuys: (buys: TradeDetectedBuy[]) => Promise<void>;
   dismissAlert: (id: string) => void;
@@ -1561,6 +1608,18 @@ interface AppStore {
   clearPendingTradeListing: () => void;
   requestedOpportunitiesTab: RequestedOpportunitiesTab | null;
   requestedFarmNowSearch: string | null;
+
+  // "Now farming" session: one active relic at a time, persisted across tabs + restarts.
+  farmingSession: FarmingSession | null;
+  /** Expanded panel vs collapsed FAB bubble. */
+  farmingPanelExpanded: boolean;
+  startFarmingSession: (session: Omit<FarmingSession, 'startedAt' | 'runs'>) => void;
+  stopFarmingSession: () => void;
+  setFarmingPanelExpanded: (expanded: boolean) => void;
+  /** Logs one run's reward. Real parts increment the owned-parts inventory; filler (Forma) is
+   *  recorded for run-count/odds accuracy only. */
+  logFarmingDrop: (drop: FarmingSessionDrop) => Promise<void>;
+  undoLastFarmingRun: () => Promise<void>;
   requestOpportunitiesTab: (tab: RequestedOpportunitiesTab, search?: string) => void;
   clearRequestedOpportunitiesTab: () => void;
   openItemAnalysis: (target: ItemQuickViewTarget) => Promise<void>;
@@ -1645,6 +1704,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   pendingTradeListing: null,
   requestedOpportunitiesTab: null,
   requestedFarmNowSearch: null,
+  farmingSession: readPersistedFarmingSession(),
+  farmingPanelExpanded: true,
   ownedRelics: [],
   ownedRelicsUpdatedAt: null,
   ownedRelicsCacheLoaded: false,
@@ -3067,7 +3128,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       };
     });
   },
-  markWatchlistItemBought: async (id, price) => {
+  markWatchlistItemBought: async (id, price, quantity = 1) => {
     try {
       const state = get();
       const item = state.watchlist.find((entry) => entry.id === id);
@@ -3079,6 +3140,48 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
         throw new Error(tUserMessage('val.boughtPriceZero'));
       }
+
+      // Never close more units than the watchlist entry is tracking.
+      const outstanding = Math.max(1, item.quantity);
+      const boughtQuantity = Math.min(Math.max(1, Math.round(quantity)), outstanding);
+      const remaining = outstanding - boughtQuantity;
+
+      /** Adds the purchased units to the parts inventory — the whole point of "mark as bought"
+       *  is that you now own them, so the set planner should see them immediately. */
+      const addToInventory = async () => {
+        if (!isTauriRuntime()) {
+          return;
+        }
+        try {
+          const owned = await getSetCompletionOwnedItems();
+          const current = owned.find((entry) => entry.slug === item.slug)?.quantity ?? 0;
+          await setSetCompletionOwnedItemQuantity({
+            itemId: item.itemId,
+            slug: item.slug,
+            name: item.name,
+            imagePath: item.imagePath,
+            quantity: current + boughtQuantity,
+          });
+        } catch (error) {
+          // A failed inventory write must not undo a real purchase — surface it, keep going.
+          console.error('[watchlist] failed to add bought item to inventory', error);
+        }
+      };
+
+      /** Either drop the entry (fully bought) or decrement what's still outstanding. */
+      const settleWatchlistEntry = () => {
+        if (remaining <= 0) {
+          get().removeWatchlistItem(id);
+          return;
+        }
+        set((currentState) => {
+          const nextWatchlist = currentState.watchlist.map((entry) =>
+            entry.id === id ? { ...entry, quantity: remaining } : entry,
+          );
+          writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
+          return { watchlist: nextWatchlist };
+        });
+      };
 
       const expectedRank = deriveVariantRankFromKey(item.variantKey);
       const clearLinkedBuyOrder = () => {
@@ -3110,7 +3213,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
               {
                 orderId: activeBuyOrder.orderId,
                 price: normalizedPrice,
-                quantity: 1,
+                // Preserve the order's real quantity: forcing 1 here used to shrink a multi-unit
+                // order so closing it removed everything, not just the units actually bought.
+                quantity: Math.max(activeBuyOrder.quantity, boughtQuantity),
                 rank: expectedRank,
                 visible: true,
               },
@@ -3125,9 +3230,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
             });
           }
 
-          await closeWfmBuyOrder(activeBuyOrder.orderId, 1, state.sellerMode);
-          clearLinkedBuyOrder();
-          get().removeWatchlistItem(id);
+          await closeWfmBuyOrder(activeBuyOrder.orderId, boughtQuantity, state.sellerMode);
+          await addToInventory();
+          if (remaining <= 0) {
+            clearLinkedBuyOrder();
+          }
+          settleWatchlistEntry();
           return { confirmationMessage: 'Item has been marked as bought.' };
         }
 
@@ -3143,8 +3251,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
             Date.now(),
           )
         ) {
-          clearLinkedBuyOrder();
-          get().removeWatchlistItem(id);
+          await addToInventory();
+          if (remaining <= 0) {
+            clearLinkedBuyOrder();
+          }
+          settleWatchlistEntry();
           return { confirmationMessage: 'Item has been marked as bought.' };
         }
 
@@ -3156,7 +3267,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             {
               wfmId: resolvedItem.wfmId,
               price: normalizedPrice,
-              quantity: 1,
+              quantity: boughtQuantity,
               rank: expectedRank,
               visible: true,
             },
@@ -3175,12 +3286,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
             sellerMode: state.sellerMode,
           });
 
-          await closeWfmBuyOrder(createdOrderId, 1, state.sellerMode);
+          await closeWfmBuyOrder(createdOrderId, boughtQuantity, state.sellerMode);
         }
       }
 
-      clearLinkedBuyOrder();
-      get().removeWatchlistItem(id);
+      await addToInventory();
+      if (remaining <= 0) {
+        clearLinkedBuyOrder();
+      }
+      settleWatchlistEntry();
       return { confirmationMessage: 'Item has been marked as bought.' };
     } catch (error) {
       throw new Error(formatHomeErrorMessage('watchlist-mark-bought', error));
@@ -3695,6 +3809,91 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }),
   clearRequestedOpportunitiesTab: () =>
     set({ requestedOpportunitiesTab: null, requestedFarmNowSearch: null }),
+
+  startFarmingSession: (session) => {
+    const next: FarmingSession = { ...session, startedAt: new Date().toISOString(), runs: [] };
+    writePersistedFarmingSession(next);
+    set({ farmingSession: next, farmingPanelExpanded: true });
+  },
+  stopFarmingSession: () => {
+    writePersistedFarmingSession(null);
+    set({ farmingSession: null, farmingPanelExpanded: true });
+  },
+  setFarmingPanelExpanded: (expanded) => set({ farmingPanelExpanded: expanded }),
+
+  logFarmingDrop: async (drop) => {
+    const session = get().farmingSession;
+    if (!session) {
+      return;
+    }
+    // Record the run first so the counter and odds respond instantly; the inventory write is
+    // what can fail, and it's reverted below if it does.
+    const run: FarmingSessionRun = {
+      dropSlug: drop.slug,
+      dropName: drop.name,
+      isFiller: drop.isFiller,
+      at: new Date().toISOString(),
+    };
+    const withRun: FarmingSession = { ...session, runs: [...session.runs, run] };
+    writePersistedFarmingSession(withRun);
+    set({ farmingSession: withRun });
+
+    if (drop.isFiller || !isTauriRuntime()) {
+      return;
+    }
+
+    try {
+      // Read-then-set: the command takes an absolute quantity, and the Inventory tab can be
+      // editing the same rows, so we always increment from the stored value.
+      const owned = await getSetCompletionOwnedItems();
+      const current = owned.find((item) => item.slug === drop.slug)?.quantity ?? 0;
+      await setSetCompletionOwnedItemQuantity({
+        itemId: drop.itemId,
+        slug: drop.slug,
+        name: drop.name,
+        imagePath: drop.imagePath,
+        quantity: current + 1,
+      });
+      get().pushToast(tActive('farm.loggedDrop', { item: drop.name }), 'success');
+    } catch (error) {
+      console.error('[farming] failed to add drop to inventory', error);
+      // Roll the run back so the log never claims an inventory change that didn't happen.
+      const rolledBack: FarmingSession = { ...withRun, runs: withRun.runs.slice(0, -1) };
+      writePersistedFarmingSession(rolledBack);
+      set({ farmingSession: rolledBack });
+      get().pushToast(tActive('farm.logFailed', { item: drop.name }), 'error');
+    }
+  },
+
+  undoLastFarmingRun: async () => {
+    const session = get().farmingSession;
+    const last = session?.runs[session.runs.length - 1];
+    if (!session || !last) {
+      return;
+    }
+    const reverted: FarmingSession = { ...session, runs: session.runs.slice(0, -1) };
+    writePersistedFarmingSession(reverted);
+    set({ farmingSession: reverted });
+
+    if (last.isFiller || !isTauriRuntime()) {
+      return;
+    }
+    try {
+      const owned = await getSetCompletionOwnedItems();
+      const entry = owned.find((item) => item.slug === last.dropSlug);
+      if (entry && entry.quantity > 0) {
+        await setSetCompletionOwnedItemQuantity({
+          itemId: entry.itemId,
+          slug: entry.slug,
+          name: entry.name,
+          imagePath: entry.imagePath,
+          quantity: entry.quantity - 1,
+        });
+      }
+    } catch (error) {
+      console.error('[farming] failed to undo drop from inventory', error);
+    }
+  },
   openItemAnalysis: async (target) => {
     await get().openItemInQuickView(target);
     set({ activePage: 'market', navigationBack: null });

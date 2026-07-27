@@ -850,13 +850,14 @@ pub(crate) fn fetch_public_stats_body_cached(
     }
 }
 
-/// Wallet callers tolerate slightly stale data (balances change on the cadence of AlecaFrame's
-/// own uploads, i.e. minutes) — a 90s window lets the wallet poll ride on trade detection's
-/// fetches instead of issuing its own.
-const WALLET_STATS_MAX_AGE: Duration = Duration::from_secs(90);
+/// `/api/stats/public` returns the whole payload — trades AND wallet — in one response, so every
+/// caller shares a single freshness window rather than each keeping its own. At 10s this is ~0.1
+/// requests/sec against AlecaFrame's 1 rps per-IP limit, leaving ample headroom for the relic
+/// endpoint and any retry burst.
+pub(crate) const PUBLIC_STATS_MAX_AGE: Duration = Duration::from_secs(10);
 
 fn fetch_public_stats(public_token: &str) -> Result<AlecaframePublicStatsResponse> {
-    let body = fetch_public_stats_body_cached(public_token, WALLET_STATS_MAX_AGE)?;
+    let body = fetch_public_stats_body_cached(public_token, PUBLIC_STATS_MAX_AGE)?;
     serde_json::from_str::<AlecaframePublicStatsResponse>(&body)
         .context("failed to parse Alecaframe public stats response")
 }

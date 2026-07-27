@@ -263,6 +263,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
         <WatchlistPurchaseModal
           itemName={purchaseItem.displayName}
           defaultPrice={purchaseItem.targetPrice}
+          maxQuantity={purchaseItem.quantity}
           loading={purchaseLoading}
           errorMessage={purchaseError}
           onClose={() => {
@@ -272,10 +273,10 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
             setPurchaseItemId(null);
             setPurchaseError(null);
           }}
-          onSubmit={(price) => {
+          onSubmit={(price, quantity) => {
             setPurchaseLoading(true);
             setPurchaseError(null);
-            void markWatchlistItemBought(purchaseItem.id, price)
+            void markWatchlistItemBought(purchaseItem.id, price, quantity)
               .then((result) => {
                 setPurchaseSuccess(result.confirmationMessage);
                 setPurchaseItemId(null);

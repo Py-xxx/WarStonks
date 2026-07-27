@@ -17,6 +17,7 @@ import { NotificationsModal } from './components/NotificationsModal';
 import { ImportExportModal } from './components/ImportExportModal';
 import { LanguageModal } from './components/LanguageModal';
 import { ToastHost } from './components/ToastHost';
+import { FarmingSessionPanel } from './components/FarmingSessionPanel';
 import { useStartupInitialization } from './hooks/useStartupInitialization';
 import { useIntegrationSettings } from './hooks/useIntegrationSettings';
 import { useWatchlistScanner } from './hooks/useWatchlistScanner';
@@ -139,6 +140,7 @@ function AppShell() {
       <NotificationsModal />
       <ImportExportModal />
       <LanguageModal />
+      <FarmingSessionPanel />
       <ToastHost />
     </>
   );

@@ -31,6 +31,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
     watchlistId: string;
     itemName: string;
     defaultPrice: number;
+    maxQuantity: number;
   } | null>(null);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
@@ -309,6 +310,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
                           watchlistId: alert.watchlistId,
                           itemName: alert.itemName,
                           defaultPrice: watchlistItem?.targetPrice ?? alert.price,
+                          maxQuantity: watchlistItem?.quantity ?? 1,
                         });
                       }}
                     >
@@ -352,6 +354,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
         <WatchlistPurchaseModal
           itemName={purchaseModal.itemName}
           defaultPrice={purchaseModal.defaultPrice}
+          maxQuantity={purchaseModal.maxQuantity}
           loading={purchaseLoading}
           errorMessage={purchaseError}
           onClose={() => {
@@ -361,11 +364,11 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
             setPurchaseModal(null);
             setPurchaseError(null);
           }}
-          onSubmit={(price) => {
+          onSubmit={(price, quantity) => {
             setPurchaseLoading(true);
             setPurchaseError(null);
             setActionError(null);
-            void markWatchlistItemBought(purchaseModal.watchlistId, price)
+            void markWatchlistItemBought(purchaseModal.watchlistId, price, quantity)
               .then((result) => {
                 setPurchaseSuccess(result.confirmationMessage);
                 setPurchaseModal(null);

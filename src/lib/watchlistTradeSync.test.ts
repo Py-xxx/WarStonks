@@ -63,6 +63,7 @@ function createWatchlistItem(input: Pick<WatchlistItem, 'id' | 'slug' | 'variant
     lastError: null,
     ignoredUserKeys: [],
     linkedBuyOrderId: null,
+  quantity: 1,
   };
 }
 

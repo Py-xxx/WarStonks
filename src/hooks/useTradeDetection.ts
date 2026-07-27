@@ -12,13 +12,21 @@ import { useAppStore } from '../stores/useAppStore';
 const WFM_TRADE_POLL_MIN_MS = 5_000;
 const WFM_TRADE_POLL_MAX_MS = 30_000;
 const WFM_TRADE_IDLE_STREAK_CAP = 3; // 5s → 10s → 20s → 30s
-// AlecaFrame's server data only changes when the companion app uploads a sync (a minutes-scale
-// cadence), so tight polling is pure flood. Poll at 30s briefly after activity, backing off to
-// 3 minutes while idle; the backend additionally coalesces these fetches with the wallet poll
-// and enforces an error cooldown, so this cadence is an upper bound on real requests.
-const ALECAFRAME_POLL_MIN_MS = 30_000;
-const ALECAFRAME_POLL_MAX_MS = 180_000;
-const ALECAFRAME_IDLE_STREAK_CAP = 3; // 30s → 60s → 120s → 180s
+// `/api/stats/public` returns trades AND wallet in one response, and AlecaFrame rate-limits at
+// 1 rps per IP — so a flat 10s poll is only ~10% of the budget while making trade detection feel
+// immediate. The old 30s→180s idle backoff meant a trade could go unnoticed for three minutes,
+// which is the wrong trade-off when the whole point is auto-detection.
+//
+// Idle backoff is deliberately mild (10s → 20s) rather than absent: it still trims requests when
+// the app sits open untouched for a long time. Error backoff is separate and stays aggressive —
+// hammering an unhealthy server is what causes 503s in the first place.
+const ALECAFRAME_POLL_MIN_MS = 10_000;
+const ALECAFRAME_POLL_MAX_MS = 20_000;
+const ALECAFRAME_IDLE_STREAK_CAP = 1; // 10s → 20s
+// Failure backoff: 30s → 60s → 120s → 180s, independent of the idle cadence.
+const ALECAFRAME_ERROR_BACKOFF_BASE_MS = 30_000;
+const ALECAFRAME_ERROR_BACKOFF_MAX_MS = 180_000;
+const ALECAFRAME_ERROR_STREAK_CAP = 3;
 const WFM_INITIAL_DELAY_MS = 1_000;
 const ALECAFRAME_INITIAL_DELAY_MS = 2_500;
 const MIN_TRADE_REFRESH_GAP_MS = 3_000;
@@ -29,6 +37,13 @@ function wfmPollIntervalForStreak(idleStreak: number): number {
 
 function alecaframePollIntervalForStreak(idleStreak: number): number {
   return Math.min(ALECAFRAME_POLL_MIN_MS * 2 ** idleStreak, ALECAFRAME_POLL_MAX_MS);
+}
+
+function alecaframeErrorBackoffMs(errorStreak: number): number {
+  return Math.min(
+    ALECAFRAME_ERROR_BACKOFF_BASE_MS * 2 ** (errorStreak - 1),
+    ALECAFRAME_ERROR_BACKOFF_MAX_MS,
+  );
 }
 
 function computeNextRefreshDelay(
@@ -72,6 +87,7 @@ export function useTradeDetection() {
     let lastAlecaframeStartedAt = 0;
     let wfmIdleStreak = 0;
     let alecaframeIdleStreak = 0;
+    let alecaframeErrorStreak = 0;
 
     const scheduleWfm = (preferredAt: number) => {
       if (cancelled) {
@@ -146,20 +162,27 @@ export function useTradeDetection() {
         if (result.detectedBuys && result.detectedBuys.length > 0) {
           await handleDetectedBuys(result.detectedBuys);
         }
-        // Reset to the fast cadence on activity; otherwise back off while idle.
+        // A successful call clears any error backoff. Reset to the fast cadence on activity;
+        // otherwise drift to the mild idle cadence.
+        alecaframeErrorStreak = 0;
         if (result.newTradeCount > 0) {
           alecaframeIdleStreak = 0;
         } else {
           alecaframeIdleStreak = Math.min(alecaframeIdleStreak + 1, ALECAFRAME_IDLE_STREAK_CAP);
         }
       } catch (error) {
-        // Errors (including the backend's cooldown refusals) also back off — retrying fast
-        // against an unhealthy server is what got us rate-limited in the first place.
-        alecaframeIdleStreak = Math.min(alecaframeIdleStreak + 1, ALECAFRAME_IDLE_STREAK_CAP);
+        // Errors back off on their own, much steeper curve — retrying fast against an unhealthy
+        // or rate-limited server is what causes 503s. Kept separate from the idle streak so the
+        // idle cadence can stay fast without weakening failure handling.
+        alecaframeErrorStreak = Math.min(alecaframeErrorStreak + 1, ALECAFRAME_ERROR_STREAK_CAP);
         console.error('[trades] failed to refresh Alecaframe trade detection', error);
       } finally {
         alecaframeInFlight = false;
-        scheduleAlecaframe(startedAt + alecaframePollIntervalForStreak(alecaframeIdleStreak));
+        const nextDelay =
+          alecaframeErrorStreak > 0
+            ? alecaframeErrorBackoffMs(alecaframeErrorStreak)
+            : alecaframePollIntervalForStreak(alecaframeIdleStreak);
+        scheduleAlecaframe(startedAt + nextDelay);
       }
     };
 

@@ -35,6 +35,7 @@ function makeItem(overrides: Partial<WatchlistItem>): WatchlistItem {
     lastError: overrides.lastError ?? null,
     ignoredUserKeys: overrides.ignoredUserKeys ?? [],
     linkedBuyOrderId: overrides.linkedBuyOrderId ?? null,
+  quantity: 1,
   };
 }
 

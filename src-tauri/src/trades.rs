@@ -4291,7 +4291,7 @@ fn fetch_alecaframe_trade_payload(app: &tauri::AppHandle) -> Result<AlecaframeTr
     // companion app uploads, which happens on a minutes cadence.
     let body = crate::settings::fetch_public_stats_body_cached(
         &public_token,
-        Duration::from_secs(20),
+        crate::settings::PUBLIC_STATS_MAX_AGE,
     )?;
     serde_json::from_str::<AlecaframeTradeResponse>(&body)
         .context("failed to parse Alecaframe trade history response")

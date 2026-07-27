@@ -37,6 +37,7 @@ function createWatchlistItem(input: Partial<WatchlistItem> & Pick<WatchlistItem,
     lastError: input.lastError ?? null,
     ignoredUserKeys: input.ignoredUserKeys ?? [],
     linkedBuyOrderId: input.linkedBuyOrderId ?? null,
+  quantity: 1,
   };
 }
 
@@ -108,6 +109,7 @@ test('findActiveWatchlistBuyOrder prefers the linked order id', () => {
     slug: 'barrel-diffusion',
     variantKey: 'rank:0',
     linkedBuyOrderId: 'linked',
+  quantity: 1,
   });
   const orders = [
     createBuyOrder({ orderId: 'older', slug: 'barrel-diffusion', rank: 0, updatedAt: '2026-03-16T08:00:00Z' }),

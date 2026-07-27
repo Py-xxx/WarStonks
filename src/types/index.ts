@@ -74,6 +74,9 @@ export interface WatchlistItem {
   lastError: string | null;
   ignoredUserKeys: string[];
   linkedBuyOrderId: string | null;
+  /** How many units you're after — mirrors the linked buy order's quantity so "mark as bought"
+   *  can close part of it instead of wiping the whole order. */
+  quantity: number;
 }
 
 export interface WatchlistAlert {
@@ -1396,6 +1399,46 @@ export interface ArbitrageScannerProgress {
 export interface ArbitrageScannerState {
   latestScan: ArbitrageScannerResponse | null;
   progress: ArbitrageScannerProgress;
+}
+
+/** One selectable reward in an active farming session. */
+export interface FarmingSessionDrop {
+  itemId: number | null;
+  slug: string;
+  name: string;
+  imagePath: string | null;
+  rarity: string | null;
+  /** Chance (0..1) at the session's refinement, for the live odds readout. */
+  chance: number | null;
+  recommendedExitPrice: number | null;
+  /** Forma (and anything else worthless to us) is logged for run-count accuracy only —
+   *  it never touches the parts inventory. */
+  isFiller: boolean;
+}
+
+/** A logged run within a farming session. */
+export interface FarmingSessionRun {
+  dropSlug: string;
+  dropName: string;
+  isFiller: boolean;
+  at: string;
+}
+
+/**
+ * "Now farming" session: the user declares which relic they're running so logging a reward is a
+ * single tap from that relic's ~6 drops instead of a catalog search. Persisted so it survives
+ * tab switches and restarts — the relics are still in their inventory either way.
+ */
+export interface FarmingSession {
+  relicSlug: string;
+  relicName: string;
+  relicImagePath: string | null;
+  tier: string;
+  code: string;
+  refinement: string;
+  startedAt: string;
+  drops: FarmingSessionDrop[];
+  runs: FarmingSessionRun[];
 }
 
 export interface SetCompletionOwnedItem {

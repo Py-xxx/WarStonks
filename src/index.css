@@ -2536,7 +2536,21 @@ textarea:focus-visible,
 }
 .sp-part-qty-badge.owned { color: var(--color-green); background: rgba(61, 214, 140, 0.16); }
 .sp-part-meta { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-.sp-part-relics { color: var(--color-blue); }
+/* Actionable: jumps to "What to farm now" with this part searched. Button reset + link styling
+   so it reads as a link inside the meta line rather than a control. */
+.sp-part-relics {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--color-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.sp-part-relics:hover { color: var(--text-primary); }
+.sp-part-relics:focus-visible { outline: 1px solid var(--color-blue); outline-offset: 2px; border-radius: 3px; }
 .sp-part-input {
   width: 66px; height: 32px; flex-shrink: 0; text-align: right;
   background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
@@ -2634,6 +2648,124 @@ textarea:focus-visible,
   flex-shrink: 0; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px; font-weight: 600; color: var(--color-green);
 }
+/* ═══ "Now farming" session ══════════════════════════════════════════════ */
+.fn-farm-this-row { display: flex; margin-bottom: 12px; }
+.fn-farm-this-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 999px; cursor: pointer;
+  font-size: 12px; font-weight: 600;
+  color: var(--color-amber); background: rgba(240, 160, 48, 0.14);
+  border: 1px solid rgba(240, 160, 48, 0.4);
+  transition: background 0.12s, color 0.12s;
+}
+.fn-farm-this-btn:hover:not(:disabled) { background: rgba(240, 160, 48, 0.24); }
+.fn-farm-this-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* Floating session panel — above page content, below modals (which sit at 350). */
+.farm-panel {
+  position: fixed; right: 24px; bottom: 24px; z-index: 200;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(70vh, 640px);
+  display: flex; flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid rgba(240, 160, 48, 0.4);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.farm-panel-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding: 13px 14px; border-bottom: 1px solid var(--border);
+}
+.farm-panel-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.farm-panel-eyebrow {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-amber);
+}
+.farm-panel-title strong { font-size: 15px; color: var(--text-primary); }
+.farm-panel-refinement { font-size: 11px; color: var(--text-secondary); }
+.farm-panel-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* Minimize sits in the corner and is deliberately prominent — it's the most-used control once
+   you're farming, since the panel collapses to the bubble between runs. */
+.farm-panel-minimize {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border-strong, var(--border));
+  color: var(--text-primary);
+  transition: background 0.12s, border-color 0.12s;
+}
+.farm-panel-minimize:hover { background: rgba(255, 255, 255, 0.14); border-color: var(--color-amber); }
+.farm-panel-minimize .ti { font-size: 18px; }
+
+.farm-panel-stats {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline;
+  padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-base);
+}
+.farm-stat { display: inline-flex; align-items: baseline; gap: 5px; font-size: 11px; color: var(--text-muted); }
+.farm-stat strong {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 16px; font-weight: 600; color: var(--text-primary);
+}
+.farm-stat-odds { flex-basis: 100%; font-size: 11px; color: var(--color-green); }
+
+.farm-panel-prompt {
+  padding: 11px 14px 8px; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+}
+.farm-drop-list {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 0 14px 12px; overflow-y: auto; min-height: 0;
+}
+.farm-drop {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 9px 10px; border-radius: 10px; cursor: pointer;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  transition: border-color 0.12s, background 0.12s;
+}
+.farm-drop:hover { border-color: var(--color-amber); background: rgba(240, 160, 48, 0.08); }
+.farm-drop.is-filler { border-style: dashed; opacity: 0.8; }
+.farm-drop-thumb {
+  width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0; overflow: hidden;
+  background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 12px; font-weight: 600;
+}
+.farm-drop-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.farm-drop-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.farm-drop-name { font-size: 13px; color: var(--text-primary); }
+.farm-drop-meta { font-size: 11px; color: var(--text-secondary); }
+
+.farm-panel-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-top: 1px solid var(--border);
+}
+.farm-panel-last { font-size: 11px; color: var(--text-secondary); min-width: 0; }
+.farm-panel-note { font-size: 10px; color: var(--text-muted); line-height: 1.4; }
+.farm-panel-empty { padding: 16px 14px; font-size: 12px; color: var(--text-muted); }
+
+/* Collapsed bubble — sits above the inventory-import FAB's z-index so it stays reachable. */
+.farm-fab {
+  position: fixed; right: 24px; bottom: 24px; z-index: 200;
+  width: 52px; height: 52px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-elevated); color: var(--color-amber);
+  border: 1px solid rgba(240, 160, 48, 0.5);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  cursor: pointer; transition: transform 0.15s ease;
+}
+.farm-fab:hover { transform: translateY(-2px); }
+.farm-fab .ti { font-size: 22px; }
+.farm-fab-badge {
+  position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--color-amber); color: #1a1204;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700;
+}
+/* The farming panel/bubble owns the bottom-right corner, so lift the inventory-import FAB clear
+   of it while a session is active. `:has()` on <body> because the panel is mounted after the page
+   content (a sibling combinator can't reach backwards). */
+body:has(.farm-panel) .inventory-import-fab { bottom: 96px; }
+body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
+
 .fn-odds-more { font-size: 11px; color: var(--text-muted); padding: 2px 0 0 104px; }
 .fn-odds-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin: 12px 0 0; }
 /* Control bar: mode → search → filters on one line, scan status quietly beneath. */
@@ -8229,45 +8361,53 @@ body {
 .listing-analysis-muted {
   color: var(--text-muted);
 }
-.watchlist-purchase-modal {
-  width: min(460px, calc(100vw - 32px));
-}
-.watchlist-purchase-modal-fullscreen {
+/* Mark-as-bought confirm — same compact, screen-centered treatment as the remove dialog so the
+   two watchlist confirmations feel like one family. */
+.settings-modal.watchlist-purchase-modal {
   top: 50%;
-  left: 50%;
-  width: min(520px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
+  width: min(420px, calc(100vw - 40px));
+  max-height: none;
   transform: translate(-50%, -50%);
+  border-radius: 16px;
 }
-.watchlist-purchase-modal-body {
-  grid-template-columns: minmax(0, 1fr);
-  padding-top: 16px;
+.watchlist-purchase-modal .settings-modal-header { padding: 20px 22px 0; }
+.watchlist-purchase-modal .settings-modal-body {
+  display: block;
+  padding: 10px 22px 0;
 }
-.watchlist-purchase-content {
+.watchlist-purchase-modal .settings-modal-actions {
+  padding: 18px 22px 20px;
+  justify-content: flex-end;
+}
+.watchlist-purchase-copy {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.watchlist-purchase-fields {
   display: grid;
-  gap: 10px;
-  width: 100%;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.watchlist-purchase-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.watchlist-purchase-field > span {
+  font-size: 11px; font-weight: 600; color: var(--text-secondary);
+}
+.watchlist-purchase-field input {
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-primary); padding: 8px 10px; font-size: 13px; width: 100%;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+}
+.watchlist-purchase-field input:focus { outline: none; border-color: var(--color-blue); }
+.watchlist-purchase-field input:disabled { opacity: 0.55; }
+.watchlist-purchase-hint {
+  margin: 10px 0 0; font-size: 11px; color: var(--text-muted);
 }
 .trade-listing-modal-body {
   display: grid;
   gap: 14px;
   grid-template-columns: 1fr;
-}
-.watchlist-purchase-copy {
-  margin: 0;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-.watchlist-purchase-actions {
-  width: 100%;
-  padding: 0 18px 18px;
-  justify-content: stretch;
-}
-.watchlist-purchase-action {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 38px;
-  justify-content: center;
 }
 .trade-listing-type-tabs {
   display: inline-grid;
