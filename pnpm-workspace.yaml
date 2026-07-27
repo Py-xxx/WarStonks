@@ -1,4 +1,4 @@
 allowBuilds:
   esbuild: true
   tesseract.js: true
-  ttf2woff: true
+  ttf2woff2: true
