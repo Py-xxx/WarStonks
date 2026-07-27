@@ -2434,6 +2434,259 @@ textarea:focus-visible,
   gap: 10px;
 }
 
+/* ═══ Set Completion Planner — redesigned (sp-*) ═══════════════════════════ */
+/* Summary strip: a quiet invest → sell → profit bar, not floating badges. */
+.sp-summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px 18px; margin-bottom: 14px;
+}
+.sp-summary-lead { display: flex; align-items: center; gap: 10px; }
+.sp-summary-lead-icon { display: inline-flex; color: var(--text-secondary); }
+.sp-summary-title { display: block; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.sp-summary-sub { display: block; font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+.sp-summary-flow { display: flex; align-items: center; gap: 20px; }
+.sp-summary-arrow { display: inline-flex; color: var(--text-muted); }
+.sp-summary-stat { text-align: right; }
+.sp-summary-stat-label {
+  display: block; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted);
+}
+.sp-summary-stat-value {
+  display: block; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 16px; font-weight: 600; color: var(--text-primary);
+}
+.sp-summary-stat-profit { border-left: 1px solid var(--border); padding-left: 20px; }
+.sp-summary-stat-profit .sp-summary-stat-value { color: var(--color-green); }
+
+/* Set card */
+.sp-set { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.sp-set.is-expanded { border-color: var(--border-strong, var(--border)); }
+.sp-set.is-complete { border-color: rgba(61, 214, 140, 0.4); }
+.sp-set-head {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 13px 16px; background: transparent; border: none; cursor: pointer; text-align: left;
+}
+.sp-set-head:hover { background: rgba(255, 255, 255, 0.02); }
+.sp-set-thumb {
+  width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0; overflow: hidden;
+  background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: uppercase;
+}
+.sp-set-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.sp-set-copy { flex: 1; min-width: 0; }
+.sp-set-name { display: block; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.sp-set-progress { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.sp-set-progress-track {
+  flex: 0 1 120px; height: 5px; border-radius: 3px; background: var(--bg-base); overflow: hidden;
+}
+.sp-set-progress-fill { display: block; height: 100%; border-radius: 3px; background: var(--color-blue); }
+.sp-set-progress-track.tone-high .sp-set-progress-fill,
+.sp-set-progress-track.tone-complete .sp-set-progress-fill { background: var(--color-green); }
+.sp-set-progress-track.tone-low .sp-set-progress-fill { background: var(--color-amber); }
+.sp-set-progress-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.sp-set-metrics { display: flex; align-items: center; gap: 18px; flex-shrink: 0; }
+.sp-set-metric { text-align: right; }
+.sp-set-metric-label {
+  display: block; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
+}
+.sp-set-metric-value {
+  display: block; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 15px; font-weight: 600; color: var(--text-primary);
+}
+.sp-set-metric-value.pos { color: var(--color-green); }
+.sp-set-roi {
+  font-size: 12px; font-weight: 600; color: var(--color-green);
+  background: rgba(61, 214, 140, 0.14); padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+}
+.sp-set-roi.complete { display: inline-flex; align-items: center; gap: 4px; }
+.sp-set-chevron { color: var(--text-muted); flex-shrink: 0; }
+
+/* Expanded body — recessed so parts read as belonging to the set above. */
+.sp-set-body { background: var(--bg-base); border-top: 1px solid var(--border); padding: 14px 16px 16px; }
+.sp-set-detail-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 14px;
+  font-size: 12px; color: var(--text-secondary);
+}
+.sp-set-detail-stats strong { color: var(--text-primary); font-weight: 600; }
+.sp-part-group-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 9px;
+}
+.sp-part-group-label.missing { color: var(--color-amber); }
+.sp-part-group-label.owned { color: var(--color-green); margin-top: 16px; }
+.sp-part-list { display: flex; flex-direction: column; gap: 8px; }
+.sp-part { display: flex; align-items: center; gap: 12px; }
+.sp-part-missing {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--color-amber); border-radius: 0 10px 10px 0; padding: 10px 12px;
+}
+.sp-part-thumb {
+  width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; overflow: hidden;
+  background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: uppercase;
+}
+.sp-part-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.sp-part-copy { flex: 1; min-width: 0; }
+.sp-part-name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sp-part-name { display: block; font-size: 14px; color: var(--text-primary); min-width: 0; }
+/* Prominent "Need ×2" flag so multi-quantity parts are obvious at a glance. */
+.sp-part-qty-badge {
+  flex-shrink: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--color-amber); background: rgba(240, 160, 48, 0.16);
+  padding: 2px 8px; border-radius: 999px;
+}
+.sp-part-qty-badge.owned { color: var(--color-green); background: rgba(61, 214, 140, 0.16); }
+.sp-part-meta { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.sp-part-relics { color: var(--color-blue); }
+.sp-part-input {
+  width: 66px; height: 32px; flex-shrink: 0; text-align: right;
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-primary); font-family: 'JetBrains Mono', monospace; padding: 0 8px;
+}
+.sp-part-input:focus { outline: none; border-color: var(--color-blue); }
+.sp-part-watch { flex-shrink: 0; }
+.sp-part-watch-btn { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.sp-part-owned { padding: 7px 12px; opacity: 0.72; }
+.sp-part-owned .sp-part-name-row { flex: 1; }
+.sp-part-owned .sp-part-name { font-size: 13px; }
+.sp-part-owned-count {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; white-space: nowrap;
+}
+.sp-part-owned-check { color: var(--color-green); display: inline-flex; }
+@media (max-width: 720px) {
+  .sp-set-head { flex-wrap: wrap; }
+  .sp-set-metrics { width: 100%; justify-content: space-between; }
+}
+
+/* ═══ What to farm now — shares the planner's shell (sp-*) plus these ═════ */
+.sp-part-group-label.muted { color: var(--text-muted); margin-top: 16px; }
+.fn-row-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fn-row-sub { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+.fn-owned-pill {
+  flex-shrink: 0; font-size: 11px; font-weight: 600;
+  color: var(--color-blue); background: rgba(74, 158, 255, 0.14);
+  padding: 2px 8px; border-radius: 999px;
+}
+.fn-owned-pill.is-none { color: var(--text-muted); background: rgba(255, 255, 255, 0.06); }
+.fn-drop { padding: 8px 12px; }
+.fn-drop-value { text-align: right; flex-shrink: 0; }
+.fn-drop-value strong {
+  display: block; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 14px; font-weight: 600; color: var(--color-green);
+}
+.fn-drop-list-low { opacity: 0.66; }
+.fn-drop-list-low .fn-drop-value strong { color: var(--text-secondary); }
+
+/* "Your odds at X" — the payoff panel when the search targets a specific drop. */
+.fn-odds {
+  background: var(--bg-surface); border: 1px solid rgba(74, 158, 255, 0.35);
+  border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;
+}
+.fn-odds-head { margin-bottom: 14px; }
+.fn-odds-title { display: block; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.fn-odds-sub { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.fn-odds-main { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; margin-bottom: 14px; }
+.fn-odds-gauge { flex: 1; min-width: 200px; }
+.fn-odds-pct {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 34px; font-weight: 700; color: var(--color-green); line-height: 1;
+}
+.fn-odds-pct-label { font-size: 12px; color: var(--text-secondary); margin-left: 8px; }
+.fn-odds-bar {
+  display: block; height: 8px; border-radius: 4px; margin-top: 10px;
+  background: var(--bg-base); overflow: hidden;
+}
+.fn-odds-bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--color-green); }
+.fn-odds-side { display: flex; gap: 22px; }
+.fn-odds-stat { text-align: right; }
+.fn-odds-stat span {
+  display: block; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
+}
+.fn-odds-stat strong {
+  display: block; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 18px; font-weight: 600; color: var(--text-primary);
+}
+.fn-odds-relics {
+  display: flex; flex-direction: column; gap: 6px;
+  border-top: 1px solid var(--border); padding-top: 12px;
+}
+.fn-odds-relic { display: flex; align-items: center; gap: 12px; }
+.fn-odds-relic-name {
+  flex: 0 0 92px; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12px; font-weight: 600; color: var(--text-primary);
+}
+.fn-odds-relic-breakdown { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.fn-odds-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--text-secondary);
+  background: var(--bg-base); border-radius: 999px; padding: 3px 9px;
+}
+.fn-odds-chip-count { font-weight: 700; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; }
+.fn-odds-chip-chance { color: var(--text-muted); }
+.fn-odds-relic-total {
+  flex-shrink: 0; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 13px; font-weight: 600; color: var(--color-green);
+}
+.fn-odds-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin: 12px 0 0; }
+/* Control bar: mode → search → filters on one line, scan status quietly beneath. */
+.fn-controls { margin-bottom: 14px; }
+.fn-controls-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 10px 12px;
+}
+.fn-segmented {
+  display: inline-flex; flex-shrink: 0; gap: 2px;
+  background: var(--bg-base); border-radius: 9px; padding: 3px;
+}
+.fn-segmented-btn {
+  border: none; background: transparent; cursor: pointer;
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  padding: 6px 14px; border-radius: 7px; white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.fn-segmented-btn:hover { color: var(--text-primary); }
+.fn-segmented-btn.is-active { background: var(--bg-elevated); color: var(--text-primary); }
+
+.fn-search { position: relative; flex: 1 1 220px; min-width: 180px; display: flex; align-items: center; }
+.fn-search-icon {
+  position: absolute; left: 10px; font-size: 15px; color: var(--text-muted); pointer-events: none;
+}
+.fn-search-input {
+  width: 100%; height: 34px; padding: 0 32px 0 32px;
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: 9px;
+  color: var(--text-primary); font-size: 12.5px;
+}
+.fn-search-input:focus { outline: none; border-color: var(--color-blue); }
+.fn-search-input::-webkit-search-cancel-button { display: none; }
+.fn-search-clear {
+  position: absolute; right: 6px; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px; border: none; cursor: pointer;
+  background: transparent; color: var(--text-muted); font-size: 14px;
+}
+.fn-search-clear:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-primary); }
+
+.fn-filters { display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+.fn-filter { display: inline-flex; align-items: center; gap: 6px; }
+.fn-filter > span {
+  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
+}
+.fn-filter select {
+  height: 34px; padding: 0 8px;
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: 9px;
+  color: var(--text-primary); font-size: 12.5px; cursor: pointer;
+}
+.fn-filter select:focus { outline: none; border-color: var(--color-blue); }
+
+.fn-controls-meta {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 4px 0; font-size: 11px; color: var(--text-muted);
+}
+.fn-rescan-btn { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; }
+@media (max-width: 720px) {
+  .fn-search { flex-basis: 100%; order: -1; }
+}
+
 .set-planner-owned-main {
   display: flex;
   align-items: center;
@@ -8583,7 +8836,8 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 10px 24px;
-  margin: 10px 0;
+  padding: 12px 14px;
+  margin: 0;
 }
 .portfolio-confidence-stat {
   display: inline-flex;
@@ -13159,7 +13413,7 @@ img[data-asset-failed='true'] {
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) auto;
   row-gap: 5px;
-  padding: 9px 2px 10px;
+  padding: 9px 14px 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .portfolio-breakdown-row:last-child { border-bottom: none; }

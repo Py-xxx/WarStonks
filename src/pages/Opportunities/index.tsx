@@ -33,7 +33,13 @@ import { wfstatLangCode } from '../../lib/language';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { tActive, useTranslation } from '../../i18n';
-import { tConfidence } from '../../lib/healthLabels';
+import { tConfidence, tHealth } from '../../lib/healthLabels';
+import {
+  REFINEMENT_KEYS,
+  computeDropOdds,
+  type ChanceProfile,
+  type RelicOddsInput,
+} from '../../lib/relicDropOdds';
 import type { TranslationKey } from '../../i18n/en';
 import type {
   ArbitrageScannerComponentEntry,
@@ -68,13 +74,27 @@ type PlannerComponentState = {
 
 type PlannerSetEntry = {
   entry: ArbitrageScannerSetEntry;
+  /** Distinct components fully owned / total distinct components. */
   ownedComponentCount: number;
   totalComponentCount: number;
+  /** Quantity-weighted: total individual parts needed (Σ quantityInSet) and how many are owned.
+   *  A set needing 2× of two of its three parts totals 5 parts, not 3. */
+  totalPartsNeeded: number;
+  ownedPartsCount: number;
   remainingInvestment: number | null;
   completionProfit: number | null;
   completionRoiPct: number | null;
+  /** Fraction of individual parts owned by quantity (0..1). */
+  partCountRatio: number;
+  /** Fraction of the set's total part value that the owned parts represent (0..1). */
+  ownedValueRatio: number;
   components: PlannerComponentState[];
 };
+
+/** A set counts as "meaningfully underway" for the summary strip when it's at least half owned
+ *  by part count, OR the parts already owned are worth at least half the set's total part value
+ *  (so owning one expensive part of a cheap-remainder set still qualifies). */
+const PLANNER_SUMMARY_THRESHOLD = 0.5;
 
 type RefinementMetric = { key: string; label: string; value: number | null; owned: number };
 type RefinementGuidance = {
@@ -389,17 +409,6 @@ function formatPercent(value: number | null | undefined): string {
   return `${Math.round(value)}%`;
 }
 
-function confidenceTone(level: string): string {
-  switch (level) {
-    case 'high':
-      return 'green';
-    case 'low':
-      return 'amber';
-    default:
-      return 'blue';
-  }
-}
-
 function chanceForRefinement(
   chanceProfile: RelicRefinementChanceProfile,
   refinementKey: string,
@@ -611,6 +620,34 @@ function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): s
   return '';
 }
 
+// The app ships no icon font, so these small inline SVGs are used instead of `ti ti-*` glyphs
+// (which render blank). currentColor lets them inherit the surrounding text color.
+const SpChevron = ({ up }: { up?: boolean }) => (
+  <svg className="sp-set-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={up ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'} />
+  </svg>
+);
+const SpCheck = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M5 12.5 10 17.5 19.5 7" />
+  </svg>
+);
+const SpPlus = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+const SpArrowRight = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M5 12h13M13 6l6 6-6 6" />
+  </svg>
+);
+const SpTarget = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 function SetPlannerRow({
   planner,
   expanded,
@@ -634,172 +671,188 @@ function SetPlannerRow({
   const { t } = useTranslation();
   const imageUrl = resolveWfmAssetUrl(planner.entry.imagePath);
   const isComplete =
-    planner.totalComponentCount > 0 &&
-    planner.ownedComponentCount >= planner.totalComponentCount;
+    planner.totalPartsNeeded > 0 && planner.ownedPartsCount >= planner.totalPartsNeeded;
+
+  const progressPct = planner.totalPartsNeeded
+    ? Math.round((planner.ownedPartsCount / planner.totalPartsNeeded) * 100)
+    : 0;
+  const progressTone = isComplete ? 'complete' : progressPct >= 50 ? 'high' : 'low';
+
+  const missingComponents = planner.components.filter((c) => c.missingQuantity > 0);
+  const ownedComponents = planner.components.filter((c) => c.missingQuantity === 0);
+
+  const renderMissingRow = (componentState: PlannerComponentState) => {
+    const { component } = componentState;
+    const targetKey = `${planner.entry.slug}:${component.slug}`;
+    const effectiveTarget = targetInputs[targetKey] ?? buildPlannerDefaultTarget(component);
+    const relicHints =
+      (component.itemId !== null ? ownedRelicHints.get(`item:${component.itemId}`) : undefined) ??
+      ownedRelicHints.get(`slug:${component.slug}`) ??
+      [];
+    const partImage = resolveWfmAssetUrl(component.imagePath);
+    return (
+      <div key={`${planner.entry.slug}-${component.slug}`} className="sp-part sp-part-missing">
+        <span className="sp-part-thumb" aria-hidden="true">
+          {partImage ? <img src={partImage} alt="" loading="lazy" /> : <span>{component.name.slice(0, 1)}</span>}
+        </span>
+        <div className="sp-part-copy">
+          <span className="sp-part-name-row">
+            <span className="sp-part-name">
+              <ItemName
+                name={component.name}
+                slug={component.slug}
+                itemId={component.itemId ?? undefined}
+                imagePath={component.imagePath}
+              />
+            </span>
+            {component.quantityInSet > 1 ? (
+              <span className="sp-part-qty-badge">{t('opp.needQty', { n: component.quantityInSet })}</span>
+            ) : null}
+          </span>
+          <span className="sp-part-meta">
+            {t('opp.buyZone')} {formatPlat(component.recommendedEntryLow)}–{formatPlat(component.recommendedEntryHigh)}
+            {' · '}
+            {component.quantityInSet > 1
+              ? t('opp.haveOfNeed', { have: componentState.coveredQuantity, need: component.quantityInSet })
+              : t('opp.ownedOfTotal', { owned: componentState.coveredQuantity, total: component.quantityInSet })}
+            {relicHints.length > 0 ? (
+              <>
+                {' · '}
+                <span className="sp-part-relics" title={relicHints.map((r) => r.fullName).join(', ')}>
+                  {t('opp.relicsOwnedShort', { n: relicHints.reduce((sum, r) => sum + r.totalCount, 0) })}
+                </span>
+              </>
+            ) : null}
+          </span>
+        </div>
+        <input
+          className="sp-part-input"
+          type="number"
+          min="1"
+          step="1"
+          value={effectiveTarget}
+          onChange={(event) => onTargetChange(component, event.target.value)}
+        />
+        <div className="sp-part-watch">
+          {recentlyAddedKeys[targetKey] ? (
+            <span className="watchlist-add-success">{t('wl.addedToWatchlist')}</span>
+          ) : (
+            <button
+              type="button"
+              className="btn-sm sp-part-watch-btn"
+              disabled={!effectiveTarget.trim() || !component.itemId}
+              onClick={() => onAddToWatchlist(component)}
+            >
+              <SpPlus /> {t('wl.addToWatchlist')}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <article
-      className={`planner-set-row${expanded ? ' is-expanded' : ''}${isComplete ? ' is-complete' : ''}`}
+      className={`sp-set${expanded ? ' is-expanded' : ''}${isComplete ? ' is-complete' : ''}`}
     >
-      <button type="button" className="planner-set-button" onClick={onToggle}>
-        <div className="planner-set-main">
-          <span className="planner-set-thumb">
-            {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{planner.entry.name.slice(0, 1)}</span>}
+      <button type="button" className="sp-set-head" onClick={onToggle} aria-expanded={expanded}>
+        <span className="sp-set-thumb">
+          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{planner.entry.name.slice(0, 2)}</span>}
+        </span>
+        <div className="sp-set-copy">
+          <span className="sp-set-name">{localizeName(planner.entry)}</span>
+          <span className="sp-set-progress">
+            <span className={`sp-set-progress-track tone-${progressTone}`}>
+              <span className="sp-set-progress-fill" style={{ width: `${progressPct}%` }} />
+            </span>
+            <span className="sp-set-progress-label">
+              {t('opp.partsOwned', { owned: planner.ownedPartsCount, total: planner.totalPartsNeeded })}
+            </span>
           </span>
-          <div className="planner-set-copy">
-            <strong>{localizeName(planner.entry)}</strong>
-            <span className="planner-set-note">
-              {planner.ownedComponentCount}/{planner.totalComponentCount} components owned
-            </span>
-          </div>
-          <div className="planner-set-status-pills">
-            {isComplete ? (
-              <span className="market-panel-badge tone-green">✓ Complete</span>
-            ) : null}
-            <span className="market-panel-badge tone-green">
-              {planner.ownedComponentCount}/{planner.totalComponentCount} owned
-            </span>
-            <span className="market-panel-badge tone-green">
-              Profit {formatPlat(planner.completionProfit)}
-            </span>
-          </div>
-          <div className="planner-set-metrics">
-            <div className="planner-set-metric">
-              <span className="planner-set-metric-label">{t('opp.investment')}</span>
-              <strong>{formatPlat(planner.remainingInvestment)}</strong>
-            </div>
-            <div className="planner-set-metric">
-              <span className="planner-set-metric-label">{t('mkt.exit')}</span>
-              <strong>{formatPlat(planner.entry.recommendedSetExitPrice)}</strong>
-            </div>
-            <div className="planner-set-metric">
-              <span className="planner-set-metric-label">ROI</span>
-              <strong>{formatPercent(planner.completionRoiPct)}</strong>
-            </div>
-            <div className="planner-set-metric">
-              <span className="planner-set-metric-label">{t('opp.liquidity')}</span>
-              <strong>{Math.round(planner.entry.liquidityScore)}%</strong>
-            </div>
-            <div className="planner-set-metric">
-              <span className="planner-set-metric-label">{t('opp.confidence')}</span>
-              <strong>{tConfidence(t, planner.entry.confidenceSummary)}</strong>
-            </div>
-          </div>
-          <div className="planner-set-pills">
-            <span className="planner-set-chevron">{expanded ? '−' : '+'}</span>
-          </div>
         </div>
+        <div className="sp-set-metrics">
+          <div className="sp-set-metric">
+            <span className="sp-set-metric-label">{t('opp.investment')}</span>
+            <span className="sp-set-metric-value">{formatPlat(planner.remainingInvestment)}</span>
+          </div>
+          <div className="sp-set-metric">
+            <span className="sp-set-metric-label">{t('opp.profit')}</span>
+            <span className="sp-set-metric-value pos">
+              {planner.completionProfit !== null && planner.completionProfit >= 0 ? '+' : ''}
+              {formatPlat(planner.completionProfit)}
+            </span>
+          </div>
+          {isComplete ? (
+            <span className="sp-set-roi complete"><SpCheck /> {t('opp.complete')}</span>
+          ) : (
+            <span className="sp-set-roi">{formatPercent(planner.completionRoiPct)} ROI</span>
+          )}
+        </div>
+        <SpChevron up={expanded} />
       </button>
 
       {expanded ? (
-        <div className="planner-set-body">
-          <div className="planner-component-list">
-            {planner.components.map((componentState) => {
-              const { component } = componentState;
-              const imagePath = resolveWfmAssetUrl(component.imagePath);
-              const targetKey = `${planner.entry.slug}:${component.slug}`;
-              const effectiveTarget =
-                targetInputs[targetKey] ?? buildPlannerDefaultTarget(component);
-              const relicHints =
-                (component.itemId !== null
-                  ? ownedRelicHints.get(`item:${component.itemId}`)
-                  : undefined) ??
-                ownedRelicHints.get(`slug:${component.slug}`) ??
-                [];
-
-              return (
-                <div
-                  key={`${planner.entry.slug}-${component.slug}`}
-                  className={`planner-component-row${componentState.isOwned ? ' is-owned' : ' is-missing'}`}
-                >
-                  <div className="planner-component-main">
-                    <span className="planner-component-thumb">
-                      {imagePath ? (
-                        <img src={imagePath} alt="" loading="lazy" />
-                      ) : (
-                        <span>{component.name.slice(0, 1)}</span>
-                      )}
-                    </span>
-                    <div className="planner-component-copy">
-                      <div className="planner-component-name-row">
-                        <strong>
-                          <ItemName
-                            name={component.name}
-                            slug={component.slug}
-                            itemId={component.itemId ?? undefined}
-                            imagePath={component.imagePath}
-                          />
-                        </strong>
-                        <span
-                          className={`market-panel-badge ${componentState.isOwned ? 'tone-green' : 'tone-red'}`}
-                        >
-                          {t('opp.ownedOfTotal', { owned: componentState.coveredQuantity, total: component.quantityInSet })}
-                        </span>
-                        <span className={`market-panel-badge tone-${confidenceTone(component.confidenceSummary.level)}`}>
-                          {tConfidence(t, component.confidenceSummary)}
-                        </span>
-                      </div>
-                      <div className="planner-component-pills">
-                        <span className="scanner-stat-pill scanner-stat-pill-highlight">
-                          <span className="scanner-stat-pill-label">{t('opp.entryZone')}</span>
-                          <span className="scanner-stat-pill-value">
-                            {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
-                          </span>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  {componentState.missingQuantity > 0 && relicHints.length > 0 ? (
-                    <div className="planner-component-relics planner-component-relics-middle">
-                      <span className="planner-component-relics-label">{t('opp.ownedRelicsLower')}</span>
-                      <div className="planner-component-relic-pill-list">
-                        {relicHints.slice(0, 4).map((relic) => (
-                          <span
-                            key={`${component.slug}-${relic.key}`}
-                            className="planner-component-relic-pill"
-                            title={relic.fullName}
-                          >
-                            {relic.label} ×{relic.totalCount}
-                          </span>
-                        ))}
-                        {relicHints.length > 4 ? (
-                          <span className="planner-component-relic-pill planner-component-relic-pill-more">
-                            +{relicHints.length - 4} more
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {componentState.missingQuantity > 0 ? (
-                    <div className="planner-component-actions">
-                      <input
-                        className="price-input scanner-component-input"
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={effectiveTarget}
-                        onChange={(event) => onTargetChange(component, event.target.value)}
-                      />
-                      <div className="watchlist-add-feedback-stack">
-                        {recentlyAddedKeys[targetKey] ? (
-                          <span className="watchlist-add-success">{t('wl.addedToWatchlist')}</span>
-                        ) : null}
-                        <button
-                          className="btn-sm scanner-component-watch-button"
-                          type="button"
-                          disabled={!effectiveTarget.trim() || !component.itemId}
-                          onClick={() => onAddToWatchlist(component)}
-                        >
-                          {t('wl.addToWatchlist')}
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+        <div className="sp-set-body">
+          <div className="sp-set-detail-stats">
+            <span>{t('mkt.exit')} <strong>{formatPlat(planner.entry.recommendedSetExitPrice)}</strong></span>
+            <span>{t('opp.liquidity')} <strong>{Math.round(planner.entry.liquidityScore)}%</strong></span>
+            <span>{t('opp.confidence')} <strong>{tConfidence(t, planner.entry.confidenceSummary)}</strong></span>
           </div>
+
+          {missingComponents.length > 0 ? (
+            <>
+              <div className="sp-part-group-label missing">
+                {t('opp.missingToBuy', { n: missingComponents.length })}
+              </div>
+              <div className="sp-part-list">{missingComponents.map(renderMissingRow)}</div>
+            </>
+          ) : null}
+
+          {ownedComponents.length > 0 ? (
+            <>
+              <div className="sp-part-group-label owned">
+                {t('opp.ownedCount', { n: ownedComponents.length })}
+              </div>
+              <div className="sp-part-list">
+                {ownedComponents.map((componentState) => {
+                  const ownedImage = resolveWfmAssetUrl(componentState.component.imagePath);
+                  return (
+                    <div
+                      key={`${planner.entry.slug}-${componentState.component.slug}`}
+                      className="sp-part sp-part-owned"
+                    >
+                      <span className="sp-part-thumb" aria-hidden="true">
+                        {ownedImage ? (
+                          <img src={ownedImage} alt="" loading="lazy" />
+                        ) : (
+                          <span>{componentState.component.name.slice(0, 1)}</span>
+                        )}
+                      </span>
+                      <span className="sp-part-name-row">
+                        <span className="sp-part-name">
+                          <ItemName
+                            name={componentState.component.name}
+                            slug={componentState.component.slug}
+                            itemId={componentState.component.itemId ?? undefined}
+                            imagePath={componentState.component.imagePath}
+                          />
+                        </span>
+                        {componentState.component.quantityInSet > 1 ? (
+                          <span className="sp-part-qty-badge owned">
+                            {t('opp.needQty', { n: componentState.component.quantityInSet })}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="sp-part-owned-count">
+                        <span className="sp-part-owned-check" aria-hidden="true"><SpCheck /></span>
+                        {componentState.coveredQuantity} / {componentState.component.quantityInSet}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
     </article>
@@ -1439,6 +1492,14 @@ export function OpportunitiesPage({
 
       const totalComponentCount = componentStates.length;
       const ownedComponentCount = componentStates.filter((component) => component.isOwned).length;
+      const totalPartsNeeded = componentStates.reduce(
+        (sum, component) => sum + component.component.quantityInSet,
+        0,
+      );
+      const ownedPartsCount = componentStates.reduce(
+        (sum, component) => sum + component.coveredQuantity,
+        0,
+      );
 
       let remainingInvestment = 0;
       let hasPricingGap = false;
@@ -1463,23 +1524,37 @@ export function OpportunitiesPage({
           ? (completionProfit / normalizedRemainingInvestment) * 100
           : null;
 
+      // Value the owned parts against the whole set so a single expensive part counts for more
+      // than its share of the part *count* (per-unit entry price is the value proxy we have).
+      let ownedPartsValue = 0;
+      let totalPartsValue = 0;
+      for (const component of componentStates) {
+        const unitValue = component.component.recommendedEntryPrice ?? 0;
+        totalPartsValue += component.component.quantityInSet * unitValue;
+        ownedPartsValue += component.coveredQuantity * unitValue;
+      }
+      const partCountRatio = totalPartsNeeded > 0 ? ownedPartsCount / totalPartsNeeded : 0;
+      const ownedValueRatio = totalPartsValue > 0 ? ownedPartsValue / totalPartsValue : 0;
+
       computed.push({
         entry,
         ownedComponentCount,
         totalComponentCount,
+        totalPartsNeeded,
+        ownedPartsCount,
         remainingInvestment: normalizedRemainingInvestment,
         completionProfit,
         completionRoiPct,
+        partCountRatio,
+        ownedValueRatio,
         components: componentStates,
       });
     }
 
     return computed.sort((left, right) => {
-      // Sort by completion fraction, not absolute count — a 3/3 or 2/2 (100%) outranks a 3/4 (75%).
-      const leftRatio =
-        left.totalComponentCount > 0 ? left.ownedComponentCount / left.totalComponentCount : 0;
-      const rightRatio =
-        right.totalComponentCount > 0 ? right.ownedComponentCount / right.totalComponentCount : 0;
+      // Sort by quantity-weighted completion fraction — a 4/5 parts set outranks a 2/3 parts set.
+      const leftRatio = left.partCountRatio;
+      const rightRatio = right.partCountRatio;
       if (rightRatio !== leftRatio) {
         return rightRatio - leftRatio;
       }
@@ -1505,6 +1580,14 @@ export function OpportunitiesPage({
         planner.completionProfit === null ||
         planner.completionProfit <= 0
       ) {
+        continue;
+      }
+
+      // Only count sets you're genuinely underway on — half the parts, or half the value.
+      const isUnderway =
+        planner.partCountRatio >= PLANNER_SUMMARY_THRESHOLD ||
+        planner.ownedValueRatio >= PLANNER_SUMMARY_THRESHOLD;
+      if (!isUnderway) {
         continue;
       }
 
@@ -1710,6 +1793,84 @@ export function OpportunitiesPage({
     });
     return sorted;
   }, [farmNowRelics, farmNowSearch, farmNowEra, farmNowSort, localizeName]);
+
+  /**
+   * "Farm this item" odds: when the search targets a specific DROP, work out the real chance of
+   * pulling it from the relics you actually hold, at the refinements you hold them in. Scanner
+   * chances are percentages, so they're normalized to 0..1 for the odds math.
+   */
+  const farmNowDropOdds = useMemo(() => {
+    const query = farmNowSearch.trim().toLowerCase();
+    if (!query) {
+      return null;
+    }
+
+    const ownedByKey = new Map<string, OwnedRelicEntry>();
+    for (const relic of ownedRelics) {
+      ownedByKey.set(`${relic.tier}:${relic.code}`, relic);
+    }
+
+    const inputs: RelicOddsInput[] = [];
+    let targetName: string | null = null;
+    let bestExitPrice: number | null = null;
+
+    for (const row of farmNowRelics) {
+      // Only drops matching the query — a relic-name match isn't item targeting.
+      const matched = row.drops.filter((entry) =>
+        entry.drop.name.toLowerCase().includes(query),
+      );
+      if (matched.length === 0) {
+        continue;
+      }
+      const parsed = parseRelicTierCode(row.relic.name);
+      const owned = parsed ? ownedByKey.get(`${parsed.tier}:${parsed.code}`) : undefined;
+      if (!owned) {
+        continue;
+      }
+
+      // Combine the per-refinement chance across every matching drop in this relic.
+      const chances: ChanceProfile = {};
+      for (const refinement of REFINEMENT_KEYS) {
+        let total = 0;
+        for (const entry of matched) {
+          const chance = chanceForRefinement(entry.drop.chanceProfile, refinement);
+          if (chance !== null) {
+            total += chance / 100;
+          }
+        }
+        chances[refinement] = total;
+      }
+
+      if (!targetName) {
+        targetName = localizeName(matched[0].drop);
+      }
+      for (const entry of matched) {
+        if (entry.drop.recommendedExitPrice !== null) {
+          bestExitPrice = Math.max(bestExitPrice ?? 0, entry.drop.recommendedExitPrice);
+        }
+      }
+
+      inputs.push({
+        label: `${parsed?.tier ?? ''} ${parsed?.code ?? row.relic.name}`.trim(),
+        chances,
+        counts: {
+          intact: owned.counts.intact ?? 0,
+          exceptional: owned.counts.exceptional ?? 0,
+          flawless: owned.counts.flawless ?? 0,
+          radiant: owned.counts.radiant ?? 0,
+        },
+      });
+    }
+
+    if (!targetName || inputs.length === 0) {
+      return null;
+    }
+    const summary = computeDropOdds(inputs);
+    if (summary.totalRelics === 0) {
+      return null;
+    }
+    return { targetName, exitPrice: bestExitPrice, ...summary };
+  }, [farmNowSearch, farmNowRelics, ownedRelics, localizeName]);
 
   const farmNowTopRelics = useMemo(
     () => displayedFarmNowRelics.slice(0, 3),
@@ -2354,26 +2515,29 @@ export function OpportunitiesPage({
               </div>
 
               {plannerPositiveSummary.profitableSetCount > 0 ? (
-                <div className="farm-now-summary">
-                  <div className="farm-now-summary-main">
-                    <div className="farm-now-metrics">
-                      <span className="market-panel-badge tone-blue">
-                        {t('opp.investmentBadge', { value: formatPlat(plannerPositiveSummary.expectedInvestment) })}
-                      </span>
-                      <span className="market-panel-badge tone-blue">
-                        {t('opp.valueBadge', { value: formatPlat(plannerPositiveSummary.expectedValue) })}
-                      </span>
-                      <span className="market-panel-badge tone-green">
-                        {t('opp.profitBadge', { value: formatPlat(plannerPositiveSummary.expectedProfit) })}
-                      </span>
-                      <span className="market-panel-badge tone-green">
-                        {t('opp.marginBadge', { value: formatPercent(plannerPositiveSummary.expectedMarginPct) })}
-                      </span>
-                    </div>
-                    <div className="farm-now-meta">
-                      <span>
+                <div className="sp-summary">
+                  <div className="sp-summary-lead">
+                    <span className="sp-summary-lead-icon"><SpTarget /></span>
+                    <div>
+                      <span className="sp-summary-title">
                         {t('opp.profitableSetsCount', { n: plannerPositiveSummary.profitableSetCount })}
                       </span>
+                      <span className="sp-summary-sub">{t('opp.summaryStripSub')}</span>
+                    </div>
+                  </div>
+                  <div className="sp-summary-flow">
+                    <div className="sp-summary-stat">
+                      <span className="sp-summary-stat-label">{t('opp.investment')}</span>
+                      <span className="sp-summary-stat-value">{formatPlat(plannerPositiveSummary.expectedInvestment)}</span>
+                    </div>
+                    <span className="sp-summary-arrow"><SpArrowRight /></span>
+                    <div className="sp-summary-stat">
+                      <span className="sp-summary-stat-label">{t('mkt.exit')}</span>
+                      <span className="sp-summary-stat-value">{formatPlat(plannerPositiveSummary.expectedValue)}</span>
+                    </div>
+                    <div className="sp-summary-stat sp-summary-stat-profit">
+                      <span className="sp-summary-stat-label">{t('opp.profit')}</span>
+                      <span className="sp-summary-stat-value">+{formatPlat(plannerPositiveSummary.expectedProfit)}</span>
                     </div>
                   </div>
                 </div>
@@ -2817,127 +2981,226 @@ export function OpportunitiesPage({
                       : t('opp.relicProfitPlannerDesc')}
                   </p>
                 </div>
-                <div className="farm-now-tabs">
-                  <button
-                    type="button"
-                    className={`farm-now-tab-button${farmNowTab === 'part-profit' ? ' is-active' : ''}`}
-                    onClick={() => setFarmNowTab('part-profit')}
-                  >
-                    {t('opp.forPartProfit')}
-                  </button>
-                  <button
-                    type="button"
-                    className={`farm-now-tab-button${farmNowTab === 'set-completion' ? ' is-active' : ''}`}
-                    onClick={() => setFarmNowTab('set-completion')}
-                  >
-                    {t('opp.forSetCompletion')}
-                  </button>
+              </div>
+
+              <div className="sp-summary">
+                <div className="sp-summary-lead">
+                  <span className="sp-summary-lead-icon"><i className="ti ti-flame" aria-hidden="true" /></span>
+                  <div>
+                    <span className="sp-summary-title">
+                      {farmNowTab === 'set-completion'
+                        ? t('opp.setsInProgress', { n: farmNowSetCompletionSetCount })
+                        : t('opp.relicsWorthRunning', { n: farmNowRelics.length })}
+                    </span>
+                    <span className="sp-summary-sub">
+                      {farmNowTab === 'set-completion'
+                        ? t('opp.missingComponents', { n: farmNowSetCompletionMissingCount })
+                        : t('opp.rankedByPlat')}
+                    </span>
+                  </div>
+                </div>
+                <div className="sp-summary-flow">
+                  <div className="sp-summary-stat">
+                    <span className="sp-summary-stat-label">{t('opp.youOwn')}</span>
+                    <span className="sp-summary-stat-value">{ownedRelicTotal}</span>
+                  </div>
+                  <div className="sp-summary-stat sp-summary-stat-profit">
+                    <span className="sp-summary-stat-label">
+                      {farmNowTab === 'set-completion' ? t('opp.relic') : t('opp.bestRun')}
+                    </span>
+                    <span className="sp-summary-stat-value">
+                      {farmNowTab === 'set-completion'
+                        ? farmNowSetCompletionRelics.length
+                        : formatPlatDecimal(farmNowRelics[0]?.expectedProfit ?? null)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div className="farm-now-summary">
-                <div className="farm-now-summary-main">
-                  <div className="farm-now-metrics">
-                    {farmNowTab === 'set-completion' ? (
-                      <>
-                        <span className="market-panel-badge tone-blue">
-                          {t('opp.relicsRanked', { n: farmNowSetCompletionRelics.length })}
-                        </span>
-                        <span className="market-panel-badge tone-blue">
-                          {t('opp.missingComponents', { n: farmNowSetCompletionMissingCount })}
-                        </span>
-                        <span className="market-panel-badge tone-green">
-                          {t('opp.setsInProgress', { n: farmNowSetCompletionSetCount })}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="market-panel-badge tone-blue">
-                          {t('opp.relicsScanned', { n: farmNowScan?.scannedRelicCount ?? 0 })}
-                        </span>
-                        <span className="market-panel-badge tone-blue">
-                          {t('opp.profitRows', { n: farmNowRelics.length })}
-                        </span>
-                        <span className="market-panel-badge tone-green">
-                          {t('opp.ownedRelicsCount', { n: ownedRelics.length, total: ownedRelicTotal })}
-                        </span>
-                      </>
-                    )}
+              {farmNowDropOdds ? (
+                <div className="fn-odds">
+                  <div className="fn-odds-head">
+                    <span className="fn-odds-title">
+                      {t('opp.oddsTitle', { item: farmNowDropOdds.targetName })}
+                    </span>
+                    <span className="fn-odds-sub">
+                      {t('opp.oddsRunAll', { n: farmNowDropOdds.totalRelics })}
+                      {farmNowDropOdds.exitPrice !== null
+                        ? ` · ${t('opp.oddsSellsFor', { price: formatPlat(farmNowDropOdds.exitPrice) })}`
+                        : ''}
+                    </span>
                   </div>
-                  <div className="farm-now-meta">
-                    {farmNowLastScan ? (
-                      <span>Last scan {formatShortLocalDateTime(farmNowLastScan)}</span>
-                    ) : (
-                      <span>{t('opp.noScanData')}</span>
-                    )}
-                    {ownedRelicsRefreshing ? (
-                      <span className="farm-now-refresh-indicator" title={t('a11y.refreshingRelicCache')}>
-                        <span className="farm-now-refresh-spinner" aria-hidden="true" />
-                        {t('opp.refreshingRelics')}
+
+                  <div className="fn-odds-main">
+                    <div className="fn-odds-gauge">
+                      <span className="fn-odds-pct">{Math.round(farmNowDropOdds.atLeastOne * 100)}%</span>
+                      <span className="fn-odds-pct-label">{t('opp.oddsAtLeastOne')}</span>
+                      <span className="fn-odds-bar" aria-hidden="true">
+                        <span
+                          className="fn-odds-bar-fill"
+                          style={{ width: `${Math.round(farmNowDropOdds.atLeastOne * 100)}%` }}
+                        />
                       </span>
+                    </div>
+                    <div className="fn-odds-side">
+                      <div className="fn-odds-stat">
+                        <span>{t('opp.oddsExpected')}</span>
+                        <strong>{farmNowDropOdds.expectedDrops.toFixed(2)}</strong>
+                      </div>
+                      <div className="fn-odds-stat">
+                        <span>{t('opp.oddsRelicsOwned')}</span>
+                        <strong>{farmNowDropOdds.totalRelics}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="fn-odds-relics">
+                    {farmNowDropOdds.relics.map((relic) => (
+                      <div key={relic.label} className="fn-odds-relic">
+                        <span className="fn-odds-relic-name">{relic.label}</span>
+                        <span className="fn-odds-relic-breakdown">
+                          {relic.breakdown.map((entry) => (
+                            <span key={entry.refinement} className="fn-odds-chip">
+                              <span className="fn-odds-chip-count">×{entry.count}</span>
+                              {tHealth(t, entry.refinement.charAt(0).toUpperCase() + entry.refinement.slice(1))}
+                              <span className="fn-odds-chip-chance">
+                                {Math.round(entry.chance * 100)}% {t('opp.oddsPerRun')}
+                              </span>
+                            </span>
+                          ))}
+                        </span>
+                        <span className="fn-odds-relic-total">
+                          {Math.round(relic.atLeastOne * 100)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <p className="fn-odds-hint">
+                    {farmNowDropOdds.relics[0]?.bestRefinement ? (
+                      <>
+                        {t('opp.oddsBestHint', {
+                          refinement: farmNowDropOdds.relics[0].bestRefinement,
+                          chance: `${Math.round((farmNowDropOdds.relics[0].bestChance ?? 0) * 100)}%`,
+                        })}
+                        {farmNowDropOdds.relics[0].missingBest
+                          ? ` ${t('opp.oddsUpgradeHint', { refinement: farmNowDropOdds.relics[0].bestRefinement })}`
+                          : ''}
+                        {farmNowDropOdds.runsForTargetOdds !== null
+                          ? ` ${t('opp.oddsTargetRuns', { n: farmNowDropOdds.runsForTargetOdds, refinement: farmNowDropOdds.relics[0].bestRefinement })}`
+                          : ''}
+                      </>
+                    ) : null}
+                  </p>
+                </div>
+              ) : null}
+
+              {/* One control bar: what you're viewing (mode) → find (search) → narrow (era) →
+                  order (sort), with scan status on its own quiet line beneath. */}
+              <div className="fn-controls">
+                <div className="fn-controls-row">
+                  <div className="fn-segmented" role="tablist" aria-label={t('opp.whatToFarmNow')}>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={farmNowTab === 'part-profit'}
+                      className={`fn-segmented-btn${farmNowTab === 'part-profit' ? ' is-active' : ''}`}
+                      onClick={() => setFarmNowTab('part-profit')}
+                    >
+                      {t('opp.forPartProfit')}
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={farmNowTab === 'set-completion'}
+                      className={`fn-segmented-btn${farmNowTab === 'set-completion' ? ' is-active' : ''}`}
+                      onClick={() => setFarmNowTab('set-completion')}
+                    >
+                      {t('opp.forSetCompletion')}
+                    </button>
+                  </div>
+
+                  <div className="fn-search">
+                    <i className="ti ti-search fn-search-icon" aria-hidden="true" />
+                    <input
+                      type="search"
+                      className="fn-search-input"
+                      placeholder={t('opp.searchRelicsPlaceholder')}
+                      value={farmNowSearch}
+                      onChange={(event) => setFarmNowSearch(event.target.value)}
+                      spellCheck={false}
+                    />
+                    {farmNowSearch ? (
+                      <button
+                        type="button"
+                        className="fn-search-clear"
+                        aria-label={t('opp.clear')}
+                        onClick={() => setFarmNowSearch('')}
+                      >
+                        <i className="ti ti-x" aria-hidden="true" />
+                      </button>
                     ) : null}
                   </div>
+
+                  <div className="fn-filters">
+                    <label className="fn-filter">
+                      <span>{t('opp.era')}</span>
+                      <select
+                        value={farmNowEra}
+                        onChange={(event) => setFarmNowEra(event.target.value)}
+                        aria-label={t('a11y.filterByEra')}
+                      >
+                        <option value="all">{t('opp.allEras')}</option>
+                        <option value="Lith">Lith</option>
+                        <option value="Meso">Meso</option>
+                        <option value="Neo">Neo</option>
+                        <option value="Axi">Axi</option>
+                      </select>
+                    </label>
+                    <label className="fn-filter">
+                      <span>{t('opp.sortBy')}</span>
+                      <select
+                        value={farmNowSort}
+                        onChange={(event) => setFarmNowSort(event.target.value)}
+                        aria-label={t('a11y.sortRelics')}
+                      >
+                        {farmNowTab === 'set-completion' ? (
+                          <>
+                            <option value="default">{t('opp.sortCompletion')}</option>
+                            <option value="coverage">{t('opp.sortSetsHelped')}</option>
+                            <option value="owned">{t('opp.sortOwned')}</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="default">{t('opp.sortPlatHour')}</option>
+                            <option value="owned">{t('opp.sortOwned')}</option>
+                          </>
+                        )}
+                      </select>
+                    </label>
+                  </div>
                 </div>
-                <div className="farm-now-summary-actions">
+
+                <div className="fn-controls-meta">
+                  <span>
+                    {farmNowLastScan
+                      ? t('opp.lastScanLabel', { when: formatShortLocalDateTime(farmNowLastScan) })
+                      : t('opp.noScanData')}
+                  </span>
+                  {ownedRelicsRefreshing ? (
+                    <span className="farm-now-refresh-indicator" title={t('a11y.refreshingRelicCache')}>
+                      <span className="farm-now-refresh-spinner" aria-hidden="true" />
+                      {t('opp.refreshingRelics')}
+                    </span>
+                  ) : null}
                   <button
                     type="button"
-                    className="btn-secondary"
+                    className="act-btn fn-rescan-btn"
                     onClick={() => setActivePage('scanners')}
                   >
-                    {t('opp.runScan')}
+                    <i className="ti ti-refresh" aria-hidden="true" /> {t('opp.runScan')}
                   </button>
                 </div>
-              </div>
-
-              <div className="farm-now-search">
-                <input
-                  type="search"
-                  className="settings-input farm-now-search-input"
-                  placeholder={t('opp.searchRelicsPlaceholder')}
-                  value={farmNowSearch}
-                  onChange={(event) => setFarmNowSearch(event.target.value)}
-                  spellCheck={false}
-                />
-                {farmNowSearch ? (
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => setFarmNowSearch('')}
-                  >
-                    {t('opp.clear')}
-                  </button>
-                ) : null}
-                <select
-                  className="settings-input farm-now-select"
-                  value={farmNowEra}
-                  onChange={(event) => setFarmNowEra(event.target.value)}
-                  aria-label={t('a11y.filterByEra')}
-                >
-                  <option value="all">{t('opp.allEras')}</option>
-                  <option value="Lith">Lith</option>
-                  <option value="Meso">Meso</option>
-                  <option value="Neo">Neo</option>
-                  <option value="Axi">Axi</option>
-                </select>
-                <select
-                  className="settings-input farm-now-select"
-                  value={farmNowSort}
-                  onChange={(event) => setFarmNowSort(event.target.value)}
-                  aria-label={t('a11y.sortRelics')}
-                >
-                  {farmNowTab === 'set-completion' ? (
-                    <>
-                      <option value="default">{t('opp.sortCompletion')}</option>
-                      <option value="coverage">{t('opp.sortSetsHelped')}</option>
-                      <option value="owned">{t('opp.sortOwned')}</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="default">{t('opp.sortPlatHour')}</option>
-                      <option value="owned">{t('opp.sortOwned')}</option>
-                    </>
-                  )}
-                </select>
               </div>
 
               {(farmNowTab === 'set-completion'
@@ -3049,14 +3312,6 @@ export function OpportunitiesPage({
                   </div>
                 ) : (
                   <div className="farm-now-list farm-now-list-set-completion">
-                    <div className="farm-now-header-row">
-                      <span className="farm-now-header-label">{t('opp.relic')}</span>
-                      <span className="farm-now-header-label">{t('opp.neededDrops')}</span>
-                      <span className="farm-now-header-label">{t('opp.setsHelped')}</span>
-                      <span className="farm-now-header-label">{t('opp.owned')}</span>
-                      <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
-                    </div>
-
                     {displayedFarmNowSetCompletionRelics.length === 0 ? (
                       <div className="opportunities-placeholder">
                         No relics or item drops match “{farmNowSearch}”.
@@ -3067,94 +3322,126 @@ export function OpportunitiesPage({
                       const expanded = expandedFarmRelicKey === relicKey;
                       const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
                       return (
-                        <article key={relicKey} className={`farm-now-row${expanded ? ' is-expanded' : ''}`}>
+                        <article key={relicKey} className={`sp-set${expanded ? ' is-expanded' : ''}`}>
                           <button
                             type="button"
-                            className="farm-now-row-button"
+                            className="sp-set-head"
+                            aria-expanded={expanded}
                             onClick={() =>
                               setExpandedFarmRelicKey((current) =>
                                 current === relicKey ? null : relicKey,
                               )
                             }
                           >
-                            <div className="farm-now-row-main">
-                              <div className="farm-now-cell farm-now-cell-name">
-                                <span className="farm-now-thumb">
-                                  {imageUrl ? (
-                                    <img src={imageUrl} alt="" loading="lazy" />
-                                  ) : (
-                                    <span>{row.relic.name.slice(0, 1)}</span>
-                                  )}
+                            <span className="sp-set-thumb">
+                              {imageUrl ? (
+                                <img src={imageUrl} alt="" loading="lazy" />
+                              ) : (
+                                <span>{row.relic.name.slice(0, 2)}</span>
+                              )}
+                            </span>
+                            <div className="sp-set-copy">
+                              <span className="fn-row-title">
+                                <span className="sp-set-name">{localizeName(row.relic)}</span>
+                                <span className={`fn-owned-pill${row.ownedCount > 0 ? '' : ' is-none'}`}>
+                                  {row.ownedCount > 0
+                                    ? t('opp.ownedTimes', { n: row.ownedCount })
+                                    : t('opp.noneOwned')}
                                 </span>
-                                <div className="farm-now-copy">
-                                  <strong>{localizeName(row.relic)}</strong>
-                                  <span className="farm-now-subtitle">
-                                    {row.bestSetProgress
-                                      ? t('opp.closestSetProgress', { name: row.bestSetProgress.name, owned: row.bestSetProgress.owned, total: row.bestSetProgress.total })
-                                      : t('opp.missingPartsCovered', { n: row.totalMissingQuantity })}
-                                  </span>
-                                </div>
-                              </div>
-                              <span className="farm-now-cell farm-now-cell-owned">
-                                {row.neededDropCount}
                               </span>
-                              <span className="farm-now-cell farm-now-cell-owned">
-                                {row.coveredSetCount}
+                              <span className="fn-row-sub">
+                                {row.bestSetProgress
+                                  ? t('opp.closestSetProgress', { name: row.bestSetProgress.name, owned: row.bestSetProgress.owned, total: row.bestSetProgress.total })
+                                  : t('opp.missingPartsCovered', { n: row.totalMissingQuantity })}
                               </span>
-                              <span className="farm-now-cell farm-now-cell-owned">
-                                ×{row.ownedCount}
-                              </span>
-                              <span className="farm-now-cell farm-now-cell-action">{expanded ? '−' : '+'}</span>
                             </div>
+                            <div className="sp-set-metrics">
+                              <div className="sp-set-metric">
+                                <span className="sp-set-metric-label">{t('opp.neededDrops')}</span>
+                                <span className="sp-set-metric-value pos">{row.neededDropCount}</span>
+                              </div>
+                              <div className="sp-set-metric">
+                                <span className="sp-set-metric-label">{t('opp.setsHelped')}</span>
+                                <span className="sp-set-metric-value">{row.coveredSetCount}</span>
+                              </div>
+                            </div>
+                            <SpChevron up={expanded} />
                           </button>
 
                           {expanded ? (
-                            <div className="farm-now-row-body">
+                            <div className="sp-set-body">
                               <RefinementGuidancePanel guidance={row.guidance} unit="pct" />
-                              <div className="farm-now-drop-grid">
-                                {row.drops.map((entry) => {
+                              {(() => {
+                                const needed = row.drops.filter((entry) => entry.isNeeded);
+                                const others = row.drops.filter((entry) => !entry.isNeeded);
+                                const renderDrop = (
+                                  entry: (typeof row.drops)[number],
+                                  isNeeded: boolean,
+                                ) => {
                                   const dropImage = resolveWfmAssetUrl(entry.drop.imagePath);
                                   const tone = relicRarityTone(entry.drop.rarity);
                                   return (
                                     <div
                                       key={`${relicKey}-${entry.drop.slug}`}
-                                      className={`farm-now-drop-card${entry.isNeeded ? ' is-needed' : ''}`}
+                                      className={`sp-part ${isNeeded ? 'sp-part-missing' : 'fn-drop'}`}
                                     >
-                                      <span className="farm-now-drop-thumb">
+                                      <span className="sp-part-thumb" aria-hidden="true">
                                         {dropImage ? (
                                           <img src={dropImage} alt="" loading="lazy" />
                                         ) : (
                                           <span>{entry.drop.name.slice(0, 1)}</span>
                                         )}
                                       </span>
-                                      <div className="farm-now-drop-copy">
-                                        <span className="farm-now-drop-name">{localizeName(entry.drop)}</span>
-                                        <div className="farm-now-drop-meta">
+                                      <div className="sp-part-copy">
+                                        <span className="sp-part-name-row">
+                                          <span className="sp-part-name">{localizeName(entry.drop)}</span>
+                                          {isNeeded && entry.missingQuantity > 0 ? (
+                                            <span className="sp-part-qty-badge">
+                                              {t('opp.missingCount', { n: entry.missingQuantity })}
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                        <span className="sp-part-meta">
                                           <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
                                             {entry.drop.rarity ?? t('opp.unknown')}
                                           </span>
-                                          {entry.isNeeded ? (
+                                          {isNeeded ? (
                                             <>
-                                              <span className="market-panel-badge tone-green">{t('opp.needed')}</span>
-                                              <span className="farm-now-drop-stat">
-                                                {t('opp.missingCount', { n: entry.missingQuantity })}
-                                              </span>
-                                              <span className="farm-now-drop-stat">
-                                                {t('opp.setsCoveredCount', { n: entry.coveredSetCount })}
-                                              </span>
+                                              {' · '}
+                                              {t('opp.setsCoveredCount', { n: entry.coveredSetCount })}
+                                              {entry.setNames.length ? ` · ${entry.setNames.join(' · ')}` : ''}
                                             </>
                                           ) : null}
-                                        </div>
-                                        {entry.isNeeded && entry.setNames.length ? (
-                                          <span className="farm-now-drop-needed-sets">
-                                            {entry.setNames.join(' · ')}
-                                          </span>
-                                        ) : null}
+                                        </span>
                                       </div>
                                     </div>
                                   );
-                                })}
-                              </div>
+                                };
+                                return (
+                                  <>
+                                    {needed.length > 0 ? (
+                                      <>
+                                        <div className="sp-part-group-label missing">
+                                          {t('opp.neededForSets')}
+                                        </div>
+                                        <div className="sp-part-list">
+                                          {needed.map((entry) => renderDrop(entry, true))}
+                                        </div>
+                                      </>
+                                    ) : null}
+                                    {others.length > 0 ? (
+                                      <>
+                                        <div className="sp-part-group-label muted">
+                                          {t('opp.notNeeded', { n: others.length })}
+                                        </div>
+                                        <div className="sp-part-list fn-drop-list-low">
+                                          {others.map((entry) => renderDrop(entry, false))}
+                                        </div>
+                                      </>
+                                    ) : null}
+                                  </>
+                                );
+                              })()}
                             </div>
                           ) : null}
                         </article>
@@ -3223,15 +3510,6 @@ export function OpportunitiesPage({
                 <div className="opportunities-placeholder">{t('opp.noOwnedRefinements')}</div>
               ) : (
                 <div className="farm-now-list">
-                  <div className="farm-now-header-row">
-                    <span className="farm-now-header-label">{t('opp.relic')}</span>
-                    <span className="farm-now-header-label">{t('opp.refinement')}</span>
-                    <span className="farm-now-header-label">{t('opp.owned')}</span>
-                    <span className="farm-now-header-label farm-now-header-value">{t('opp.profitRelic')}</span>
-                    <span className="farm-now-header-label farm-now-header-value">{t('opp.platHour')}</span>
-                    <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
-                  </div>
-
                   {displayedFarmNowRelics.length === 0 ? (
                     <div className="opportunities-placeholder">
                       No relics or item drops match “{farmNowSearch}”.
@@ -3241,54 +3519,66 @@ export function OpportunitiesPage({
                     const relicKey = `${row.relic.slug}:part-profit`;
                     const expanded = expandedFarmRelicKey === relicKey;
                     const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
+                    const bestDrop = row.drops.find((entry) => entry.drop.slug === row.bestDropSlug);
                     return (
-                      <article key={relicKey} className={`farm-now-row${expanded ? ' is-expanded' : ''}`}>
+                      <article key={relicKey} className={`sp-set${expanded ? ' is-expanded' : ''}`}>
                         <button
                           type="button"
-                          className="farm-now-row-button"
+                          className="sp-set-head"
+                          aria-expanded={expanded}
                           onClick={() =>
                             setExpandedFarmRelicKey((current) =>
                               current === relicKey ? null : relicKey,
                             )
                           }
                         >
-                          <div className="farm-now-row-main">
-                            <div className="farm-now-cell farm-now-cell-name">
-                              <span className="farm-now-thumb">
-                                {imageUrl ? (
-                                  <img src={imageUrl} alt="" loading="lazy" />
-                                ) : (
-                                  <span>{row.relic.name.slice(0, 1)}</span>
-                                )}
-                              </span>
-                              <div className="farm-now-copy">
-                                <strong>{localizeName(row.relic)}</strong>
-                                <span className="farm-now-subtitle">{row.relic.dropCount} drops</span>
-                              </div>
-                            </div>
-                            <span className="farm-now-cell farm-now-cell-refinement">
-                              <span
-                                className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(row.guidance.bestKey)}`}
-                                title={t('a11y.bestRefinement')}
-                              >
-                                Run {row.guidance.bestLabel}
+                          <span className="sp-set-thumb">
+                            {imageUrl ? (
+                              <img src={imageUrl} alt="" loading="lazy" />
+                            ) : (
+                              <span>{row.relic.name.slice(0, 2)}</span>
+                            )}
+                          </span>
+                          <div className="sp-set-copy">
+                            <span className="fn-row-title">
+                              <span className="sp-set-name">{localizeName(row.relic)}</span>
+                              <span className={`fn-owned-pill${row.ownedCount > 0 ? '' : ' is-none'}`}>
+                                {row.ownedCount > 0
+                                  ? t('opp.ownedTimes', { n: row.ownedCount })
+                                  : t('opp.noneOwned')}
                               </span>
                             </span>
-                            <span className="farm-now-cell farm-now-cell-owned">
-                              ×{row.ownedCount}
+                            <span className="fn-row-sub">
+                              {bestDrop
+                                ? t('opp.dropsBest', {
+                                    n: row.relic.dropCount,
+                                    name: localizeName(bestDrop.drop),
+                                    price: formatPlat(bestDrop.drop.recommendedExitPrice),
+                                  })
+                                : `${row.relic.dropCount} drops`}
                             </span>
-                            <span className="farm-now-cell farm-now-cell-profit">
-                              {formatPlatDecimal(row.expectedProfit)}
-                            </span>
-                            <span className="farm-now-cell farm-now-cell-profit">
-                              {formatPlatDecimal(row.platPerHour)}
-                            </span>
-                            <span className="farm-now-cell farm-now-cell-action">{expanded ? '−' : '+'}</span>
                           </div>
+                          <div className="sp-set-metrics">
+                            <span
+                              className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(row.guidance.bestKey)}`}
+                              title={t('a11y.bestRefinement')}
+                            >
+                              {t('opp.runRefinement', { refinement: row.guidance.bestLabel })}
+                            </span>
+                            <div className="sp-set-metric">
+                              <span className="sp-set-metric-label">{t('opp.perRun')}</span>
+                              <span className="sp-set-metric-value pos">{formatPlatDecimal(row.expectedProfit)}</span>
+                            </div>
+                            <div className="sp-set-metric">
+                              <span className="sp-set-metric-label">{t('opp.perHour')}</span>
+                              <span className="sp-set-metric-value">{formatPlatDecimal(row.platPerHour)}</span>
+                            </div>
+                          </div>
+                          <SpChevron up={expanded} />
                         </button>
 
                         {expanded ? (
-                          <div className="farm-now-row-body">
+                          <div className="sp-set-body">
                             <RefinementGuidancePanel
                               guidance={row.guidance}
                               unit={row.targetedDropName ? 'pct' : 'plat'}
@@ -3298,45 +3588,73 @@ export function OpportunitiesPage({
                                   : undefined
                               }
                             />
-                            <div className="farm-now-drop-grid">
-                              {row.drops.map((entry) => {
+                            {(() => {
+                              // Split by expected value so the drops worth farming stand apart from
+                              // the Forma-tier filler, instead of every drop looking equally important.
+                              const ranked = [...row.drops].sort(
+                                (a, b) => (b.expectedValue ?? 0) - (a.expectedValue ?? 0),
+                              );
+                              const worth = ranked.filter(
+                                (entry) => (entry.expectedValue ?? 0) >= 1 || entry.drop.slug === row.bestDropSlug,
+                              );
+                              const low = ranked.filter((entry) => !worth.includes(entry));
+                              const renderDrop = (entry: (typeof ranked)[number]) => {
                                 const drop = entry.drop;
                                 const dropImage = resolveWfmAssetUrl(drop.imagePath);
                                 const tone = relicRarityTone(drop.rarity);
                                 const isBest = row.bestDropSlug === drop.slug;
                                 return (
-                                  <div
-                                    key={`${relicKey}-${drop.slug}`}
-                                    className={`farm-now-drop-card${isBest ? ' is-best' : ''}`}
-                                  >
-                                    <span className="farm-now-drop-thumb">
+                                  <div key={`${relicKey}-${drop.slug}`} className="sp-part fn-drop">
+                                    <span className="sp-part-thumb" aria-hidden="true">
                                       {dropImage ? (
                                         <img src={dropImage} alt="" loading="lazy" />
                                       ) : (
                                         <span>{drop.name.slice(0, 1)}</span>
                                       )}
                                     </span>
-                                    <div className="farm-now-drop-copy">
-                                      <span className="farm-now-drop-name">{localizeName(drop)}</span>
-                                      <div className="farm-now-drop-meta">
+                                    <div className="sp-part-copy">
+                                      <span className="sp-part-name-row">
+                                        <span className="sp-part-name">{localizeName(drop)}</span>
+                                        {isBest ? (
+                                          <span className="sp-part-qty-badge owned">{t('opp.topPick')}</span>
+                                        ) : null}
+                                      </span>
+                                      <span className="sp-part-meta">
                                         <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
                                           {drop.rarity ?? t('opp.unknown')}
                                         </span>
-                                        <span className="farm-now-drop-stat">
-                                          {formatChance(entry.chance)}
-                                        </span>
-                                        <span className="farm-now-drop-stat">
-                                          {t('opp.exitValue', { price: formatPlat(drop.recommendedExitPrice) })}
-                                        </span>
-                                        {isBest ? (
-                                          <span className="market-panel-badge tone-green">{t('opp.topPick')}</span>
-                                        ) : null}
-                                      </div>
+                                        {' · '}
+                                        {formatChance(entry.chance)}
+                                        {' · '}
+                                        {t('opp.exitValue', { price: formatPlat(drop.recommendedExitPrice) })}
+                                      </span>
                                     </div>
+                                    <span className="fn-drop-value">
+                                      <span className="sp-set-metric-label">{t('opp.value')}</span>
+                                      <strong>{formatPlatDecimal(entry.expectedValue)}</strong>
+                                    </span>
                                   </div>
                                 );
-                              })}
-                            </div>
+                              };
+                              return (
+                                <>
+                                  {worth.length > 0 ? (
+                                    <>
+                                      <div className="sp-part-group-label owned">{t('opp.worthKeeping')}</div>
+                                      <div className="sp-part-list">{worth.map(renderDrop)}</div>
+                                    </>
+                                  ) : null}
+                                  {low.length > 0 ? (
+                                    <>
+                                      <div className="sp-part-group-label muted">
+                                        {t('opp.lowValue', { n: low.length })}
+                                      </div>
+                                      <div className="sp-part-list fn-drop-list-low">{low.map(renderDrop)}</div>
+                                    </>
+                                  ) : null}
+                                </>
+                              );
+                            })()}
                           </div>
                         ) : null}
                       </article>
