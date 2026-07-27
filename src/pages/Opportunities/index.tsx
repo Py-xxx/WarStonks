@@ -97,6 +97,10 @@ type PlannerSetEntry = {
  *  (so owning one expensive part of a cheap-remainder set still qualifies). */
 const PLANNER_SUMMARY_THRESHOLD = 0.5;
 
+/** How many relics the odds panel lists inline before collapsing the rest into "+N more" —
+ *  the full inventory is already in the relic rows below. */
+const ODDS_RELIC_PREVIEW_COUNT = 3;
+
 type RefinementMetric = { key: string; label: string; value: number | null; owned: number };
 type RefinementGuidance = {
   metrics: RefinementMetric[];
@@ -3064,8 +3068,10 @@ export function OpportunitiesPage({
                     </div>
                   </div>
 
+                  {/* Only the few relics that actually move your odds — the full list is in the
+                      relic rows below, so repeating a long inventory here is just noise. */}
                   <div className="fn-odds-relics">
-                    {farmNowDropOdds.relics.map((relic) => (
+                    {farmNowDropOdds.relics.slice(0, ODDS_RELIC_PREVIEW_COUNT).map((relic) => (
                       <div key={relic.label} className="fn-odds-relic">
                         <span className="fn-odds-relic-name">{relic.label}</span>
                         <span className="fn-odds-relic-breakdown">
@@ -3084,6 +3090,13 @@ export function OpportunitiesPage({
                         </span>
                       </div>
                     ))}
+                    {farmNowDropOdds.relics.length > ODDS_RELIC_PREVIEW_COUNT ? (
+                      <span className="fn-odds-more">
+                        {t('opp.oddsMoreRelics', {
+                          n: farmNowDropOdds.relics.length - ODDS_RELIC_PREVIEW_COUNT,
+                        })}
+                      </span>
+                    ) : null}
                   </div>
 
                   <p className="fn-odds-hint">

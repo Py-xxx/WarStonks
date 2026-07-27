@@ -830,6 +830,7 @@ export const en = {
   'opp.oddsUpgradeHint': 'You hold none at {refinement} — upgrading would raise these odds.',
   'opp.oddsTargetRuns': 'About {n} runs at {refinement} gets you to ~80%.',
   'opp.oddsPerRun': 'per run',
+  'opp.oddsMoreRelics': '+{n} more relics below',
   'opp.oddsNoRelics': 'You own no relics that drop this item.',
   'opp.oddsSellsFor': 'Sells for {price}',
   'opp.ownedOnly': 'Owned only',
