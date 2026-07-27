@@ -2600,8 +2600,13 @@ textarea:focus-visible,
 .fn-odds-side { display: flex; gap: 22px; }
 .fn-odds-stat { text-align: right; }
 .fn-odds-stat span {
-  display: block; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
+  display: flex; align-items: center; justify-content: flex-end; gap: 5px;
+  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
 }
+/* Info hints sit inline with these small labels rather than top-aligned. */
+.fn-odds-stat .info-hint,
+.fn-odds-pct-label .info-hint { align-self: center; }
+.fn-odds-pct-label { display: inline-flex; align-items: center; gap: 5px; }
 .fn-odds-stat strong {
   display: block; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 18px; font-weight: 600; color: var(--text-primary);

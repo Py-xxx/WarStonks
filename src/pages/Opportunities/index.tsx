@@ -34,6 +34,7 @@ import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { tActive, useTranslation } from '../../i18n';
 import { tConfidence, tHealth } from '../../lib/healthLabels';
+import { InfoHint } from '../../components/InfoHint';
 import {
   REFINEMENT_KEYS,
   computeDropOdds,
@@ -3034,7 +3035,10 @@ export function OpportunitiesPage({
                   <div className="fn-odds-main">
                     <div className="fn-odds-gauge">
                       <span className="fn-odds-pct">{Math.round(farmNowDropOdds.atLeastOne * 100)}%</span>
-                      <span className="fn-odds-pct-label">{t('opp.oddsAtLeastOne')}</span>
+                      <span className="fn-odds-pct-label">
+                        {t('opp.oddsAtLeastOne')}
+                        <InfoHint text={t('opp.oddsAtLeastOneInfo')} placement="bottom" />
+                      </span>
                       <span className="fn-odds-bar" aria-hidden="true">
                         <span
                           className="fn-odds-bar-fill"
@@ -3044,11 +3048,17 @@ export function OpportunitiesPage({
                     </div>
                     <div className="fn-odds-side">
                       <div className="fn-odds-stat">
-                        <span>{t('opp.oddsExpected')}</span>
+                        <span>
+                          {t('opp.oddsExpected')}
+                          <InfoHint text={t('opp.oddsExpectedInfo')} placement="bottom" />
+                        </span>
                         <strong>{farmNowDropOdds.expectedDrops.toFixed(2)}</strong>
                       </div>
                       <div className="fn-odds-stat">
-                        <span>{t('opp.oddsRelicsOwned')}</span>
+                        <span>
+                          {t('opp.oddsRelicsOwned')}
+                          <InfoHint text={t('opp.oddsRelicsOwnedInfo')} placement="bottom" />
+                        </span>
                         <strong>{farmNowDropOdds.totalRelics}</strong>
                       </div>
                     </div>
