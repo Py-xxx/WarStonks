@@ -3,6 +3,7 @@
  * All functions are stubs when running in a browser (non-Tauri) context.
  */
 
+import { wfmLangCode, type AppLanguage } from './language';
 import type {
   ArbitrageScannerProgress,
   ArbitrageScannerState,
@@ -418,14 +419,26 @@ export async function getRelicTierIcons(): Promise<RelicTierIcon[]> {
   return invoke<RelicTierIcon[]>('get_relic_tier_icons');
 }
 
+/**
+ * The localized item catalog that powers every search box.
+ *
+ * Takes the app language, NOT a raw code string, and converts it here. Item names live in
+ * `wfm_item_i18n` keyed by Warframe.Market's codes, but the app also has warframestat.us codes
+ * for worldstate — and those disagree for Chinese (`zh-hans` vs `zh`). Five call sites passed
+ * the warframestat code, the SQL join silently matched nothing, and every Chinese user got an
+ * English-only catalog. Accepting `AppLanguage` makes that mistake a compile error instead of
+ * a silent fallback.
+ */
 export async function getWfmAutocompleteItems(
-  language?: string,
+  language?: AppLanguage,
 ): Promise<WfmAutocompleteItem[]> {
   if (!isTauriRuntime()) {
     return [];
   }
 
-  return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items', { language });
+  return invoke<WfmAutocompleteItem[]>('get_wfm_autocomplete_items', {
+    language: language ? wfmLangCode(language) : undefined,
+  });
 }
 
 export interface LanguagePackStatus {

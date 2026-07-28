@@ -3,7 +3,6 @@ import type { KeyboardEvent } from 'react';
 import { AlertsPanel } from '../AlertsPanel';
 import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
-import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import { formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
@@ -145,7 +144,7 @@ export function TopBar() {
       setAutocompleteError(null);
 
       try {
-        const items = await getWfmAutocompleteItems(wfstatLangCode(language));
+        const items = await getWfmAutocompleteItems(language);
         if (!isMounted) {
           return;
         }
@@ -237,6 +236,12 @@ export function TopBar() {
   }, [searchFocusNonce]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    // While an IME is composing (Chinese, Japanese, Korean), Enter and the arrow keys belong to
+    // the candidate picker, not to us — stealing them makes the input unusable in those
+    // languages. `isComposing` is false for every Latin-script keystroke, so this costs nothing.
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       if (!dropdownOpen && suggestions.length > 0) {

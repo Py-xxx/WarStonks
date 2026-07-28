@@ -10,6 +10,7 @@ import {
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { ItemName } from '../../components/ItemName';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
+import { useItemQueryMatcher } from '../../hooks/useItemSearch';
 import { tConfidence, tHealth } from '../../lib/healthLabels';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
@@ -770,16 +771,18 @@ export function ScannersPage() {
   const isRunning = progress?.status === 'running';
   const hasSavedScan = Boolean(arbitrage);
   const actionLabel = hasSavedScan ? t('scan.rescan') : t('scan.startScan');
-  const normalizedArbitrageSearch = arbitrageSearch.trim().toLowerCase();
-  const normalizedRelicSearch = relicSearch.trim().toLowerCase();
+  const normalizedArbitrageSearch = arbitrageSearch.trim();
+  const normalizedRelicSearch = relicSearch.trim();
+  // Matches against the localized name shown on the row, not just the English one behind it.
+  const matchesItem = useItemQueryMatcher();
   const arbitrageResults = useMemo(() => {
     const source = arbitrage?.results ?? [];
     if (!normalizedArbitrageSearch) {
       return source;
     }
 
-    return source.filter((entry) => entry.name.toLowerCase().includes(normalizedArbitrageSearch));
-  }, [arbitrage?.results, normalizedArbitrageSearch]);
+    return source.filter((entry) => matchesItem(normalizedArbitrageSearch, entry));
+  }, [arbitrage?.results, normalizedArbitrageSearch, matchesItem]);
   const relicResults = useMemo(() => {
     const source = arbitrage?.relicRoiResults ?? [];
     const filtered = showOnlyUnvaulted
@@ -787,11 +790,11 @@ export function ScannersPage() {
       : source;
     const searchFiltered = normalizedRelicSearch
       ? filtered.filter((entry) => {
-          if (entry.name.toLowerCase().includes(normalizedRelicSearch)) {
+          if (matchesItem(normalizedRelicSearch, entry)) {
             return true;
           }
 
-          return entry.drops.some((drop) => drop.name.toLowerCase().includes(normalizedRelicSearch));
+          return entry.drops.some((drop) => matchesItem(normalizedRelicSearch, drop));
         })
       : filtered;
     return [...searchFiltered].sort((left, right) => {
@@ -799,7 +802,7 @@ export function ScannersPage() {
       const leftSummary = getRelicRefinementSummary(left, relicRefinement);
       return (rightSummary?.relicRoiScore ?? 0) - (leftSummary?.relicRoiScore ?? 0);
     });
-  }, [arbitrage?.relicRoiResults, normalizedRelicSearch, relicRefinement, showOnlyUnvaulted]);
+  }, [arbitrage?.relicRoiResults, normalizedRelicSearch, relicRefinement, showOnlyUnvaulted, matchesItem]);
 
   useEffect(() => {
     if (!arbitrageResults.length) {

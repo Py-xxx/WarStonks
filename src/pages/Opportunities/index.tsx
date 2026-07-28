@@ -29,9 +29,9 @@ import {
   markWatchlistAddFeedback,
 } from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
-import { wfstatLangCode } from '../../lib/language';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
+import { useItemQueryMatcher } from '../../hooks/useItemSearch';
 import { tActive, useTranslation } from '../../i18n';
 import { tConfidence, tHealth } from '../../lib/healthLabels';
 import { InfoHint } from '../../components/InfoHint';
@@ -1232,6 +1232,8 @@ export function OpportunitiesPage({
     mode === 'inventory' ? 'set-planner' : 'opportunities',
   );
   const localizeName = useLocalizedName();
+  // Searches the localized name the row displays, not just the English name behind it.
+  const matchesItem = useItemQueryMatcher();
   const { t } = useTranslation();
 
   // Honour a subtab request from an opportunity action button (e.g. a "Farm" action → farm-now).
@@ -1379,7 +1381,7 @@ export function OpportunitiesPage({
         const [scannerState, owned, autocompleteItems, ownedPrices] = await Promise.all([
           getArbitrageScannerState(),
           getSetCompletionOwnedItems(),
-          getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language)),
+          getWfmAutocompleteItems(useAppStore.getState().language),
           getSetCompletionOwnedItemPrices(),
         ]);
         if (cancelled) {
@@ -1793,25 +1795,23 @@ export function OpportunitiesPage({
 
   // Search (relic name + drops) + era filter + sort — shared controls for the part-profit list.
   const displayedFarmNowRelics = useMemo(() => {
-    const query = farmNowSearch.trim().toLowerCase();
+    const query = farmNowSearch.trim();
     let rows = farmNowRelics;
     if (query) {
       rows = rows.filter(
         (row) =>
-          row.relic.name.toLowerCase().includes(query) ||
-          row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
+          matchesItem(query, row.relic) ||
+          row.drops.some((entry) => matchesItem(query, entry.drop)),
       );
       // Item-targeted mode: when the query matches a DROP (and not the relic's own name),
       // re-aim the refinement suggestion at that item — best refinement = highest chance of
       // pulling the searched part, not best overall plat per run. Searching a relic name
       // keeps the normal plat-per-run guidance.
       rows = rows.map((row) => {
-        if (row.relic.name.toLowerCase().includes(query)) {
+        if (matchesItem(query, row.relic)) {
           return row;
         }
-        const matchedDrops = row.drops.filter((entry) =>
-          entry.drop.name.toLowerCase().includes(query),
-        );
+        const matchedDrops = row.drops.filter((entry) => matchesItem(query, entry.drop));
         if (matchedDrops.length === 0) {
           return row;
         }
@@ -1863,7 +1863,7 @@ export function OpportunitiesPage({
       return left.relic.name.localeCompare(right.relic.name);
     });
     return sorted;
-  }, [farmNowRelics, farmNowSearch, farmNowEra, farmNowSort, localizeName]);
+  }, [farmNowRelics, farmNowSearch, farmNowEra, farmNowSort, localizeName, matchesItem]);
 
   /**
    * "Farm this item" odds: when the search targets a specific DROP, work out the real chance of
@@ -1871,7 +1871,7 @@ export function OpportunitiesPage({
    * chances are percentages, so they're normalized to 0..1 for the odds math.
    */
   const farmNowDropOdds = useMemo(() => {
-    const query = farmNowSearch.trim().toLowerCase();
+    const query = farmNowSearch.trim();
     if (!query) {
       return null;
     }
@@ -1888,9 +1888,7 @@ export function OpportunitiesPage({
 
     for (const row of farmNowRelics) {
       // Only drops matching the query — a relic-name match isn't item targeting.
-      const matched = row.drops.filter((entry) =>
-        entry.drop.name.toLowerCase().includes(query),
-      );
+      const matched = row.drops.filter((entry) => matchesItem(query, entry.drop));
       if (matched.length === 0) {
         continue;
       }
@@ -1943,7 +1941,7 @@ export function OpportunitiesPage({
       return null;
     }
     return { targetName, targetSlug: targetSlug ?? '', exitPrice: bestExitPrice, ...summary };
-  }, [farmNowSearch, farmNowRelics, ownedRelics, localizeName]);
+  }, [farmNowSearch, farmNowRelics, ownedRelics, localizeName, matchesItem]);
 
   /**
    * Autofill source for the farm-now search: every relic name plus every drop it can yield, so a
@@ -1951,7 +1949,7 @@ export function OpportunitiesPage({
    * same scan the list renders from, so suggestions can never point at rows that don't exist.
    */
   const farmNowSuggestions = useMemo(() => {
-    const query = farmNowSearch.trim().toLowerCase();
+    const query = farmNowSearch.trim();
     if (query.length < 2) {
       return [];
     }
@@ -1960,7 +1958,7 @@ export function OpportunitiesPage({
 
     for (const row of farmNowRelics) {
       const relicName = localizeName(row.relic);
-      if (relicName.toLowerCase().includes(query) && !relics.has(relicName)) {
+      if (matchesItem(query, row.relic) && !relics.has(relicName)) {
         relics.set(relicName, {
           label: relicName,
           kind: 'relic',
@@ -1969,7 +1967,7 @@ export function OpportunitiesPage({
       }
       for (const entry of row.drops) {
         const dropName = localizeName(entry.drop);
-        if (!dropName.toLowerCase().includes(query) || drops.has(dropName)) {
+        if (!matchesItem(query, entry.drop) || drops.has(dropName)) {
           continue;
         }
         drops.set(dropName, {
@@ -1984,7 +1982,7 @@ export function OpportunitiesPage({
 
     // Drops first: searching for a part you need is the common case.
     return [...drops.values(), ...relics.values()].slice(0, 8);
-  }, [farmNowSearch, farmNowRelics, localizeName, t]);
+  }, [farmNowSearch, farmNowRelics, localizeName, t, matchesItem]);
 
   const farmNowTopRelics = useMemo(
     () => displayedFarmNowRelics.slice(0, 3),
@@ -2131,13 +2129,13 @@ export function OpportunitiesPage({
   }, [farmNowScan, ownedRelics, farmNowMissingComponents]);
 
   const displayedFarmNowSetCompletionRelics = useMemo(() => {
-    const query = farmNowSearch.trim().toLowerCase();
+    const query = farmNowSearch.trim();
     let rows = farmNowSetCompletionRelics;
     if (query) {
       rows = rows.filter(
         (row) =>
-          row.relic.name.toLowerCase().includes(query) ||
-          row.drops.some((entry) => entry.drop.name.toLowerCase().includes(query)),
+          matchesItem(query, row.relic) ||
+          row.drops.some((entry) => matchesItem(query, entry.drop)),
       );
     }
     if (farmNowEra !== 'all') {
@@ -2161,7 +2159,7 @@ export function OpportunitiesPage({
       return left.relic.name.localeCompare(right.relic.name);
     });
     return sorted;
-  }, [farmNowSetCompletionRelics, farmNowSearch, farmNowEra, farmNowSort]);
+  }, [farmNowSetCompletionRelics, farmNowSearch, farmNowEra, farmNowSort, matchesItem]);
 
   const farmNowSetCompletionTopRelics = useMemo(
     () => displayedFarmNowSetCompletionRelics.slice(0, 3),
@@ -2192,21 +2190,19 @@ export function OpportunitiesPage({
 
   // Left panel: every known prime component, filtered by the shared search bar.
   const filteredCatalog = useMemo(() => {
-    const normalizedQuery = componentQuery.trim().toLowerCase();
+    const normalizedQuery = componentQuery.trim();
     if (!normalizedQuery) {
       return plannerCatalog;
     }
-    return plannerCatalog.filter((item) =>
-      item.name.toLowerCase().includes(normalizedQuery),
-    );
-  }, [componentQuery, plannerCatalog]);
+    return plannerCatalog.filter((item) => matchesItem(normalizedQuery, item));
+  }, [componentQuery, plannerCatalog, matchesItem]);
 
   // Right panel: only the parts the user owns, filtered by the same search bar and
   // sorted by the user's chosen order (name A–Z, or value high→low).
   const filteredOwnedItems = useMemo(() => {
-    const normalizedQuery = componentQuery.trim().toLowerCase();
+    const normalizedQuery = componentQuery.trim();
     const base = normalizedQuery
-      ? ownedItems.filter((item) => item.name.toLowerCase().includes(normalizedQuery))
+      ? ownedItems.filter((item) => matchesItem(normalizedQuery, item))
       : ownedItems;
     const sorted = [...base];
     if (ownedSort === 'price') {
@@ -2220,7 +2216,7 @@ export function OpportunitiesPage({
       sorted.sort((a, b) => a.name.localeCompare(b.name));
     }
     return sorted;
-  }, [componentQuery, ownedItems, ownedSort, ownedItemPrices]);
+  }, [componentQuery, ownedItems, ownedSort, ownedItemPrices, matchesItem]);
 
   useEffect(() => {
     if (!screenshotImportScreenshots.length) {

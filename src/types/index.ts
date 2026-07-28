@@ -899,7 +899,14 @@ export interface WalletSnapshot {
 export interface WfmAutocompleteItem {
   itemId: number;
   wfmId: string | null;
+  /** Localized display name, falling back to English when no translation exists. */
   name: string;
+  /**
+   * The English name, so search matches whichever name the player knows. Always present on
+   * items from the backend catalog; optional because the app also builds ad-hoc items (from a
+   * search result, an order, a scanner row) that only ever carry the one name.
+   */
+  nameEn?: string;
   slug: string;
   maxRank: number | null;
   itemFamily: string | null;

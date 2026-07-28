@@ -220,7 +220,7 @@ let backgroundWalletRefreshPromise: Promise<void> | null = null;
 const watchlistRefreshGenerations = new Map<string, number>();
 let autocompleteCatalogPromise: Promise<WfmAutocompleteItem[]> | null = null;
 // The catalog is fetched per display language; changing language invalidates it.
-let autocompleteCatalogLang: string | null = null;
+let autocompleteCatalogLang: AppLanguage | null = null;
 
 const defaultAppSettings: AppSettings = {
   alecaframe: {
@@ -589,7 +589,7 @@ function clearLinkedBuyOrderFromWatchlistState(
 }
 
 async function getAutocompleteCatalog(): Promise<WfmAutocompleteItem[]> {
-  const lang = wfmLangCode(useAppStore.getState().language);
+  const lang = useAppStore.getState().language;
   if (!autocompleteCatalogPromise || autocompleteCatalogLang !== lang) {
     autocompleteCatalogLang = lang;
     autocompleteCatalogPromise = getWfmAutocompleteItems(lang).catch((error) => {
@@ -1825,9 +1825,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const catalog = await getAutocompleteCatalog();
         const needleSlug = target.slug?.trim().toLowerCase();
         const needleName = target.name.trim().toLowerCase();
+        // Match on the localized name AND the English one: the incoming target usually carries
+        // an English name (backend rows aren't localized) while the catalog's `name` is
+        // localized, so comparing only those two would fail for every non-English user.
         resolved =
           (needleSlug ? catalog.find((entry) => entry.slug.toLowerCase() === needleSlug) : undefined) ??
-          catalog.find((entry) => entry.name.toLowerCase() === needleName) ??
+          catalog.find(
+            (entry) =>
+              entry.name.toLowerCase() === needleName ||
+              entry.nameEn?.toLowerCase() === needleName,
+          ) ??
           null;
       } catch (error) {
         console.error('[quick-view] failed to resolve item from catalog', error);
@@ -1893,7 +1900,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const language = useAppStore.getState().language;
       // Names come from WFM (i18n keyed by the WFM language code, e.g. "zh-hans"); they're
       // complete and already carry the localized "Set" suffix, so no post-processing is needed.
-      const items = await getWfmAutocompleteItems(wfmLangCode(language));
+      const items = await getWfmAutocompleteItems(language);
       const map: Record<string, string> = {};
       for (const item of items) {
         if (!item.name) {

@@ -52,7 +52,12 @@ pub fn set_worldstate_language(language: String) {
 pub struct WfmAutocompleteItem {
     pub item_id: i64,
     pub wfm_id: String,
+    /// Localized display name (falls back to English when the language pack has no entry).
     pub name: String,
+    /// The English name, always. Kept alongside `name` so search can match what the user sees
+    /// *and* what they might know the item as — a Chinese player who knows "Mesa Prime" should
+    /// not lose the ability to type it just because the UI is localized.
+    pub name_en: String,
     pub slug: String,
     pub max_rank: Option<i64>,
     pub item_family: Option<String>,
@@ -800,6 +805,7 @@ fn load_wfm_autocomplete_items_inner(
             w.item_id,
             w.wfm_id,
             COALESCE(NULLIF(t.name, ''), w.name_en) AS name,
+            w.name_en,
             w.slug,
             w.max_rank,
             w.item_family,
@@ -816,11 +822,12 @@ fn load_wfm_autocomplete_items_inner(
             item_id: row.get(0)?,
             wfm_id: row.get(1)?,
             name: row.get(2)?,
-            slug: row.get(3)?,
-            max_rank: row.get(4)?,
-            item_family: row.get(5)?,
-            image_path: row.get(6)?,
-            bulk_tradable: row.get::<_, Option<i64>>(7)?.unwrap_or(0) == 1,
+            name_en: row.get(3)?,
+            slug: row.get(4)?,
+            max_rank: row.get(5)?,
+            item_family: row.get(6)?,
+            image_path: row.get(7)?,
+            bulk_tradable: row.get::<_, Option<i64>>(8)?.unwrap_or(0) == 1,
         })
     })?;
 

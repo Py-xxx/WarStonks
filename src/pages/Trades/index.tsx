@@ -41,7 +41,6 @@ import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
 import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
-import { wfstatLangCode } from '../../lib/language';
 import { useTranslation } from '../../i18n';
 import { maybeFireHealthAlert } from '../../lib/tradeHealthAlerts';
 import { tHealth, tSubtype, tTrendSummary } from '../../lib/healthLabels';
@@ -1973,7 +1972,7 @@ function ListingsTab() {
       setAutocompleteLoading(true);
       setAutocompleteError(null);
       try {
-        const items = await getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language));
+        const items = await getWfmAutocompleteItems(useAppStore.getState().language);
         if (!cancelled) {
           setAutocompleteItems(items);
         }
@@ -2178,7 +2177,7 @@ function ListingsTab() {
     void (async () => {
       let item: WfmAutocompleteItem | null = null;
       try {
-        const catalog = await getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language));
+        const catalog = await getWfmAutocompleteItems(useAppStore.getState().language);
         item =
           catalog.find((entry) => entry.slug === request.slug) ??
           catalog.find((entry) => entry.name === request.name) ??

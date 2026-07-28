@@ -15,7 +15,6 @@ import {
 } from '../../lib/watchlistAddFeedback';
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
-import { wfstatLangCode } from '../../lib/language';
 import { tActive, useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { resolveLocalizedName } from '../../lib/itemNames';
@@ -1470,7 +1469,9 @@ function buildDisplayDropSources(
 ): DisplayDropSource[] {
   const relicImageByName = new Map<string, string | null>();
   autocompleteItems.forEach((item) => {
-    if (!item.name.toLowerCase().includes(' relic')) {
+    // Category detection has to read the ENGLISH name — `item.name` is localized, so matching
+    // " relic" against it silently classifies nothing once the app is in another language.
+    if (!(item.nameEn ?? item.name).toLowerCase().includes(' relic')) {
       return;
     }
 
@@ -2318,7 +2319,7 @@ function AnalysisTab() {
 
   useEffect(() => {
     let isMounted = true;
-    void getWfmAutocompleteItems(wfstatLangCode(useAppStore.getState().language))
+    void getWfmAutocompleteItems(useAppStore.getState().language)
       .then((items) => {
         if (!isMounted) {
           return;
