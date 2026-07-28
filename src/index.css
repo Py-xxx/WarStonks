@@ -727,7 +727,9 @@ textarea:focus-visible,
 /* Right-click context menu for item names. */
 .item-context-menu {
   position: fixed;
-  z-index: 400;
+  /* Above modals (350) and the farming panel (200) — a context menu is always the topmost thing
+     while it's open. Portaled to <body>, so this value isn't trapped in a row's stacking context. */
+  z-index: 2200;
   min-width: 190px;
   padding: 5px;
   display: flex;
@@ -735,8 +737,9 @@ textarea:focus-visible,
   gap: 1px;
   border-radius: 9px;
   border: 1px solid var(--border-strong);
-  background: rgba(12, 16, 22, 0.99);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  /* Fully opaque: rows behind it can be busy, and a translucent menu is unreadable. */
+  background: var(--bg-elevated);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
 }
 .item-context-menu-option {
   display: block;
@@ -2679,7 +2682,7 @@ textarea:focus-visible,
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
 }
 .item-price-prompt {
-  position: fixed; z-index: 400; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  position: fixed; z-index: 2210; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: min(320px, calc(100vw - 32px));
   display: flex; flex-direction: column; gap: 10px;
   background: var(--bg-elevated); border: 1px solid var(--border-strong, var(--border));
@@ -2759,7 +2762,21 @@ textarea:focus-visible,
   font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-amber);
 }
 .farm-panel-title strong { font-size: 15px; color: var(--text-primary); }
-.farm-panel-refinement { font-size: 11px; color: var(--text-secondary); }
+/* Current vs recommended refinement are deliberately different shapes: the one you're running
+   reads as a solid state chip, the recommendation as a dashed suggestion. */
+.farm-panel-refinement { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.farm-refine-current,
+.farm-refine-recommended,
+.farm-refine-best {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.03em;
+  padding: 2px 7px; border-radius: 999px; text-transform: capitalize;
+}
+.farm-refine-current { color: var(--color-blue); background: rgba(74, 158, 255, 0.16); }
+.farm-refine-recommended {
+  color: var(--color-amber); background: transparent;
+  border: 1px dashed rgba(240, 160, 48, 0.6); cursor: help;
+}
+.farm-refine-best { color: var(--color-green); background: rgba(61, 214, 140, 0.14); }
 .farm-panel-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 /* Minimize sits in the corner and is deliberately prominent — it's the most-used control once
    you're farming, since the panel collapses to the bubble between runs. */
@@ -14287,10 +14304,26 @@ img[data-asset-failed='true'] {
 .trade-split-empty { padding: 24px 12px; }
 
 /* Trades: close-quantity popup */
-.trade-close-qty-modal { max-width: 380px; }
+/* Same compact, screen-centered treatment as the watchlist confirm dialogs, so all three
+   quantity/confirm popups read as one family. */
+.settings-modal.trade-close-qty-modal {
+  top: 50%;
+  width: min(400px, calc(100vw - 40px));
+  max-width: none;
+  max-height: none;
+  transform: translate(-50%, -50%);
+  border-radius: 16px;
+}
+.trade-close-qty-modal .settings-modal-header { padding: 20px 22px 0; }
+.trade-close-qty-modal .settings-modal-body { display: block; padding: 10px 22px 0; }
+.trade-close-qty-modal .settings-modal-actions {
+  padding: 18px 22px 20px;
+  justify-content: flex-end;
+}
 .trade-close-qty-prompt {
-  margin: 0 0 12px;
-  font-size: 12px;
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--text-secondary);
 }
 .trade-close-qty-controls {

@@ -211,7 +211,7 @@ export function TopBar() {
     setDropdownOpen(false);
     // Route through the shared open action so the item lands in Quick View, is recorded in
     // recents, and a back target is captured.
-    void openItemInQuickView(item);
+    void openItemInQuickView(item, 'home');
   };
 
   useEffect(() => {

@@ -110,6 +110,9 @@ interface ListingModalState {
   /** Chosen WFM subtype; '' until the item's subtypes load (or when it has none). */
   subtype: string;
   visible: boolean;
+  /** True once the user types in the price field. Auto-fill then stops overwriting their value —
+   *  re-suggesting on every rank/subtype tweak would silently discard a deliberate price. */
+  priceTouched: boolean;
 }
 
 
@@ -572,6 +575,8 @@ function createListingModalState(
     perTrade: isBulkTradable(item) ? String(order?.perTrade ?? 1) : '',
     subtype: '',
     visible: order?.visible ?? true,
+    // Editing starts "touched": the existing price is the user's own, not a suggestion to replace.
+    priceTouched: mode !== 'create',
   };
 }
 
@@ -1046,7 +1051,7 @@ function ListingModal({
               min={1}
               step={1}
               value={form.price}
-              onChange={(event) => onChange({ price: event.target.value })}
+              onChange={(event) => onChange({ price: event.target.value, priceTouched: true })}
               placeholder={t('trades.pricePlaceholder')}
             />
           </div>
@@ -2070,8 +2075,11 @@ function ListingsTab() {
   useEffect(() => {
     if (recommendedAutoFillPrice === null) return;
     setListingModal((current) => {
-      if (!current || current.price !== '') return current;
-      return { ...current, price: String(recommendedAutoFillPrice) };
+      // Only while creating: an existing listing's price is the user's real live price, and
+      // re-suggesting over it on an unrelated edit would be destructive.
+      if (!current || current.mode !== 'create' || current.priceTouched) return current;
+      const next = String(recommendedAutoFillPrice);
+      return current.price === next ? current : { ...current, price: next };
     });
   }, [recommendedAutoFillPrice]);
 

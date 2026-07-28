@@ -53,6 +53,14 @@ export function FarmingSessionPanel() {
   const totalRuns = session.runs.length;
   const lastRun = session.runs[totalRuns - 1] ?? null;
   const canCycle = session.cycle.length > 1;
+  // Session-local depletion: what's left of this relic after the runs logged here. Display only —
+  // the real inventory still comes from AlecaFrame.
+  const remaining = active ? Math.max(0, active.ownedCount - runCount) : 0;
+  const allSpent =
+    session.cycle.every(
+      (relic) =>
+        session.runs.filter((run) => run.relicSlug === relic.relicSlug).length >= relic.ownedCount,
+    );
 
   if (!expanded) {
     return (
@@ -130,7 +138,18 @@ export function FarmingSessionPanel() {
               : t('farm.nowFarming')}
           </span>
           <strong>{active?.relicName ?? ''}</strong>
-          <span className="farm-panel-refinement">{active?.refinement ?? ''}</span>
+          <span className="farm-panel-refinement">
+            <span className="farm-refine-current">
+              {t('farm.runningAt', { refinement: active?.refinement ?? '' })}
+            </span>
+            {active && active.recommendedRefinement !== active.refinement ? (
+              <span className="farm-refine-recommended" title={t('farm.upgradeHint')}>
+                {t('farm.recommends', { refinement: active.recommendedRefinement })}
+              </span>
+            ) : (
+              <span className="farm-refine-best">{t('farm.bestAlready')}</span>
+            )}
+          </span>
         </div>
         <div className="farm-panel-actions">
           <button type="button" className="act-btn" onClick={stop}>
@@ -171,7 +190,7 @@ export function FarmingSessionPanel() {
             <div className="farm-cycle-copy">
               <span className="farm-cycle-name">{active?.relicName}</span>
               <span className="farm-cycle-meta">
-                {t('opp.ownedTimes', { n: active?.ownedCount ?? 0 })}
+                {t('farm.relicsLeft', { n: remaining, total: active?.ownedCount ?? 0 })}
                 {active?.targetChance != null
                   ? ` · ${Math.round(active.targetChance * 100)}% ${t('opp.oddsPerRun')}`
                   : ''}
@@ -214,7 +233,9 @@ export function FarmingSessionPanel() {
         ) : null}
       </div>
 
-      <div className="farm-panel-prompt">{t('farm.whatDidYouGet')}</div>
+      <div className="farm-panel-prompt">
+        {allSpent ? t('farm.allSpent') : t('farm.whatDidYouGet')}
+      </div>
 
       {drops.length === 0 ? (
         <div className="farm-panel-empty">{t('farm.noDrops')}</div>

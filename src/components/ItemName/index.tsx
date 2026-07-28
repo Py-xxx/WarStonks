@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { copyTextToClipboard } from '../../lib/marketMessages';
 import { useAppStore } from '../../stores/useAppStore';
 import { useTranslation } from '../../i18n';
@@ -33,7 +34,6 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const relicDropSlugs = useAppStore((state) => state.relicDropSlugs);
   const itemExitPrices = useAppStore((state) => state.itemExitPrices);
   const requestOpportunitiesTab = useAppStore((state) => state.requestOpportunitiesTab);
-  const setActivePage = useAppStore((state) => state.setActivePage);
   const startFarmingForItem = useAppStore((state) => state.startFarmingForItem);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const [pricePrompt, setPricePrompt] = useState<string | null>(null);
@@ -69,7 +69,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const handleOpen = (event: { stopPropagation: () => void }) => {
     stop(event);
     setMenu(null);
-    void openItemInQuickView(target);
+    void openItemInQuickView(target, 'home');
   };
 
   const handleCopy = (event: { stopPropagation: () => void }) => {
@@ -95,8 +95,7 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const handleOpenMarketPage = (event: { stopPropagation: () => void }) => {
     stop(event);
     setMenu(null);
-    setActivePage('market');
-    void openItemInQuickView(target);
+    void openItemInQuickView(target, 'market');
   };
 
   const handleCopyWfmLink = (event: { stopPropagation: () => void }) => {
@@ -183,7 +182,11 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
       >
         {children ?? displayName}
       </span>
-      {pricePrompt !== null ? (
+      {/* Portaled to <body>: rows use `opacity` for dimmed/hidden states, and any ancestor with
+          opacity < 1 both fades its descendants and traps their z-index in a new stacking
+          context — which made this menu render translucent and behind other panels. */}
+      {pricePrompt !== null
+        ? createPortal(
         <div className="item-price-prompt" role="dialog" onClick={stop}>
           <span className="item-price-prompt-label">
             {t('itm.watchPricePrompt', { item: displayName })}
@@ -209,9 +212,12 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
               {t('itm.addToWatchlist')}
             </button>
           </div>
-        </div>
-      ) : null}
-      {menu ? (
+        </div>,
+            document.body,
+          )
+        : null}
+      {menu
+        ? createPortal(
         <div
           className="item-context-menu"
           style={{ top: menu.y, left: menu.x }}
@@ -273,8 +279,10 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
           >
             {t('itm.copyWfmLink')}
           </button>
-        </div>
-      ) : null}
+        </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }

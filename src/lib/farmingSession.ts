@@ -71,16 +71,35 @@ export function buildFarmingRelic(
     ? relic.drops.find((drop) => drop.slug === options.targetDropSlug)
     : undefined;
 
-  // Pick the refinement that maximises the target's chance; without a target keep the caller's.
-  let refinement = options.fallbackRefinement ?? 'radiant';
-  if (targetDrop) {
-    let best = -1;
-    for (const candidate of REFINEMENTS) {
-      const chance = chanceAt(targetDrop, candidate) ?? 0;
-      if (chance > best) {
-        best = chance;
-        refinement = candidate;
-      }
+  const counts = owned?.counts;
+  const heldAt = (key: RefinementKey) => (counts?.[key] as number | undefined) ?? 0;
+  const scoreAt = (key: RefinementKey) =>
+    targetDrop ? chanceAt(targetDrop, key) ?? 0 : REFINEMENTS.indexOf(key);
+
+  // What we'd advise: the refinement giving the best shot at the goal, owned or not.
+  let recommendedRefinement: RefinementKey = REFINEMENTS[0];
+  let bestScore = -1;
+  for (const candidate of REFINEMENTS) {
+    const score = scoreAt(candidate);
+    if (score > bestScore) {
+      bestScore = score;
+      recommendedRefinement = candidate;
+    }
+  }
+
+  // What you'll actually run: the best refinement you hold copies of. Falls back to the
+  // recommendation (or the caller's hint) when we can't tell what's owned — showing chances for
+  // a refinement you don't have would quietly overstate your odds.
+  let refinement: string = options.fallbackRefinement ?? recommendedRefinement;
+  let ownedScore = -1;
+  for (const candidate of REFINEMENTS) {
+    if (heldAt(candidate) <= 0) {
+      continue;
+    }
+    const score = scoreAt(candidate);
+    if (score > ownedScore) {
+      ownedScore = score;
+      refinement = candidate;
     }
   }
 
@@ -97,7 +116,6 @@ export function buildFarmingRelic(
     })),
   );
 
-  const counts = owned?.counts;
   const ownedCount = counts?.total ?? 0;
   const targetChance = targetDrop ? chanceAt(targetDrop, refinement) : null;
 
@@ -118,6 +136,8 @@ export function buildFarmingRelic(
     tier,
     code,
     refinement,
+    recommendedRefinement,
+    refinementOwnedCount: heldAt(refinement as RefinementKey),
     drops,
     ownedCount,
     targetChance,

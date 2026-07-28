@@ -155,7 +155,6 @@ export const zhHans: Record<string, string> = {
   'home.seller.filter': '卖家筛选',
   'home.seller.ingame': '游戏内',
   'home.seller.ingameOnline': '游戏内和在线',
-  'home.autoProfile': '自动档案',
 
   'events.title': '活动',
   'events.tab.vendors': '商人',

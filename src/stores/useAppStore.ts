@@ -1413,7 +1413,14 @@ interface AppStore {
   setHomeSubTab: (tab: HomeSubTab) => void;
 
   // Quality-of-life: clickable item names, back navigation, toasts, recents, ⌘K.
-  openItemInQuickView: (item: ItemQuickViewTarget) => Promise<void>;
+  /**
+   * Loads an item into Quick View. `destination` is the caller's call — this used to force
+   * 'home' for everyone, which silently overrode buttons that meant to land on Market.
+   */
+  openItemInQuickView: (
+    item: ItemQuickViewTarget,
+    destination?: 'home' | 'market' | 'stay',
+  ) => Promise<void>;
   navigationBack: NavigationSnapshot | null;
   goBack: () => void;
   recentItems: WfmAutocompleteItem[];
@@ -1553,8 +1560,6 @@ interface AppStore {
 
   sellerMode: SellerMode;
   setSellerMode: (mode: SellerMode) => void;
-  autoProfile: boolean;
-  toggleAutoProfile: () => void;
 
   watchlist: WatchlistItem[];
   alerts: WatchlistAlert[];
@@ -1652,6 +1657,10 @@ interface AppStore {
   farmingSession: FarmingSession | null;
   /** Expanded panel vs collapsed FAB bubble. */
   farmingPanelExpanded: boolean;
+  /** Set the moment a session is requested, before its data resolves, so the panel can paint
+   *  immediately with a loading state instead of leaving a dead window. Holds what we're
+   *  loading for, so the skeleton can name it. */
+  farmingSessionLoading: { label: string } | null;
   startFarmingSession: (session: Omit<FarmingSession, 'startedAt' | 'runs'>) => void;
   /** Move through the frozen relic cycle. Wraps at both ends. */
   cycleFarmingRelic: (delta: number) => void;
@@ -1750,6 +1759,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   relicDropSlugs: new Set<string>(),
   itemExitPrices: new Map<string, number>(),
   farmingSession: readPersistedFarmingSession(),
+  farmingSessionLoading: null,
   farmingPanelExpanded: true,
   ownedRelics: [],
   ownedRelicsUpdatedAt: null,
@@ -1783,7 +1793,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       navigationBack: null,
     });
   },
-  openItemInQuickView: async (target) => {
+  openItemInQuickView: async (target, destination = 'stay') => {
     const state = get();
 
     // Resolve to a full autocomplete item. Most call sites already carry the itemId +
@@ -1827,8 +1837,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         homeSubTab: state.homeSubTab,
         marketSubTab: state.marketSubTab,
       } satisfies NavigationSnapshot,
-      activePage: 'home',
-      homeSubTab: 'overview',
+      ...(destination === 'home' ? { activePage: 'home' as const, homeSubTab: 'overview' as const } : {}),
+      ...(destination === 'market' ? { activePage: 'market' as const } : {}),
     });
 
     // Record in recents (most-recent first, deduped by slug).
@@ -2950,8 +2960,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       void get().loadSelectedMarketAnalysis({ force: true });
     }
   },
-  autoProfile: false,
-  toggleAutoProfile: () => set((s) => ({ autoProfile: !s.autoProfile })),
 
   watchlist: restoredWatchlist,
   alerts: [],
@@ -3961,6 +3969,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!isTauriRuntime()) {
       return;
     }
+    // Paint the panel now; the cycle fills in when the scan + inventory resolve.
+    set({ farmingSessionLoading: { label: name }, farmingPanelExpanded: true });
     try {
       const [scanState, ownedRelics] = await Promise.all([
         getArbitrageScannerState(),
@@ -3985,6 +3995,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         .filter((relic) => relic.ownedCount > 0);
 
       if (candidates.length === 0) {
+        set({ farmingSessionLoading: null });
         get().pushToast(tActive('farm.noRelicsForItem'), 'error');
         return;
       }
@@ -3997,6 +4008,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
     } catch (error) {
       console.error('[farming] failed to start item-targeted session', error);
+      set({ farmingSessionLoading: null });
       get().pushToast(tActive('farm.noRelicsForItem'), 'error');
     }
   },
@@ -4032,7 +4044,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
       isFiller: drop.isFiller,
       at: new Date().toISOString(),
     };
-    const withRun: FarmingSession = { ...session, runs: [...session.runs, run] };
+    const nextRuns = [...session.runs, run];
+    // Local-only depletion: once you've logged as many runs as you own copies, that relic is
+    // spent for this session and we move to the next one that still has copies left. This never
+    // touches the relic cache — AlecaFrame stays the source of truth for real inventory.
+    const runsFor = (slug: string) => nextRuns.filter((entry) => entry.relicSlug === slug).length;
+    let activeIndex = session.activeIndex;
+    if (activeRelic && runsFor(activeRelic.relicSlug) >= activeRelic.ownedCount) {
+      const count = session.cycle.length;
+      for (let step = 1; step <= count; step += 1) {
+        const candidateIndex = (session.activeIndex + step) % count;
+        const candidate = session.cycle[candidateIndex];
+        if (candidate && runsFor(candidate.relicSlug) < candidate.ownedCount) {
+          activeIndex = candidateIndex;
+          break;
+        }
+      }
+    }
+    const withRun: FarmingSession = { ...session, runs: nextRuns, activeIndex };
     writePersistedFarmingSession(withRun);
     set({ farmingSession: withRun });
 
@@ -4093,8 +4122,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   openItemAnalysis: async (target) => {
-    await get().openItemInQuickView(target);
-    set({ activePage: 'market', navigationBack: null });
+    await get().openItemInQuickView(target, 'market');
+    set({ navigationBack: null });
     void get().loadSelectedMarketAnalysis({ force: false });
   },
 

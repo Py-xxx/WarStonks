@@ -1433,8 +1433,14 @@ export interface FarmingSessionRelic {
   relicImagePath: string | null;
   tier: string;
   code: string;
-  /** Refinement this relic should be run at (best available for the goal). */
+  /** The refinement you'll actually run: the best one you currently hold copies of. Drop chances
+   *  in `drops` are computed at THIS refinement, because it reflects reality. */
   refinement: string;
+  /** The refinement that would give the best shot at the goal, owned or not. Shown alongside
+   *  `refinement` so an upgrade opportunity is visible without silently faking the odds. */
+  recommendedRefinement: string;
+  /** Copies held at the refinement being run. */
+  refinementOwnedCount: number;
   drops: FarmingSessionDrop[];
   /** Copies held across all refinements. */
   ownedCount: number;

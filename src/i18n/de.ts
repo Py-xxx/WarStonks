@@ -155,7 +155,6 @@ export const de: Record<string, string> = {
   'home.seller.filter': 'Verkäuferfilter',
   'home.seller.ingame': 'Im Spiel',
   'home.seller.ingameOnline': 'Im Spiel & Online',
-  'home.autoProfile': 'Auto-Profil',
 
   'events.title': 'Ereignisse',
   'events.tab.vendors': 'Händler',

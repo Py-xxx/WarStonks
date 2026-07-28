@@ -139,6 +139,7 @@ function ActionButton({ action }: { action: OpportunityAction }) {
   const requestTradeListing = useAppStore((state) => state.requestTradeListing);
   const requestOpportunitiesTab = useAppStore((state) => state.requestOpportunitiesTab);
   const openItemAnalysis = useAppStore((state) => state.openItemAnalysis);
+  const openItemInQuickView = useAppStore((state) => state.openItemInQuickView);
   const setActivePage = useAppStore((state) => state.setActivePage);
   const setTradesSubTab = useAppStore((state) => state.setTradesSubTab);
   const pushToast = useAppStore((state) => state.pushToast);
@@ -147,7 +148,13 @@ function ActionButton({ action }: { action: OpportunityAction }) {
   const handle = () => {
     switch (action.kind) {
       case 'buyPart':
+        // Buying means finding a seller — Home's Quick View is where the live sell orders are.
+        if (action.itemName) {
+          void openItemInQuickView({ name: action.itemName, slug: action.itemSlug }, 'home');
+        }
+        break;
       case 'viewItem':
+        // "View analysis" means the deep market view, not the summary.
         if (action.itemName) {
           void openItemAnalysis({ name: action.itemName, slug: action.itemSlug });
         }

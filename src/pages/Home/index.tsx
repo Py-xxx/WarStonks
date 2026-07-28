@@ -10,10 +10,8 @@ import { AlertsTab } from './AlertsTab';
 export function HomePage() {
   const homeSubTab = useAppStore((s) => s.homeSubTab);
   const setHomeSubTab = useAppStore((s) => s.setHomeSubTab);
-  const autoProfile = useAppStore((s) => s.autoProfile);
   const sellerMode = useAppStore((s) => s.sellerMode);
   const setSellerMode = useAppStore((s) => s.setSellerMode);
-  const toggleAutoProfile = useAppStore((s) => s.toggleAutoProfile);
   const { t } = useTranslation();
 
   const tabs: { id: HomeSubTab; labelKey: TranslationKey }[] = [
@@ -57,17 +55,6 @@ export function HomePage() {
             >
               {t('home.seller.ingameOnline')}
             </button>
-          </div>
-          <div className="toggle-wrap">
-            <span>{t('home.autoProfile')}</span>
-            <div
-              className={`toggle${autoProfile ? ' on' : ''}`}
-              onClick={toggleAutoProfile}
-              role="switch"
-              aria-checked={autoProfile}
-              tabIndex={0}
-              onKeyDown={(e) => e.key === 'Enter' && toggleAutoProfile()}
-            />
           </div>
         </div>
       </div>

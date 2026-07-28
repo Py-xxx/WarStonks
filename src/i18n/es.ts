@@ -155,7 +155,6 @@ export const es: Record<string, string> = {
   'home.seller.filter': 'Filtro de vendedor',
   'home.seller.ingame': 'En el juego',
   'home.seller.ingameOnline': 'En el juego y en línea',
-  'home.autoProfile': 'Perfil automático',
 
   'events.title': 'Eventos',
   'events.tab.vendors': 'Vendedores',
