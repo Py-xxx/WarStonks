@@ -836,6 +836,8 @@ export const en = {
   'opp.ownedCount': 'Owned — {n}',
   'opp.buyZone': 'Buy zone',
   'farm.nowFarming': 'Now farming',
+  'farm.findingRelics': 'Finding your relics…',
+  'farm.loadingRelics': 'Checking which relics you own and their odds',
   'farm.runningAt': 'Running {refinement}',
   'farm.relicsLeft': '{n} of {total} left',
   'farm.allSpent': 'All relics in this run used — log anyway or stop.',

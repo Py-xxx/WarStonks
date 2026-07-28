@@ -3963,7 +3963,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   startFarmingSession: (session) => {
     const next: FarmingSession = { ...session, startedAt: new Date().toISOString(), runs: [] };
     writePersistedFarmingSession(next);
-    set({ farmingSession: next, farmingPanelExpanded: true });
+    // Clearing the pending flag here is what hands the panel over from skeleton to real session.
+    set({ farmingSession: next, farmingPanelExpanded: true, farmingSessionLoading: null });
   },
   startFarmingForItem: async (slug, name) => {
     if (!isTauriRuntime()) {
@@ -4025,7 +4026,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   stopFarmingSession: () => {
     writePersistedFarmingSession(null);
-    set({ farmingSession: null, farmingPanelExpanded: true });
+    // Must clear the pending flag too — otherwise the panel falls back to its loading skeleton
+    // and spins forever, since no request is in flight to ever resolve it.
+    set({ farmingSession: null, farmingPanelExpanded: true, farmingSessionLoading: null });
   },
   setFarmingPanelExpanded: (expanded) => set({ farmingPanelExpanded: expanded }),
 

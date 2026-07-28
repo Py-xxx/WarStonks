@@ -21,6 +21,7 @@ export function FarmingSessionPanel() {
   const logDrop = useAppStore((state) => state.logFarmingDrop);
   const undoLast = useAppStore((state) => state.undoLastFarmingRun);
   const cycleRelic = useAppStore((state) => state.cycleFarmingRelic);
+  const loading = useAppStore((state) => state.farmingSessionLoading);
   const panelRef = useRef<HTMLElement | null>(null);
 
   // Get out of the way as soon as attention moves elsewhere — the panel sits over page content,
@@ -28,7 +29,7 @@ export function FarmingSessionPanel() {
   // rather than after the click resolves; a "Farm this" click elsewhere still wins because
   // startFarmingSession re-expands on the click that follows.
   useEffect(() => {
-    if (!session || !expanded) {
+    if ((!session && !loading) || !expanded) {
       return undefined;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -39,7 +40,48 @@ export function FarmingSessionPanel() {
     };
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [session, expanded, setExpanded]);
+  }, [session, loading, expanded, setExpanded]);
+
+  // A session still resolving renders the panel shell straight away — the whole point is that
+  // clicking "Farm this" feels instant rather than dead for a second or two.
+  if (!session && loading) {
+    if (!expanded) {
+      return (
+        <button
+          type="button"
+          className="farm-fab is-loading"
+          aria-label={t('farm.reopen')}
+          title={loading.label}
+          onClick={() => setExpanded(true)}
+        >
+          <span className="farm-fab-spinner" aria-hidden="true" />
+        </button>
+      );
+    }
+    return (
+      <section ref={panelRef} className="farm-panel" aria-busy="true" aria-label={t('farm.nowFarming')}>
+        <header className="farm-panel-head">
+          <div className="farm-panel-title">
+            <span className="farm-panel-eyebrow">{t('farm.huntingItem', { item: loading.label })}</span>
+            <strong>{t('farm.findingRelics')}</strong>
+          </div>
+          <button
+            type="button"
+            className="farm-panel-minimize"
+            aria-label={t('farm.minimize')}
+            title={t('farm.minimize')}
+            onClick={() => setExpanded(false)}
+          >
+            <i className="ti ti-chevron-down" aria-hidden="true" />
+          </button>
+        </header>
+        <div className="farm-panel-loading">
+          <span className="farm-panel-spinner" aria-hidden="true" />
+          <span>{t('farm.loadingRelics')}</span>
+        </div>
+      </section>
+    );
+  }
 
   if (!session) {
     return null;
