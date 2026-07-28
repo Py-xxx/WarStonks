@@ -2,6 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { createPortal } from 'react-dom';
+import {
+  cacheOrderHealth,
+  marketLowCache,
+  marketLowKey,
+  tradeHealthCache,
+  tradeOverviewCache,
+  tradeOverviewLoadPromises,
+} from '../../lib/tradeCache';
 import { useSmartManageStates } from '../../hooks/useSmartManageStates';
 import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import { formatTradesErrorMessage } from '../../lib/tradesErrorHandling';
@@ -48,7 +56,6 @@ import type {
   SmartListingOverrides,
   WfmAutocompleteItem,
   SellerMode,
-  TradeListingHealth,
   HealthPredictionAccuracy,
 } from '../../types';
 
@@ -105,17 +112,6 @@ interface ListingModalState {
   visible: boolean;
 }
 
-const tradeOverviewCache = new Map<SellerMode, TradeOverview>();
-const tradeOverviewLoadPromises = new Map<SellerMode, Promise<TradeOverview>>();
-
-// Persists the last known market low value and timestamp across overview refreshes
-// and component remounts. Keyed by "slug:rank" so it survives order-id changes.
-const marketLowCache = new Map<string, { marketLow: number | null; refreshedAt: number }>();
-const tradeHealthCache = new Map<string, { health: TradeListingHealth; yourPrice: number }>();
-
-function marketLowKey(slug: string, rank: number | null): string {
-  return rank !== null && rank !== undefined ? `${slug}:${rank}` : slug;
-}
 
 function hydrateOverviewFromCache(
   overview: TradeOverview,
@@ -301,7 +297,7 @@ function useTradeSellHealthRefresh({
             marketLow: health.marketLow,
             refreshedAt: refreshedAtMs,
           });
-          tradeHealthCache.set(order.orderId, { health, yourPrice: order.yourPrice });
+          cacheOrderHealth(order.orderId, order.slug, order.rank, order.yourPrice, health);
           setOverview((current) => {
             if (!current) {
               return current;
@@ -1923,7 +1919,12 @@ function ListingsTab() {
     const loadOverview = async () => {
       const cachedOverview = tradeOverviewCache.get(sellerMode) ?? null;
       if (cachedOverview) {
-        setOverview(cachedOverview);
+        // Hydrate before painting: the background refresher caches the raw overview and the
+        // scored health separately, so without this the instant paint would show orders with
+        // blank health until the refetch landed.
+        const { overview: warmOverview, timestamps } = hydrateOverviewFromCache(cachedOverview);
+        setOverview(warmOverview);
+        setMarketLowTimestamps((prev) => ({ ...prev, ...timestamps }));
       }
       setOverviewLoading(!cachedOverview);
       setOverviewError(null);

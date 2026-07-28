@@ -1595,7 +1595,6 @@ export const es: Record<string, string> = {
   'al.pctBelow': '{pct}% por debajo',
   'al.dismiss': 'Descartar',
   'al.copyMessage': 'Copiar Mensaje',
-  'al.otherUnderpricedFound': 'Se encontraron {n} otras publicaciones subvaloradas',
   'al.clearSystem': 'Limpiar Sistema',
   'al.retry': 'Reintentar',
   'al.later': 'Más Tarde',

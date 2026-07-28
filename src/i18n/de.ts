@@ -1595,7 +1595,6 @@ export const de: Record<string, string> = {
   'al.pctBelow': '{pct}% darunter',
   'al.dismiss': 'Verwerfen',
   'al.copyMessage': 'Nachricht Kopieren',
-  'al.otherUnderpricedFound': '{n} weitere unterbewertete Angebote gefunden',
   'al.clearSystem': 'System Löschen',
   'al.retry': 'Erneut Versuchen',
   'al.later': 'Später',

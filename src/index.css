@@ -999,12 +999,6 @@ textarea:focus-visible,
   border-top: 1px solid var(--border-subtle);
 }
 
-.alerts-underpriced-more {
-  padding: 8px 12px 2px;
-  font-size: 12px;
-  color: var(--text-muted);
-  text-align: center;
-}
 
 /* Import / Export modal */
 .import-export-actions {
@@ -2792,6 +2786,32 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
 .fn-search-icon {
   position: absolute; left: 10px; font-size: 15px; color: var(--text-muted); pointer-events: none;
 }
+/* Autofill dropdown: relic + drop names from the live scan. */
+.fn-suggest {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
+  display: flex; flex-direction: column;
+  background: var(--bg-elevated); border: 1px solid var(--border-strong, var(--border));
+  border-radius: 10px; padding: 4px; overflow: hidden;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+}
+.fn-suggest-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 7px 9px; border-radius: 7px; cursor: pointer;
+  background: transparent; border: none; color: var(--text-primary); font-size: 12.5px;
+}
+.fn-suggest-item:hover { background: rgba(255, 255, 255, 0.06); }
+.fn-suggest-kind {
+  flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 999px;
+}
+.fn-suggest-kind.drop { color: var(--color-green); background: rgba(61, 214, 140, 0.14); }
+.fn-suggest-kind.relic { color: var(--color-blue); background: rgba(74, 158, 255, 0.14); }
+.fn-suggest-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fn-suggest-detail {
+  flex-shrink: 0; font-size: 11px; color: var(--text-muted);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+}
+
 .fn-search-input {
   width: 100%; height: 34px; padding: 0 32px 0 32px;
   background: var(--bg-base); border: 1px solid var(--border); border-radius: 9px;
@@ -4339,9 +4359,7 @@ body {
   padding: 14px;
   border-radius: 16px;
   border: 1px solid rgba(108, 174, 255, 0.16);
-  background:
-    linear-gradient(180deg, rgba(17, 24, 38, 0.98), rgba(10, 14, 22, 0.98)),
-    var(--bg-surface);
+  background: var(--bg-elevated);
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.3);
   z-index: 260;
 }
@@ -4570,9 +4588,7 @@ body {
   gap: 18px;
   padding: 18px;
   border-left: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, rgba(26, 30, 42, 0.96), rgba(13, 15, 20, 0.98)),
-    var(--bg-surface);
+  background: var(--bg-elevated);
   box-shadow: -24px 0 48px rgba(0, 0, 0, 0.28);
   z-index: 310;
 }
@@ -4844,9 +4860,7 @@ body {
   transform: translateX(-50%);
   border: 1px solid rgba(74, 158, 255, 0.18);
   border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(26, 30, 42, 0.96), rgba(13, 15, 20, 0.98)),
-    var(--bg-surface);
+  background: var(--bg-elevated);
   box-shadow: 0 26px 70px rgba(0, 0, 0, 0.34);
   overflow: auto;
   z-index: 350;
@@ -8361,6 +8375,33 @@ body {
 .listing-analysis-muted {
   color: var(--text-muted);
 }
+/* ── Quantity stepper (watchlist rows + add controls) ── */
+.qty-stepper {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: var(--bg-base); border: 1px solid var(--border);
+  border-radius: 8px; padding: 2px;
+}
+.qty-stepper-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  background: transparent; border: none; color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+}
+.qty-stepper-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); color: var(--text-primary); }
+.qty-stepper-btn:disabled { opacity: 0.35; cursor: default; }
+.qty-stepper-btn .ti { font-size: 14px; }
+.qty-stepper-value {
+  width: 34px; text-align: center; background: transparent; border: none;
+  color: var(--text-primary); font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12px; font-weight: 600; padding: 0;
+}
+.qty-stepper-value:focus { outline: none; }
+/* Hide the native number spinners — the -/+ buttons are the control. */
+.qty-stepper-value::-webkit-outer-spin-button,
+.qty-stepper-value::-webkit-inner-spin-button { appearance: none; margin: 0; }
+.qty-stepper-value[type='number'] { appearance: textfield; -moz-appearance: textfield; }
+.wl-qty-cell { white-space: nowrap; }
+
 /* Mark-as-bought confirm — same compact, screen-centered treatment as the remove dialog so the
    two watchlist confirmations feel like one family. */
 .settings-modal.watchlist-purchase-modal {
@@ -12870,18 +12911,14 @@ img[data-asset-failed='true'] {
 /* ── Top bar ── */
 .topbar {
   position: relative;
-  background: linear-gradient(180deg, #151924 0%, #12151E 100%);
+  background: var(--bg-surface);
 }
 .topbar::after {
   content: '';
   position: absolute;
   left: 0; right: 0; bottom: -1px;
   height: 1px;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    rgba(74, 158, 255, 0.35) 22%,
-    rgba(139, 111, 255, 0.28) 55%,
-    transparent 90%);
+  background: var(--border-strong, var(--border));
   pointer-events: none;
 }
 
@@ -12926,7 +12963,7 @@ img[data-asset-failed='true'] {
 /* ── Sidebar ── */
 .sidebar {
   padding: 10px 8px;
-  background: linear-gradient(180deg, #141824 0%, var(--bg-surface) 30%);
+  background: var(--bg-surface);
 }
 .sidebar.collapsed { width: 56px; }
 
@@ -12965,7 +13002,7 @@ img[data-asset-failed='true'] {
 .nav-item:hover { background: rgba(255, 255, 255, 0.045); color: var(--text-primary); }
 .nav-item.active {
   border-left-color: transparent;
-  background: linear-gradient(90deg, var(--nav-accent-soft), rgba(255, 255, 255, 0.02) 70%);
+  background: var(--nav-accent-soft);
   color: var(--text-primary);
 }
 .nav-item.active::before { height: 60%; }

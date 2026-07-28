@@ -1595,7 +1595,6 @@ export const zhHans: Record<string, string> = {
   'al.pctBelow': '低于 {pct}%',
   'al.dismiss': '关闭',
   'al.copyMessage': '复制消息',
-  'al.otherUnderpricedFound': '发现 {n} 个其他低价挂单',
   'al.clearSystem': '清除系统提醒',
   'al.retry': '重试',
   'al.later': '稍后',

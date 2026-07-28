@@ -3,6 +3,7 @@ import { ItemName } from '../ItemName';
 import { ModalPortal } from '../ModalPortal';
 import { useTranslation } from '../../i18n';
 import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
+import { QuantityStepper } from '../QuantityStepper';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
@@ -29,6 +30,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
   const setSelected = useAppStore((state) => state.setSelectedWatchlist);
   const removeItem = useAppStore((state) => state.removeWatchlistItem);
   const markWatchlistItemBought = useAppStore((state) => state.markWatchlistItemBought);
+  const setWatchlistItemQuantity = useAppStore((state) => state.setWatchlistItemQuantity);
   const watchlistActionError = useAppStore((state) => state.watchlistActionError);
   const setWatchlistActionError = useAppStore((state) => state.setWatchlistActionError);
 
@@ -118,9 +120,10 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                 <tr>
                   <th>{t('wl.item')}</th>
                   <th>{t('wl.desired')}</th>
+                  <th>{t('wl.want')}</th>
                   <th>{t('wl.lowest')}</th>
                   <th>{t('wl.seller')}</th>
-                  <th>{t('wl.qty')}</th>
+                  <th>{t('wl.sellerStock')}</th>
                   <th>{t('wl.rank')}</th>
                   <th>{t('wl.lastScan')}</th>
                   <th>{t('wl.status')}</th>
@@ -130,6 +133,7 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                 <tr>
                   <th>{t('wl.item')}</th>
                   <th>{t('wl.target')}</th>
+                  <th>{t('wl.want')}</th>
                   <th>{t('wl.current')}</th>
                   <th>{t('wl.status')}</th>
                   <th>{t('wl.actions')}</th>
@@ -178,6 +182,12 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                     {variant === 'full' ? (
                       <>
                         <td>{item.targetPrice} pt</td>
+                        <td className="wl-qty-cell">
+                          <QuantityStepper
+                            value={item.quantity}
+                            onChange={(next) => setWatchlistItemQuantity(item.id, next)}
+                          />
+                        </td>
                         <td
                           className={`wl-price-cell${
                             item.currentPrice !== null && item.currentPrice <= item.targetPrice
@@ -195,6 +205,12 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
                     ) : (
                       <>
                         <td className="td-muted">{item.targetPrice} pt</td>
+                        <td className="wl-qty-cell">
+                          <QuantityStepper
+                            value={item.quantity}
+                            onChange={(next) => setWatchlistItemQuantity(item.id, next)}
+                          />
+                        </td>
                         <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
                       </>
                     )}

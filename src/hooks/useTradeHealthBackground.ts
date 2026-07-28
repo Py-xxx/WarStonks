@@ -6,6 +6,7 @@ import {
   isTauriRuntime,
 } from '../lib/tauriClient';
 import { maybeFireHealthAlert } from '../lib/tradeHealthAlerts';
+import { cacheOrderHealth, tradeOverviewCache } from '../lib/tradeCache';
 import { useAppStore } from '../stores/useAppStore';
 import type { TradeListingHealth, TradeSellOrder } from '../types';
 
@@ -89,6 +90,9 @@ export function useTradeHealthBackground(): void {
       if (cancelled) {
         return;
       }
+      // Warm the shared cache straight away: the Trades page hydrates from it on mount, so this
+      // is what stops it showing a cold "first load" every time it's reopened.
+      tradeOverviewCache.set(sellerMode, overview);
 
       const sellWithHealth: TradeSellOrder[] = [];
       for (const order of [...overview.sellOrders, ...overview.buyOrders]) {
@@ -96,6 +100,10 @@ export function useTradeHealthBackground(): void {
           return;
         }
         const health = await refreshHealthFor(order);
+        if (health) {
+          // Cache every scored order (buy and sell) so the page can render it without refetching.
+          cacheOrderHealth(order.orderId, order.slug, order.rank, order.yourPrice, health);
+        }
         if (order.orderType === 'sell') {
           sellWithHealth.push(health ? { ...order, health } : order);
         }

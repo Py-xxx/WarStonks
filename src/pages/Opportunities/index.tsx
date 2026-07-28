@@ -1290,10 +1290,14 @@ export function OpportunitiesPage({
       setActiveTab(requestedOpportunitiesTab as OppTab);
       if (requestedFarmNowSearch !== null) {
         setFarmNowSearch(requestedFarmNowSearch);
+        // Arrived via a deep link ("Farm this item") — the query is already the intended one, so
+        // don't pop the suggestion list over the results the user came here to see.
+        setFarmNowSuggestOpen(false);
       }
       clearRequestedOpportunitiesTab();
     }
   }, [requestedOpportunitiesTab, requestedFarmNowSearch, mode, clearRequestedOpportunitiesTab]);
+  const [farmNowSuggestOpen, setFarmNowSuggestOpen] = useState(false);
   const [farmNowTab, setFarmNowTab] = useState<FarmNowTab>('part-profit');
   const [farmNowEra, setFarmNowEra] = useState<string>('all');
   const [farmNowSort, setFarmNowSort] = useState<string>('default');
@@ -1943,6 +1947,47 @@ export function OpportunitiesPage({
     }
     return { targetName, exitPrice: bestExitPrice, ...summary };
   }, [farmNowSearch, farmNowRelics, ownedRelics, localizeName]);
+
+  /**
+   * Autofill source for the farm-now search: every relic name plus every drop it can yield, so a
+   * user can find "Bronco Prime Barrel" without knowing which relic carries it. Built from the
+   * same scan the list renders from, so suggestions can never point at rows that don't exist.
+   */
+  const farmNowSuggestions = useMemo(() => {
+    const query = farmNowSearch.trim().toLowerCase();
+    if (query.length < 2) {
+      return [];
+    }
+    const relics = new Map<string, { label: string; kind: 'relic'; detail: string }>();
+    const drops = new Map<string, { label: string; kind: 'drop'; detail: string }>();
+
+    for (const row of farmNowRelics) {
+      const relicName = localizeName(row.relic);
+      if (relicName.toLowerCase().includes(query) && !relics.has(relicName)) {
+        relics.set(relicName, {
+          label: relicName,
+          kind: 'relic',
+          detail: t('opp.ownedTimes', { n: row.ownedCount }),
+        });
+      }
+      for (const entry of row.drops) {
+        const dropName = localizeName(entry.drop);
+        if (!dropName.toLowerCase().includes(query) || drops.has(dropName)) {
+          continue;
+        }
+        drops.set(dropName, {
+          label: dropName,
+          kind: 'drop',
+          detail: entry.drop.recommendedExitPrice != null
+            ? formatPlat(entry.drop.recommendedExitPrice)
+            : '',
+        });
+      }
+    }
+
+    // Drops first: searching for a part you need is the common case.
+    return [...drops.values(), ...relics.values()].slice(0, 8);
+  }, [farmNowSearch, farmNowRelics, localizeName, t]);
 
   const farmNowTopRelics = useMemo(
     () => displayedFarmNowRelics.slice(0, 3),
@@ -3222,7 +3267,16 @@ export function OpportunitiesPage({
                       className="fn-search-input"
                       placeholder={t('opp.searchRelicsPlaceholder')}
                       value={farmNowSearch}
-                      onChange={(event) => setFarmNowSearch(event.target.value)}
+                      onChange={(event) => {
+                        setFarmNowSearch(event.target.value);
+                        setFarmNowSuggestOpen(true);
+                      }}
+                      onFocus={() => setFarmNowSuggestOpen(true)}
+                      // Delay so a suggestion click lands before the list unmounts.
+                      onBlur={() => window.setTimeout(() => setFarmNowSuggestOpen(false), 120)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') setFarmNowSuggestOpen(false);
+                      }}
                       spellCheck={false}
                     />
                     {farmNowSearch ? (
@@ -3230,10 +3284,39 @@ export function OpportunitiesPage({
                         type="button"
                         className="fn-search-clear"
                         aria-label={t('opp.clear')}
-                        onClick={() => setFarmNowSearch('')}
+                        onClick={() => {
+                          setFarmNowSearch('');
+                          setFarmNowSuggestOpen(false);
+                        }}
                       >
                         <i className="ti ti-x" aria-hidden="true" />
                       </button>
+                    ) : null}
+                    {farmNowSuggestOpen && farmNowSuggestions.length > 0 ? (
+                      <div className="fn-suggest" role="listbox">
+                        {farmNowSuggestions.map((suggestion) => (
+                          <button
+                            key={`${suggestion.kind}-${suggestion.label}`}
+                            type="button"
+                            role="option"
+                            aria-selected={false}
+                            className="fn-suggest-item"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              setFarmNowSearch(suggestion.label);
+                              setFarmNowSuggestOpen(false);
+                            }}
+                          >
+                            <span className={`fn-suggest-kind ${suggestion.kind}`}>
+                              {suggestion.kind === 'relic' ? t('opp.relic') : t('opp.drop')}
+                            </span>
+                            <span className="fn-suggest-label">{suggestion.label}</span>
+                            {suggestion.detail ? (
+                              <span className="fn-suggest-detail">{suggestion.detail}</span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
                     ) : null}
                   </div>
 

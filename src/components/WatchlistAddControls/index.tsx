@@ -1,3 +1,4 @@
+import { QuantityStepper } from '../QuantityStepper';
 import { useAppStore } from '../../stores/useAppStore';
 import { useTranslation } from '../../i18n';
 
@@ -15,6 +16,8 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
   const targetInput = useAppStore((state) => state.watchlistTargetInput);
   const formError = useAppStore((state) => state.watchlistFormError);
   const setTargetInput = useAppStore((state) => state.setWatchlistTargetInput);
+  const quantityInput = useAppStore((state) => state.watchlistQuantityInput);
+  const setQuantityInput = useAppStore((state) => state.setWatchlistQuantityInput);
   const setSelectedMarketVariantKey = useAppStore((state) => state.setSelectedMarketVariantKey);
   const addSelectedQuickViewToWatchlist = useAppStore(
     (state) => state.addSelectedQuickViewToWatchlist,
@@ -59,6 +62,12 @@ export function WatchlistAddControls({ compact = false }: WatchlistAddControlsPr
           title={t('a11y.desiredPrice')}
           value={targetInput}
           onChange={(event) => setTargetInput(event.target.value)}
+        />
+        <span className="input-label">{t('wl.qty')}</span>
+        <QuantityStepper
+          value={Math.max(1, Number.parseInt(quantityInput, 10) || 1)}
+          onChange={(next) => setQuantityInput(String(next))}
+          label={t('wl.boughtQuantity')}
         />
         <button
           className="btn-sm"

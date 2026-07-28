@@ -117,11 +117,6 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
               </div>
             </div>
           </div>
-          {underpricedAlert.otherCount > 0 ? (
-            <div className="alerts-underpriced-more">
-              {t('al.otherUnderpricedFound', { n: underpricedAlert.otherCount })}
-            </div>
-          ) : null}
         </div>
       ) : null}
 

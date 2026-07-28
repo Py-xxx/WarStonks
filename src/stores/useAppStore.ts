@@ -395,6 +395,17 @@ function writePersistedRecentItems(items: WfmAutocompleteItem[]): void {
   }
 }
 
+/**
+ * Quantity edits are debounced per watchlist item: `+`/`-` updates local state instantly but the
+ * WFM buy-order update only fires once the user stops adjusting, so spamming the stepper can't
+ * flood the API. 3s comfortably absorbs a burst of clicks while still feeling immediate — the
+ * write also goes through the rate-limited WFM scheduler, so a stray extra request is cheap.
+ * Timers live at module scope so a pending sync still lands if the user navigates away from the
+ * watchlist before it fires.
+ */
+const WATCHLIST_QUANTITY_SYNC_DELAY_MS = 3_000;
+const watchlistQuantitySyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 const FARMING_SESSION_STORAGE_KEY = 'warstonks.farmingSession.v1';
 
 function readPersistedFarmingSession(): FarmingSession | null {
@@ -611,6 +622,7 @@ async function syncWatchlistBuyOrder(
   targetPrice: number,
   sellerMode: SellerMode,
   linkedBuyOrderId: string | null,
+  quantity = 1,
 ): Promise<string | null> {
   const resolvedItem = await resolveWatchlistWfmIdentity(item);
   if (!resolvedItem.wfmId) {
@@ -619,13 +631,14 @@ async function syncWatchlistBuyOrder(
 
   const rank = deriveVariantRankFromKey(variantKey);
   const normalizedPrice = Math.max(1, Math.round(targetPrice));
+  const normalizedQuantity = Math.max(1, Math.round(quantity));
 
   if (linkedBuyOrderId) {
     const overview = await updateWfmBuyOrder(
       {
         orderId: linkedBuyOrderId,
         price: normalizedPrice,
-        quantity: 1,
+        quantity: normalizedQuantity,
         rank,
         visible: true,
       },
@@ -638,7 +651,7 @@ async function syncWatchlistBuyOrder(
     {
       wfmId: resolvedItem.wfmId,
       price: normalizedPrice,
-      quantity: 1,
+      quantity: normalizedQuantity,
       rank,
       visible: true,
     },
@@ -1064,7 +1077,12 @@ function mergeWatchlistWithTradeBuyOrders(
       return item.linkedBuyOrderId ? { ...item, linkedBuyOrderId: null } : item;
     }
 
-    const orderQuantity = Math.max(1, matchingOrder.quantity);
+    // A pending debounced sync means the local value is newer than the server's — don't let a
+    // background overview refresh snap the stepper back while the user is still adjusting.
+    const hasPendingQuantityEdit = watchlistQuantitySyncTimers.has(item.id);
+    const orderQuantity = hasPendingQuantityEdit
+      ? item.quantity
+      : Math.max(1, matchingOrder.quantity);
     if (
       item.targetPrice === matchingOrder.yourPrice
       && item.linkedBuyOrderId === matchingOrder.orderId
@@ -1159,6 +1177,7 @@ function buildWatchlistUpdateState(
   targetPrice: number,
   preferredOrder: WfmTopSellOrder | null,
   linkedBuyOrderId: string | null,
+  quantity = 1,
 ) {
   const existingItem = currentState.watchlist.find(
     (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
@@ -1175,6 +1194,7 @@ function buildWatchlistUpdateState(
     watchlistCount,
     existingItem?.ignoredUserKeys ?? [],
     linkedBuyOrderId ?? existingItem?.linkedBuyOrderId ?? null,
+    quantity,
   );
   const nextAlert =
     preferredOrder && targetPrice >= preferredOrder.platinum
@@ -1202,6 +1222,7 @@ function buildWatchlistUpdateState(
       : currentState.alerts.filter((alert) => alert.watchlistId !== nextItem.id),
     selectedWatchlistId: existingItem?.id ?? nextItem.id,
     watchlistTargetInput: '',
+    watchlistQuantityInput: '1',
     watchlistFormError: null,
   };
 }
@@ -1375,8 +1396,6 @@ export interface UnderpricedListingCard extends UnderpricedListing {
 /** The single underpriced alert card shown in the notification bar. */
 export interface UnderpricedAlertState {
   listing: UnderpricedListingCard;
-  /** How many other notified underpriced listings arrived since this card was last cleared. */
-  otherCount: number;
 }
 
 interface AppStore {
@@ -1544,7 +1563,11 @@ interface AppStore {
   setWatchlistActionError: (message: string | null) => void;
   setSelectedWatchlist: (id: string | null) => void;
   setWatchlistTargetInput: (val: string) => void;
+  watchlistQuantityInput: string;
+  setWatchlistQuantityInput: (value: string) => void;
   addSelectedQuickViewToWatchlist: () => void;
+  /** Optimistic quantity change; the WFM buy order is updated after a quiet period. */
+  setWatchlistItemQuantity: (id: string, quantity: number) => void;
   addExplicitItemToWatchlist: (
     item: WfmAutocompleteItem,
     variantKey: string,
@@ -2927,6 +2950,56 @@ export const useAppStore = create<AppStore>((set, get) => ({
       watchlistTargetInput: sanitizePositiveIntegerInput(val),
       watchlistFormError: null,
     }),
+  watchlistQuantityInput: '1',
+  setWatchlistQuantityInput: (value) =>
+    set({ watchlistQuantityInput: sanitizePositiveIntegerInput(value), watchlistFormError: null }),
+
+  setWatchlistItemQuantity: (id, quantity) => {
+    const normalized = Math.max(1, Math.min(999, Math.round(quantity)));
+
+    // Update local state immediately so the stepper feels instant.
+    set((currentState) => {
+      const nextWatchlist = currentState.watchlist.map((entry) =>
+        entry.id === id ? { ...entry, quantity: normalized } : entry,
+      );
+      writePersistedWatchlistState(nextWatchlist, currentState.selectedWatchlistId);
+      return { watchlist: nextWatchlist };
+    });
+
+    // Debounce the WFM write: restart the timer on every adjustment so only the settled value
+    // is ever sent.
+    const existingTimer = watchlistQuantitySyncTimers.get(id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    watchlistQuantitySyncTimers.set(
+      id,
+      setTimeout(() => {
+        watchlistQuantitySyncTimers.delete(id);
+        const state = get();
+        const item = state.watchlist.find((entry) => entry.id === id);
+        if (!item || !item.linkedBuyOrderId || !state.tradeAccount) {
+          return;
+        }
+        void updateWfmBuyOrder(
+          {
+            orderId: item.linkedBuyOrderId,
+            price: item.targetPrice,
+            quantity: item.quantity,
+            rank: deriveVariantRankFromKey(item.variantKey),
+            visible: true,
+          },
+          state.sellerMode,
+        ).catch((error) => {
+          console.error('[watchlist] failed to sync buy-order quantity', error);
+          set({
+            watchlistActionError: formatHomeErrorMessage('watchlist-buy-sync', error),
+          });
+        });
+      }, WATCHLIST_QUANTITY_SYNC_DELAY_MS),
+    );
+  },
+
   addSelectedQuickViewToWatchlist: () => {
     const state = get();
     const selectedItem = state.quickView.selectedItem;
@@ -2953,6 +3026,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
+    const desiredQuantity = parsePositiveWholeNumber(state.watchlistQuantityInput) ?? 1;
     const variantKey = selectedVariantKey ?? 'base';
     const variantLabel = selectedVariantLabel ?? 'Base Market';
     const existingItem = state.watchlist.find(
@@ -2971,6 +3045,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         targetPrice,
         preferredOrder,
         existingItem?.linkedBuyOrderId ?? null,
+        desiredQuantity,
       );
       writePersistedWatchlistState(nextState.watchlist, nextState.selectedWatchlistId);
       return nextState;
@@ -2995,6 +3070,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         targetPrice,
         state.sellerMode,
         existingItem?.linkedBuyOrderId ?? null,
+        desiredQuantity,
       )
         .then((linkedBuyOrderId) => {
           set((currentState) => {
@@ -3733,12 +3809,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     // Surface a single, replaceable alert card in the notification bar so a ping is never
     // silent — newest listing shown, earlier ones rolled into the "N others" count.
-    set((state) => ({
+    set({
       underpricedAlert: {
         listing: { ...listing, receivedAt: Date.now(), status: 'new', verifiedPrice: null },
-        otherCount: state.underpricedAlert ? state.underpricedAlert.otherCount + 1 : 0,
       },
-    }));
+    });
 
     const title = 'Underpriced listing found';
     const body = `${listing.itemName} — ${listing.listedPrice}p (${Math.round(listing.pctBelow)}% below ${listing.recommendedPrice}p) from ${listing.username}`;
@@ -3765,15 +3840,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
   removeUnderpricedListing: (orderId) =>
     set((state) => ({
       underpricedListings: state.underpricedListings.filter((entry) => entry.orderId !== orderId),
+      // Drop the alert card when it's showing the listing that just went away.
+      ...(state.underpricedAlert?.listing.orderId === orderId ? { underpricedAlert: null } : {}),
     })),
   dismissUnderpricedAlert: () => set({ underpricedAlert: null }),
   pruneExpiredUnderpricedListings: () =>
     set((state) => {
       const cutoff = Date.now() - UNDERPRICED_LISTING_TTL_MS;
       const next = state.underpricedListings.filter((entry) => entry.receivedAt > cutoff);
-      return next.length === state.underpricedListings.length
-        ? state
-        : { underpricedListings: next };
+      // The alert card mirrors a live listing — once that listing expires the card is stale and
+      // must go too, otherwise it advertises an offer that no longer exists.
+      const alertExpired =
+        state.underpricedAlert !== null && state.underpricedAlert.listing.receivedAt <= cutoff;
+      if (next.length === state.underpricedListings.length && !alertExpired) {
+        return state;
+      }
+      return {
+        underpricedListings: next,
+        ...(alertExpired ? { underpricedAlert: null } : {}),
+      };
     }),
 
   loadCachedOpportunities: async () => {
