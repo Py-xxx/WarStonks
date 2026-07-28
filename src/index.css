@@ -2489,15 +2489,22 @@ textarea:focus-visible,
 .sp-set { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .sp-set.is-expanded { border-color: var(--border-strong, var(--border)); }
 .sp-set.is-complete { border-color: rgba(61, 214, 140, 0.4); }
+/* Shared by two shapes: the Set Completion Planner renders this as a <div> wrapping its own
+   buttons, while Scanners (arbitrage + relic ROI) and What To Farm Now render it as a <button>
+   directly. The button reset therefore has to live HERE, not only on .sp-set-head-main — moving
+   it off this rule left those four rows with the browser's default grey button face. */
 .sp-set-head {
   display: flex; align-items: center; gap: 14px; width: 100%;
-  padding: 13px 16px;
+  padding: 13px 16px; background: transparent; border: none; cursor: pointer; text-align: left;
+  color: inherit; font: inherit;
 }
-/* The toggle area. Split out of the head so a completed set's "Sell Now" control can sit
-   beside it — nesting a button inside a button isn't valid, and made the pill unclickable. */
+/* The toggle area inside the planner's div variant. Split out of the head so a completed set's
+   "Sell Now" control can sit beside it — nesting a button inside a button isn't valid, and made
+   the pill unclickable. */
 .sp-set-head-main {
   display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0;
   padding: 0; background: transparent; border: none; cursor: pointer; text-align: left;
+  color: inherit; font: inherit;
 }
 .sp-set-head-chevron {
   display: flex; align-items: center; flex-shrink: 0;

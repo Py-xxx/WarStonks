@@ -68,7 +68,13 @@ pub struct FlowStats {
     pub observed_floor: Option<f64>,
     /// Seconds of history the rates are computed over (small windows are low-confidence).
     pub sample_seconds: f64,
+    // Raw event counts behind the per-hour rates. Callers use the rates; these are the sample
+    // size those rates were derived from, and the tests assert on them directly because
+    // checking the numerator is a far sharper test than checking a divided rate. The dead-code
+    // lint cannot see test-only readers in a non-test build.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub sell_count: i64,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub buy_count: i64,
 }
 

@@ -104,6 +104,13 @@ pub struct SmartInputs {
     /// Live buyer depth (demand behind the book).
     pub buy_depth: i64,
     /// Graded confidence in the market context: "high" / "medium" / "low".
+    ///
+    /// Deliberately does NOT influence the decision — see the note on `SmartDecision::auto_allowed`.
+    /// Gating on it silently disabled auto-repricing for anyone with slightly stale analytics, so
+    /// safety is enforced by the hard guardrails instead. Kept on the input so callers keep
+    /// supplying it (it is surfaced to the user) and so `low_confidence_does_not_block_when_a_zone_exists`
+    /// can keep proving the behaviour, rather than deleting the field and losing the record of why.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub confidence_level: String,
     pub is_only_seller: bool,
     /// Empirical correction for the sell-time model, learned from this user's own resolved
@@ -161,9 +168,18 @@ pub struct SmartDecision {
     /// the hard guardrails (cost floor, price-war brake, max-step, zone bounds, rate limits) are
     /// what keep an auto-change safe, and gating on staleness silently disabled the feature.
     pub auto_allowed: bool,
+    // The guardrails and the arithmetic behind the decision. App code deliberately reads only
+    // `target_price`/`action`/`should_change` — these exist so the tests can assert the
+    // invariants that make an auto-change safe (target within [floor, ceiling]; a change only
+    // ever proposed when expected value actually improves). They are not unused; the dead-code
+    // lint just cannot see test-only readers in a non-test build.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub floor: i64,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub ceiling: i64,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub ev_before: f64,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub ev_after: f64,
     /// Machine-readable driver tags for building a localized reason on the frontend.
     pub reason_code: String,
@@ -405,7 +421,6 @@ fn zone_conflicts_with_market(zone_low: f64, zone_high: f64, market_low: Option<
 
 pub fn smart_target(inputs: &SmartInputs, params: &SmartParams) -> SmartDecision {
     let current = inputs.your_price;
-    let confidence = inputs.confidence_level.to_ascii_lowercase();
     let horizon = effective_horizon(inputs, params);
 
     // Insufficient data → never auto-manage. We need a fair-value zone to anchor against.
@@ -961,6 +976,74 @@ mod tests {
         assert!(d.auto_allowed);
         assert_eq!(d.action, SmartAction::Raise);
         assert!(d.should_change);
+    }
+
+    /// The invariant the whole feature rests on: we never propose moving a price unless doing so
+    /// is actually worth more than leaving it alone, and the result always sits inside the
+    /// guardrails. Asserted across a spread of market shapes rather than one hand-picked case,
+    /// because a single fixture would only prove the arithmetic for that fixture.
+    #[test]
+    fn a_proposed_change_always_improves_expected_value_and_respects_guardrails() {
+        let scenarios: Vec<(&str, SmartInputs)> = vec![
+            ("undercut by competitors", {
+                let mut i = base(30);
+                i.competitor_prices = vec![22, 24, 25];
+                i
+            }),
+            ("room to raise", {
+                let mut i = base(20);
+                i.competitor_prices = vec![28, 30];
+                i
+            }),
+            ("only seller", {
+                let mut i = base(25);
+                i.is_only_seller = true;
+                i.competitor_prices = vec![];
+                i
+            }),
+            ("thin book", {
+                let mut i = base(18);
+                i.competitor_prices = vec![19];
+                i
+            }),
+            ("already well priced", {
+                let mut i = base(24);
+                i.competitor_prices = vec![25, 26, 27];
+                i
+            }),
+        ];
+
+        for (label, inputs) in scenarios {
+            let d = smart_target(&inputs, &balanced());
+            if d.action == SmartAction::InsufficientData {
+                continue;
+            }
+
+            assert!(
+                d.target_price >= d.floor,
+                "{label}: target {} broke the floor {}",
+                d.target_price,
+                d.floor
+            );
+            assert!(
+                d.target_price <= d.ceiling,
+                "{label}: target {} exceeded the ceiling {}",
+                d.target_price,
+                d.ceiling
+            );
+            if d.should_change {
+                assert!(
+                    d.ev_after > d.ev_before,
+                    "{label}: proposed a change that does not improve EV ({} -> {})",
+                    d.ev_before,
+                    d.ev_after
+                );
+                assert_ne!(
+                    d.target_price, inputs.your_price,
+                    "{label}: should_change with no actual price move"
+                );
+            }
+        }
     }
 
     #[test]

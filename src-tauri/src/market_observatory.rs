@@ -8237,6 +8237,19 @@ pub(crate) fn persist_trade_sell_orders(app: &tauri::AppHandle, payload_json: &s
 
 /// Persist a batch of stream-derived order-flow samples, then prune anything older than 14 days
 /// so the table can't grow without bound. Best-effort per row.
+/// Formats a flow sample's collection instant (unix epoch seconds) for storage. Returns `None`
+/// for a non-finite or nonsensical epoch so the caller can fall back to write-time rather than
+/// persisting a garbage timestamp.
+fn format_flow_sample_timestamp(epoch_seconds: f64) -> Option<String> {
+    if !epoch_seconds.is_finite() || epoch_seconds <= 0.0 {
+        return None;
+    }
+    let nanos = (epoch_seconds * 1_000_000_000.0) as i128;
+    OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .ok()
+        .and_then(|moment| format_timestamp(moment).ok())
+}
+
 pub(crate) fn persist_order_flow_samples(
     app: &tauri::AppHandle,
     samples: &[crate::order_flow::FlowSample],
@@ -8245,8 +8258,14 @@ pub(crate) fn persist_order_flow_samples(
         return Ok(());
     }
     let connection = open_market_observatory_database(app)?;
-    let captured_at = format_timestamp(now_utc())?;
+    // Each sample carries the instant it was actually collected. This used to stamp write-time
+    // for the whole batch instead, which is indistinguishable while the flush is immediate but
+    // silently collapses every sample onto one timestamp whenever persistence is delayed —
+    // distorting the very history these samples exist to build.
+    let write_time = format_timestamp(now_utc())?;
     for sample in samples {
+        let captured_at = format_flow_sample_timestamp(sample.captured_at_epoch)
+            .unwrap_or_else(|| write_time.clone());
         let _ = connection.execute(
             "INSERT INTO order_flow_sample
                (wfm_item_id, variant_key, captured_at, sell_arrivals_per_hour,

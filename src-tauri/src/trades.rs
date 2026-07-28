@@ -11332,9 +11332,8 @@ mod presence_liveness_tests {
     #[test]
     fn unanswered_pings_force_reconnect() {
         let (mut live, now, wall) = fresh();
-        let mut at = (now, wall);
         for step in 1..=PRESENCE_MAX_PENDING_PINGS {
-            at = advance((now, wall), 15 * step as u64);
+            let at = advance((now, wall), 15 * step as u64);
             assert_eq!(live.tick(at.0, at.1), LivenessAction::Ping);
             live.on_ping_sent(at.0);
         }
