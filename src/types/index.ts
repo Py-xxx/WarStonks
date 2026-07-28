@@ -1418,26 +1418,46 @@ export interface FarmingSessionDrop {
 
 /** A logged run within a farming session. */
 export interface FarmingSessionRun {
+  /** Which relic in the cycle this run came from, so per-relic counts survive cycling. */
+  relicSlug: string;
   dropSlug: string;
   dropName: string;
   isFiller: boolean;
   at: string;
 }
 
-/**
- * "Now farming" session: the user declares which relic they're running so logging a reward is a
- * single tap from that relic's ~6 drops instead of a catalog search. Persisted so it survives
- * tab switches and restarts — the relics are still in their inventory either way.
- */
-export interface FarmingSession {
+/** One relic the user can cycle to within a session. */
+export interface FarmingSessionRelic {
   relicSlug: string;
   relicName: string;
   relicImagePath: string | null;
   tier: string;
   code: string;
+  /** Refinement this relic should be run at (best available for the goal). */
   refinement: string;
-  startedAt: string;
   drops: FarmingSessionDrop[];
+  /** Copies held across all refinements. */
+  ownedCount: number;
+  /** Chance of the targeted drop at `refinement` (0..1); null when not item-targeted. */
+  targetChance: number | null;
+  /** Real odds of pulling the target from every copy owned (0..1) — the auto-pick ranking. */
+  targetOdds: number | null;
+}
+
+/**
+ * "Now farming" session: the user declares what they're running so logging a reward is a single
+ * tap. Carries an ordered `cycle` of candidate relics — frozen at selection time so later filter
+ * changes can't reorder it underneath the user — plus the active index.
+ *
+ * Persisted so it survives tab switches and restarts; the relics are still in their inventory.
+ */
+export interface FarmingSession {
+  cycle: FarmingSessionRelic[];
+  activeIndex: number;
+  /** Set when started from a specific item ("Farm this item"), so the card can show its odds. */
+  targetDropSlug: string | null;
+  targetDropName: string | null;
+  startedAt: string;
   runs: FarmingSessionRun[];
 }
 

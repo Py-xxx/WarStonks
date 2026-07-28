@@ -4,6 +4,8 @@ import {
   listenToArbitrageScannerProgress,
   startArbitrageScanner,
   stopArbitrageScanner,
+  getSetCompletionOwnedItems,
+  isTauriRuntime,
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { ItemName } from '../../components/ItemName';
@@ -34,6 +36,12 @@ import type {
 } from '../../types';
 
 type ScannerTab = 'arbitrage' | 'relic-roi';
+
+const ScanChevron = ({ up }: { up?: boolean }) => (
+  <svg className="sp-set-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={up ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'} />
+  </svg>
+);
 type RelicRefinementKey = 'intact' | 'exceptional' | 'flawless' | 'radiant';
 type ScannerErrorState = {
   context: ScannerErrorContext;
@@ -306,82 +314,63 @@ function ArbitrageRow({
   const imageUrl = resolveWfmAssetUrl(entry.imagePath);
 
   return (
-    <article className={`farm-now-row scanner-farm-row${expanded ? ' is-expanded' : ''}`}>
-      <button className="farm-now-row-button scanner-farm-row-button" type="button" onClick={onToggle}>
-        <div className="farm-now-row-main scanner-farm-row-main scanner-farm-row-main-arbitrage">
-          <div className="farm-now-cell farm-now-cell-name scanner-farm-cell-name">
-            <span className="panel-dot panel-dot-purple" aria-hidden="true" />
-            <div className="scanner-result-rank">#{index + 1}</div>
-            <span className="farm-now-thumb scanner-farm-thumb">
-              {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
+    <article className={`sp-set${expanded ? ' is-expanded' : ''}`}>
+      <button className="sp-set-head" type="button" onClick={onToggle} aria-expanded={expanded}>
+        <span className="scan-rank">{index + 1}</span>
+        <span className="sp-set-thumb">
+          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 2)}</span>}
+        </span>
+        <div className="sp-set-copy">
+          <span className="fn-row-title">
+            <span className="sp-set-name">
+              <ItemName
+                name={entry.name}
+                slug={entry.slug}
+                itemId={entry.setItemId}
+                imagePath={entry.imagePath}
+              />
             </span>
-            <div className="farm-now-copy scanner-farm-copy">
-              <strong>
-                <ItemName
-                  name={entry.name}
-                  slug={entry.slug}
-                  itemId={entry.setItemId}
-                  imagePath={entry.imagePath}
-                />
-              </strong>
-              <div className="scanner-farm-badge-row">
-                <span className={`market-panel-badge tone-${confidenceTone(entry.confidenceSummary.level)}`}>
-                  {tConfidence(t, entry.confidenceSummary)}
-                </span>
-                <span className="market-panel-badge tone-blue">Score {Math.round(entry.arbitrageScore)}</span>
-                <span className="market-panel-badge tone-neutral">Liquidity {Math.round(entry.liquidityScore)}%</span>
-              </div>
-            </div>
-          </div>
-          <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">{t('scan.entry')}</span>
-            <strong className="scanner-farm-cell-value">{formatPlat(entry.basketEntryCost)}</strong>
+            <span className={`scan-confidence-pill tone-${confidenceTone(entry.confidenceSummary.level)}`}>
+              {tConfidence(t, entry.confidenceSummary)}
+            </span>
           </span>
-          <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">{t('scan.exitZone')}</span>
-            <strong className="scanner-farm-cell-value">
-              {formatPlat(entry.setExitLow)} - {formatPlat(entry.setExitHigh)}
-            </strong>
+          <span className="fn-row-sub">
+            {t('scan.partsAndLiquidity', {
+              n: entry.componentCount,
+              pct: `${Math.round(entry.liquidityScore)}%`,
+            })}
           </span>
-          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">{t('scan.margin')}</span>
-            <strong className="scanner-farm-cell-value">{formatPlat(entry.grossMargin)}</strong>
-          </span>
-          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">ROI</span>
-            <strong className="scanner-farm-cell-value">{formatPercent(entry.roiPct)}</strong>
-          </span>
-          <span className="farm-now-cell farm-now-cell-action scanner-farm-cell-action">{expanded ? '−' : '+'}</span>
         </div>
+        <div className="sp-set-metrics">
+          <div className="sp-set-metric">
+            <span className="sp-set-metric-label">{t('scan.buyIn')}</span>
+            <span className="sp-set-metric-value">{formatPlat(entry.basketEntryCost)}</span>
+          </div>
+          <div className="sp-set-metric">
+            <span className="sp-set-metric-label">{t('scan.sellAt')}</span>
+            <span className="sp-set-metric-value">{formatPlat(entry.recommendedSetExitPrice)}</span>
+          </div>
+          <div className="sp-set-metric">
+            <span className="sp-set-metric-label">{t('scan.margin')}</span>
+            <span className="sp-set-metric-value pos">{formatPlat(entry.grossMargin)}</span>
+          </div>
+          <span className="sp-set-roi">{formatPercent(entry.roiPct)} ROI</span>
+        </div>
+        <ScanChevron up={expanded} />
       </button>
 
       {expanded ? (
-        <div className="farm-now-row-body scanner-farm-row-body">
-          <div className="scanner-row-summary-grid">
-            <div className="market-metric-card">
-              <span className="info-card-label">{t('scan.setExit')}</span>
-              <strong>{formatPlat(entry.recommendedSetExitPrice)}</strong>
-            </div>
-            <div className="market-metric-card">
-              <span className="info-card-label">{t('scan.liquidity')}</span>
-              <strong>{Math.round(entry.liquidityScore)}%</strong>
-            </div>
-            <div className="market-metric-card">
-              <span className="info-card-label">{t('scan.confidence')}</span>
-              <strong>{tConfidence(t, entry.confidenceSummary)}</strong>
-            </div>
-            <div className="market-metric-card">
-              <span className="info-card-label">{t('scan.components')}</span>
-              <strong>{entry.componentCount}</strong>
-            </div>
+        <div className="sp-set-body">
+          <div className="sp-set-detail-stats">
+            <span>{t('scan.exitZone')} <strong>{formatPlat(entry.setExitLow)}–{formatPlat(entry.setExitHigh)}</strong></span>
+            <span>{t('scan.score')} <strong>{Math.round(entry.arbitrageScore)}</strong></span>
+            <span>{t('scan.liquidity')} <strong>{Math.round(entry.liquidityScore)}%</strong></span>
           </div>
 
-          <div className="scanner-components-panel">
-            <div className="scanner-components-header">
-              <span className="card-label">{t('scan.componentBasket')}</span>
-              <span className="scanner-components-meta">{entry.componentCount} components</span>
-            </div>
-            <div className="scanner-components-list">
+          <div className="sp-part-group-label missing">
+            {t('scan.partsToBuy', { n: entry.componentCount })}
+          </div>
+          <div className="sp-part-list">
               {entry.components.map((component) => (
                 <ArbitrageComponentRow
                   key={`${entry.slug}-${component.slug}`}
@@ -392,7 +381,6 @@ function ArbitrageRow({
                   onAdd={() => onAddToWatchlist(component)}
                 />
               ))}
-            </div>
           </div>
         </div>
       ) : null}
@@ -475,58 +463,59 @@ function RelicRoiRow({
   const imageUrl = resolveWfmAssetUrl(entry.imagePath);
   const summary = getRelicRefinementSummary(entry, refinementKey);
 
+  // Highest-value drop at the active refinement — the single most useful fact about a relic,
+  // previously hidden until the row was expanded.
+  const bestDrop = [...(entry.drops ?? [])]
+    .sort((a, b) => (b.recommendedExitPrice ?? 0) - (a.recommendedExitPrice ?? 0))[0];
+
   return (
-    <article className={`farm-now-row scanner-farm-row${expanded ? ' is-expanded' : ''}`}>
-      <button className="farm-now-row-button scanner-farm-row-button" type="button" onClick={onToggle}>
-        <div className="farm-now-row-main scanner-farm-row-main scanner-farm-row-main-relic">
-          <div className="farm-now-cell farm-now-cell-name scanner-farm-cell-name">
-            <span className="panel-dot panel-dot-purple" aria-hidden="true" />
-            <div className="scanner-result-rank">#{index + 1}</div>
-            <span className="farm-now-thumb scanner-farm-thumb">
-              {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 1)}</span>}
+    <article className={`sp-set${expanded ? ' is-expanded' : ''}`}>
+      <button className="sp-set-head" type="button" onClick={onToggle} aria-expanded={expanded}>
+        <span className="scan-rank">{index + 1}</span>
+        <span className="sp-set-thumb">
+          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 2)}</span>}
+        </span>
+        <div className="sp-set-copy">
+          <span className="fn-row-title">
+            <span className="sp-set-name">
+              <ItemName
+                name={entry.name}
+                slug={entry.slug}
+                itemId={entry.relicItemId}
+                imagePath={entry.imagePath}
+              />
             </span>
-            <div className="farm-now-copy scanner-farm-copy">
-              <strong>
-                <ItemName
-                  name={entry.name}
-                  slug={entry.slug}
-                  itemId={entry.relicItemId}
-                  imagePath={entry.imagePath}
-                />
-              </strong>
-              <div className="scanner-farm-badge-row">
-                {entry.isUnvaulted ? (
-                  <span className="market-panel-badge tone-green">{t('scan.unvaulted')}</span>
-                ) : (
-                  <span className="market-panel-badge tone-amber">{t('scan.vaulted')}</span>
-                )}
-                <span className={`market-panel-badge tone-${confidenceTone(summary?.confidenceSummary.level ?? 'low')}`}>
-                  {summary ? tConfidence(t, summary.confidenceSummary) : tConfidence(t, entry.confidenceSummary)}
-                </span>
-              </div>
-            </div>
-          </div>
-          <span className="farm-now-cell scanner-farm-cell scanner-farm-cell-metric">
-            <span className="market-panel-badge tone-blue">{tHealth(t, summary?.refinementLabel) || '—'}</span>
+            <span className={`scan-confidence-pill tone-${entry.isUnvaulted ? 'green' : 'amber'}`}>
+              {entry.isUnvaulted ? t('scan.unvaulted') : t('scan.vaulted')}
+            </span>
           </span>
-          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">{t('scan.runValue')}</span>
-            <strong className="scanner-farm-cell-value">{formatPlatPrecise(summary?.runValue ?? null)}</strong>
+          <span className="fn-row-sub">
+            {bestDrop
+              ? t('scan.bestDrop', {
+                  name: bestDrop.name,
+                  price: formatPlat(bestDrop.recommendedExitPrice),
+                })
+              : tConfidence(t, summary?.confidenceSummary ?? entry.confidenceSummary)}
           </span>
-          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">{t('scan.liquidity')}</span>
-            <strong className="scanner-farm-cell-value">{Math.round(summary?.liquidityScore ?? 0)}%</strong>
-          </span>
-          <span className="farm-now-cell farm-now-cell-profit scanner-farm-cell scanner-farm-cell-metric">
-            <span className="scanner-farm-cell-label">{t('scan.score')}</span>
-            <strong className="scanner-farm-cell-value">{Math.round(summary?.relicRoiScore ?? 0)}</strong>
-          </span>
-          <span className="farm-now-cell farm-now-cell-action scanner-farm-cell-action">{expanded ? '−' : '+'}</span>
         </div>
+        <div className="sp-set-metrics">
+          <span className="relic-refinement-pill relic-refinement-pill-blue">
+            {t('opp.runRefinement', { refinement: tHealth(t, summary?.refinementLabel) || '—' })}
+          </span>
+          <div className="sp-set-metric">
+            <span className="sp-set-metric-label">{t('scan.runValueLabel')}</span>
+            <span className="sp-set-metric-value pos">{formatPlatPrecise(summary?.runValue ?? null)}</span>
+          </div>
+          <div className="sp-set-metric">
+            <span className="sp-set-metric-label">{t('scan.liquidity')}</span>
+            <span className="sp-set-metric-value">{Math.round(summary?.liquidityScore ?? 0)}%</span>
+          </div>
+        </div>
+        <ScanChevron up={expanded} />
       </button>
 
       {expanded ? (
-        <div className="farm-now-row-body scanner-farm-row-body">
+        <div className="sp-set-body">
           <div className="scanner-inline-summary">
             <span className="scanner-stat-pill">
               <span className="scanner-stat-pill-label">{t('scan.refinement')}</span>
@@ -573,6 +562,9 @@ export function ScannersPage() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ScannerTab>('arbitrage');
   const [arbitrage, setArbitrage] = useState<ArbitrageScannerResponse | null>(null);
+  /** Owned prime-part counts, so "add to watchlist" can want only the shortfall. Best-effort:
+   *  an empty map simply means "own nothing", which watches the full requirement. */
+  const [ownedPartQuantities, setOwnedPartQuantities] = useState<Map<string, number>>(new Map());
   const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
   const [scannerError, setScannerError] = useState<ScannerErrorState | null>(null);
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
@@ -852,10 +844,31 @@ export function ScannersPage() {
     }));
   };
 
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let cancelled = false;
+    void getSetCompletionOwnedItems()
+      .then((items) => {
+        if (!cancelled) {
+          setOwnedPartQuantities(new Map(items.map((item) => [item.slug, item.quantity])));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const addComponentToWatchlist = (component: ArbitrageScannerComponentEntry) => {
     if (component.itemId === null) {
       return;
     }
+    // Want only the shortfall. No inventory loaded (or item absent) reads as 0 owned, so the
+    // full set requirement is watched — which is the right default for a fresh flip.
+    const owned = ownedPartQuantities.get(component.slug) ?? 0;
+    const needed = Math.max(1, (component.quantityInSet ?? 1) - owned);
 
     const rawTarget = componentTargets[component.slug] ?? getDefaultComponentTarget(component);
     const targetPrice = Number.parseInt(rawTarget || '0', 10);
@@ -874,7 +887,7 @@ export function ScannersPage() {
       bulkTradable: false,
     };
 
-    addExplicitItemToWatchlist(item, 'base', 'Base Market', targetPrice);
+    addExplicitItemToWatchlist(item, 'base', 'Base Market', targetPrice, needed);
     markWatchlistAddFeedback(component.slug, setWatchlistAddFeedback, watchlistAddFeedbackTimeoutsRef);
   };
 
@@ -1035,26 +1048,44 @@ export function ScannersPage() {
 
             {activeTab === 'arbitrage' && arbitrage ? (
               <div className="scanner-results-list">
-                <div className="panel-section-header">{t('scan.tab.arbitrage')}</div>
-                <div className="scanner-results-toolbar">
-                  <div className="scanner-search-shell" role="search">
-                    <span className="scanner-search-icon" aria-hidden="true">⌕</span>
-                    <input
-                      className="scanner-search-input"
-                      type="search"
-                      value={arbitrageSearch}
-                      onChange={(event) => setArbitrageSearch(event.target.value)}
-                      placeholder={t('scan.searchSet')}
-                    />
+                <div className="sp-summary">
+                  <div className="sp-summary-lead">
+                    <span className="sp-summary-lead-icon"><i className="ti ti-radar" aria-hidden="true" /></span>
+                    <div>
+                      <span className="sp-summary-title">
+                        {t('scan.setsWorthFlipping', { n: arbitrageResults.length })}
+                      </span>
+                      <span className="sp-summary-sub">{t('scan.flipSubtitle')}</span>
+                    </div>
+                  </div>
+                  <div className="sp-summary-flow">
+                    <div className="sp-summary-stat">
+                      <span className="sp-summary-stat-label">{t('scan.bestMargin')}</span>
+                      <span className="sp-summary-stat-value">
+                        {formatPlat(arbitrageResults[0]?.grossMargin ?? null)}
+                      </span>
+                    </div>
+                    <div className="sp-summary-stat sp-summary-stat-profit">
+                      <span className="sp-summary-stat-label">{t('scan.bestRoi')}</span>
+                      <span className="sp-summary-stat-value">
+                        {formatPercent(arbitrageResults[0]?.roiPct ?? null)}
+                      </span>
+                    </div>
                   </div>
                 </div>
-                <div className="farm-now-header-row scanner-farm-header-row scanner-farm-header-row-arbitrage">
-                  <span className="farm-now-header-label">Set</span>
-                  <span className="farm-now-header-label">{t('scan.entry')}</span>
-                  <span className="farm-now-header-label">{t('scan.exitZone')}</span>
-                  <span className="farm-now-header-label farm-now-header-value">{t('scan.margin')}</span>
-                  <span className="farm-now-header-label farm-now-header-value">ROI</span>
-                  <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
+                <div className="fn-controls">
+                  <div className="fn-controls-row">
+                    <div className="fn-search">
+                      <i className="ti ti-search fn-search-icon" aria-hidden="true" />
+                      <input
+                        className="fn-search-input"
+                        type="search"
+                        value={arbitrageSearch}
+                        onChange={(event) => setArbitrageSearch(event.target.value)}
+                        placeholder={t('scan.searchSetsOrParts')}
+                      />
+                    </div>
+                  </div>
                 </div>
                 {arbitrageResults.length > 0 ? (
                   arbitrageResults.map((entry, index) => (
@@ -1084,49 +1115,65 @@ export function ScannersPage() {
             ) : activeTab === 'relic-roi' && arbitrage ? (
               relicResults.length > 0 ? (
                 <div className="scanner-results-list">
-                  <div className="panel-section-header">{t('scan.tab.relicRoi')}</div>
-                  <div className="scanner-results-toolbar scanner-results-toolbar-split">
-                    <div className="scanner-search-shell" role="search">
-                      <span className="scanner-search-icon" aria-hidden="true">⌕</span>
-                      <input
-                        className="scanner-search-input"
-                        type="search"
-                        value={relicSearch}
-                        onChange={(event) => setRelicSearch(event.target.value)}
-                        placeholder={t('scan.searchRelic')}
-                      />
+                  <div className="sp-summary">
+                    <div className="sp-summary-lead">
+                      <span className="sp-summary-lead-icon"><i className="ti ti-flame" aria-hidden="true" /></span>
+                      <div>
+                        <span className="sp-summary-title">
+                          {t('scan.relicsRanked2', { n: relicResults.length })}
+                        </span>
+                        <span className="sp-summary-sub">{t('scan.relicSubtitle')}</span>
+                      </div>
                     </div>
-                    <div className="scanner-results-toolbar-actions">
-                      <label className="toggle-wrap" htmlFor="relic-unvaulted-toggle">
-                        <span>{t('scan.unvaultedOnly')}</span>
-                        <button
-                          id="relic-unvaulted-toggle"
-                          className={`toggle${showOnlyUnvaulted ? ' on' : ''}`}
-                          type="button"
-                          aria-pressed={showOnlyUnvaulted}
-                          onClick={() => setShowOnlyUnvaulted((current) => !current)}
-                        />
-                      </label>
-                      <select
-                        className="market-variant-select scanner-refinement-select"
-                        value={relicRefinement}
-                        onChange={(event) => setRelicRefinement(event.target.value as RelicRefinementKey)}
-                      >
-                        {RELIC_REFINEMENT_KEYS.map((key) => (
-                          <option key={key} value={key}>
-                            {t(RELIC_REFINEMENT_LABEL_KEYS[key])}
-                          </option>
-                        ))}
-                      </select>
+                    <div className="sp-summary-flow">
+                      <div className="sp-summary-stat sp-summary-stat-profit">
+                        <span className="sp-summary-stat-label">{t('scan.bestRun')}</span>
+                        <span className="sp-summary-stat-value">
+                          {formatPlatPrecise(
+                            getRelicRefinementSummary(relicResults[0], relicRefinement)?.runValue ?? null,
+                          )}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                  <div className="farm-now-header-row scanner-farm-header-row scanner-farm-header-row-relic">
-                    <span className="farm-now-header-label">{t('scan.relic')}</span>
-                    <span className="farm-now-header-label">{t('scan.refinement')}</span>
-                    <span className="farm-now-header-label farm-now-header-value">{t('scan.runValue')}</span>
-                    <span className="farm-now-header-label farm-now-header-value">{t('scan.liquidity')}</span>
-                    <span className="farm-now-header-label farm-now-header-value">{t('scan.score')}</span>
-                    <span className="farm-now-header-label farm-now-header-action" aria-hidden="true" />
+                  <div className="fn-controls">
+                    <div className="fn-controls-row">
+                      <div className="fn-search">
+                        <i className="ti ti-search fn-search-icon" aria-hidden="true" />
+                        <input
+                          className="fn-search-input"
+                          type="search"
+                          value={relicSearch}
+                          onChange={(event) => setRelicSearch(event.target.value)}
+                          placeholder={t('scan.searchRelicsOrDrops')}
+                        />
+                      </div>
+                      <div className="fn-filters">
+                        <label className="fn-filter">
+                          <span>{t('scan.refinement')}</span>
+                          <select
+                            value={relicRefinement}
+                            onChange={(event) => setRelicRefinement(event.target.value as RelicRefinementKey)}
+                          >
+                            {RELIC_REFINEMENT_KEYS.map((key) => (
+                              <option key={key} value={key}>
+                                {t(RELIC_REFINEMENT_LABEL_KEYS[key])}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="toggle-wrap scan-unvaulted-toggle" htmlFor="relic-unvaulted-toggle">
+                          <span>{t('scan.unvaultedOnly')}</span>
+                          <button
+                            id="relic-unvaulted-toggle"
+                            className={`toggle${showOnlyUnvaulted ? ' on' : ''}`}
+                            type="button"
+                            aria-pressed={showOnlyUnvaulted}
+                            onClick={() => setShowOnlyUnvaulted((current) => !current)}
+                          />
+                        </label>
+                      </div>
+                    </div>
                   </div>
                   {relicResults.map((entry, index) => (
                     <RelicRoiRow

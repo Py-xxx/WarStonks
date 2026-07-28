@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useAppStore } from './stores/useAppStore';
 import { TopBar } from './components/TopBar';
 import { Sidebar } from './components/Sidebar';
@@ -115,6 +116,11 @@ function AppShell() {
   useTradeHealthBackground();
   useSmartManageAlerts();
   useTradeDetectedAlerts();
+  // Build the relic-drop index once so item context menus can offer "View drop details".
+  const loadRelicDropIndex = useAppStore((state) => state.loadRelicDropIndex);
+  useEffect(() => {
+    void loadRelicDropIndex();
+  }, [loadRelicDropIndex]);
   useTradePresence();
   useAppUpdater();
   useIntegrationSettings();

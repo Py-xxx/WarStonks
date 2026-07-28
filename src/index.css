@@ -2642,6 +2642,88 @@ textarea:focus-visible,
   flex-shrink: 0; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 13px; font-weight: 600; color: var(--color-green);
 }
+/* Relic carousel inside the farming panel. */
+.farm-cycle {
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--bg-base);
+}
+.farm-cycle-arrow {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 26px; height: 32px; border-radius: 7px; cursor: pointer;
+  background: transparent; border: 1px solid var(--border); color: var(--text-secondary);
+}
+.farm-cycle-arrow:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-primary); }
+.farm-cycle-card { flex: 1; display: flex; align-items: center; gap: 9px; min-width: 0; }
+.farm-cycle-thumb {
+  width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0; overflow: hidden;
+  background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+}
+.farm-cycle-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.farm-cycle-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.farm-cycle-name {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.farm-cycle-meta { font-size: 11px; color: var(--text-secondary); }
+.farm-cycle-index {
+  flex-shrink: 0; font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--text-muted);
+}
+.fn-odds-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Context-menu price header + inline watchlist price prompt. */
+.item-context-menu-header {
+  display: block; padding: 6px 10px 4px;
+  font-size: 11px; color: var(--text-muted);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+}
+.item-price-prompt {
+  position: fixed; z-index: 400; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(320px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--bg-elevated); border: 1px solid var(--border-strong, var(--border));
+  border-radius: 12px; padding: 14px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+.item-price-prompt-label { font-size: 13px; color: var(--text-primary); }
+.item-price-prompt-row { display: flex; align-items: center; gap: 8px; }
+.item-price-prompt-row input {
+  flex: 1; min-width: 0; height: 32px; padding: 0 9px;
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-size: 13px;
+}
+.item-price-prompt-row input:focus { outline: none; border-color: var(--color-blue); }
+
+/* Item context menu: drop-details is the promoted action, separated from the generic ones. */
+.item-context-menu-option.is-primary { color: var(--color-green); font-weight: 600; }
+.item-context-menu-divider {
+  display: block; height: 1px; margin: 4px 6px;
+  background: var(--border);
+}
+
+/* ═══ Scanners — reuses the planner shell (sp-*) plus these ═══════════════ */
+.scan-rank {
+  flex-shrink: 0; width: 22px; text-align: center;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12px; font-weight: 600; color: var(--text-muted);
+}
+.scan-confidence-pill {
+  flex-shrink: 0; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+}
+.scan-confidence-pill.tone-green { color: var(--color-green); background: rgba(61, 214, 140, 0.14); }
+.scan-confidence-pill.tone-amber { color: var(--color-amber); background: rgba(240, 160, 48, 0.14); }
+.scan-confidence-pill.tone-blue { color: var(--color-blue); background: rgba(74, 158, 255, 0.14); }
+.scan-confidence-pill.tone-red { color: var(--color-red); background: rgba(240, 79, 88, 0.14); }
+.scan-confidence-pill.tone-neutral { color: var(--text-muted); background: rgba(255, 255, 255, 0.06); }
+/* The unvaulted switch sits inline with the selects rather than in its own toolbar block. */
+.scan-unvaulted-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--text-secondary); white-space: nowrap;
+}
+.scanner-results-list { display: flex; flex-direction: column; gap: 10px; }
+
 /* ═══ "Now farming" session ══════════════════════════════════════════════ */
 .fn-farm-this-row { display: flex; margin-bottom: 12px; }
 .fn-farm-this-btn {

@@ -35,6 +35,7 @@ import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { tActive, useTranslation } from '../../i18n';
 import { tConfidence, tHealth } from '../../lib/healthLabels';
 import { InfoHint } from '../../components/InfoHint';
+import { buildFarmingRelic, parseRelicTierCode } from '../../lib/farmingSession';
 import {
   REFINEMENT_KEYS,
   computeDropOdds,
@@ -53,7 +54,6 @@ import type {
   RelicRoiEntry,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
-  FarmingSessionDrop,
 } from '../../types';
 
 type OppTab = 'opportunities' | 'farm-now' | 'set-planner' | 'owned-relics' | 'inventory';
@@ -562,30 +562,6 @@ function RefinementGuidancePanel({
   );
 }
 
-/** Placeholder slug for the synthetic "nothing I need" option when a relic lists no Forma. */
-const FILLER_DROP_SLUG = '__forma_filler__';
-
-/** Forma is the universal "got nothing worth keeping" reward — logged for run-count accuracy but
- *  never added to the parts inventory. */
-function isFillerDropName(name: string): boolean {
-  return name.trim().toLowerCase().includes('forma');
-}
-
-function parseRelicTierCode(name: string): { tier: string; code: string } | null {
-  const tokens = name.trim().split(/\s+/);
-  if (tokens.length < 2) {
-    return null;
-  }
-
-  const tier = tokens[0];
-  const code = tokens[1];
-  if (!tier || !code) {
-    return null;
-  }
-
-  return { tier, code };
-}
-
 function relicRarityTone(rarity: string | null): string {
   const normalized = rarity?.toLowerCase() ?? '';
   if (normalized.includes('rare')) {
@@ -681,7 +657,7 @@ function SetPlannerRow({
   ownedRelicHints: Map<string, PlannerOwnedRelicHint[]>;
   recentlyAddedKeys: Record<string, boolean>;
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
-  onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
+  onAddToWatchlist: (component: ArbitrageScannerComponentEntry, missingQuantity: number) => void;
   onFarmComponent: (component: ArbitrageScannerComponentEntry) => void;
 }) {
   const localizeName = useLocalizedName();
@@ -763,7 +739,7 @@ function SetPlannerRow({
               type="button"
               className="btn-sm sp-part-watch-btn"
               disabled={!effectiveTarget.trim() || !component.itemId}
-              onClick={() => onAddToWatchlist(component)}
+              onClick={() => onAddToWatchlist(component, componentState.missingQuantity)}
             >
               <SpPlus /> {t('wl.addToWatchlist')}
             </button>
@@ -1232,54 +1208,38 @@ export function OpportunitiesPage({
   );
   const requestOpportunitiesTab = useAppStore((state) => state.requestOpportunitiesTab);
   const startFarmingSession = useAppStore((state) => state.startFarmingSession);
-  const activeFarmingRelicSlug = useAppStore((state) => state.farmingSession?.relicSlug ?? null);
+  const startFarmingForItem = useAppStore((state) => state.startFarmingForItem);
+  const activeFarmingRelicSlug = useAppStore(
+    (state) => state.farmingSession?.cycle[state.farmingSession.activeIndex]?.relicSlug ?? null,
+  );
 
-  /** Starts a "now farming" session for a relic: the drop list is snapshotted so the panel keeps
-   *  working on any tab, and Forma is always offered as the "got nothing I need" option. */
-  const beginFarmingRelic = (row: FarmNowRelicRow | FarmNowSetCompletionRow) => {
-    const parsed = parseRelicTierCode(row.relic.name);
-    const drops: FarmingSessionDrop[] = row.drops.map((entry) => {
-      // The two row shapes carry chance differently: part-profit precomputes it, set-completion
-      // reads it off the drop's profile at the recommended refinement.
-      const rawChance =
-        'chance' in entry && entry.chance !== null
-          ? entry.chance
-          : chanceForRefinement(entry.drop.chanceProfile, row.guidance.bestKey);
-      return {
-        itemId: entry.drop.itemId,
-        slug: entry.drop.slug,
-        name: entry.drop.name,
-        imagePath: entry.drop.imagePath,
-        rarity: entry.drop.rarity,
-        // Scanner chances are percentages; the session stores 0..1 for the odds math.
-        chance: rawChance !== null ? rawChance / 100 : null,
-        recommendedExitPrice: entry.drop.recommendedExitPrice,
-        isFiller: isFillerDropName(entry.drop.name),
-      };
+  /**
+   * Starts a session from a relic the user picked out of a list. The whole *currently displayed*
+   * list becomes the cycle, in its current order — snapshotted now, so changing filters or sort
+   * afterwards can't reorder what they're stepping through.
+   */
+  const beginFarmingRelic = (
+    row: FarmNowRelicRow | FarmNowSetCompletionRow,
+    visibleRows: Array<FarmNowRelicRow | FarmNowSetCompletionRow>,
+  ) => {
+    const ownedByKey = new Map(ownedRelics.map((relic) => [`${relic.tier}:${relic.code}`, relic]));
+    const cycle = visibleRows.map((candidate) => {
+      const parsed = parseRelicTierCode(candidate.relic.name);
+      return buildFarmingRelic(
+        candidate.relic,
+        parsed ? ownedByKey.get(`${parsed.tier}:${parsed.code}`) : undefined,
+        parsed?.tier ?? '',
+        parsed?.code ?? '',
+        { fallbackRefinement: candidate.guidance.bestKey },
+      );
     });
-    // Guarantee a "nothing I need" choice even when the relic's table has no Forma entry.
-    if (!drops.some((drop) => drop.isFiller)) {
-      drops.push({
-        itemId: null,
-        slug: FILLER_DROP_SLUG,
-        name: 'Forma Blueprint',
-        imagePath: null,
-        rarity: null,
-        chance: null,
-        recommendedExitPrice: null,
-        isFiller: true,
-      });
-    }
-    startFarmingSession({
-      relicSlug: row.relic.slug,
-      relicName: localizeName(row.relic),
-      relicImagePath: row.relic.imagePath,
-      tier: parsed?.tier ?? '',
-      code: parsed?.code ?? '',
-      refinement: row.guidance.bestLabel,
-      drops,
-    });
+    const activeIndex = Math.max(
+      0,
+      visibleRows.findIndex((candidate) => candidate.relic.slug === row.relic.slug),
+    );
+    startFarmingSession({ cycle, activeIndex, targetDropSlug: null, targetDropName: null });
   };
+
   const [farmNowSearch, setFarmNowSearch] = useState('');
   useEffect(() => {
     const validTabs: OppTab[] =
@@ -1888,6 +1848,7 @@ export function OpportunitiesPage({
 
     const inputs: RelicOddsInput[] = [];
     let targetName: string | null = null;
+    let targetSlug: string | null = null;
     let bestExitPrice: number | null = null;
 
     for (const row of farmNowRelics) {
@@ -1919,6 +1880,7 @@ export function OpportunitiesPage({
 
       if (!targetName) {
         targetName = localizeName(matched[0].drop);
+        targetSlug = matched[0].drop.slug;
       }
       for (const entry of matched) {
         if (entry.drop.recommendedExitPrice !== null) {
@@ -1945,7 +1907,7 @@ export function OpportunitiesPage({
     if (summary.totalRelics === 0) {
       return null;
     }
-    return { targetName, exitPrice: bestExitPrice, ...summary };
+    return { targetName, targetSlug: targetSlug ?? '', exitPrice: bestExitPrice, ...summary };
   }, [farmNowSearch, farmNowRelics, ownedRelics, localizeName]);
 
   /**
@@ -2560,6 +2522,7 @@ export function OpportunitiesPage({
   const handleAddMissingComponentToWatchlist = (
     component: ArbitrageScannerComponentEntry,
     setSlug: string,
+    missingQuantity: number,
   ) => {
     if (!component.itemId) {
       return;
@@ -2583,7 +2546,14 @@ export function OpportunitiesPage({
       bulkTradable: false,
     };
 
-    addExplicitItemToWatchlist(watchlistItem, 'base', 'Base Market', targetPrice);
+    // Want only what's still missing — owning 1 of 2 should watch for 1, not 2.
+    addExplicitItemToWatchlist(
+      watchlistItem,
+      'base',
+      'Base Market',
+      targetPrice,
+      Math.max(1, missingQuantity),
+    );
     markWatchlistAddFeedback(
       `${setSlug}:${component.slug}`,
       setWatchlistAddFeedback,
@@ -2705,8 +2675,12 @@ export function OpportunitiesPage({
                       onTargetChange={(component, value) =>
                         handlePlannerTargetChange(component, value, planner.entry.slug)
                       }
-                      onAddToWatchlist={(component) =>
-                        handleAddMissingComponentToWatchlist(component, planner.entry.slug)
+                      onAddToWatchlist={(component, missingQuantity) =>
+                        handleAddMissingComponentToWatchlist(
+                          component,
+                          planner.entry.slug,
+                          missingQuantity,
+                        )
                       }
                       onFarmComponent={(component) =>
                         // Jump to Opportunities → What to farm now with this part searched, so the
@@ -3142,9 +3116,24 @@ export function OpportunitiesPage({
               {farmNowDropOdds ? (
                 <div className="fn-odds">
                   <div className="fn-odds-head">
-                    <span className="fn-odds-title">
-                      {t('opp.oddsTitle', { item: farmNowDropOdds.targetName })}
-                    </span>
+                    <div className="fn-odds-head-row">
+                      <span className="fn-odds-title">
+                        {t('opp.oddsTitle', { item: farmNowDropOdds.targetName })}
+                      </span>
+                      <button
+                        type="button"
+                        className="fn-farm-this-btn"
+                        onClick={() =>
+                          void startFarmingForItem(
+                            farmNowDropOdds.targetSlug,
+                            farmNowDropOdds.targetName,
+                          )
+                        }
+                      >
+                        <i className="ti ti-flame" aria-hidden="true" />
+                        {t('farm.farmItem')}
+                      </button>
+                    </div>
                     <span className="fn-odds-sub">
                       {t('opp.oddsRunAll', { n: farmNowDropOdds.totalRelics })}
                       {farmNowDropOdds.exitPrice !== null
@@ -3553,7 +3542,7 @@ export function OpportunitiesPage({
                                   type="button"
                                   className="fn-farm-this-btn"
                                   disabled={activeFarmingRelicSlug === row.relic.slug}
-                                  onClick={() => beginFarmingRelic(row)}
+                                  onClick={() => beginFarmingRelic(row, displayedFarmNowSetCompletionRelics)}
                                 >
                                   <i className="ti ti-flame" aria-hidden="true" />
                                   {activeFarmingRelicSlug === row.relic.slug
@@ -3775,7 +3764,7 @@ export function OpportunitiesPage({
                                 type="button"
                                 className="fn-farm-this-btn"
                                 disabled={activeFarmingRelicSlug === row.relic.slug}
-                                onClick={() => beginFarmingRelic(row)}
+                                onClick={() => beginFarmingRelic(row, displayedFarmNowRelics)}
                               >
                                 <i className="ti ti-flame" aria-hidden="true" />
                                 {activeFarmingRelicSlug === row.relic.slug

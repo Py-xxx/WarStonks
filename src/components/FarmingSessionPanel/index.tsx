@@ -20,6 +20,7 @@ export function FarmingSessionPanel() {
   const stop = useAppStore((state) => state.stopFarmingSession);
   const logDrop = useAppStore((state) => state.logFarmingDrop);
   const undoLast = useAppStore((state) => state.undoLastFarmingRun);
+  const cycleRelic = useAppStore((state) => state.cycleFarmingRelic);
   const panelRef = useRef<HTMLElement | null>(null);
 
   // Get out of the way as soon as attention moves elsewhere — the panel sits over page content,
@@ -44,8 +45,14 @@ export function FarmingSessionPanel() {
     return null;
   }
 
-  const runCount = session.runs.length;
-  const lastRun = session.runs[runCount - 1] ?? null;
+  const active = session.cycle[session.activeIndex];
+  // Per-relic count: cycling back to a relic keeps its history (session totals stay global).
+  const runCount = active
+    ? session.runs.filter((run) => run.relicSlug === active.relicSlug).length
+    : 0;
+  const totalRuns = session.runs.length;
+  const lastRun = session.runs[totalRuns - 1] ?? null;
+  const canCycle = session.cycle.length > 1;
 
   if (!expanded) {
     return (
@@ -53,25 +60,32 @@ export function FarmingSessionPanel() {
         type="button"
         className="farm-fab"
         aria-label={t('farm.reopen')}
-        title={`${t('farm.nowFarming')}: ${session.relicName}`}
+        title={`${t('farm.nowFarming')}: ${active?.relicName ?? ''}`}
         onClick={() => setExpanded(true)}
       >
         <i className="ti ti-flame" aria-hidden="true" />
-        {runCount > 0 ? <span className="farm-fab-badge">{runCount}</span> : null}
+        {totalRuns > 0 ? <span className="farm-fab-badge">{totalRuns}</span> : null}
       </button>
     );
   }
 
   // Plat added this session, counting only real parts (filler is worth nothing to us).
   const platGained = session.runs.reduce((sum, run) => {
-    const drop = session.drops.find((entry) => entry.slug === run.dropSlug);
+    const drop = session.cycle
+      .flatMap((relic) => relic.drops)
+      .find((entry) => entry.slug === run.dropSlug);
     return sum + (run.isFiller ? 0 : drop?.recommendedExitPrice ?? 0);
   }, 0);
 
   // Live odds: across the runs logged so far, how likely you'd have seen the best drop by now.
-  const bestDrop = session.drops
-    .filter((drop) => !drop.isFiller && drop.chance !== null)
-    .sort((a, b) => (b.recommendedExitPrice ?? 0) - (a.recommendedExitPrice ?? 0))[0];
+  // Item-targeted sessions track the item you're hunting; otherwise fall back to the relic's
+  // most valuable drop.
+  const drops = active?.drops ?? [];
+  const bestDrop = session.targetDropSlug
+    ? drops.find((drop) => drop.slug === session.targetDropSlug)
+    : drops
+        .filter((drop) => !drop.isFiller && drop.chance !== null)
+        .sort((a, b) => (b.recommendedExitPrice ?? 0) - (a.recommendedExitPrice ?? 0))[0];
   const seenOdds =
     bestDrop?.chance != null && runCount > 0
       ? atLeastOneChance([{ chance: bestDrop.chance, count: runCount }])
@@ -103,16 +117,20 @@ export function FarmingSessionPanel() {
     );
   };
 
-  const realDrops = session.drops.filter((drop) => !drop.isFiller);
-  const fillerDrops = session.drops.filter((drop) => drop.isFiller);
+  const realDrops = drops.filter((drop) => !drop.isFiller);
+  const fillerDrops = drops.filter((drop) => drop.isFiller);
 
   return (
     <section ref={panelRef} className="farm-panel" aria-label={t('farm.nowFarming')}>
       <header className="farm-panel-head">
         <div className="farm-panel-title">
-          <span className="farm-panel-eyebrow">{t('farm.nowFarming')}</span>
-          <strong>{session.relicName}</strong>
-          <span className="farm-panel-refinement">{session.refinement}</span>
+          <span className="farm-panel-eyebrow">
+            {session.targetDropName
+              ? t('farm.huntingItem', { item: session.targetDropName })
+              : t('farm.nowFarming')}
+          </span>
+          <strong>{active?.relicName ?? ''}</strong>
+          <span className="farm-panel-refinement">{active?.refinement ?? ''}</span>
         </div>
         <div className="farm-panel-actions">
           <button type="button" className="act-btn" onClick={stop}>
@@ -129,6 +147,53 @@ export function FarmingSessionPanel() {
           </button>
         </div>
       </header>
+
+      {/* Relic carousel: the cycle is frozen at selection time, so changing filters afterwards
+          can't reorder what the user is stepping through. */}
+      {canCycle ? (
+        <div className="farm-cycle">
+          <button
+            type="button"
+            className="farm-cycle-arrow"
+            aria-label={t('farm.previousRelic')}
+            onClick={() => cycleRelic(-1)}
+          >
+            <i className="ti ti-chevron-left" aria-hidden="true" />
+          </button>
+          <div className="farm-cycle-card">
+            <span className="farm-cycle-thumb" aria-hidden="true">
+              {resolveWfmAssetUrl(active?.relicImagePath ?? null) ? (
+                <img src={resolveWfmAssetUrl(active?.relicImagePath ?? null) ?? undefined} alt="" />
+              ) : (
+                <span>{(active?.relicName ?? '?').slice(0, 2)}</span>
+              )}
+            </span>
+            <div className="farm-cycle-copy">
+              <span className="farm-cycle-name">{active?.relicName}</span>
+              <span className="farm-cycle-meta">
+                {t('opp.ownedTimes', { n: active?.ownedCount ?? 0 })}
+                {active?.targetChance != null
+                  ? ` · ${Math.round(active.targetChance * 100)}% ${t('opp.oddsPerRun')}`
+                  : ''}
+                {active?.targetOdds != null
+                  ? ` · ${Math.round(active.targetOdds * 100)}% ${t('farm.overall')}`
+                  : ''}
+              </span>
+            </div>
+            <span className="farm-cycle-index">
+              {session.activeIndex + 1}/{session.cycle.length}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="farm-cycle-arrow"
+            aria-label={t('farm.nextRelic')}
+            onClick={() => cycleRelic(1)}
+          >
+            <i className="ti ti-chevron-right" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
 
       <div className="farm-panel-stats">
         <span className="farm-stat">
@@ -151,7 +216,7 @@ export function FarmingSessionPanel() {
 
       <div className="farm-panel-prompt">{t('farm.whatDidYouGet')}</div>
 
-      {session.drops.length === 0 ? (
+      {drops.length === 0 ? (
         <div className="farm-panel-empty">{t('farm.noDrops')}</div>
       ) : (
         <div className="farm-drop-list">

@@ -1,5 +1,4 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { openExternalUrl } from '../../lib/tauriClient';
 import { copyTextToClipboard } from '../../lib/marketMessages';
 import { useAppStore } from '../../stores/useAppStore';
 import { useTranslation } from '../../i18n';
@@ -13,7 +12,8 @@ type ItemNameProps = ItemQuickViewTarget & {
 
 // Approximate menu size, used to keep it on-screen near the viewport edges.
 const ITEM_MENU_WIDTH = 210;
-const ITEM_MENU_HEIGHT = 116;
+// Tallest case: drop-details + divider + 4 options.
+const ITEM_MENU_HEIGHT = 196;
 
 function clampMenuPosition(x: number, y: number): { x: number; y: number } {
   const maxX = Math.max(8, window.innerWidth - ITEM_MENU_WIDTH - 8);
@@ -30,6 +30,13 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const openItemInQuickView = useAppStore((state) => state.openItemInQuickView);
   const pushToast = useAppStore((state) => state.pushToast);
   const itemNameMap = useAppStore((state) => state.itemNameMap);
+  const relicDropSlugs = useAppStore((state) => state.relicDropSlugs);
+  const itemExitPrices = useAppStore((state) => state.itemExitPrices);
+  const requestOpportunitiesTab = useAppStore((state) => state.requestOpportunitiesTab);
+  const setActivePage = useAppStore((state) => state.setActivePage);
+  const startFarmingForItem = useAppStore((state) => state.startFarmingForItem);
+  const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
+  const [pricePrompt, setPricePrompt] = useState<string | null>(null);
   const { t } = useTranslation();
   const displayName = resolveLocalizedName(itemNameMap, target);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -73,16 +80,75 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
       .catch(() => pushToast(t('itm.copyFailed'), 'error'));
   };
 
-  const handleOpenWfm = (event: { stopPropagation: () => void }) => {
+  // Only meaningful for items a relic can actually drop, so the entry is hidden otherwise
+  // rather than dead-ending on an empty farm-now search.
+  const dropsFromRelic = Boolean(target.slug && relicDropSlugs.has(target.slug));
+  const exitPrice = target.slug ? itemExitPrices.get(target.slug) : undefined;
+  const sellsForLabel = exitPrice ? t('itm.sellsFor', { price: `${Math.round(exitPrice)}p` }) : null;
+
+  const handleViewDropDetails = (event: { stopPropagation: () => void }) => {
+    stop(event);
+    setMenu(null);
+    requestOpportunitiesTab('farm-now', target.name);
+  };
+
+  const handleOpenMarketPage = (event: { stopPropagation: () => void }) => {
+    stop(event);
+    setMenu(null);
+    setActivePage('market');
+    void openItemInQuickView(target);
+  };
+
+  const handleCopyWfmLink = (event: { stopPropagation: () => void }) => {
     stop(event);
     setMenu(null);
     if (!target.slug) {
       pushToast(t('itm.noWfmLink'), 'error');
       return;
     }
-    void openExternalUrl(`https://warframe.market/items/${target.slug}`).catch(() =>
-      pushToast(t('itm.wfmOpenFailed'), 'error'),
+    void copyTextToClipboard(`https://warframe.market/items/${target.slug}`)
+      .then(() => pushToast(t('itm.linkCopied'), 'success'))
+      .catch(() => pushToast(t('itm.copyFailed'), 'error'));
+  };
+
+  const handleFarmItem = (event: { stopPropagation: () => void }) => {
+    stop(event);
+    setMenu(null);
+    if (target.slug) {
+      void startFarmingForItem(target.slug, target.name);
+    }
+  };
+
+  // Watchlist needs a price, so the menu hands off to a tiny prompt rather than guessing.
+  const handleAddToWatchlist = (event: { stopPropagation: () => void }) => {
+    stop(event);
+    setMenu(null);
+    setPricePrompt('');
+  };
+
+  const submitWatchlistPrice = () => {
+    const price = Number.parseInt(pricePrompt ?? '', 10);
+    if (!Number.isInteger(price) || price <= 0) {
+      pushToast(t('itm.enterPrice'), 'error');
+      return;
+    }
+    addExplicitItemToWatchlist(
+      {
+        itemId: target.itemId ?? 0,
+        wfmId: null,
+        name: target.name,
+        slug: target.slug ?? '',
+        maxRank: null,
+        itemFamily: null,
+        imagePath: target.imagePath ?? null,
+        bulkTradable: false,
+      },
+      'base',
+      'Base Market',
+      price,
     );
+    setPricePrompt(null);
+    pushToast(t('itm.addedToWatchlist'), 'success');
   };
 
   return (
@@ -117,6 +183,34 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
       >
         {children ?? displayName}
       </span>
+      {pricePrompt !== null ? (
+        <div className="item-price-prompt" role="dialog" onClick={stop}>
+          <span className="item-price-prompt-label">
+            {t('itm.watchPricePrompt', { item: displayName })}
+          </span>
+          <div className="item-price-prompt-row">
+            <input
+              autoFocus
+              type="number"
+              min={1}
+              step={1}
+              value={pricePrompt}
+              placeholder={exitPrice ? String(Math.round(exitPrice)) : '0'}
+              onChange={(event) => setPricePrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') submitWatchlistPrice();
+                if (event.key === 'Escape') setPricePrompt(null);
+              }}
+            />
+            <button type="button" className="act-btn" onClick={() => setPricePrompt(null)}>
+              {t('common.cancel')}
+            </button>
+            <button type="button" className="btn-primary" onClick={submitWatchlistPrice}>
+              {t('itm.addToWatchlist')}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {menu ? (
         <div
           className="item-context-menu"
@@ -124,8 +218,48 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
           role="menu"
           onClick={stop}
         >
+          {sellsForLabel ? (
+            <span className="item-context-menu-header">{sellsForLabel}</span>
+          ) : null}
+          {dropsFromRelic ? (
+            <>
+              <button
+                type="button"
+                className="item-context-menu-option is-primary"
+                role="menuitem"
+                onClick={handleViewDropDetails}
+              >
+                {t('itm.viewDropDetails')}
+              </button>
+              <button
+                type="button"
+                className="item-context-menu-option is-primary"
+                role="menuitem"
+                onClick={handleFarmItem}
+              >
+                {t('itm.farmItem')}
+              </button>
+              <span className="item-context-menu-divider" role="separator" />
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="item-context-menu-option"
+            role="menuitem"
+            onClick={handleAddToWatchlist}
+          >
+            {t('itm.addToWatchlist')}
+          </button>
           <button type="button" className="item-context-menu-option" role="menuitem" onClick={handleOpen}>
             {t('itm.openQv')}
+          </button>
+          <button
+            type="button"
+            className="item-context-menu-option"
+            role="menuitem"
+            onClick={handleOpenMarketPage}
+          >
+            {t('itm.openMarket')}
           </button>
           <button type="button" className="item-context-menu-option" role="menuitem" onClick={handleCopy}>
             {t('itm.copyName')}
@@ -134,10 +268,10 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
             type="button"
             className="item-context-menu-option"
             role="menuitem"
-            onClick={handleOpenWfm}
+            onClick={handleCopyWfmLink}
             disabled={!target.slug}
           >
-            {t('itm.openWfm')}
+            {t('itm.copyWfmLink')}
           </button>
         </div>
       ) : null}

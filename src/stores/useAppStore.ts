@@ -26,6 +26,7 @@ import {
   sendWatchlistFoundDiscordNotification,
   sendUnderpricedListingDiscordNotification,
   sendScannerStaleDiscordNotification,
+  getArbitrageScannerState,
   getSetCompletionOwnedItems,
   setSetCompletionOwnedItemQuantity,
   isTauriRuntime,
@@ -154,6 +155,7 @@ import {
 import { loadAutoScanEnabled, saveAutoScanEnabled } from '../lib/autoScan';
 import { type AppLanguage, loadLanguage, saveLanguage, wfmLangCode, wfstatLangCode } from '../lib/language';
 import { tActive, tUserMessage } from '../i18n';
+import { buildFarmingRelic, parseRelicTierCode, rankByTargetOdds } from '../lib/farmingSession';
 import {
   loadPinnedOpportunities,
   savePinnedOpportunities,
@@ -416,8 +418,13 @@ function readPersistedFarmingSession(): FarmingSession | null {
     }
     const parsed = JSON.parse(raw) as FarmingSession;
     // Guard against a malformed/older shape rather than rendering a broken panel.
-    return parsed && typeof parsed.relicSlug === 'string' && Array.isArray(parsed.drops)
-      ? { ...parsed, runs: Array.isArray(parsed.runs) ? parsed.runs : [] }
+    // Reject anything that isn't the current shape — an older saved session would render broken.
+    return parsed && Array.isArray(parsed.cycle) && parsed.cycle.length > 0
+      ? {
+          ...parsed,
+          activeIndex: Math.min(Math.max(0, parsed.activeIndex ?? 0), parsed.cycle.length - 1),
+          runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+        }
       : null;
   } catch {
     return null;
@@ -1573,6 +1580,8 @@ interface AppStore {
     variantKey: string,
     variantLabel: string,
     targetPrice: number,
+    /** How many units to want — callers pass the shortfall (needed minus owned). */
+    quantity?: number,
   ) => void;
   removeWatchlistItem: (id: string) => void;
   markWatchlistItemBought: (
@@ -1632,11 +1641,22 @@ interface AppStore {
   requestedOpportunitiesTab: RequestedOpportunitiesTab | null;
   requestedFarmNowSearch: string | null;
 
+  /** Slugs of every item obtainable from a relic, from the cached arbitrage scan. Lets any item
+   *  name in the app decide whether "View drop details" is meaningful without its own query. */
+  relicDropSlugs: Set<string>;
+  /** Recommended sell price per slug, from the same cached scan — powers the context-menu header. */
+  itemExitPrices: Map<string, number>;
+  loadRelicDropIndex: () => Promise<void>;
+
   // "Now farming" session: one active relic at a time, persisted across tabs + restarts.
   farmingSession: FarmingSession | null;
   /** Expanded panel vs collapsed FAB bubble. */
   farmingPanelExpanded: boolean;
   startFarmingSession: (session: Omit<FarmingSession, 'startedAt' | 'runs'>) => void;
+  /** Move through the frozen relic cycle. Wraps at both ends. */
+  cycleFarmingRelic: (delta: number) => void;
+  /** Starts an item-targeted session: every owned relic that drops `slug`, ranked by real odds. */
+  startFarmingForItem: (slug: string, name: string) => Promise<void>;
   stopFarmingSession: () => void;
   setFarmingPanelExpanded: (expanded: boolean) => void;
   /** Logs one run's reward. Real parts increment the owned-parts inventory; filler (Forma) is
@@ -1727,6 +1747,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   pendingTradeListing: null,
   requestedOpportunitiesTab: null,
   requestedFarmNowSearch: null,
+  relicDropSlugs: new Set<string>(),
+  itemExitPrices: new Map<string, number>(),
   farmingSession: readPersistedFarmingSession(),
   farmingPanelExpanded: true,
   ownedRelics: [],
@@ -3091,11 +3113,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         });
     }
   },
-  addExplicitItemToWatchlist: (item, variantKey, variantLabel, targetPrice) => {
+  addExplicitItemToWatchlist: (item, variantKey, variantLabel, targetPrice, quantity = 1) => {
     if (!Number.isInteger(targetPrice) || targetPrice <= 0) {
       set({ watchlistFormError: 'Enter a positive whole-number desired price.' });
       return;
     }
+    const desiredQuantity = Math.max(1, Math.round(quantity));
 
     void getWfmTopSellOrdersForVariant(item.slug, variantKey, get().sellerMode)
       .then((response) => {
@@ -3111,6 +3134,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             currentState.watchlist.find(
               (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
             )?.linkedBuyOrderId ?? null,
+            desiredQuantity,
           );
           writePersistedWatchlistState(nextState.watchlist, nextState.selectedWatchlistId);
           return nextState;
@@ -3135,6 +3159,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
                 targetPrice,
                 latestState.sellerMode,
                 existingItem?.linkedBuyOrderId ?? null,
+                desiredQuantity,
               ).then((linkedBuyOrderId) => {
                 set((currentState) => {
                   const nextWatchlist = currentState.watchlist.map((entry) =>
@@ -3885,6 +3910,38 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ pendingTradeListing: req, activePage: 'trades', navigationBack: null });
   },
   clearPendingTradeListing: () => set({ pendingTradeListing: null }),
+  loadRelicDropIndex: async () => {
+    if (!isTauriRuntime() || get().relicDropSlugs.size > 0) {
+      return;
+    }
+    try {
+      const state = await getArbitrageScannerState();
+      const slugs = new Set<string>();
+      const prices = new Map<string, number>();
+      for (const relic of state.latestScan?.relicRoiResults ?? []) {
+        for (const drop of relic.drops) {
+          if (drop.slug) {
+            slugs.add(drop.slug);
+            if (drop.recommendedExitPrice !== null) {
+              prices.set(drop.slug, drop.recommendedExitPrice);
+            }
+          }
+        }
+      }
+      // Sets aren't relic drops, but their exit price is just as useful in the menu.
+      for (const set_ of state.latestScan?.results ?? []) {
+        if (set_.recommendedSetExitPrice !== null) {
+          prices.set(set_.slug, set_.recommendedSetExitPrice);
+        }
+      }
+      if (slugs.size > 0 || prices.size > 0) {
+        set({ relicDropSlugs: slugs, itemExitPrices: prices });
+      }
+    } catch (error) {
+      // Best-effort: without the index the menu just omits the drop-details entry.
+      console.error('[items] failed to build relic drop index', error);
+    }
+  },
   requestOpportunitiesTab: (tab, search) =>
     set({
       requestedOpportunitiesTab: tab,
@@ -3900,6 +3957,60 @@ export const useAppStore = create<AppStore>((set, get) => ({
     writePersistedFarmingSession(next);
     set({ farmingSession: next, farmingPanelExpanded: true });
   },
+  startFarmingForItem: async (slug, name) => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    try {
+      const [scanState, ownedRelics] = await Promise.all([
+        getArbitrageScannerState(),
+        getOwnedRelicInventoryCache().then((cache) => cache.entries).catch(() => []),
+      ]);
+      const ownedByKey = new Map(
+        ownedRelics.map((relic) => [`${relic.tier}:${relic.code}`, relic]),
+      );
+      const candidates = (scanState.latestScan?.relicRoiResults ?? [])
+        .filter((relic) => relic.drops.some((drop) => drop.slug === slug))
+        .map((relic) => {
+          const parsed = parseRelicTierCode(relic.name);
+          return buildFarmingRelic(
+            relic,
+            parsed ? ownedByKey.get(`${parsed.tier}:${parsed.code}`) : undefined,
+            parsed?.tier ?? '',
+            parsed?.code ?? '',
+            { targetDropSlug: slug },
+          );
+        })
+        // Only relics you actually hold are runnable right now.
+        .filter((relic) => relic.ownedCount > 0);
+
+      if (candidates.length === 0) {
+        get().pushToast(tActive('farm.noRelicsForItem'), 'error');
+        return;
+      }
+      // Best real odds first — a single Radiant can beat eight Intacts.
+      get().startFarmingSession({
+        cycle: rankByTargetOdds(candidates),
+        activeIndex: 0,
+        targetDropSlug: slug,
+        targetDropName: name,
+      });
+    } catch (error) {
+      console.error('[farming] failed to start item-targeted session', error);
+      get().pushToast(tActive('farm.noRelicsForItem'), 'error');
+    }
+  },
+  cycleFarmingRelic: (delta) => {
+    const session = get().farmingSession;
+    if (!session || session.cycle.length < 2) {
+      return;
+    }
+    const count = session.cycle.length;
+    const activeIndex = (((session.activeIndex + delta) % count) + count) % count;
+    const next: FarmingSession = { ...session, activeIndex };
+    writePersistedFarmingSession(next);
+    set({ farmingSession: next });
+  },
   stopFarmingSession: () => {
     writePersistedFarmingSession(null);
     set({ farmingSession: null, farmingPanelExpanded: true });
@@ -3913,7 +4024,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     // Record the run first so the counter and odds respond instantly; the inventory write is
     // what can fail, and it's reverted below if it does.
+    const activeRelic = session.cycle[session.activeIndex];
     const run: FarmingSessionRun = {
+      relicSlug: activeRelic?.relicSlug ?? '',
       dropSlug: drop.slug,
       dropName: drop.name,
       isFiller: drop.isFiller,
