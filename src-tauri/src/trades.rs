@@ -22,7 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -8354,6 +8354,10 @@ fn normalize_status_set_request(status: &str) -> Result<&'static str> {
 
 const TRADES_PRESENCE_FILE_NAME: &str = "wfm-presence.json";
 const PRESENCE_CHANGED_EVENT: &str = "wfm-presence-changed";
+/// Emitted whenever the websocket's connection/auth state changes, so the UI can distinguish
+/// "socket down" from "auth failed" from "WFM demoted us" — all three previously looked
+/// identical (a bare "offline"), which is exactly what made this hard to diagnose.
+const PRESENCE_CONNECTION_EVENT: &str = "wfm-presence-connection";
 /// Emitted to the frontend when a tracked watchlist item gets a matching sell ≤ target via
 /// the realtime newOrders feed.
 const WATCHLIST_ORDER_EVENT: &str = "wfm-watchlist-order";
@@ -8385,8 +8389,227 @@ fn underpriced_trigger_ratio(recommended_price: f64) -> f64 {
     (UNDERPRICED_TRIGGER_BASE_RATIO - UNDERPRICED_TRIGGER_PRICE_OFFSET / recommended_price)
         .clamp(0.0, UNDERPRICED_TRIGGER_BASE_RATIO)
 }
-const PRESENCE_KEEPALIVE_SECONDS: u64 = 20;
+
+/// Whether a listing at `listed` still counts as underpriced against `recommended`.
+///
+/// Shared by the live firehose and by re-verification, so a seller who edits their price
+/// is judged by exactly the same rule that surfaced the listing in the first place —
+/// duplicating this would let the card and the radar quietly disagree.
+fn is_listing_underpriced(listed: f64, recommended: f64) -> bool {
+    if !listed.is_finite() || listed < UNDERPRICED_MIN_LISTED_PLAT {
+        return false;
+    }
+    if !recommended.is_finite() || recommended <= 0.0 {
+        return false;
+    }
+    let ratio = listed / recommended;
+    let trigger_ratio = underpriced_trigger_ratio(recommended);
+    ratio.is_finite() && trigger_ratio > 0.0 && ratio < trigger_ratio
+}
 const PRESENCE_STARTUP_DELAY_SECONDS: u64 = 8;
+
+// ─── Connection liveness ──────────────────────────────────────────────────────
+//
+// A TCP connection can go half-open (Wi-Fi flap, sleep, NAT rebind) without either side
+// noticing: `send` still succeeds into the local kernel buffer and reads simply never
+// arrive. The OS retransmit timeout is minutes — and on a NAT rebind, never. WFM drops
+// presence within its own grace window long before that, which is how the app ends up
+// "offline forever" on a socket it believes is fine. So we never trust the socket: we
+// prove liveness ourselves and tear down the moment the proof stops arriving.
+
+/// Send a keepalive ping after this much inbound silence. Two probes fit comfortably
+/// inside any plausible server-side grace window.
+const PRESENCE_PING_IDLE_SECONDS: u64 = 15;
+/// Unanswered pings tolerated before the socket is declared dead (~30s of silence).
+const PRESENCE_MAX_PENDING_PINGS: u8 = 2;
+/// Hard ceiling on inbound silence regardless of ping accounting.
+const PRESENCE_MAX_SILENCE_SECONDS: u64 = 60;
+/// Re-send `status/set` this often so a server-side idle demotion can't stick.
+const PRESENCE_REASSERT_SECONDS: u64 = 240;
+/// Give up on a `signIn` handshake that never gets a reply, instead of sitting
+/// unauthenticated (and therefore invisible) forever on a healthy-looking socket.
+const PRESENCE_AUTH_DEADLINE_SECONDS: u64 = 10;
+/// Wall-clock running this far ahead of monotonic time means the machine slept; the
+/// socket is dead by definition, so reconnect at once rather than waiting to notice.
+const PRESENCE_SLEEP_SKEW_SECONDS: u64 = 90;
+/// Minimum spacing between corrective `status/set` pushes, so a server that refuses a
+/// status can't turn reconciliation into a set/observe ping-pong loop.
+const PRESENCE_RECONCILE_DEBOUNCE_SECONDS: u64 = 10;
+/// How often the connection loop evaluates liveness.
+const PRESENCE_TICK_MILLIS: u64 = 1_000;
+
+/// Why the liveness tracker wants the connection torn down. Carried into the error log so
+/// a recurring failure mode is identifiable from the log file alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconnectReason {
+    /// Keepalive pings went unanswered.
+    PingsUnanswered,
+    /// No inbound frame of any kind for too long.
+    Silent,
+    /// The `signIn` handshake never completed.
+    AuthTimeout,
+    /// Wall-clock jumped — the host slept and resumed.
+    SleepResume,
+}
+
+impl ReconnectReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            ReconnectReason::PingsUnanswered => "pings-unanswered",
+            ReconnectReason::Silent => "silent",
+            ReconnectReason::AuthTimeout => "auth-timeout",
+            ReconnectReason::SleepResume => "sleep-resume",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            ReconnectReason::PingsUnanswered => {
+                "Keepalive pings went unanswered — socket is half-open. Reconnecting to restore presence."
+            }
+            ReconnectReason::Silent => {
+                "No inbound websocket traffic within the silence ceiling. Reconnecting to restore presence."
+            }
+            ReconnectReason::AuthTimeout => {
+                "Websocket sign-in was never acknowledged. Reconnecting to retry authentication."
+            }
+            ReconnectReason::SleepResume => {
+                "Wall-clock jump detected (host slept). Reconnecting immediately to restore presence."
+            }
+        }
+    }
+}
+
+/// What the connection loop should do on this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LivenessAction {
+    Idle,
+    Ping,
+    ReassertStatus,
+    ForceReconnect(ReconnectReason),
+}
+
+/// Pure liveness bookkeeping for one websocket connection.
+///
+/// Deliberately owns no socket and does no I/O, so every timing rule above is unit-testable
+/// without a network — these thresholds are the difference between recovering in 30 seconds
+/// and staying silently offline, and they need to stay verifiable.
+#[derive(Debug, Clone)]
+struct PresenceLiveness {
+    last_inbound: Instant,
+    last_inbound_wall: SystemTime,
+    pending_pings: u8,
+    last_ping: Option<Instant>,
+    last_status_set: Option<Instant>,
+    auth_sent_at: Option<Instant>,
+    authenticated: bool,
+}
+
+impl PresenceLiveness {
+    fn new(now: Instant, wall: SystemTime) -> Self {
+        Self {
+            last_inbound: now,
+            last_inbound_wall: wall,
+            pending_pings: 0,
+            last_ping: None,
+            last_status_set: None,
+            auth_sent_at: None,
+            authenticated: false,
+        }
+    }
+
+    /// Any frame at all — text, pong, ping, binary — is proof the path is alive.
+    fn on_inbound(&mut self, now: Instant, wall: SystemTime) {
+        self.last_inbound = now;
+        self.last_inbound_wall = wall;
+        self.pending_pings = 0;
+    }
+
+    fn on_auth_sent(&mut self, now: Instant) {
+        self.auth_sent_at = Some(now);
+        self.authenticated = false;
+    }
+
+    fn on_authenticated(&mut self, now: Instant) {
+        self.authenticated = true;
+        self.auth_sent_at = None;
+        self.last_status_set = Some(now);
+    }
+
+    fn on_ping_sent(&mut self, now: Instant) {
+        self.pending_pings = self.pending_pings.saturating_add(1);
+        self.last_ping = Some(now);
+    }
+
+    fn on_status_set(&mut self, now: Instant) {
+        self.last_status_set = Some(now);
+    }
+
+    /// Seconds since the last inbound frame — surfaced to the UI and the log.
+    fn silence_seconds(&self, now: Instant) -> u64 {
+        now.saturating_duration_since(self.last_inbound).as_secs()
+    }
+
+    /// Detects a sleep/resume by comparing wall-clock progress against monotonic progress.
+    /// Only a suspended host makes wall-clock outrun the monotonic clock materially.
+    fn slept(&self, now: Instant, wall: SystemTime) -> bool {
+        let monotonic = now.saturating_duration_since(self.last_inbound);
+        let Ok(elapsed_wall) = wall.duration_since(self.last_inbound_wall) else {
+            // Clock stepped backwards (NTP correction); not evidence of sleep.
+            return false;
+        };
+        elapsed_wall.saturating_sub(monotonic) > Duration::from_secs(PRESENCE_SLEEP_SKEW_SECONDS)
+    }
+
+    fn tick(&self, now: Instant, wall: SystemTime) -> LivenessAction {
+        // Ordered by severity: a dead connection must win over any work we'd do on it.
+        if self.slept(now, wall) {
+            return LivenessAction::ForceReconnect(ReconnectReason::SleepResume);
+        }
+        if !self.authenticated {
+            if let Some(sent) = self.auth_sent_at {
+                if now.saturating_duration_since(sent)
+                    > Duration::from_secs(PRESENCE_AUTH_DEADLINE_SECONDS)
+                {
+                    return LivenessAction::ForceReconnect(ReconnectReason::AuthTimeout);
+                }
+            }
+        }
+        let silence = now.saturating_duration_since(self.last_inbound);
+        if silence > Duration::from_secs(PRESENCE_MAX_SILENCE_SECONDS) {
+            return LivenessAction::ForceReconnect(ReconnectReason::Silent);
+        }
+        if self.pending_pings >= PRESENCE_MAX_PENDING_PINGS {
+            return LivenessAction::ForceReconnect(ReconnectReason::PingsUnanswered);
+        }
+        if self.authenticated {
+            let due = match self.last_status_set {
+                None => true,
+                Some(at) => {
+                    now.saturating_duration_since(at)
+                        >= Duration::from_secs(PRESENCE_REASSERT_SECONDS)
+                }
+            };
+            if due {
+                return LivenessAction::ReassertStatus;
+            }
+        }
+        if silence >= Duration::from_secs(PRESENCE_PING_IDLE_SECONDS) {
+            // Space probes out so one silent stretch yields probes, not a flood.
+            let ready = match self.last_ping {
+                None => true,
+                Some(at) => {
+                    now.saturating_duration_since(at)
+                        >= Duration::from_secs(PRESENCE_PING_IDLE_SECONDS)
+                }
+            };
+            if ready {
+                return LivenessAction::Ping;
+            }
+        }
+        LivenessAction::Idle
+    }
+}
 
 // ─── Single persistent websocket: commands + tracked-item registry ─────────────
 //
@@ -8607,8 +8830,12 @@ async fn run_ws_manager(
     tokio::time::sleep(Duration::from_secs(PRESENCE_STARTUP_DELAY_SECONDS)).await;
 
     let reset_backoff = Duration::from_secs(2);
-    let max_backoff = Duration::from_secs(60);
+    // Presence is the product's whole value while trading, so cap the wait low; the
+    // flap guard below is what actually protects WFM from a reconnect storm.
+    let max_backoff = Duration::from_secs(30);
     let mut backoff = reset_backoff;
+    let mut attempts: u32 = 0;
+    let mut auth_refreshes: u32 = 0;
 
     loop {
         let session = get_session_from_cache();
@@ -8631,35 +8858,152 @@ async fn run_ws_manager(
         const MIN_HEALTHY_CONNECTION: Duration = Duration::from_secs(10);
         let connected_at = std::time::Instant::now();
 
-        match run_ws_connection(&app, &mut rx, session).await {
+        let outcome = run_ws_connection(&app, &mut rx, session).await;
+        let held_for = connected_at.elapsed();
+
+        match outcome {
             // A deliberate command (status change / sign-in / sign-out) — reconnect promptly.
             Ok(WsOutcome::CommandReconnect) => {
                 backoff = reset_backoff;
+                attempts = 0;
+                auth_refreshes = 0;
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
             // Socket closed: reset only if it held for a while; otherwise treat as flapping.
             Ok(WsOutcome::Closed) => {
-                if connected_at.elapsed() >= MIN_HEALTHY_CONNECTION {
+                if held_for >= MIN_HEALTHY_CONNECTION {
                     backoff = reset_backoff;
+                    attempts = 0;
+                    auth_refreshes = 0;
+                    log_feature_event_best_effort(
+                        &app,
+                        "trades-ws",
+                        "reconnect",
+                        &format!(
+                            "Websocket closed after {}s of healthy uptime; reconnecting immediately.",
+                            held_for.as_secs()
+                        ),
+                    );
+                    emit_presence_disconnected(&app, attempts, Duration::from_secs(1));
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 } else {
-                    tokio::time::sleep(backoff).await;
+                    attempts = attempts.saturating_add(1);
+                    let wait = jittered_backoff(backoff);
+                    log_feature_error_best_effort(
+                        &app,
+                        "trades-ws",
+                        "flapping",
+                        "Websocket closed almost immediately after connecting; backing off to avoid a reconnect storm.",
+                        &anyhow!(
+                            "heldForMs={} attempt={} retryInSeconds={}",
+                            held_for.as_millis(),
+                            attempts,
+                            wait.as_secs()
+                        ),
+                    );
+                    emit_presence_disconnected(&app, attempts, wait);
+                    tokio::time::sleep(wait).await;
                     backoff = (backoff * 2).min(max_backoff);
                 }
             }
+            // The cached JWT was rejected. Refresh it off this task, then reconnect — a few
+            // attempts only, so genuinely bad credentials can't loop against WFM's login.
+            Ok(WsOutcome::AuthExpired) => {
+                const MAX_AUTH_REFRESHES: u32 = 3;
+                if auth_refreshes >= MAX_AUTH_REFRESHES {
+                    let wait = jittered_backoff(max_backoff);
+                    log_feature_error_best_effort(
+                        &app,
+                        "trades-ws",
+                        "auth-refresh-exhausted",
+                        "Websocket sign-in kept being rejected after repeated session refreshes. Presence will stay off until you sign in again.",
+                        &anyhow!("refreshAttempts={auth_refreshes}"),
+                    );
+                    emit_presence_disconnected(&app, attempts, wait);
+                    tokio::time::sleep(wait).await;
+                } else {
+                    auth_refreshes = auth_refreshes.saturating_add(1);
+                    log_feature_event_best_effort(
+                        &app,
+                        "trades-ws",
+                        "auth-refresh",
+                        &format!(
+                            "Refreshing the WFM session after a rejected websocket sign-in (attempt {auth_refreshes})."
+                        ),
+                    );
+                    let app_for_refresh = app.clone();
+                    let refreshed = tauri::async_runtime::spawn_blocking(move || {
+                        ensure_authenticated_session(&app_for_refresh)
+                    })
+                    .await;
+                    match refreshed {
+                        Ok(Ok(_)) => {
+                            log_feature_event_best_effort(
+                                &app,
+                                "trades-ws",
+                                "auth-refresh",
+                                "Session refreshed; reconnecting the websocket with the new token.",
+                            );
+                            backoff = reset_backoff;
+                        }
+                        Ok(Err(error)) => {
+                            log_feature_error_best_effort(
+                                &app,
+                                "trades-ws",
+                                "auth-refresh",
+                                "Could not refresh the WFM session after a rejected websocket sign-in.",
+                                &error,
+                            );
+                        }
+                        Err(error) => {
+                            log_feature_error_best_effort(
+                                &app,
+                                "trades-ws",
+                                "auth-refresh",
+                                "Session refresh task failed after a rejected websocket sign-in.",
+                                &anyhow!("{error}"),
+                            );
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
             Err(error) => {
+                attempts = attempts.saturating_add(1);
+                let wait = jittered_backoff(backoff);
                 log_feature_error_best_effort(
                     &app,
                     "trades-ws",
                     "connection",
-                    "WFM websocket dropped; backing off and reconnecting (auth session left intact).",
+                    &format!(
+                        "WFM websocket dropped after {}s; retrying in {}s (attempt {attempts}, auth session left intact).",
+                        held_for.as_secs(),
+                        wait.as_secs()
+                    ),
                     &error,
                 );
-                tokio::time::sleep(backoff).await;
+                emit_presence_disconnected(&app, attempts, wait);
+                tokio::time::sleep(wait).await;
                 backoff = (backoff * 2).min(max_backoff);
             }
         }
     }
+}
+
+/// Spreads reconnects by ±20% so a WFM-side blip can't sync every client into the same
+/// retry instant. Deterministic source (nanos) — no rng dependency needed for this.
+fn jittered_backoff(base: Duration) -> Duration {
+    let millis = base.as_millis() as u64;
+    if millis == 0 {
+        return base;
+    }
+    let spread = (millis / 5).max(1);
+    let noise = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|value| value.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let offset = noise % (spread * 2 + 1);
+    Duration::from_millis(millis.saturating_add(offset).saturating_sub(spread))
 }
 
 /// Opens and services one websocket connection until it should be torn down (so the
@@ -8670,8 +9014,10 @@ async fn run_ws_manager(
 enum WsOutcome {
     /// A SetStatus/SignedIn/SignedOut/subscription command asked us to reconnect.
     CommandReconnect,
-    /// The socket closed (clean close, EOF, or channel gone).
+    /// The socket closed (clean close, EOF, or failed a liveness check).
     Closed,
+    /// The server rejected our cached JWT — refresh the session before reconnecting.
+    AuthExpired,
 }
 
 async fn run_ws_connection(
@@ -8680,8 +9026,11 @@ async fn run_ws_connection(
     session: Option<StoredTradeSession>,
 ) -> Result<WsOutcome> {
     let mut ws = connect_wfm_websocket().await?;
-    let mut authenticated = false;
+    let mut live = PresenceLiveness::new(Instant::now(), SystemTime::now());
     let mut subscribed = false;
+    let mut auth_failed = false;
+
+    emit_presence_connection(app, &live, Instant::now());
 
     if wants_new_orders_subscription() {
         ws_send_subscribe_new_orders(&mut ws).await?;
@@ -8696,7 +9045,17 @@ async fn run_ws_connection(
 
     if let Some(session) = session.as_ref() {
         ws_send_auth(&mut ws, &session.token, &session.device_id).await?;
+        live.on_auth_sent(Instant::now());
+        log_feature_event_best_effort(
+            app,
+            "trades-ws",
+            "auth",
+            "Websocket connected; sign-in sent, awaiting acknowledgement.",
+        );
     }
+
+    let mut ticker = tokio::time::interval(Duration::from_millis(PRESENCE_TICK_MILLIS));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         // Tear down when there's nothing left to hold the connection for.
@@ -8709,8 +9068,20 @@ async fn run_ws_connection(
                 match command {
                     None => return Ok(WsOutcome::Closed),
                     Some(WsCommand::SetStatus) => {
-                        if authenticated {
+                        if live.authenticated {
                             ws_send_status_set(&mut ws, effective_presence_status()).await?;
+                            live.on_status_set(Instant::now());
+                        } else {
+                            // Previously dropped silently, which left a presence toggle doing
+                            // nothing at all whenever auth hadn't landed. Reconnecting is the
+                            // only way to get authenticated, so do that instead.
+                            log_feature_event_best_effort(
+                                app,
+                                "trades-ws",
+                                "status",
+                                "Presence change requested while unauthenticated; reconnecting to apply it.",
+                            );
+                            return Ok(WsOutcome::CommandReconnect);
                         }
                     }
                     // Reconnect to (re)authenticate or drop auth cleanly.
@@ -8729,16 +9100,50 @@ async fn run_ws_connection(
                     }
                 }
             }
-            next = timeout(Duration::from_secs(PRESENCE_KEEPALIVE_SECONDS), ws.next()) => {
-                match next {
-                    // Idle window elapsed: keepalive ping (also detects a dead socket).
-                    Err(_) => {
+            _ = ticker.tick() => {
+                let now = Instant::now();
+                match live.tick(now, SystemTime::now()) {
+                    LivenessAction::Idle => {}
+                    LivenessAction::Ping => {
                         ws.send(Message::Ping(Vec::new().into()))
                             .await
                             .context("failed to send websocket keepalive ping")?;
+                        live.on_ping_sent(now);
                     }
-                    Ok(None) => return Ok(WsOutcome::Closed),
-                    Ok(Some(message)) => {
+                    LivenessAction::ReassertStatus => {
+                        // Idempotent heartbeat: defeats any server-side idle demotion without
+                        // waiting for someone to notice the account went quiet.
+                        ws_send_status_set(&mut ws, effective_presence_status()).await?;
+                        live.on_status_set(now);
+                    }
+                    LivenessAction::ForceReconnect(reason) => {
+                        log_feature_error_best_effort(
+                            app,
+                            "trades-ws",
+                            reason.as_str(),
+                            reason.detail(),
+                            &anyhow!(
+                                "silence={}s pendingPings={} authenticated={} subscribed={}",
+                                live.silence_seconds(now),
+                                live.pending_pings,
+                                live.authenticated,
+                                subscribed
+                            ),
+                        );
+                        live.authenticated = false;
+                        emit_presence_connection(app, &live, now);
+                        return Ok(WsOutcome::Closed);
+                    }
+                }
+            }
+            next = ws.next() => {
+                let now = Instant::now();
+                match next {
+                    None => return Ok(WsOutcome::Closed),
+                    Some(message) => {
+                        // Record liveness before dispatch: any frame proves the path is alive,
+                        // even one we don't otherwise care about.
+                        live.on_inbound(now, SystemTime::now());
                         match message.context("failed to read websocket message")? {
                             Message::Ping(payload) => {
                                 ws.send(Message::Pong(payload))
@@ -8747,7 +9152,18 @@ async fn run_ws_connection(
                             }
                             Message::Close(_) => return Ok(WsOutcome::Closed),
                             Message::Text(text) => {
-                                handle_ws_text(app, &mut ws, &text, &mut authenticated).await?;
+                                let was_authenticated = live.authenticated;
+                                handle_ws_text(app, &mut ws, &text, &mut live, &mut auth_failed)
+                                    .await?;
+                                if live.authenticated != was_authenticated {
+                                    emit_presence_connection(app, &live, now);
+                                }
+                                if auth_failed {
+                                    // The cached JWT is no longer good. Re-auth happens off this
+                                    // task (it does blocking keychain/HTTP work), then the
+                                    // manager reconnects with the fresh token.
+                                    return Ok(WsOutcome::AuthExpired);
+                                }
                             }
                             _ => {}
                         }
@@ -8758,13 +9174,41 @@ async fn run_ws_connection(
     }
 }
 
+/// Publishes the connection's real state so the UI can show "reconnecting" rather than a
+/// bare "offline", and so the log and the UI agree on what failed.
+fn emit_presence_connection(app: &tauri::AppHandle, live: &PresenceLiveness, now: Instant) {
+    let _ = app.emit(
+        PRESENCE_CONNECTION_EVENT,
+        json!({
+            "connected": true,
+            "authenticated": live.authenticated,
+            "lastInboundSecondsAgo": live.silence_seconds(now),
+            "pendingPings": live.pending_pings,
+        }),
+    );
+}
+
+/// Publishes a fully-down connection (no socket at all), with how long until the next try.
+fn emit_presence_disconnected(app: &tauri::AppHandle, attempts: u32, retry_in: Duration) {
+    let _ = app.emit(
+        PRESENCE_CONNECTION_EVENT,
+        json!({
+            "connected": false,
+            "authenticated": false,
+            "reconnectAttempts": attempts,
+            "retryInSeconds": retry_in.as_secs(),
+        }),
+    );
+}
+
 /// Routes one inbound text frame. Unexpected/error paths are logged so the connection never
 /// fails silently.
 async fn handle_ws_text(
     app: &tauri::AppHandle,
     ws: &mut WfmWsStream,
     text: &str,
-    authenticated: &mut bool,
+    live: &mut PresenceLiveness,
+    auth_failed: &mut bool,
 ) -> Result<()> {
     let Ok(message) = serde_json::from_str::<WfmWsMessage>(text) else {
         return Ok(());
@@ -8777,7 +9221,7 @@ async fn handle_ws_text(
 
     match route {
         "cmd/auth/signIn:ok" => {
-            *authenticated = true;
+            live.on_authenticated(Instant::now());
             log_feature_event_best_effort(
                 app,
                 "trades-ws",
@@ -8787,11 +9231,16 @@ async fn handle_ws_text(
             ws_send_status_set(ws, effective_presence_status()).await?;
         }
         "cmd/auth/signIn:error" => {
+            // Previously this was logged and then abandoned: the connection lived on
+            // unauthenticated, so presence never applied and never recovered. Flag it so the
+            // manager can refresh the token and reconnect.
+            *auth_failed = true;
+            live.authenticated = false;
             log_feature_error_best_effort(
                 app,
                 "trades-ws",
-                "auth",
-                "Websocket authentication failed (presence unavailable; subscription continues).",
+                "auth-rejected",
+                "Websocket sign-in was rejected (cached token likely expired); refreshing the session and reconnecting.",
                 &anyhow!("{}", message.payload.clone().unwrap_or(Value::Null)),
             );
         }
@@ -8987,11 +9436,11 @@ fn check_underpriced_listing(app: &tauri::AppHandle, order: &NewOrderEvent, item
         return;
     }
 
-    let ratio = order.platinum / recommended.price;
-    let trigger_ratio = underpriced_trigger_ratio(recommended.price);
-    if !ratio.is_finite() || trigger_ratio <= 0.0 || ratio >= trigger_ratio {
+    if !is_listing_underpriced(order.platinum, recommended.price) {
         return;
     }
+    let ratio = order.platinum / recommended.price;
+    let trigger_ratio = underpriced_trigger_ratio(recommended.price);
 
     // Same seller-mode gate as watchlist alerts — only surface sellers you can trade with now.
     let seller_mode = watchlist_seller_mode()
@@ -9073,6 +9522,44 @@ fn record_observed_presence(app: &tauri::AppHandle, status: &str) {
         let _ = save_session(app, &session);
     }
     let _ = app.emit(PRESENCE_CHANGED_EVENT, status.to_string());
+
+    // Reconciliation: WFM can demote us server-side (its own idle timer, another session, a
+    // browser tab). Recording that as truth is how the app used to get stuck offline while
+    // still "connected" — so push the desired status back instead of just believing it.
+    let desired = effective_presence_status();
+    if status != desired && desired != "invisible" && reconcile_due() {
+        log_feature_event_best_effort(
+            app,
+            "trades-ws",
+            "presence-reconcile",
+            &format!(
+                "WFM reported presence '{status}' but '{desired}' is desired; re-asserting."
+            ),
+        );
+        send_ws_command(WsCommand::SetStatus);
+    }
+}
+
+/// Rate-limits corrective presence pushes. Without this, a server that refuses the desired
+/// status would turn `set → observe → set` into a hot loop against WFM.
+fn reconcile_due() -> bool {
+    static LAST: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    let cell = LAST.get_or_init(|| Mutex::new(None));
+    let Ok(mut guard) = cell.lock() else {
+        return false;
+    };
+    let now = Instant::now();
+    let due = match *guard {
+        None => true,
+        Some(at) => {
+            now.saturating_duration_since(at)
+                >= Duration::from_secs(PRESENCE_RECONCILE_DEBOUNCE_SECONDS)
+        }
+    };
+    if due {
+        *guard = Some(now);
+    }
+    due
 }
 
 fn sign_in_inner(app: &tauri::AppHandle, input: &TradeSignInInput) -> Result<StoredTradeSession> {
@@ -9610,6 +10097,10 @@ struct WfmUserOrder {
 pub struct VerifyMarketListingResult {
     pub still_listed: bool,
     pub current_price: Option<i64>,
+    /// Whether the listing is *still* a genuine opportunity at its current price. `None` when
+    /// we have no recommended price to judge against. Computed here rather than on the
+    /// frontend so it uses the same rule that surfaced the listing.
+    pub still_underpriced: Option<bool>,
 }
 
 fn verify_market_listing_inner(
@@ -9659,11 +10150,13 @@ fn verify_market_listing_inner(
             return Ok(VerifyMarketListingResult {
                 still_listed: true,
                 current_price: order.platinum,
+                still_underpriced: None,
             });
         }
         return Ok(VerifyMarketListingResult {
             still_listed: false,
             current_price: None,
+            still_underpriced: None,
         });
     }
 
@@ -9678,10 +10171,12 @@ fn verify_market_listing_inner(
         Some(order) => VerifyMarketListingResult {
             still_listed: true,
             current_price: order.platinum,
+            still_underpriced: None,
         },
         None => VerifyMarketListingResult {
             still_listed: false,
             current_price: None,
+            still_underpriced: None,
         },
     })
 }
@@ -9693,8 +10188,9 @@ pub async fn verify_market_listing(
     item_id: String,
     rank: Option<i64>,
     expected_price: i64,
+    recommended_price: Option<f64>,
 ) -> Result<VerifyMarketListingResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
         let token = get_session_from_cache().map(|session| session.token);
         verify_market_listing_inner(
             user_slug.trim(),
@@ -9707,7 +10203,18 @@ pub async fn verify_market_listing(
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| friendly_order_error(&error))
+    .map_err(|error| friendly_order_error(&error))?;
+
+    // A seller can edit their price after we surfaced the listing. Re-judge it against the
+    // same threshold the radar used, so the card can tell "cheaper than we said", "still a
+    // deal but worse", and "no longer a deal" apart instead of silently swapping the number.
+    if result.still_listed {
+        if let (Some(current), Some(recommended)) = (result.current_price, recommended_price) {
+            result.still_underpriced = Some(is_listing_underpriced(current as f64, recommended));
+        }
+    }
+
+    Ok(result)
 }
 
 fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
@@ -10781,6 +11288,164 @@ pub async fn delete_wfm_buy_order(
 }
 
 #[cfg(test)]
+mod presence_liveness_tests {
+    use super::{
+        jittered_backoff, LivenessAction, PresenceLiveness, ReconnectReason,
+        PRESENCE_MAX_PENDING_PINGS,
+    };
+    use std::time::{Duration, Instant, SystemTime};
+
+    /// Both clocks advanced by the same amount — normal running, no sleep.
+    fn advance(start: (Instant, SystemTime), secs: u64) -> (Instant, SystemTime) {
+        (
+            start.0 + Duration::from_secs(secs),
+            start.1 + Duration::from_secs(secs),
+        )
+    }
+
+    fn fresh() -> (PresenceLiveness, Instant, SystemTime) {
+        let now = Instant::now();
+        let wall = SystemTime::now();
+        (PresenceLiveness::new(now, wall), now, wall)
+    }
+
+    #[test]
+    fn stays_idle_while_traffic_flows() {
+        let (mut live, now, wall) = fresh();
+        live.on_authenticated(now);
+        let (t, w) = advance((now, wall), 5);
+        live.on_inbound(t, w);
+        assert_eq!(live.tick(t, w), LivenessAction::Idle);
+    }
+
+    #[test]
+    fn pings_after_idle_window_then_spaces_probes() {
+        let (mut live, now, wall) = fresh();
+        let (t, w) = advance((now, wall), 15);
+        assert_eq!(live.tick(t, w), LivenessAction::Ping);
+        live.on_ping_sent(t);
+        // Immediately after sending, we must not ping again on the very next tick.
+        let (t2, w2) = advance((now, wall), 16);
+        assert_eq!(live.tick(t2, w2), LivenessAction::Idle);
+    }
+
+    #[test]
+    fn unanswered_pings_force_reconnect() {
+        let (mut live, now, wall) = fresh();
+        let mut at = (now, wall);
+        for step in 1..=PRESENCE_MAX_PENDING_PINGS {
+            at = advance((now, wall), 15 * step as u64);
+            assert_eq!(live.tick(at.0, at.1), LivenessAction::Ping);
+            live.on_ping_sent(at.0);
+        }
+        let after = advance((now, wall), 15 * (PRESENCE_MAX_PENDING_PINGS as u64 + 1));
+        assert_eq!(
+            live.tick(after.0, after.1),
+            LivenessAction::ForceReconnect(ReconnectReason::PingsUnanswered)
+        );
+    }
+
+    #[test]
+    fn a_pong_clears_pending_pings() {
+        let (mut live, now, wall) = fresh();
+        let (t, w) = advance((now, wall), 15);
+        live.on_ping_sent(t);
+        // Any inbound frame counts as proof of life, pongs included.
+        live.on_inbound(t, w);
+        assert_eq!(live.pending_pings, 0);
+        assert_eq!(live.tick(t, w), LivenessAction::Idle);
+    }
+
+    #[test]
+    fn total_silence_forces_reconnect() {
+        let (mut live, now, wall) = fresh();
+        live.on_authenticated(now);
+        // Suppress the ping path so only the silence ceiling can fire.
+        live.on_ping_sent(now);
+        let (t, w) = advance((now, wall), 61);
+        assert_eq!(
+            live.tick(t, w),
+            LivenessAction::ForceReconnect(ReconnectReason::Silent)
+        );
+    }
+
+    #[test]
+    fn unacknowledged_auth_times_out() {
+        let (mut live, now, wall) = fresh();
+        live.on_auth_sent(now);
+        let (t, w) = advance((now, wall), 11);
+        assert_eq!(
+            live.tick(t, w),
+            LivenessAction::ForceReconnect(ReconnectReason::AuthTimeout)
+        );
+    }
+
+    #[test]
+    fn acknowledged_auth_does_not_time_out() {
+        let (mut live, now, wall) = fresh();
+        live.on_auth_sent(now);
+        live.on_authenticated(now);
+        live.on_inbound(now, wall);
+        let (t, w) = advance((now, wall), 11);
+        assert_eq!(live.tick(t, w), LivenessAction::Idle);
+    }
+
+    #[test]
+    fn wall_clock_jump_is_treated_as_sleep() {
+        let (mut live, now, wall) = fresh();
+        live.on_authenticated(now);
+        // Monotonic barely moved but wall-clock jumped 10 minutes: the host suspended.
+        let t = now + Duration::from_secs(2);
+        let w = wall + Duration::from_secs(600);
+        assert_eq!(
+            live.tick(t, w),
+            LivenessAction::ForceReconnect(ReconnectReason::SleepResume)
+        );
+    }
+
+    #[test]
+    fn backwards_clock_step_is_not_sleep() {
+        let (mut live, now, wall) = fresh();
+        live.on_authenticated(now);
+        // An NTP correction moving the clock back must not be mistaken for a resume.
+        let t = now + Duration::from_secs(2);
+        let w = wall - Duration::from_secs(300);
+        assert!(!live.slept(t, w));
+    }
+
+    #[test]
+    fn presence_is_reasserted_on_the_heartbeat_interval() {
+        let (mut live, now, wall) = fresh();
+        live.on_authenticated(now);
+        let (t, w) = advance((now, wall), 10);
+        live.on_inbound(t, w);
+        assert_eq!(live.tick(t, w), LivenessAction::Idle);
+
+        let (t2, w2) = advance((now, wall), 241);
+        live.on_inbound(t2, w2);
+        assert_eq!(live.tick(t2, w2), LivenessAction::ReassertStatus);
+    }
+
+    #[test]
+    fn unauthenticated_connections_never_reassert_status() {
+        let (mut live, now, wall) = fresh();
+        let (t, w) = advance((now, wall), 300);
+        live.on_inbound(t, w);
+        assert_eq!(live.tick(t, w), LivenessAction::Idle);
+    }
+
+    #[test]
+    fn jitter_stays_within_twenty_percent() {
+        let base = Duration::from_secs(10);
+        for _ in 0..50 {
+            let value = jittered_backoff(base);
+            assert!(value >= Duration::from_secs(8), "{value:?} below range");
+            assert!(value <= Duration::from_secs(12), "{value:?} above range");
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         append_unique_trade_entries, build_cost_basis_confidence,
@@ -10796,7 +11461,7 @@ mod tests {
         parse_status_from_payload, prune_stale_trade_log_overrides_inner, resolve_per_trade,
         replace_trade_log_rows_inner, save_trade_log_rows_inner,
         should_attempt_trade_session_reauth, trade_record_is_before_cutoff,
-        underpriced_trigger_ratio, UNDERPRICED_TRIGGER_BASE_RATIO,
+        is_listing_underpriced, underpriced_trigger_ratio, UNDERPRICED_TRIGGER_BASE_RATIO,
         AlecaframeRawTradeRecord, AlecaframeTradeItemRecord, AlecaframeTradeResponse,
         PortfolioTradeLogEntry, StoredTradeLogRecord, TradeSetComponentRecord,
         TradeSetMapComponentRecord, TradeSetMapFile, TradeSetMapSetRecord, TradeSetRootRecord,
@@ -10811,6 +11476,25 @@ mod tests {
     use serde_json::json;
     use time::format_description::well_known::Rfc3339;
     use time::OffsetDateTime;
+
+    #[test]
+    fn reverification_uses_the_same_underpriced_rule_as_the_radar() {
+        // A 100p item fires at ~<=85p, so a reprice from 60p to 70p is still a deal…
+        assert!(is_listing_underpriced(60.0, 100.0));
+        assert!(is_listing_underpriced(70.0, 100.0));
+        // …but a reprice up to the recommended price is not.
+        assert!(!is_listing_underpriced(95.0, 100.0));
+        assert!(!is_listing_underpriced(100.0, 100.0));
+
+        // Typo-price floor still applies on re-verification.
+        assert!(!is_listing_underpriced(1.0, 100.0));
+
+        // Nonsense inputs are never "a deal".
+        assert!(!is_listing_underpriced(10.0, 0.0));
+        assert!(!is_listing_underpriced(10.0, -5.0));
+        assert!(!is_listing_underpriced(f64::NAN, 100.0));
+        assert!(!is_listing_underpriced(10.0, f64::NAN));
+    }
 
     #[test]
     fn underpriced_trigger_scales_discount_with_price() {

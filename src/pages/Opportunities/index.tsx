@@ -649,10 +649,12 @@ function SetPlannerRow({
   onTargetChange,
   onAddToWatchlist,
   onFarmComponent,
+  onSellSet,
 }: {
   planner: PlannerSetEntry;
   expanded: boolean;
   onToggle: () => void;
+  onSellSet: () => void;
   targetInputs: Record<string, string>;
   ownedRelicHints: Map<string, PlannerOwnedRelicHint[]>;
   recentlyAddedKeys: Record<string, boolean>;
@@ -753,7 +755,16 @@ function SetPlannerRow({
     <article
       className={`sp-set${expanded ? ' is-expanded' : ''}${isComplete ? ' is-complete' : ''}`}
     >
-      <button type="button" className="sp-set-head" onClick={onToggle} aria-expanded={expanded}>
+      {/* The head is a row, not a single button: a completed set carries its own "Sell Now"
+          control, and an interactive element can't legally nest inside a <button>. Both the
+          main area and the chevron toggle, so keyboard access is unchanged. */}
+      <div className="sp-set-head">
+      <button
+        type="button"
+        className="sp-set-head-main"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
         <span className="sp-set-thumb">
           {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{planner.entry.name.slice(0, 2)}</span>}
         </span>
@@ -780,14 +791,37 @@ function SetPlannerRow({
               {formatPlat(planner.completionProfit)}
             </span>
           </div>
-          {isComplete ? (
-            <span className="sp-set-roi complete"><SpCheck /> {t('opp.complete')}</span>
-          ) : (
-            <span className="sp-set-roi">{formatPercent(planner.completionRoiPct)} ROI</span>
-          )}
         </div>
+      </button>
+
+      {/* Completed sets swap their status pill for the action it implies. Both labels occupy
+          the same grid cell so the pill keeps one width and nothing shifts on hover. */}
+      {isComplete ? (
+        <button
+          type="button"
+          className="sp-set-sell"
+          onClick={onSellSet}
+          title={t('opp.sellNowHint', { item: planner.entry.name })}
+        >
+          <span className="sp-set-sell-idle">
+            <SpCheck /> {t('opp.complete')}
+          </span>
+          <span className="sp-set-sell-active">{t('opp.sellNow')}</span>
+        </button>
+      ) : (
+        <span className="sp-set-roi">{formatPercent(planner.completionRoiPct)} ROI</span>
+      )}
+
+      <button
+        type="button"
+        className="sp-set-head-chevron"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-label={expanded ? t('opp.collapseSet') : t('opp.expandSet')}
+      >
         <SpChevron up={expanded} />
       </button>
+      </div>
 
       {expanded ? (
         <div className="sp-set-body">
@@ -1207,6 +1241,7 @@ export function OpportunitiesPage({
     (state) => state.clearRequestedOpportunitiesTab,
   );
   const requestOpportunitiesTab = useAppStore((state) => state.requestOpportunitiesTab);
+  const requestTradeListing = useAppStore((state) => state.requestTradeListing);
   const startFarmingSession = useAppStore((state) => state.startFarmingSession);
   const startFarmingForItem = useAppStore((state) => state.startFarmingForItem);
   const activeFarmingRelicSlug = useAppStore(
@@ -2508,6 +2543,24 @@ export function OpportunitiesPage({
     }
   };
 
+  /**
+   * "Sell Now" on a completed set — same route the Opportunities board's sell actions take:
+   * hand the draft to the store, which switches to Trades → Orders and opens the create-order
+   * form pre-filled. Price is the set's recommended exit; the form still lets you edit it.
+   */
+  const handleSellCompletedSet = (planner: PlannerSetEntry) => {
+    const exitPrice = planner.entry.recommendedSetExitPrice;
+    requestTradeListing({
+      orderType: 'sell',
+      name: planner.entry.name,
+      slug: planner.entry.slug,
+      rank: null,
+      // A missing/zero exit price means we have no pricing for this set; leave the field empty
+      // rather than pre-filling a 0p listing the user might not notice before posting.
+      price: typeof exitPrice === 'number' && exitPrice > 0 ? Math.round(exitPrice) : null,
+    });
+  };
+
   const handlePlannerTargetChange = (
     component: ArbitrageScannerComponentEntry,
     value: string,
@@ -2687,6 +2740,7 @@ export function OpportunitiesPage({
                         // odds panel immediately shows what your relics give you for it.
                         requestOpportunitiesTab('farm-now', component.name)
                       }
+                      onSellSet={() => handleSellCompletedSet(planner)}
                     />
                   ))}
                 </div>

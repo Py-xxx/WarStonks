@@ -1396,8 +1396,18 @@ export type RequestedOpportunitiesTab =
 /** A live underpriced listing as held in the store: the backend event plus UI/verify state. */
 export interface UnderpricedListingCard extends UnderpricedListing {
   receivedAt: number;
-  status: 'new' | 'verifying' | 'verified' | 'gone';
+  /**
+   * `overpriced` is distinct from `gone`: the listing is still live, but the seller raised the
+   * price out of deal territory. Collapsing the two would tell the user "unavailable" about a
+   * listing they can still buy — just not at a price worth whispering for.
+   */
+  status: 'new' | 'verifying' | 'verified' | 'gone' | 'overpriced';
   verifiedPrice: number | null;
+  /**
+   * Set when re-verification found the seller had edited the price. Kept so the card can show
+   * the change (old → new) instead of silently swapping the number under the user.
+   */
+  repricedFrom: { price: number; pctBelow: number } | null;
 }
 
 /** The single underpriced alert card shown in the notification bar. */
@@ -3822,6 +3832,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         receivedAt: Date.now(),
         status: 'new',
         verifiedPrice: null,
+        repricedFrom: null,
       };
       // Dedupe by order id (refresh it if the same listing re-arrives), newest first, capped.
       const without = state.underpricedListings.filter((entry) => entry.orderId !== card.orderId);
@@ -3844,7 +3855,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // silent — newest listing shown, earlier ones rolled into the "N others" count.
     set({
       underpricedAlert: {
-        listing: { ...listing, receivedAt: Date.now(), status: 'new', verifiedPrice: null },
+        listing: {
+          ...listing,
+          receivedAt: Date.now(),
+          status: 'new',
+          verifiedPrice: null,
+          repricedFrom: null,
+        },
       },
     });
 

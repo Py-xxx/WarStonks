@@ -45,23 +45,60 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
         itemId: card.itemId,
         rank: card.rank,
         expectedPrice: Math.round(card.listedPrice),
+        recommendedPrice: card.recommendedPrice,
       });
-      if (result.stillListed) {
-        updateListing(card.orderId, { status: 'verified', verifiedPrice: result.currentPrice });
-        // Auto-copy the whisper at the confirmed current price.
-        await copyWhisperMessage(
-          {
-            username: card.username,
-            platinum: Math.round(result.currentPrice ?? card.listedPrice),
-            rank: card.rank,
-          },
-          card.itemName,
-        );
-        pushToast(t('up.stillActive'), 'success');
-      } else {
+
+      if (!result.stillListed) {
         updateListing(card.orderId, { status: 'gone' });
         pushToast(t('up.unavailable'), 'info');
+        return;
       }
+
+      const priceNow = Math.round(result.currentPrice ?? card.listedPrice);
+      const priceBefore = Math.round(card.verifiedPrice ?? card.listedPrice);
+      // Preserve the *original* delta across repeated verifies, so a second edit still shows
+      // the change from what the user was first told rather than from the last check.
+      const repricedFrom =
+        priceNow === priceBefore
+          ? card.repricedFrom
+          : card.repricedFrom ?? { price: priceBefore, pctBelow: card.pctBelow };
+      const pctBelowNow =
+        card.recommendedPrice > 0
+          ? Math.max(0, (1 - priceNow / card.recommendedPrice) * 100)
+          : card.pctBelow;
+
+      // The seller priced it out of deal territory. Still buyable, but not worth a whisper —
+      // so don't copy a message the user didn't ask for at a price they'd reject.
+      if (result.stillUnderpriced === false) {
+        updateListing(card.orderId, {
+          status: 'overpriced',
+          verifiedPrice: priceNow,
+          pctBelow: pctBelowNow,
+          repricedFrom,
+        });
+        pushToast(t('up.nowOverpriced', { from: priceBefore, to: priceNow }), 'info');
+        return;
+      }
+
+      updateListing(card.orderId, {
+        status: 'verified',
+        verifiedPrice: priceNow,
+        pctBelow: pctBelowNow,
+        repricedFrom,
+      });
+      // Auto-copy the whisper at the confirmed current price.
+      await copyWhisperMessage(
+        { username: card.username, platinum: priceNow, rank: card.rank },
+        card.itemName,
+      );
+      // Never report a bare "copied" when the number moved — the user is about to whisper a
+      // price they haven't seen, which is the whole bug this guards against.
+      pushToast(
+        repricedFrom && repricedFrom.price !== priceNow
+          ? t('up.repricedCopied', { from: repricedFrom.price, to: priceNow })
+          : t('up.stillActive'),
+        repricedFrom && repricedFrom.price !== priceNow ? 'info' : 'success',
+      );
     } catch (error) {
       updateListing(card.orderId, { status: 'new' });
       pushToast(error instanceof Error ? error.message : t('up.verifyFailed'), 'error');
@@ -79,8 +116,10 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
 
   return (
     <div
-      className={`radar-card radar-card-${card.tier}${card.status === 'gone' ? ' is-gone' : ''}${
-        card.completesSet ? ' radar-card-completes' : ''
+      className={`radar-card radar-card-${card.tier}${
+        card.status === 'gone' || card.status === 'overpriced' ? ' is-gone' : ''
+      }${card.completesSet ? ' radar-card-completes' : ''}${
+        card.repricedFrom ? ' is-repriced' : ''
       }`}
     >
       <div className="radar-card-top">
@@ -111,9 +150,26 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
         </span>
       </div>
 
+      {/* The seller edited their price after we surfaced this. Shown in red on the card
+          itself — a toast alone is too easy to miss before whispering. */}
+      {card.repricedFrom ? (
+        <div className="radar-card-reprice" role="status">
+          <span className="radar-card-reprice-label">{t('up.priceChanged')}</span>
+          <span className="radar-card-reprice-delta">
+            {card.repricedFrom.price}p <span aria-hidden="true">→</span> {buyPrice}p
+          </span>
+          <span className="radar-card-reprice-delta">
+            −{Math.round(card.repricedFrom.pctBelow)}% <span aria-hidden="true">→</span> −
+            {Math.round(card.pctBelow)}%
+          </span>
+        </div>
+      ) : null}
+
       <div className="radar-card-actions">
         {card.status === 'gone' ? (
           <span className="radar-card-gone">{t('wl.noLongerListed')}</span>
+        ) : card.status === 'overpriced' ? (
+          <span className="radar-card-gone">{t('up.noLongerUnderpriced')}</span>
         ) : card.status === 'verified' ? (
           <button className="act-btn" type="button" onClick={() => void handleCopyAgain()}>
             Copy Message

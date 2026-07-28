@@ -4152,6 +4152,117 @@ fn average_recent_prices(values: &[f64], take: usize) -> Option<f64> {
     Some(slice.iter().sum::<f64>() / slice.len() as f64)
 }
 
+/// Median of the most recent `take` values, taken in chronological order.
+///
+/// The median — not the mean — because these windows are tiny (3 and 7 buckets). One spiked
+/// bucket moves a 3-sample mean by a third of the spike; it can't move the median at all
+/// unless the majority of the window agrees with it. That's exactly the property we want:
+/// responsive to a real move, immune to a single loud print.
+fn median_recent_prices(values: &[f64], take: usize) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let slice_len = values.len().min(take);
+    let mut slice = values[values.len() - slice_len..].to_vec();
+    slice.sort_by(|left, right| left.total_cmp(right));
+    percentile_price(&slice, 0.5)
+}
+
+/// Volume-weighted percentile over `(price, volume)` buckets, taken in chronological order in
+/// and sorted by price internally.
+///
+/// Unweighted stats treat a bucket holding one trade exactly like a bucket holding forty, so a
+/// single thin print sets the price for the whole window. Weighting by traded volume makes a
+/// price count for as much as it was actually traded at — which is the difference between
+/// "somebody once asked 300p" and "the market pays 300p".
+///
+/// Buckets with no recorded volume fall back to equal weights, so a series missing volume data
+/// degrades to a plain percentile rather than to nothing.
+fn volume_weighted_percentile(points: &[(f64, f64)], percentile: f64) -> Option<f64> {
+    if points.is_empty() {
+        return None;
+    }
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+    let total_weight: f64 = sorted.iter().map(|(_, weight)| weight.max(0.0)).sum();
+    if !(total_weight > 0.0) {
+        let prices = sorted.iter().map(|(price, _)| *price).collect::<Vec<_>>();
+        return percentile_price(&prices, percentile);
+    }
+
+    let target = total_weight * percentile.clamp(0.0, 1.0);
+    let mut cumulative = 0.0;
+    for (price, weight) in &sorted {
+        cumulative += weight.max(0.0);
+        if cumulative >= target {
+            return Some(*price);
+        }
+    }
+    sorted.last().map(|(price, _)| *price)
+}
+
+/// Volume-weighted median of the most recent `take` buckets.
+fn volume_weighted_recent_median(points: &[(f64, f64)], take: usize) -> Option<f64> {
+    if points.is_empty() {
+        return None;
+    }
+    let start = points.len().saturating_sub(take);
+    volume_weighted_percentile(&points[start..], 0.5)
+}
+
+/// Median absolute deviation. Unlike standard deviation (and, on small samples, the IQR), a
+/// single extreme value cannot inflate it — so it stays a usable yardstick for "how far from
+/// normal is this price?" precisely when there IS an outlier to judge.
+fn median_absolute_deviation(values: &[f64]) -> Option<f64> {
+    if values.len() < 4 {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.total_cmp(right));
+    let median = percentile_price(&sorted, 0.5)?;
+    let mut deviations = values
+        .iter()
+        .map(|value| (value - median).abs())
+        .collect::<Vec<_>>();
+    deviations.sort_by(|left, right| left.total_cmp(right));
+    percentile_price(&deviations, 0.5)
+}
+
+/// Plausibility band for a price series: `median ± 3·MAD`, falling back to the IQR fence when
+/// MAD collapses to zero (a flat series with one spike in it).
+fn robust_price_bounds(values: &[f64]) -> Option<(f64, f64)> {
+    if values.len() < 4 {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.total_cmp(right));
+    let median = percentile_price(&sorted, 0.5)?;
+    match median_absolute_deviation(values) {
+        Some(mad) if mad > 0.0 => Some((median - (mad * 3.0), median + (mad * 3.0))),
+        // MAD of zero means the series is essentially constant apart from the outliers
+        // themselves; the IQR fence still separates them.
+        _ => interquartile_bounds(&sorted),
+    }
+}
+
+/// Clamps each value into the plausibility band, preserving chronological order.
+///
+/// Winsorizing rather than discarding is deliberate: dropping a bucket would silently shorten
+/// the recency window and let older prices masquerade as current, while clamping keeps every
+/// bucket in its real time slot and only limits how far one of them can pull the result. A
+/// genuine sustained rise still moves the anchors, because every bucket rises together and
+/// the band rises with them.
+fn winsorized_series(values: &[f64]) -> Vec<f64> {
+    let Some((lower, upper)) = robust_price_bounds(values) else {
+        return values.to_vec();
+    };
+    values
+        .iter()
+        .map(|value| value.clamp(lower, upper))
+        .collect()
+}
+
 fn interquartile_bounds(sorted_values: &[f64]) -> Option<(f64, f64)> {
     if sorted_values.len() < 4 {
         return None;
@@ -4161,28 +4272,6 @@ fn interquartile_bounds(sorted_values: &[f64]) -> Option<(f64, f64)> {
     let q3 = percentile_price(sorted_values, 0.75)?;
     let iqr = q3 - q1;
     Some((q1 - (iqr * 1.5), q3 + (iqr * 1.5)))
-}
-
-fn filtered_price_series(values: &[f64]) -> Vec<f64> {
-    if values.is_empty() {
-        return Vec::new();
-    }
-
-    let mut sorted_values = values.to_vec();
-    sorted_values.sort_by(|left, right| left.total_cmp(right));
-    let Some((lower_bound, upper_bound)) = interquartile_bounds(&sorted_values) else {
-        return sorted_values;
-    };
-
-    let filtered = sorted_values
-        .into_iter()
-        .filter(|value| *value >= lower_bound && *value <= upper_bound)
-        .collect::<Vec<_>>();
-    if filtered.is_empty() {
-        values.to_vec()
-    } else {
-        filtered
-    }
 }
 
 fn weighted_average_pairs(pairs: &[(Option<f64>, f64)]) -> Option<f64> {
@@ -4214,50 +4303,61 @@ fn build_historical_exit_profile(rows: &[InternalStatsRow]) -> HistoricalExitPro
         recent_rows
     };
 
-    let fair_series = source_rows
+    // One chronological fair-price series. This used to be built twice — identically — and only
+    // one copy was outlier-treated; the untreated copy fed the two highest-weighted anchors,
+    // which is how a single spiked bucket became the recommended exit price.
+    // Price paired with its own bucket's volume, kept together from the start — deriving the
+    // volumes separately would misalign the moment a row carries no usable price.
+    let fair_points = source_rows
         .iter()
         .filter_map(|row| {
             row.median
                 .or(row.wa_price)
                 .or(row.avg_price)
                 .or(row.moving_avg)
+                .map(|price| (price, row.volume.max(0.0)))
         })
         .collect::<Vec<_>>();
-    let filtered_fair_series = filtered_price_series(&fair_series);
-    let recent_fair_series = source_rows
+    let fair_series = fair_points
         .iter()
-        .filter_map(|row| {
-            row.median
-                .or(row.wa_price)
-                .or(row.avg_price)
-                .or(row.moving_avg)
-        })
+        .map(|(price, _)| *price)
         .collect::<Vec<_>>();
 
-    let fair_high_anchor = percentile_price(&filtered_fair_series, 0.68)
-        .or_else(|| percentile_price(&filtered_fair_series, 0.62))
-        .or_else(|| filtered_fair_series.last().copied());
-    let recent_fair_anchor = average_recent_prices(&recent_fair_series, 3)
-        .or_else(|| average_recent_prices(&filtered_fair_series, 3));
-    let recent_mid_anchor = average_recent_prices(&recent_fair_series, 7)
-        .or_else(|| average_recent_prices(&filtered_fair_series, 6));
+    // Every anchor now reads from the winsorized series, so no single bucket can pull any of
+    // them past what the surrounding history supports. Order is preserved, so "recent" still
+    // means recent.
+    let clamped_series = winsorized_series(&fair_series);
+    let mut sorted_clamped = clamped_series.clone();
+    sorted_clamped.sort_by(|left, right| left.total_cmp(right));
 
-    let drift_pct = if recent_fair_series.len() >= 6 {
-        let midpoint = recent_fair_series.len() / 2;
-        let previous_avg = recent_fair_series[..midpoint].iter().sum::<f64>() / midpoint as f64;
-        let recent_avg = recent_fair_series[midpoint..].iter().sum::<f64>()
-            / (recent_fair_series.len() - midpoint) as f64;
+    let clamped_points = clamped_series
+        .iter()
+        .zip(fair_points.iter())
+        .map(|(price, (_, volume))| (*price, *volume))
+        .collect::<Vec<_>>();
+
+    let fair_high_anchor = percentile_price(&sorted_clamped, 0.68)
+        .or_else(|| percentile_price(&sorted_clamped, 0.62))
+        .or_else(|| sorted_clamped.last().copied());
+    let recent_fair_anchor = volume_weighted_recent_median(&clamped_points, 3)
+        .or_else(|| median_recent_prices(&clamped_series, 3));
+    let recent_mid_anchor = volume_weighted_recent_median(&clamped_points, 7)
+        .or_else(|| median_recent_prices(&clamped_series, 7));
+
+    let drift_pct = if clamped_series.len() >= 6 {
+        let midpoint = clamped_series.len() / 2;
+        let previous_avg = clamped_series[..midpoint].iter().sum::<f64>() / midpoint as f64;
+        let recent_avg = clamped_series[midpoint..].iter().sum::<f64>()
+            / (clamped_series.len() - midpoint) as f64;
         if previous_avg > 0.0 {
             Some(((recent_avg - previous_avg) / previous_avg) * 100.0)
         } else {
             None
         }
     } else {
-        let previous_avg = average_recent_prices(
-            &recent_fair_series[..recent_fair_series.len().saturating_sub(3)],
-            3,
-        );
-        let recent_avg = average_recent_prices(&recent_fair_series, 3);
+        let previous_avg =
+            average_recent_prices(&clamped_series[..clamped_series.len().saturating_sub(3)], 3);
+        let recent_avg = average_recent_prices(&clamped_series, 3);
         match (previous_avg, recent_avg) {
             (Some(previous), Some(recent)) if previous > 0.0 => {
                 Some(((recent - previous) / previous) * 100.0)
@@ -13252,6 +13352,115 @@ mod tests {
         assert_eq!(
             super::resolved_recommended_entry_price(Some(58.0), Some(61.0)),
             Some(58.0)
+        );
+    }
+
+    /// Minimal stats row for exit-pricing tests: only price + volume matter to the anchors.
+    fn build_stats_row(bucket_at: time::OffsetDateTime, price: f64, volume: f64) -> InternalStatsRow {
+        InternalStatsRow {
+            bucket_at,
+            source_kind: "closed".to_string(),
+            volume,
+            min_price: Some(price - 1.0),
+            max_price: Some(price + 1.0),
+            open_price: Some(price),
+            closed_price: Some(price),
+            avg_price: Some(price),
+            wa_price: Some(price),
+            median: Some(price),
+            moving_avg: Some(price),
+            donch_top: Some(price + 1.0),
+            donch_bot: Some(price - 1.0),
+        }
+    }
+
+    #[test]
+    fn volume_weighting_ignores_a_thin_spike_bucket() {
+        // Two busy buckets at ~100 and one single-trade bucket at 300: the weighted median must
+        // stay with the volume, not the loudest print.
+        let points = [(100.0, 40.0), (102.0, 35.0), (300.0, 1.0)];
+        let weighted = super::volume_weighted_percentile(&points, 0.5).expect("weighted median");
+        assert!(
+            weighted <= 102.0,
+            "one thin 300p bucket should not set the price, got {weighted}"
+        );
+
+        // With volume data missing entirely it must still produce a sane plain median.
+        let unweighted = super::volume_weighted_percentile(
+            &[(100.0, 0.0), (102.0, 0.0), (300.0, 0.0)],
+            0.5,
+        )
+        .expect("fallback median");
+        assert_eq!(unweighted, 102.0);
+    }
+
+    #[test]
+    fn winsorizing_clamps_outliers_without_reordering() {
+        let series = [100.0, 101.0, 99.0, 100.0, 102.0, 98.0, 300.0];
+        let clamped = super::winsorized_series(&series);
+        assert_eq!(clamped.len(), series.len(), "length must be preserved");
+        // Chronology intact — the spike is still the newest bucket, just pulled back.
+        assert!(clamped[6] < 130.0, "spike should be clamped, got {}", clamped[6]);
+        assert_eq!(&clamped[..6], &series[..6], "normal values must pass through");
+    }
+
+    #[test]
+    fn a_sustained_rise_still_moves_the_anchor() {
+        // Guard against over-correcting: winsorizing must not flatten a genuine trend, or the
+        // app would under-price every rising item — the opposite failure, and a costlier one.
+        let series = [100.0, 104.0, 108.0, 112.0, 116.0, 120.0, 124.0, 128.0];
+        let clamped = super::winsorized_series(&series);
+        let recent = super::median_recent_prices(&clamped, 3).expect("recent median");
+        assert!(
+            recent >= 120.0,
+            "a real uptrend must still lift the anchor, got {recent}"
+        );
+    }
+
+    #[test]
+    fn exit_price_tracks_traded_volume_not_a_lone_recent_print() {
+        // A steady ~100p item whose newest bucket holds a single 300p trade. No zone bands, so
+        // the anchors alone decide — this is the case the old unfiltered mean got badly wrong.
+        let base_time = super::now_utc() - time::Duration::days(12);
+        let mut rows = Vec::new();
+        for day in 0..11 {
+            let price = 100.0 + ((day % 3) as f64) - 1.0;
+            rows.push(build_stats_row(base_time + time::Duration::days(day), price, 30.0));
+        }
+        rows.push(build_stats_row(base_time + time::Duration::days(11), 300.0, 1.0));
+
+        let recommended = super::historical_recommended_exit_price(Some(90.0), &rows, None, None)
+            .expect("recommended exit");
+
+        assert!(
+            recommended <= 110.0,
+            "a single thin 300p print must not drive the exit price, got {recommended}"
+        );
+        assert!(
+            recommended >= 95.0,
+            "must not over-correct below the real market, got {recommended}"
+        );
+    }
+
+    #[test]
+    fn exit_price_follows_a_real_sustained_move() {
+        // Same shape, but the rise is real and traded at volume across many buckets. Here the
+        // recommendation SHOULD follow it up — recency is the feature, outliers are the bug.
+        let base_time = super::now_utc() - time::Duration::days(12);
+        let mut rows = Vec::new();
+        for day in 0..6 {
+            rows.push(build_stats_row(base_time + time::Duration::days(day), 100.0, 30.0));
+        }
+        for day in 6..12 {
+            rows.push(build_stats_row(base_time + time::Duration::days(day), 150.0, 30.0));
+        }
+
+        let recommended = super::historical_recommended_exit_price(Some(90.0), &rows, None, None)
+            .expect("recommended exit");
+
+        assert!(
+            recommended >= 120.0,
+            "a genuine volume-backed rise must lift the exit price, got {recommended}"
         );
     }
 

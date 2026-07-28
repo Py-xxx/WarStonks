@@ -1000,6 +1000,37 @@ export async function listenToWfmPresenceChange(
   });
 }
 
+/**
+ * Live state of the persistent WFM websocket. Presence only exists while this connection
+ * does, so a dropped socket and a rejected sign-in are the two ways the user silently goes
+ * offline — this distinguishes them instead of both surfacing as a bare "offline".
+ */
+export interface WfmPresenceConnection {
+  connected: boolean;
+  authenticated: boolean;
+  /** Seconds since the last inbound frame. Only present while connected. */
+  lastInboundSecondsAgo?: number;
+  /** Unanswered keepalive pings. Only present while connected. */
+  pendingPings?: number;
+  /** Consecutive failed reconnects. Only present while disconnected. */
+  reconnectAttempts?: number;
+  /** Seconds until the next reconnect attempt. Only present while disconnected. */
+  retryInSeconds?: number;
+}
+
+export async function listenToWfmPresenceConnection(
+  onConnection: (state: WfmPresenceConnection) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<WfmPresenceConnection>('wfm-presence-connection', (event) => {
+    onConnection(event.payload);
+  });
+}
+
 export interface WatchlistTargetSync {
   watchlistId: string;
   slug: string;
@@ -1189,6 +1220,12 @@ export async function getRadarStats(): Promise<RadarStats> {
 export interface VerifyMarketListingResult {
   stillListed: boolean;
   currentPrice: number | null;
+  /**
+   * Whether the listing is still a genuine deal at its *current* price — the seller may have
+   * edited it since we surfaced it. `null` when there's no recommended price to judge against.
+   * Decided in Rust so it uses the same threshold that surfaced the listing.
+   */
+  stillUnderpriced: boolean | null;
 }
 
 /** Re-checks (instant priority) whether an underpriced listing is still live on Warframe.Market. */
@@ -1198,6 +1235,7 @@ export async function verifyMarketListing(input: {
   itemId: string;
   rank: number | null;
   expectedPrice: number;
+  recommendedPrice?: number | null;
 }): Promise<VerifyMarketListingResult> {
   return invoke<VerifyMarketListingResult>('verify_market_listing', {
     orderId: input.orderId,
@@ -1205,6 +1243,7 @@ export async function verifyMarketListing(input: {
     itemId: input.itemId,
     rank: input.rank,
     expectedPrice: input.expectedPrice,
+    recommendedPrice: input.recommendedPrice ?? null,
   });
 }
 

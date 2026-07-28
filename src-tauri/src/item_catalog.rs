@@ -363,6 +363,42 @@ where
     })
 }
 
+/// Turns a WFStat fetch failure into a sentence that says what actually went wrong.
+///
+/// The distinction matters to whoever reads it: "refused" means the request arrived and was
+/// rejected (our problem, or the user's IP reputation — retrying won't help), while "couldn't
+/// connect" means it never got there (network — retrying might). Reporting both as "WFStat is
+/// offline" blamed a third party that was working fine and cost real time to unpick.
+fn describe_wfstat_failure(error: &anyhow::Error) -> String {
+    describe_wfstat_status(
+        error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
+            .and_then(reqwest::Error::status),
+    )
+}
+
+/// The wording itself, split from error inspection so it is testable without fabricating a
+/// `reqwest::Error`.
+fn describe_wfstat_status(status: Option<reqwest::StatusCode>) -> String {
+    match status {
+        Some(code) if code == reqwest::StatusCode::FORBIDDEN => {
+            "warframestat.us refused the request (HTTP 403). This is usually a network or \
+             firewall between you and the service rather than an outage."
+                .to_string()
+        }
+        Some(code) if code == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            "warframestat.us is rate-limiting this app (HTTP 429).".to_string()
+        }
+        Some(code) if code.is_server_error() => {
+            format!("warframestat.us returned a server error (HTTP {code}).")
+        }
+        Some(code) => format!("warframestat.us rejected the request (HTTP {code})."),
+        // No HTTP status at all: DNS failure, timeout, TLS error — never reached the service.
+        None => "Could not connect to warframestat.us — the request never reached it.".to_string(),
+    }
+}
+
 fn startup_warning(app: &AppHandle, stage_key: &str, detail: &str, error: &anyhow::Error) {
     log_feature_error_best_effort(app, "bootstrap", stage_key, detail, error);
 }
@@ -708,12 +744,19 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             (json, bytes, false)
         }
         Err(error) => {
+            // "Offline" was the only story this code could tell, so a request that was actively
+            // *refused* (403 from Cloudflare) reported a third-party outage that wasn't
+            // happening — and sent everyone looking in the wrong place. Name what really
+            // happened instead.
+            let cause = describe_wfstat_failure(&error);
             if paths.wfstat_file_path.exists() {
                 startup_warning(
                     &app,
                     "wfstat-fetch-fallback",
-                    "Could not reach warframestat.us — rebuilding with the last saved WFStat \
-                     catalog. Drop/vault data may be out of date until WFStat is back online.",
+                    &format!(
+                        "{cause} Rebuilding with the last saved WFStat catalog — drop/vault data \
+                         may be out of date until the next successful refresh."
+                    ),
                     &error,
                 );
                 let cached = fs::read(&paths.wfstat_file_path).with_context(|| {
@@ -729,8 +772,10 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
                 startup_warning(
                     &app,
                     "wfstat-fetch-fallback",
-                    "Could not reach warframestat.us — continuing with the existing item catalog. \
-                     Drop/vault data may be out of date until WFStat is back online.",
+                    &format!(
+                        "{cause} Continuing with the existing item catalog — drop/vault data may \
+                         be out of date until the next successful refresh."
+                    ),
                     &error,
                 );
                 return reuse_existing_catalog_summary(
@@ -741,11 +786,10 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
                     &current_version,
                 );
             } else {
-                return Err(error.context(
-                    "WFSTAT_FIRST_RUN_OFFLINE: Initial startup could not be completed because \
-                     warframestat.us (WFStat) is offline. Please try again later — this resolves \
-                     itself once WFStat is reachable.",
-                ));
+                return Err(error.context(format!(
+                    "WFSTAT_FIRST_RUN_OFFLINE: Initial startup could not be completed. {cause} \
+                     Please try again — startup completes once the WFStat catalog downloads."
+                )));
             }
         }
     };
@@ -3277,12 +3321,30 @@ fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<Dur
     Some(Duration::from_secs(seconds as u64))
 }
 
+/// Builds the request for the WFStat catalog download.
+///
+/// The User-Agent is mandatory, not cosmetic: warframestat.us sits behind Cloudflare, which
+/// risk-scores User-Agent-less requests and answers them with `403 Forbidden` — and the score
+/// depends on the caller's IP reputation, so the same UA-less request that succeeds from one
+/// country is refused from another. That is why this failed only for some users while looking
+/// perfectly healthy in testing. WFStat's API rules require an identifying UA regardless.
+///
+/// Split out from the send so a test can assert the header is present without doing any I/O.
+fn build_catalog_download_request(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> reqwest::blocking::RequestBuilder {
+    client
+        .get(url)
+        .header("User-Agent", WFM_USER_AGENT)
+        .header("Accept", "application/json")
+}
+
 fn fetch_http_to_file(url: &str, output_path: &Path) -> Result<Vec<u8>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()?;
-    let bytes = client
-        .get(url)
+    let bytes = build_catalog_download_request(&client, url)
         .send()?
         .error_for_status()?
         .bytes()?
@@ -4315,11 +4377,66 @@ pub fn import_language_pack(
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_wfm_item_family, is_unmatched_wfm_outcome, normalize_name, parse_variant_info,
+        build_catalog_download_request, derive_wfm_item_family,
+        describe_wfstat_status, is_unmatched_wfm_outcome, normalize_name, parse_variant_info,
         split_blueprint_name, wfstat_component_source_record_key, WfstatComponentRecord,
-        WFSTAT_ITEMS_COLUMN_COUNT, WFSTAT_ITEMS_INSERT_SQL, MatchOutcome,
+        WFSTAT_ITEMS_COLUMN_COUNT, WFSTAT_ITEMS_INSERT_SQL, MatchOutcome, WFM_USER_AGENT,
+        WFSTAT_ITEMS_URL,
     };
     use serde_json::json;
+
+    /// warframestat.us sits behind Cloudflare, which answers User-Agent-less requests with 403
+    /// depending on the caller's IP reputation — so this silently worked in testing and failed
+    /// for users in other countries. It has now been fixed twice on two different call paths;
+    /// this test exists so there is never a third time.
+    #[test]
+    fn catalog_download_always_sends_an_identifying_user_agent() {
+        let client = reqwest::blocking::Client::builder()
+            .build()
+            .expect("client builds");
+        let request = build_catalog_download_request(&client, WFSTAT_ITEMS_URL)
+            .build()
+            .expect("request builds");
+
+        let user_agent = request
+            .headers()
+            .get("User-Agent")
+            .expect("catalog download must send a User-Agent")
+            .to_str()
+            .expect("User-Agent is valid text");
+
+        assert!(
+            user_agent.contains("WarStonks"),
+            "User-Agent must identify this app, got {user_agent}"
+        );
+        assert_eq!(user_agent, WFM_USER_AGENT);
+    }
+
+    #[test]
+    fn wfstat_failures_are_described_by_what_actually_happened() {
+        let describe = |code: u16| {
+            describe_wfstat_status(Some(
+                reqwest::StatusCode::from_u16(code).expect("valid status"),
+            ))
+        };
+
+        // A refusal must never be reported as an outage — that wording is what sent this
+        // investigation after a third-party service that was working the entire time.
+        let refused = describe(403);
+        assert!(refused.contains("403"), "should name the status: {refused}");
+        assert!(
+            !refused.to_lowercase().contains("offline"),
+            "a refusal is not an outage: {refused}"
+        );
+
+        assert!(describe(429).contains("429"));
+        assert!(describe(503).contains("503"));
+
+        // No HTTP status = the request never arrived; that one really is a connectivity issue.
+        let unreachable = describe_wfstat_status(None);
+        assert!(unreachable.contains("never reached it"), "got {unreachable}");
+        assert!(!unreachable.contains("403"));
+    }
 
     #[test]
     fn normalizes_whitespace_and_case() {
