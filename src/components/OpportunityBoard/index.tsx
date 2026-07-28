@@ -6,6 +6,7 @@ import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { tHealth } from '../../lib/healthLabels';
 import { copyWhisperMessage } from '../../lib/marketMessages';
+import { useLocalizedParams } from '../../hooks/useLocalizedParams';
 import type { Opportunity, OpportunityAction } from '../../lib/tauriClient';
 
 const REFRESH_INTERVAL_MS = 30_000;
@@ -143,6 +144,7 @@ function ActionButton({ action }: { action: OpportunityAction }) {
   const setActivePage = useAppStore((state) => state.setActivePage);
   const setTradesSubTab = useAppStore((state) => state.setTradesSubTab);
   const pushToast = useAppStore((state) => state.pushToast);
+  const localizeParams = useLocalizedParams();
 
   // Every action stays inside WarStonks — open the right page/flow, don't leave for the website.
   const handle = () => {
@@ -197,7 +199,7 @@ function ActionButton({ action }: { action: OpportunityAction }) {
 
   return (
     <button type="button" className="opp-action" onClick={handle}>
-      {tActive(action.labelKey as TranslationKey, action.labelParams)}
+      {tActive(action.labelKey as TranslationKey, localizeParams(action.labelParams))}
       {action.price !== null ? <span className="opp-action-price">{action.price}p</span> : null}
     </button>
   );
@@ -260,6 +262,7 @@ function OpportunityCard({
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
+  const localizeParams = useLocalizedParams();
   const confidenceClass = `opp-conf-${opp.confidenceLabel.toLowerCase()}`;
   const imageUrl = resolveWfmAssetUrl(opp.imagePath);
   const urgent = opp.urgency === 'expiring';
@@ -281,7 +284,9 @@ function OpportunityCard({
             {t(opp.titleKey as TranslationKey, opp.titleParams)}
           </h4>
           {opp.subtitleKey ? (
-            <p className="opp-card-subtitle">{t(opp.subtitleKey as TranslationKey, opp.subtitleParams)}</p>
+            <p className="opp-card-subtitle">
+              {t(opp.subtitleKey as TranslationKey, localizeParams(opp.subtitleParams))}
+            </p>
           ) : null}
         </div>
         <div className="opp-card-value">
@@ -297,7 +302,7 @@ function OpportunityCard({
             <span className="opp-reason-icon" aria-hidden="true">
               <ReasonIcon kind={reason.icon} />
             </span>
-            {t(reason.textKey as TranslationKey, reason.textParams)}
+            {t(reason.textKey as TranslationKey, localizeParams(reason.textParams))}
           </li>
         ))}
       </ul>

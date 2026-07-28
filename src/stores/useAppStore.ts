@@ -154,6 +154,7 @@ import {
 } from '../lib/notifications';
 import { loadAutoScanEnabled, saveAutoScanEnabled } from '../lib/autoScan';
 import { type AppLanguage, loadLanguage, saveLanguage, wfmLangCode, wfstatLangCode } from '../lib/language';
+import { englishNameKey } from '../lib/itemNames';
 import { tActive, tUserMessage } from '../i18n';
 import { buildFarmingRelic, parseRelicTierCode, rankByTargetOdds } from '../lib/farmingSession';
 import {
@@ -1911,6 +1912,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
         if (item.slug) {
           map[item.slug] = item.name;
+        }
+        // Also index by the English name, so item names the backend interpolates into strings
+        // (opportunity labels, subtitles, reasons) can be localized even though they arrive
+        // with no id or slug attached.
+        if (item.nameEn) {
+          map[englishNameKey(item.nameEn)] = item.name;
         }
       }
       set({ itemNameMap: map });

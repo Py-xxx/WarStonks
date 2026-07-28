@@ -4121,10 +4121,14 @@ fn fetch_wfm_item_names(lang_code: &str) -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
-/// Downloads and installs localized item names for one language from WFStat, matching on the
-/// stored `primary_wfstat_unique_name`. This is how `wfm_item_i18n` actually gets populated —
-/// the bulk catalog has no i18n object. Errors (e.g. WFStat offline) bubble up so the UI can
-/// show the fallback + language-pack path.
+/// Downloads and installs localized item names for one language **from Warframe.Market**, keyed
+/// by WFM item id (== our `wfm_id`, so no join is needed). This is how `wfm_item_i18n` actually
+/// gets populated — the bulk catalog request carries no i18n object.
+///
+/// warframestat.us is NOT involved in item names and must never be: WFM is the marketplace's own
+/// canonical localization, and it is the only source that covers every tradeable item in every
+/// supported language. (WFStat is used solely for worldstate/event data.) Errors bubble up so
+/// the UI can show the fallback + language-pack path.
 pub fn populate_language_item_names(
     app: AppHandle,
     lang_code: String,
