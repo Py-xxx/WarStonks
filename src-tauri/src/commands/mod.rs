@@ -8,7 +8,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
 
-use crate::error_log::log_feature_error_best_effort;
+use crate::error_log::{log_feature_error_best_effort, log_feature_event_best_effort};
 use crate::item_catalog;
 use crate::wfm_scheduler::{
     execute_coalesced_wfm_request, wfm_scheduler_snapshot, RequestPriority, WfmHttpResponse,
@@ -792,6 +792,33 @@ fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
     .context("failed to open the local item catalog")
 }
 
+/// Removes the `Name: Part` / `Name - Part` separators Warframe.Market puts in some localized
+/// item names ("Perigale Prime: Cano", "Trumna Prime - Culasse").
+///
+/// These come from WFM's own data, not from us — verified against the raw API response, where
+/// the English name is "Perigale Prime Barrel" and the Portuguese is "Perigale Prime: Cano".
+/// They carry no meaning and only make the item harder to search for, since the user has to
+/// reproduce punctuation they can't see the need for. English has zero of them across all
+/// 3,837 items, so removing them costs nothing and makes every language read like English.
+///
+/// Only *spaced* separators are removed. A hyphen inside a word is part of the name — "目—目"
+/// (Eye-Eye) and "Photora-Szene" must survive intact.
+fn strip_name_separators(name: &str) -> String {
+    let cleaned = name.replace(": ", " ").replace(" - ", " ");
+    // Collapse any double spacing the removal leaves behind.
+    let mut out = String::with_capacity(cleaned.len());
+    let mut previous_was_space = false;
+    for character in cleaned.chars() {
+        let is_space = character == ' ';
+        if is_space && previous_was_space {
+            continue;
+        }
+        previous_was_space = is_space;
+        out.push(character);
+    }
+    out.trim().to_string()
+}
+
 fn load_wfm_autocomplete_items_inner(
     app: tauri::AppHandle,
     language: Option<String>,
@@ -821,7 +848,9 @@ fn load_wfm_autocomplete_items_inner(
         Ok(WfmAutocompleteItem {
             item_id: row.get(0)?,
             wfm_id: row.get(1)?,
-            name: row.get(2)?,
+            // Cleaned on read, not on import, so installs that already downloaded a language
+            // pack are fixed on next launch with no re-download.
+            name: strip_name_separators(&row.get::<_, String>(2)?),
             name_en: row.get(3)?,
             slug: row.get(4)?,
             max_rank: row.get(5)?,
@@ -1070,6 +1099,35 @@ fn run_initialize_app_catalog(
 
     let result = item_catalog::initialize_app_catalog(app.clone());
 
+    // Right after the catalog settles, realign anything still holding an item_id from before ids
+    // became stable. Best-effort: a repair failure must never block startup, but it IS logged,
+    // because until it runs the app can serve one item's prices under another item's name.
+    if result.is_ok() {
+        match crate::market_observatory::repair_stale_item_ids(&app) {
+            Ok(summary) if summary.changed_anything() => {
+                log_feature_event_best_effort(
+                    &app,
+                    "bootstrap",
+                    "item-id-repair",
+                    &format!(
+                        "Realigned stale item ids after a catalog rebuild: {} rows repointed at the item they actually describe ({} unrecoverable rows removed).",
+                        summary.remapped, summary.dropped
+                    ),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                log_feature_error_best_effort(
+                    &app,
+                    "bootstrap",
+                    "item-id-repair",
+                    "Could not realign cached item ids; prices may be attached to the wrong items until this succeeds.",
+                    &error,
+                );
+            }
+        }
+    }
+
     let mut state = state_lock.lock().map_err(|_| {
         let error = anyhow::anyhow!("startup command state lock poisoned");
         log_feature_error_best_effort(
@@ -1187,9 +1245,60 @@ pub async fn get_wfm_top_sell_orders(
 
 #[cfg(test)]
 mod tests {
+
+    /// Real strings from Warframe.Market's API. WFM ships these separators in its own localized
+    /// names — English has zero across all 3,837 items — so stripping them is data cleanup, not
+    /// a change to what an item is called.
+    #[test]
+    fn strips_wfm_localized_name_separators() {
+        assert_eq!(strip_name_separators("Perigale Prime: Cano"), "Perigale Prime Cano");
+        assert_eq!(strip_name_separators("Quassus Prime: Klinge"), "Quassus Prime Klinge");
+        assert_eq!(strip_name_separators("Trumna Prime - Culasse"), "Trumna Prime Culasse");
+        assert_eq!(strip_name_separators("Frost Prime: Conjunto"), "Frost Prime Conjunto");
+    }
+
+    #[test]
+    fn leaves_english_names_untouched() {
+        for name in [
+            "Mesa Prime Set",
+            "Perigale Prime Barrel",
+            "Titania Prime Neuroptics Blueprint",
+        ] {
+            assert_eq!(strip_name_separators(name), name);
+        }
+    }
+
+    #[test]
+    fn preserves_hyphens_that_are_part_of_the_name() {
+        // Only *spaced* separators are structural. These are real names and must survive:
+        // "Eye-Eye" in Chinese, and a compound German word.
+        assert_eq!(strip_name_separators("\u{76ee}\u{2014}\u{76ee}"), "\u{76ee}\u{2014}\u{76ee}");
+        assert_eq!(strip_name_separators("Photora-Szene"), "Photora-Szene");
+        // Both kinds in one real name: the spaced dash goes, the in-word hyphen stays.
+        assert_eq!(
+            strip_name_separators("Photora-Szene: Citrines Letzter Wunsch - Fabrik"),
+            "Photora-Szene Citrines Letzter Wunsch Fabrik"
+        );
+    }
+
+    #[test]
+    fn collapses_whitespace_left_behind() {
+        assert_eq!(strip_name_separators("Fluctus:  Cano"), "Fluctus Cano");
+        assert_eq!(strip_name_separators("  Vasto Prime: Conjunto  "), "Vasto Prime Conjunto");
+    }
+
+    #[test]
+    fn keeps_parenthetical_qualifiers_wfm_uses() {
+        // WFM marks blueprints/arcanes with a trailing parenthetical; that is meaningful.
+        assert_eq!(
+            strip_name_separators("Zephyr Prime: Chassi (Diagrama)"),
+            "Zephyr Prime Chassi (Diagrama)"
+        );
+    }
     use super::{
         cached_startup_summary, normalize_catalog_lookup_value, normalize_top_sell_orders,
-        seller_mode_allows_status, validate_external_url, StartupCommandState, WfmOrderUser,
+        seller_mode_allows_status, strip_name_separators, validate_external_url,
+        StartupCommandState, WfmOrderUser,
         WfmOrderWithUser,
     };
     use crate::item_catalog::{ImportStats, StartupSummary};

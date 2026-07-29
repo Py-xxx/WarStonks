@@ -71,6 +71,21 @@ test('handles targets with no English name or slug', () => {
   assert.equal(scoreItemQuery('void', localizedOnly), MATCH_NONE);
 });
 
+test('separators are ignored so a pasted name still matches', () => {
+  // Names are stripped for display, but a user may paste "Perigale Prime: Cano" from WFM.
+  const target = { name: 'Perigale Prime Cano', nameEn: 'Perigale Prime Barrel', slug: 'perigale_prime_barrel' };
+  assert.ok(matchesItemQuery('Perigale Prime: Cano', target));
+  assert.ok(matchesItemQuery('Perigale Prime - Cano', target));
+  assert.ok(matchesItemQuery('Perigale Prime Cano', target));
+});
+
+test('a hyphen inside a word is not treated as a separator', () => {
+  // "Eye-Eye" is a real item; collapsing its dash would make the name unsearchable as typed.
+  const target = { name: '目—目', nameEn: 'Eye-Eye', slug: 'eye_eye' };
+  assert.ok(matchesItemQuery('Eye-Eye', target));
+  assert.equal(normalizeSearchText('Eye-Eye'), 'eye-eye');
+});
+
 test('normalizeSearchText leaves CJK untouched', () => {
   // toLowerCase and the diacritic strip must be no-ops here, or Chinese would never match.
   assert.equal(normalizeSearchText('虐星 Prime'), '虐星 prime');

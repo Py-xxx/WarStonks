@@ -961,6 +961,9 @@ fn import_into_database(
     import_context: ImportContext,
 ) -> Result<StartupSummary> {
     let tx = connection.transaction()?;
+    // Snapshot the current ids BEFORE the reset empties `items` — this is what lets a rebuild
+    // keep every existing item's id, so cached prices stay attached to the item they describe.
+    let previous_item_ids = load_existing_item_ids(&tx)?;
     reset_catalog_tables(&tx)?;
 
     upsert_source_version(&tx, wfm_meta)?;
@@ -991,7 +994,7 @@ fn import_into_database(
     )?;
     insert_manual_alias_rows(&tx, alias_seed)?;
 
-    let item_ids = insert_canonical_items(&tx, &import_context.canonical_items)?;
+    let item_ids = insert_canonical_items(&tx, &import_context.canonical_items, &previous_item_ids)?;
     apply_parent_item_links(&tx, &import_context.canonical_items, &item_ids)?;
 
     for record in &import_context.wfstat_records {
@@ -1569,15 +1572,53 @@ fn wfstat_component_source_record_key(component: &WfstatComponentRecord) -> Stri
     )
 }
 
+/// Snapshots the current `canonical_ref -> item_id` mapping so a rebuild can keep the same ids.
+///
+/// Must be called BEFORE `reset_catalog_tables`, which empties `items`.
+fn load_existing_item_ids(tx: &Transaction<'_>) -> Result<HashMap<String, i64>> {
+    let mut statement = tx.prepare("SELECT canonical_ref, item_id FROM items")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (canonical_ref, item_id) = row?;
+        out.insert(canonical_ref, item_id);
+    }
+    Ok(out)
+}
+
+/// Inserts the canonical items, **reusing each item's previous `item_id`**.
+///
+/// `item_id` is an auto-assigned rowid, and a catalog refresh does `DELETE FROM items` then
+/// re-inserts in `canonical_ref` order — so without this, every id is renumbered from 1 on every
+/// refresh, and adding a single item upstream shifts every id after it. Everything that cached an
+/// item_id (statistics, analytics, tracked items, owned inventory) then silently pointed at a
+/// DIFFERENT item, and the app served one item's prices under another item's name.
+///
+/// `canonical_ref` is the stable natural key, so carrying its id across the rebuild keeps every
+/// existing reference valid. Genuinely new items get ids above the previous maximum, so a new
+/// item can never take an id another item is still remembered by.
 fn insert_canonical_items(
     tx: &Transaction<'_>,
     canonical_items: &BTreeMap<String, CanonicalItem>,
+    previous_item_ids: &HashMap<String, i64>,
 ) -> Result<HashMap<String, i64>> {
     let mut item_ids = HashMap::new();
+    let mut next_item_id = previous_item_ids.values().copied().max().unwrap_or(0) + 1;
 
     for canonical in canonical_items.values() {
+        let item_id = match previous_item_ids.get(&canonical.key) {
+            Some(existing) => *existing,
+            None => {
+                let assigned = next_item_id;
+                next_item_id += 1;
+                assigned
+            }
+        };
         tx.execute(
             "INSERT INTO items (
+                item_id,
                 canonical_ref,
                 canonical_name,
                 canonical_name_normalized,
@@ -1597,8 +1638,9 @@ fn insert_canonical_items(
                 relic_tier,
                 relic_code,
                 notes
-            ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
+                item_id,
                 canonical.key,
                 canonical.canonical_name,
                 canonical.canonical_name_normalized,
@@ -1619,7 +1661,7 @@ fn insert_canonical_items(
                 canonical.notes,
             ],
         )?;
-        item_ids.insert(canonical.key.clone(), tx.last_insert_rowid());
+        item_ids.insert(canonical.key.clone(), item_id);
     }
 
     Ok(item_ids)

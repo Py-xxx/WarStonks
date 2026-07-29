@@ -38,7 +38,12 @@ export function normalizeSearchText(value: string): string {
   return folded
     .normalize('NFD')
     .replace(DIACRITIC_PATTERN, '')
-    .replace(/\s+/g, ' ');
+    // Warframe.Market puts "Name: Part" / "Name - Part" separators in some localized names.
+    // They're stripped for display, but a user pasting a name from elsewhere may still type
+    // them — treat them as spaces so the query matches either way.
+    .replace(/\s*[:–—-]\s+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** The fields a query is matched against. All optional except the displayed name. */

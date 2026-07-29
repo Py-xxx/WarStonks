@@ -1295,6 +1295,172 @@ fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
     .context("failed to open the local item catalog")
 }
 
+/// Realigns cached rows whose `item_id` no longer matches the catalog.
+///
+/// `item_id` used to be renumbered from 1 on every catalog rebuild (see
+/// `item_catalog::insert_canonical_items`), so anything that cached an id ended up pointing at a
+/// different item — and the app showed one item's prices under another item's name. Ids are
+/// stable now, but installs created before that fix still hold mismatched rows and would keep
+/// serving wrong prices forever, so they get repaired once here.
+///
+/// `slug` is the stable key every affected table already stores, so it's the source of truth.
+/// Tables whose primary key contains `item_id` can't be updated in place without risking a
+/// collision — those are caches, so their stale rows are dropped and refetched instead.
+pub fn repair_stale_item_ids(app: &tauri::AppHandle) -> Result<ItemIdRepairSummary> {
+    let catalog = open_catalog_database(app)?;
+    let mut correct_ids: HashMap<String, i64> = HashMap::new();
+    {
+        let mut statement = catalog.prepare("SELECT slug, item_id FROM wfm_items")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (slug, item_id) = row?;
+            correct_ids.insert(slug, item_id);
+        }
+    }
+    if correct_ids.is_empty() {
+        // No catalog yet — repairing against an empty map would delete everything.
+        return Ok(ItemIdRepairSummary::default());
+    }
+
+    let observatory = open_market_observatory_database(app)?;
+    let mut summary = ItemIdRepairSummary::default();
+
+    // Remappable: `item_id` is not part of the primary key, so an in-place update is safe.
+    for (table, slug_column, id_column) in [
+        ("owned_set_components", "component_slug", "component_item_id"),
+        ("set_completion_screenshot_baseline", "component_slug", "component_item_id"),
+        ("orderbook_snapshots", "slug", "item_id"),
+        ("recommendation_outcomes", "slug", "item_id"),
+        ("tracked_items", "slug", "item_id"),
+    ] {
+        summary.remapped += remap_table_item_ids(&observatory, table, slug_column, id_column, &correct_ids)?;
+    }
+
+    // Cache tables with `item_id` inside the primary key — remapped in two passes so the price
+    // history survives instead of being thrown away and refetched.
+    for (table, slug_column, id_column) in [
+        ("statistics_cache", "slug", "item_id"),
+        ("analytics_cache", "slug", "item_id"),
+    ] {
+        summary.remapped += remap_cache_table_item_ids(&observatory, table, slug_column, id_column, &correct_ids)?;
+    }
+
+    Ok(summary)
+}
+
+/// What a repair pass changed — surfaced so a silent no-op is distinguishable from a real fix.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ItemIdRepairSummary {
+    pub remapped: usize,
+    pub dropped: usize,
+}
+
+impl ItemIdRepairSummary {
+    pub fn changed_anything(&self) -> bool {
+        self.remapped > 0 || self.dropped > 0
+    }
+}
+
+/// Points a table's rows back at the id their slug actually resolves to.
+fn remap_table_item_ids(
+    connection: &Connection,
+    table: &str,
+    slug_column: &str,
+    id_column: &str,
+    correct_ids: &HashMap<String, i64>,
+) -> Result<usize> {
+    let stale: Vec<(String, i64)> = {
+        let mut statement = connection.prepare(&format!(
+            "SELECT DISTINCT {slug_column}, {id_column} FROM {table} WHERE {slug_column} IS NOT NULL"
+        ))?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.filter_map(Result::ok)
+            .filter(|(slug, id)| correct_ids.get(slug).is_some_and(|correct| correct != id))
+            .collect()
+    };
+
+    let mut updated = 0;
+    for (slug, stale_id) in stale {
+        let Some(correct) = correct_ids.get(&slug) else { continue };
+        // OR REPLACE: a row may already exist under the correct id (e.g. re-tracked after a
+        // rebuild); the correctly-keyed one wins rather than the update failing.
+        updated += connection.execute(
+            &format!(
+                "UPDATE OR REPLACE {table} SET {id_column} = ?1 WHERE {slug_column} = ?2 AND {id_column} = ?3"
+            ),
+            params![correct, slug, stale_id],
+        )?;
+    }
+    Ok(updated)
+}
+
+/// Repoints cache rows whose slug no longer resolves to the id they were stored under.
+///
+/// These tables have `item_id` inside their PRIMARY KEY, so a direct update can collide with rows
+/// already sitting on the destination id. Two passes avoid that entirely: first move every stale
+/// row into a negative id (a namespace nothing else uses), which vacates the destinations, then
+/// move them onto the correct id. Deleting instead would be simpler but would throw away the
+/// 90-day price history every recommendation is built from.
+fn remap_cache_table_item_ids(
+    connection: &Connection,
+    table: &str,
+    slug_column: &str,
+    id_column: &str,
+    correct_ids: &HashMap<String, i64>,
+) -> Result<usize> {
+    let stale: Vec<(String, i64)> = {
+        let mut statement = connection.prepare(&format!(
+            "SELECT DISTINCT {slug_column}, {id_column} FROM {table} WHERE {slug_column} IS NOT NULL"
+        ))?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.filter_map(Result::ok)
+            .filter(|(slug, id)| correct_ids.get(slug).is_some_and(|correct| correct != id))
+            .collect()
+    };
+    if stale.is_empty() {
+        return Ok(0);
+    }
+
+    // Pass 1 — vacate.
+    for (slug, stale_id) in &stale {
+        connection.execute(
+            &format!(
+                "UPDATE OR REPLACE {table} SET {id_column} = -{id_column} \
+                 WHERE {slug_column} = ?1 AND {id_column} = ?2"
+            ),
+            params![slug, stale_id],
+        )?;
+    }
+    // Pass 2 — land on the real id.
+    let mut moved = 0;
+    for (slug, stale_id) in &stale {
+        let Some(correct) = correct_ids.get(slug) else { continue };
+        moved += connection.execute(
+            &format!(
+                "UPDATE OR REPLACE {table} SET {id_column} = ?1 \
+                 WHERE {slug_column} = ?2 AND {id_column} = ?3"
+            ),
+            params![correct, slug, -stale_id],
+        )?;
+    }
+
+    // Anything still negative would be invisible to every lookup, so it must not survive.
+    let stranded = connection.execute(
+        &format!("DELETE FROM {table} WHERE {id_column} < 0"),
+        [],
+    )?;
+    if stranded > 0 {
+        moved = moved.saturating_sub(stranded);
+    }
+    Ok(moved)
+}
+
 pub(crate) fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
     let db_path = resolve_market_observatory_db_path(app)?;
     if let Some(parent_dir) = db_path.parent() {
@@ -12061,6 +12227,82 @@ pub async fn stop_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Strin
 
 #[cfg(test)]
 mod tests {
+
+    /// The repair that rescues installs corrupted before item ids became stable.
+    ///
+    /// Reproduces the real failure: a cache row stored under an id that now belongs to a
+    /// different item. Two passes are required because `item_id` sits inside the primary key,
+    /// so the destination may already be occupied.
+    #[test]
+    fn repairs_cache_rows_left_on_another_items_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE statistics_cache (
+                item_id INTEGER NOT NULL,
+                slug TEXT,
+                variant_key TEXT NOT NULL,
+                domain_key TEXT NOT NULL,
+                bucket_origin TEXT NOT NULL,
+                bucket_at TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                PRIMARY KEY (item_id, variant_key, domain_key, bucket_origin, bucket_at, source_kind)
+            );",
+        )
+        .unwrap();
+        let insert = |id: i64, slug: &str, bucket: &str| {
+            conn.execute(
+                "INSERT INTO statistics_cache VALUES (?1, ?2, 'base', '90days', 'wfm', ?3, 'closed')",
+                params![id, slug, bucket],
+            )
+            .unwrap();
+        };
+        // Two items whose ids were swapped by a rebuild — the case a one-pass update cannot fix,
+        // because each one's destination is occupied by the other.
+        insert(10, "mesa_prime_set", "2026-01-01");
+        insert(20, "rhino_prime_set", "2026-01-01");
+
+        let mut correct = HashMap::new();
+        correct.insert("mesa_prime_set".to_string(), 20_i64);
+        correct.insert("rhino_prime_set".to_string(), 10_i64);
+
+        let moved = super::remap_cache_table_item_ids(
+            &conn, "statistics_cache", "slug", "item_id", &correct,
+        )
+        .expect("repair runs");
+        assert!(moved > 0, "should have moved rows");
+
+        let pairs: Vec<(String, i64)> = {
+            let mut st = conn.prepare("SELECT slug, item_id FROM statistics_cache ORDER BY slug").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().filter_map(Result::ok).collect()
+        };
+        assert_eq!(
+            pairs,
+            vec![("mesa_prime_set".to_string(), 20), ("rhino_prime_set".to_string(), 10)],
+            "every row must end up on the id its slug resolves to"
+        );
+        // No row may be left parked in the temporary negative namespace — it would be invisible.
+        let negatives: i64 = conn
+            .query_row("SELECT COUNT(*) FROM statistics_cache WHERE item_id < 0", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(negatives, 0);
+    }
+
+    #[test]
+    fn repair_is_a_no_op_when_ids_already_match() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tracked_items (item_id INTEGER NOT NULL, slug TEXT, variant_key TEXT NOT NULL,
+             PRIMARY KEY (item_id, slug, variant_key));",
+        )
+        .unwrap();
+        conn.execute("INSERT INTO tracked_items VALUES (7, 'mesa_prime_set', 'base')", []).unwrap();
+        let mut correct = HashMap::new();
+        correct.insert("mesa_prime_set".to_string(), 7_i64);
+
+        let moved = super::remap_table_item_ids(&conn, "tracked_items", "slug", "item_id", &correct)
+            .expect("repair runs");
+        assert_eq!(moved, 0, "matching ids must not be rewritten");
+    }
     use super::{
         build_action_card, build_confidence_summary, build_entry_exit_zone_overview,
         build_liquidity_confidence, build_manipulation_risk, build_market_snapshot,
@@ -12077,7 +12319,8 @@ mod tests {
         WfmStatisticsRowApi,
     };
     use crate::wfm_scheduler::RequestPriority;
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
+    use std::collections::HashMap;
     fn sample_order(
         order_type: &str,
         platinum: f64,
