@@ -4163,11 +4163,20 @@ fn resolve_catalog_trade_item_by_alias(
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
             WHERE item_aliases.alias_value = ?2
                OR item_aliases.normalized_alias_value = ?3
+            -- Thousands of alias values map to more than one item (the bare word blueprint alone
+            -- matches over a thousand), so without a full tie-break LIMIT 1 returns an arbitrary
+            -- row and the same trade can resolve differently on different runs. Every term below
+            -- is deterministic.
             ORDER BY CASE
               WHEN item_aliases.alias_value = ?2 THEN 0
               WHEN item_aliases.normalized_alias_value = ?3 THEN 1
               ELSE 2
-            END
+            END,
+              -- Prefer a primary alias, then one that resolves to a real tradeable WFM item,
+              -- then the lowest id purely so the outcome is stable and reproducible.
+              CASE WHEN item_aliases.is_primary = 1 THEN 0 ELSE 1 END,
+              CASE WHEN wfm_items.wfm_id IS NOT NULL THEN 0 ELSE 1 END,
+              items.item_id
             LIMIT 1
             ",
             params![preferred_name.as_str(), trimmed, normalized.as_str()],
@@ -5474,7 +5483,11 @@ fn append_unique_trade_entries(
     existing: &[PortfolioTradeLogEntry],
     incoming: &[PortfolioTradeLogEntry],
 ) -> Vec<PortfolioTradeLogEntry> {
-    let existing_records = existing
+    // Grows as entries are accepted. Comparing only against the *pre-existing* rows let a batch
+    // duplicate itself: the WFM order-close and the AlecaFrame in-game record for one physical
+    // trade usually arrive in the same sync, so neither had been stored when the other was
+    // checked, and both landed in the log.
+    let mut existing_records = existing
         .iter()
         .map(build_stored_trade_record_from_entry)
         .collect::<Vec<_>>();
@@ -5487,6 +5500,7 @@ fn append_unique_trade_entries(
         if trade_record_matches_existing_duplicate(&existing_records, entry) {
             continue;
         }
+        existing_records.push(build_stored_trade_record_from_entry(entry));
         combined.push(entry.clone());
     }
 
@@ -5502,17 +5516,21 @@ fn merge_wfm_trade_log_entries(
         .map(|record| record.id.clone())
         .collect::<HashSet<_>>();
 
-    let persisted_entries = fetched_entries
-        .iter()
-        .filter(|entry| {
-            if existing_ids.contains(&entry.id) {
-                return true;
-            }
-
-            !trade_record_matches_existing_duplicate(existing, entry)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    // Same accumulation rule as `append_unique_trade_entries`: an entry accepted earlier in this
+    // batch has to be visible to the ones checked after it, or a batch can duplicate itself.
+    let mut seen = existing.to_vec();
+    let mut persisted_entries = Vec::with_capacity(fetched_entries.len());
+    for entry in fetched_entries {
+        if existing_ids.contains(&entry.id) {
+            persisted_entries.push(entry.clone());
+            continue;
+        }
+        if trade_record_matches_existing_duplicate(&seen, entry) {
+            continue;
+        }
+        seen.push(build_stored_trade_record_from_entry(entry));
+        persisted_entries.push(entry.clone());
+    }
 
     let new_entries = persisted_entries
         .iter()
@@ -12238,6 +12256,78 @@ mod tests {
         let set_rows = collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count();
         assert_eq!(set_rows, 1, "expected exactly one set row after cross-source dedup");
         assert!(collapsed.iter().any(|r| r.id == "wfm-set"));
+    }
+
+    fn log_entry(id: &str, name: &str, source: &str, closed_at: &str) -> PortfolioTradeLogEntry {
+        PortfolioTradeLogEntry {
+            id: id.to_string(),
+            item_name: name.to_string(),
+            slug: name.to_string(),
+            image_path: None,
+            order_type: "buy".to_string(),
+            source: source.to_string(),
+            platinum: 7,
+            quantity: 1,
+            rank: None,
+            closed_at: closed_at.to_string(),
+            updated_at: closed_at.to_string(),
+            profit: None,
+            margin: None,
+            status: None,
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+            allocation_mode: None,
+            cost_basis_confidence: None,
+            cost_basis_label: None,
+            matched_cost: None,
+            matched_quantity: None,
+            matched_buy_count: 0,
+            matched_buy_rows: Vec::new(),
+            set_component_rows: Vec::new(),
+            profit_formula: None,
+            duplicate_risk: false,
+        }
+    }
+
+    /// One physical trade seen by both sources usually arrives in a SINGLE sync, so the two
+    /// records are compared against a log that contains neither of them yet. Dedupe therefore has
+    /// to consider entries accepted earlier in the same batch, not just already-stored rows —
+    /// without that, every cross-source pair produced two log rows.
+    #[test]
+    fn a_batch_containing_both_sources_of_one_trade_is_deduped() {
+        let incoming = vec![
+            log_entry("af-1", "Larkspur Prime Barrel", "alecaframe", "2026-07-29T10:49:40.000+00:00"),
+            log_entry("wfm-1", "Larkspur Prime Barrel", "wfm", "2026-07-29T10:50:02.000+00:00"),
+        ];
+
+        let combined = append_unique_trade_entries(&[], &incoming);
+
+        assert_eq!(
+            combined.len(),
+            1,
+            "one physical trade must yield one row, got {:?}",
+            combined.iter().map(|e| &e.id).collect::<Vec<_>>()
+        );
+        assert_eq!(combined[0].id, "af-1", "the first record seen should win");
+    }
+
+    #[test]
+    fn a_batch_still_keeps_genuinely_different_trades() {
+        // Guard against over-merging: different items, and the same item far enough apart to be a
+        // real repeat purchase, must both survive.
+        let incoming = vec![
+            log_entry("a", "Trumna Prime Receiver", "alecaframe", "2026-07-29T11:56:35.000+00:00"),
+            log_entry("b", "Sybaris Prime Barrel", "wfm", "2026-07-29T11:57:05.000+00:00"),
+            log_entry("c", "Trumna Prime Receiver", "alecaframe", "2026-07-29T13:30:00.000+00:00"),
+        ];
+
+        let combined = append_unique_trade_entries(&[], &incoming);
+        assert_eq!(combined.len(), 3, "distinct trades must not be merged");
     }
 
     #[test]

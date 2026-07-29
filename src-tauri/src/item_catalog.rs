@@ -2050,6 +2050,14 @@ fn insert_wfstat_record(
         true,
         None,
     )?;
+    insert_unique_name_leaf_alias(
+        tx,
+        item_id,
+        &record.unique_name,
+        "wfstat_unique_name_leaf",
+        "wfstat_items",
+        &record.unique_name,
+    )?;
     insert_alias(
         tx,
         item_id,
@@ -2304,6 +2312,14 @@ fn insert_wfstat_component_record(
             &component_source_record_key,
             true,
             None,
+        )?;
+        insert_unique_name_leaf_alias(
+            tx,
+            component_item_id,
+            unique_name,
+            "wfstat_component_unique_name_leaf",
+            "wfstat_item_components",
+            &component_source_record_key,
         )?;
     }
     if let Some(name) = &component.name {
@@ -3044,6 +3060,44 @@ fn insert_alias(
         ],
     )?;
     Ok(())
+}
+
+/// Registers the final path segment of a `/Lotus/...` unique name as an alias in its own right.
+///
+/// AlecaFrame reports an item's internal name in two shapes depending on the code path: the full
+/// `/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeDualKamasBlade`, and sometimes just the leaf
+/// `PrimeDualKamasBlade`. Only the full path used to be registered, so the leaf form resolved to
+/// nothing and the raw string was stored as the item's name — which then failed to dedupe against
+/// the same trade seen via Warframe.Market, leaving two log rows for one physical trade.
+///
+/// No-ops when the value has no path separator (nothing new to add) or the leaf is empty.
+fn insert_unique_name_leaf_alias(
+    tx: &Transaction<'_>,
+    item_id: i64,
+    unique_name: &str,
+    alias_scope: &str,
+    source_table: &str,
+    source_record_key: &str,
+) -> Result<()> {
+    let Some((_, leaf)) = unique_name.rsplit_once('/') else {
+        return Ok(());
+    };
+    let leaf = leaf.trim();
+    if leaf.is_empty() {
+        return Ok(());
+    }
+    insert_alias(
+        tx,
+        item_id,
+        alias_scope,
+        leaf,
+        Some(&normalize_name(leaf)),
+        WFSTAT_SOURCE_NAME,
+        source_table,
+        source_record_key,
+        false,
+        Some("Leaf of the /Lotus unique name — AlecaFrame reports this form directly."),
+    )
 }
 
 fn insert_variant(
@@ -4422,6 +4476,61 @@ pub fn import_language_pack(
 
 #[cfg(test)]
 mod tests {
+
+    /// AlecaFrame reports internal names in two shapes — the full `/Lotus/...` path and, on some
+    /// code paths, just the leaf. Only the path used to be an alias, so the leaf resolved to
+    /// nothing, the raw string was stored as the item name, and the trade failed to dedupe
+    /// against the same trade seen via Warframe.Market.
+    #[test]
+    fn unique_name_leaf_is_registered_as_its_own_alias() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE item_aliases (
+                    item_id INTEGER NOT NULL,
+                    alias_scope TEXT NOT NULL,
+                    alias_value TEXT NOT NULL,
+                    normalized_alias_value TEXT,
+                    source_name TEXT NOT NULL,
+                    source_table TEXT NOT NULL,
+                    source_record_key TEXT NOT NULL,
+                    is_primary INTEGER NOT NULL,
+                    notes TEXT
+                );",
+            )
+            .unwrap();
+        let tx = connection.transaction().unwrap();
+        super::insert_unique_name_leaf_alias(
+            &tx,
+            42,
+            "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeDualKamasBlade",
+            "wfstat_unique_name_leaf",
+            "wfstat_items",
+            "key",
+        )
+        .unwrap();
+        // A value with no path separator adds nothing — there is no leaf to register.
+        super::insert_unique_name_leaf_alias(&tx, 43, "PlainName", "s", "t", "k").unwrap();
+        tx.commit().unwrap();
+
+        let rows: Vec<(i64, String, Option<String>)> = {
+            let mut st = connection
+                .prepare("SELECT item_id, alias_value, normalized_alias_value FROM item_aliases")
+                .unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert_eq!(rows.len(), 1, "only the path form should produce a leaf alias");
+        assert_eq!(rows[0].0, 42);
+        assert_eq!(rows[0].1, "PrimeDualKamasBlade");
+        assert_eq!(
+            rows[0].2.as_deref(),
+            Some(super::normalize_name("PrimeDualKamasBlade").as_str()),
+            "the normalized form must be stored too, so a lowercased report still matches"
+        );
+    }
     use super::{
         build_catalog_download_request, derive_wfm_item_family,
         describe_wfstat_status, is_unmatched_wfm_outcome, normalize_name, parse_variant_info,
