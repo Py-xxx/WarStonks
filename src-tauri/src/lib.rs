@@ -2,6 +2,10 @@ mod commands;
 mod data_transfer;
 mod error_log;
 mod item_catalog;
+// Phase 1 of the catalog rebuild — pure transformation logic only, proven against real WFM/
+// WFStat data via its own tests. Deliberately not registered as a Tauri command and not called
+// from startup: nothing in the running app consumes it yet.
+mod item_catalog_v2;
 mod maintenance;
 mod market_observatory;
 mod opportunities;
