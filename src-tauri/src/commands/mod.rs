@@ -1,21 +1,17 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
-use tauri::Manager;
 
-use crate::error_log::{log_feature_error_best_effort, log_feature_event_best_effort};
-use crate::item_catalog;
+use crate::error_log::log_feature_error_best_effort;
 use crate::wfm_scheduler::{
     execute_coalesced_wfm_request, wfm_scheduler_snapshot, RequestPriority, WfmHttpResponse,
     WfmSchedulerSnapshot,
 };
 
-const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const WFM_API_BASE_URL: &str = "https://api.warframe.market/v2";
 const WFSTAT_API_BASE_URL: &str = "https://api.warframestat.us";
 const WFM_LANGUAGE_HEADER: &str = "en";
@@ -528,77 +524,18 @@ fn normalize_catalog_lookup_value(value: &str) -> Option<String> {
     }
 }
 
-fn resolve_catalog_item_id_by_name(
+/// Resolves an item name to its v2 item_key + slug via the catalog's deterministic Name-kind
+/// lookup — the same resolution `lookup_item_v2_inner` uses for any other query, never a
+/// `LIMIT 1` pick among ambiguous candidates.
+fn resolve_catalog_item_key_and_slug_by_name(
     connection: &Connection,
     item_name: &str,
-) -> Result<Option<i64>> {
-    let Some(normalized_name) = normalize_catalog_lookup_value(item_name) else {
+) -> Result<Option<(String, String)>> {
+    if normalize_catalog_lookup_value(item_name).is_none() {
         return Ok(None);
-    };
-
-    let alias_item_id = connection
-        .query_row(
-            "SELECT item_id
-             FROM item_aliases
-             WHERE normalized_alias_value = ?1
-             ORDER BY
-               CASE alias_scope
-                 WHEN 'wfm_name_en' THEN 0
-                 WHEN 'wfstat_name' THEN 1
-                 WHEN 'wfstat_component_name' THEN 2
-                 WHEN 'normalized_name' THEN 3
-                 ELSE 4
-               END,
-               is_primary DESC,
-               alias_id ASC
-             LIMIT 1",
-            [normalized_name.as_str()],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-
-    if alias_item_id.is_some() {
-        return Ok(alias_item_id);
     }
-
-    let indexed_item_id = connection
-        .query_row(
-            "SELECT item_id
-             FROM items
-             WHERE canonical_name_normalized = ?1
-             UNION
-             SELECT item_id
-             FROM wfm_items
-             WHERE normalized_name_en = ?1
-             UNION
-             SELECT item_id
-             FROM wfstat_items
-             WHERE normalized_name = ?1
-             LIMIT 1",
-            [normalized_name.as_str()],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-
-    Ok(indexed_item_id)
-}
-
-/// Resolves an item name to its catalog item id and WFM slug (needed to fetch statistics).
-fn resolve_catalog_item_id_and_slug_by_name(
-    connection: &Connection,
-    item_name: &str,
-) -> Result<Option<(i64, String)>> {
-    let Some(item_id) = resolve_catalog_item_id_by_name(connection, item_name)? else {
-        return Ok(None);
-    };
-    let slug: Option<String> = connection
-        .query_row(
-            "SELECT wfm_slug FROM items WHERE item_id = ?1 AND wfm_slug IS NOT NULL LIMIT 1",
-            [item_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    Ok(slug.map(|slug| (item_id, slug)))
+    let item = crate::item_catalog_v2::lookup_item_v2_inner(connection, item_name)?;
+    Ok(item.map(|item| (item.item_key, item.slug)))
 }
 
 #[derive(Debug, Serialize)]
@@ -620,18 +557,15 @@ fn scan_void_trader_prices_inner(
         })
         .collect();
 
-    let Some(catalog) = open_catalog_database(app).ok() else {
+    let Some(catalog) = crate::item_catalog_v2::open_catalog_v2_readonly(app).ok() else {
         return Ok(result);
     };
 
     // Resolve names → (index, item_key, slug), dropping any item the v2 catalog can't resolve.
-    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app).unwrap_or_default();
     let mut resolved: Vec<(usize, String, String)> = Vec::new();
     for (index, item) in items.iter().enumerate() {
-        if let Some((_item_id, slug)) = resolve_catalog_item_id_and_slug_by_name(&catalog, item)? {
-            if let Some(item_key) = slug_to_item_key.get(&slug) {
-                resolved.push((index, item_key.clone(), slug));
-            }
+        if let Some((item_key, slug)) = resolve_catalog_item_key_and_slug_by_name(&catalog, item)? {
+            resolved.push((index, item_key, slug));
         }
     }
 
@@ -663,41 +597,14 @@ pub async fn scan_void_trader_prices(
 
 fn load_catalog_item_metadata(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
 ) -> Result<Option<CatalogItemMetadata>> {
-    connection
-        .query_row(
-            "SELECT
-               COALESCE(
-                 NULLIF(wfstat_items.category, ''),
-                 NULLIF(wfstat_items.type, ''),
-                 NULLIF(wfm_items.item_family, ''),
-                 NULLIF(items.item_family, ''),
-                 'Other'
-               ) AS category,
-               COALESCE(
-                 NULLIF(items.preferred_image, ''),
-                 NULLIF(wfm_items.thumb, ''),
-                 NULLIF(wfm_items.icon, ''),
-                 NULLIF(wfstat_items.wikia_thumbnail, '')
-               ) AS image_path
-             FROM items
-             LEFT JOIN wfm_items
-               ON wfm_items.item_id = items.item_id
-             LEFT JOIN wfstat_items
-               ON wfstat_items.item_id = items.item_id
-             WHERE items.item_id = ?1
-             LIMIT 1",
-            [item_id],
-            |row| {
-                Ok(CatalogItemMetadata {
-                    category: row.get::<_, String>(0)?,
-                    image_path: row.get::<_, Option<String>>(1)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
+    Ok(crate::item_catalog_v2::load_item_metadata_v2(connection, item_key)?.map(|row| {
+        CatalogItemMetadata {
+            category: row.category,
+            image_path: row.image_path,
+        }
+    }))
 }
 
 fn enrich_void_trader_inventory_item(
@@ -705,8 +612,8 @@ fn enrich_void_trader_inventory_item(
     item: VoidTraderInventoryApiItem,
 ) -> Result<VoidTraderInventoryItem> {
     let metadata = match connection {
-        Some(catalog) => resolve_catalog_item_id_by_name(catalog, &item.item)?
-            .map(|item_id| load_catalog_item_metadata(catalog, item_id))
+        Some(catalog) => resolve_catalog_item_key_and_slug_by_name(catalog, &item.item)?
+            .map(|(item_key, _slug)| load_catalog_item_metadata(catalog, &item_key))
             .transpose()?
             .flatten(),
         None => None,
@@ -739,7 +646,7 @@ fn fetch_worldstate_void_trader_inner(app: tauri::AppHandle) -> Result<VoidTrade
         .json::<VoidTraderApiResponse>()
         .context("failed to parse WFStat void trader response JSON")?;
 
-    let catalog_connection = open_catalog_database(&app).ok();
+    let catalog_connection = crate::item_catalog_v2::open_catalog_v2_readonly(&app).ok();
     let mut inventory = payload
         .inventory
         .into_iter()
@@ -778,21 +685,18 @@ pub async fn get_worldstate_void_trader(
         .map_err(|error| error.to_string())
 }
 
-fn resolve_catalog_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve the app data directory")?;
-    Ok(app_data_dir.join(ITEM_CATALOG_DATABASE_FILE))
-}
-
-fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
-    let db_path = resolve_catalog_db_path(app)?;
-    Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .context("failed to open the local item catalog")
+/// `WfmAutocompleteItem.item_id` is a legacy numeric field the frontend still keys watchlist/
+/// cache entries by (see `useAppStore.ts`). The old catalog's own rowid was itself unstable
+/// across rebuilds (see `item_id` comment history) — this hash is deterministic given the same
+/// `item_key` (std's `DefaultHasher` uses fixed keys, not per-process randomized ones), so it is
+/// at least as stable as what it replaces, without requiring the wider frontend numeric-id ->
+/// string-id migration that is out of scope here. `wfm_id` carries the real, fully-stable v2
+/// `item_key` for any caller that already resolves identity from it instead.
+fn stable_numeric_item_id(item_key: &str) -> i64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    item_key.hash(&mut hasher);
+    hasher.finish() as i64
 }
 
 /// Removes the `Name: Part` / `Name - Part` separators Warframe.Market puts in some localized
@@ -826,87 +730,40 @@ fn load_wfm_autocomplete_items_inner(
     app: tauri::AppHandle,
     language: Option<String>,
 ) -> Result<Vec<WfmAutocompleteItem>> {
-    let connection = open_catalog_database(&app)?;
-    // Localize the display name from the catalog's per-language table (wfm_item_i18n),
-    // falling back to English when no translation exists. Passing "en" is a harmless no-op.
+    let connection = crate::item_catalog_v2::open_catalog_v2_readonly(&app)?;
+    // Localize the display name from the catalog's per-language table (item_i18n), falling back
+    // to English when no translation exists. Passing "en" is a harmless no-op.
     let lang_code = language.unwrap_or_else(|| "en".to_string());
-    let mut statement = connection.prepare(
-        "SELECT
-            w.item_id,
-            w.wfm_id,
-            COALESCE(NULLIF(t.name, ''), w.name_en) AS name,
-            w.name_en,
-            w.slug,
-            w.max_rank,
-            w.item_family,
-            COALESCE(NULLIF(w.thumb, ''), NULLIF(w.icon, '')),
-            w.bulk_tradable
-         FROM wfm_items w
-         LEFT JOIN wfm_item_i18n t
-           ON t.wfm_id = w.wfm_id AND t.lang_code = ?1
-         WHERE w.name_en IS NOT NULL
-         ORDER BY name COLLATE NOCASE, w.slug COLLATE NOCASE",
-    )?;
-    let rows = statement.query_map([lang_code.as_str()], |row| {
-        Ok(WfmAutocompleteItem {
-            item_id: row.get(0)?,
-            wfm_id: row.get(1)?,
+    let rows = crate::item_catalog_v2::load_autocomplete_items_v2(&connection, &lang_code)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| WfmAutocompleteItem {
+            item_id: stable_numeric_item_id(&row.item_key),
+            wfm_id: row.item_key,
             // Cleaned on read, not on import, so installs that already downloaded a language
             // pack are fixed on next launch with no re-download.
-            name: strip_name_separators(&row.get::<_, String>(2)?),
-            name_en: row.get(3)?,
-            slug: row.get(4)?,
-            max_rank: row.get(5)?,
-            item_family: row.get(6)?,
-            image_path: row.get(7)?,
-            bulk_tradable: row.get::<_, Option<i64>>(8)?.unwrap_or(0) == 1,
+            name: strip_name_separators(&row.name),
+            name_en: row.name_en,
+            slug: row.slug,
+            max_rank: row.max_rank,
+            item_family: Some(row.item_family),
+            image_path: row.image_path,
+            bulk_tradable: row.bulk_tradable,
         })
-    })?;
-
-    let mut items = Vec::new();
-    for row in rows {
-        items.push(row?);
-    }
-
-    Ok(items)
+        .collect())
 }
 
 fn load_relic_tier_icons_inner(app: tauri::AppHandle) -> Result<Vec<RelicTierIcon>> {
-    let connection = open_catalog_database(&app)?;
-    let mut statement = connection.prepare(
-        "WITH ranked AS (
-            SELECT
-              relic_tier,
-              preferred_image,
-              ROW_NUMBER() OVER (
-                PARTITION BY relic_tier
-                ORDER BY
-                  CASE WHEN preferred_image = 'items/unknown.thumb.png' THEN 1 ELSE 0 END,
-                  preferred_name ASC
-              ) AS row_rank
-            FROM items
-            WHERE item_family = 'relics'
-              AND relic_tier IS NOT NULL
-              AND preferred_image IS NOT NULL
-          )
-          SELECT relic_tier, preferred_image
-          FROM ranked
-          WHERE row_rank = 1
-          ORDER BY relic_tier COLLATE NOCASE",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok(RelicTierIcon {
-            tier: row.get(0)?,
-            image_path: row.get(1)?,
+    let connection = crate::item_catalog_v2::open_catalog_v2_readonly(&app)?;
+    let rows = crate::item_catalog_v2::load_relic_tier_icons_v2(&connection)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| RelicTierIcon {
+            tier: row.tier,
+            image_path: row.image_path,
         })
-    })?;
-
-    let mut icons = Vec::new();
-    for row in rows {
-        icons.push(row?);
-    }
-
-    Ok(icons)
+        .collect())
 }
 
 fn compare_sell_orders(left: &WfmTopSellOrder, right: &WfmTopSellOrder) -> Ordering {
@@ -1041,7 +898,7 @@ fn fetch_wfm_top_sell_orders_inner(
 #[derive(Debug, Default)]
 struct StartupCommandState {
     in_progress: bool,
-    last_result: Option<Result<item_catalog::StartupSummary, String>>,
+    last_result: Option<Result<crate::item_catalog_v2::StartupSummary, String>>,
 }
 
 fn startup_command_state() -> &'static (Mutex<StartupCommandState>, Condvar) {
@@ -1051,7 +908,7 @@ fn startup_command_state() -> &'static (Mutex<StartupCommandState>, Condvar) {
 
 fn cached_startup_summary(
     state: &StartupCommandState,
-) -> Option<Result<item_catalog::StartupSummary, String>> {
+) -> Option<Result<crate::item_catalog_v2::StartupSummary, String>> {
     match &state.last_result {
         Some(Ok(summary)) => Some(Ok(summary.clone())),
         Some(Err(_)) | None => None,
@@ -1060,7 +917,7 @@ fn cached_startup_summary(
 
 fn run_initialize_app_catalog(
     app: tauri::AppHandle,
-) -> Result<item_catalog::StartupSummary, String> {
+) -> Result<crate::item_catalog_v2::StartupSummary, String> {
     let (state_lock, state_signal) = startup_command_state();
     let mut state = state_lock.lock().map_err(|_| {
         let error = anyhow::anyhow!("startup command state lock poisoned");
@@ -1100,44 +957,11 @@ fn run_initialize_app_catalog(
     state.last_result = None;
     drop(state);
 
-    let result = item_catalog::initialize_app_catalog(app.clone());
-
-    // Right after the catalog settles, realign anything still holding an item_id from before ids
-    // became stable. Best-effort: a repair failure must never block startup, but it IS logged,
-    // because until it runs the app can serve one item's prices under another item's name.
-    if result.is_ok() {
-        match crate::market_observatory::repair_stale_item_ids(&app) {
-            Ok(summary) if summary.changed_anything() => {
-                log_feature_event_best_effort(
-                    &app,
-                    "bootstrap",
-                    "item-id-repair",
-                    &format!(
-                        "Realigned stale item ids after a catalog rebuild: {} rows repointed at the item they actually describe ({} unrecoverable rows removed).",
-                        summary.remapped, summary.dropped
-                    ),
-                );
-            }
-            Ok(_) => {}
-            Err(error) => {
-                log_feature_error_best_effort(
-                    &app,
-                    "bootstrap",
-                    "item-id-repair",
-                    "Could not realign cached item ids; prices may be attached to the wrong items until this succeeds.",
-                    &error,
-                );
-            }
-        }
-
-        // Build (or freshness-check) the v2 item catalog on the same loading screen, right after
-        // the current catalog settles. Deliberately blocking, not a background thread: this whole
-        // rebuild is allowed to leave the app unusable until every piece lands, so there is no
-        // reason to hide this step underneath a UI the user can already interact with. Best-effort
-        // internally — nothing running today reads from the v2 catalog yet, so a failure here is
-        // logged and never blocks the rest of startup.
-        crate::item_catalog_v2::initialize_catalog_v2_on_startup(&app);
-    }
+    // The sole boot-time catalog build step. Deliberately blocking, not a background thread:
+    // the app is allowed to stay on the loading screen until this lands, since nothing downstream
+    // (order creation, trade log import, portfolio valuation, set-completion scanning) can
+    // resolve an item's identity without it.
+    let result = crate::item_catalog_v2::initialize_catalog_v2_on_startup(&app);
 
     let mut state = state_lock.lock().map_err(|_| {
         let error = anyhow::anyhow!("startup command state lock poisoned");
@@ -1160,7 +984,7 @@ fn run_initialize_app_catalog(
 #[tauri::command]
 pub async fn initialize_app_catalog(
     app: tauri::AppHandle,
-) -> Result<item_catalog::StartupSummary, String> {
+) -> Result<crate::item_catalog_v2::StartupSummary, String> {
     let app_for_worker = app.clone();
     tauri::async_runtime::spawn_blocking(move || run_initialize_app_catalog(app_for_worker))
         .await
@@ -1192,9 +1016,9 @@ pub async fn get_wfm_autocomplete_items(
 pub async fn get_language_pack_status(
     app: tauri::AppHandle,
     language: String,
-) -> Result<item_catalog::LanguagePackStatus, String> {
+) -> Result<crate::item_catalog_v2::LanguagePackStatusV2, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        item_catalog::get_language_pack_status(app, language)
+        crate::item_catalog_v2::get_language_pack_status_v2(app, language)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1204,9 +1028,9 @@ pub async fn get_language_pack_status(
 pub async fn populate_language_item_names(
     app: tauri::AppHandle,
     language: String,
-) -> Result<item_catalog::LanguagePackImportResult, String> {
+) -> Result<crate::item_catalog_v2::LanguagePackImportResultV2, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        item_catalog::populate_language_item_names(app, language)
+        crate::item_catalog_v2::populate_language_item_names_v2(app, language)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1217,19 +1041,23 @@ pub async fn export_language_pack(
     app: tauri::AppHandle,
     language: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || item_catalog::export_language_pack(app, language))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::item_catalog_v2::export_language_pack_v2(app, language)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
 pub async fn import_language_pack(
     app: tauri::AppHandle,
     pack: String,
-) -> Result<item_catalog::LanguagePackImportResult, String> {
-    tauri::async_runtime::spawn_blocking(move || item_catalog::import_language_pack(app, pack))
-        .await
-        .map_err(|error| error.to_string())?
+) -> Result<crate::item_catalog_v2::LanguagePackImportResultV2, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::item_catalog_v2::import_language_pack_v2(app, pack)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1312,16 +1140,16 @@ mod tests {
         StartupCommandState, WfmOrderUser,
         WfmOrderWithUser,
     };
-    use crate::item_catalog::{ImportStats, StartupSummary};
+    use crate::item_catalog_v2::{ImportStats, StartupSummary};
 
     fn sample_summary() -> StartupSummary {
         StartupSummary {
             ready: true,
             refreshed: false,
-            database_path: "/tmp/item_catalog.sqlite".to_string(),
+            database_path: "/tmp/item_catalog_v2.sqlite".to_string(),
             data_dir: "/tmp".to_string(),
-            wfm_source_file: "/tmp/WFM-items.json".to_string(),
-            wfstat_source_file: Some("/tmp/WFStat-items.json".to_string()),
+            wfm_source_file: String::new(),
+            wfstat_source_file: None,
             stats: ImportStats::default(),
             current_wfm_api_version: Some("v2".to_string()),
             wfstat_stale: false,

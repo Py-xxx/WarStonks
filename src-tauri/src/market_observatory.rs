@@ -1,11 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -15,12 +14,11 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::error_log::{log_feature_error_best_effort, log_feature_event_best_effort};
+use crate::item_catalog_v2;
 use crate::settings;
 use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
-const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
-const SCANNER_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
 const WFM_LANGUAGE_HEADER: &str = "en";
@@ -114,7 +112,7 @@ fn scoped_wfm_orders_coalesce_key(
 
 #[derive(Debug, Clone)]
 struct RelicCatalogEntry {
-    item_id: i64,
+    item_key: String,
     slug: String,
     name: String,
     image_path: Option<String>,
@@ -796,7 +794,7 @@ pub struct RelicRoiRefinementSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelicRoiEntry {
-    pub relic_item_id: i64,
+    pub relic_item_id: String,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -831,7 +829,7 @@ pub struct OwnedRelicDropEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedRelicEntry {
-    pub relic_item_id: Option<i64>,
+    pub relic_item_id: Option<String>,
     pub slug: Option<String>,
     pub name: String,
     pub tier: String,
@@ -1062,37 +1060,11 @@ struct CachedSetComponentRecord {
 
 #[derive(Debug, Clone)]
 struct RelicRootCatalogRecord {
-    item_id: i64,
+    item_key: String,
     slug: String,
     name: String,
     image_path: Option<String>,
     vaulted: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ScannerSetMapFile {
-    #[serde(default)]
-    warstonks_version: Option<String>,
-    api_version: Option<String>,
-    generated_at: String,
-    sets: Vec<ScannerSetMapSetRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ScannerSetMapSetRecord {
-    slug: String,
-    name: String,
-    image_path: Option<String>,
-    components: Vec<ScannerSetMapComponentRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ScannerSetMapComponentRecord {
-    slug: String,
-    quantity_in_set: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -1268,197 +1240,6 @@ fn resolve_market_observatory_db_path(app: &tauri::AppHandle) -> Result<PathBuf>
         .app_data_dir()
         .context("failed to resolve the app data directory")?;
     Ok(app_data_dir.join(MARKET_OBSERVATORY_DATABASE_FILE))
-}
-
-fn resolve_catalog_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve the app data directory")?;
-    Ok(app_data_dir.join(ITEM_CATALOG_DATABASE_FILE))
-}
-
-fn resolve_scanner_set_map_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve the app data directory")?;
-    Ok(app_data_dir.join("data").join(SCANNER_SET_MAP_FILE_NAME))
-}
-
-fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
-    let db_path = resolve_catalog_db_path(app)?;
-    Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .context("failed to open the local item catalog")
-}
-
-/// Realigns cached rows whose `item_id` no longer matches the catalog.
-///
-/// `item_id` used to be renumbered from 1 on every catalog rebuild (see
-/// `item_catalog::insert_canonical_items`), so anything that cached an id ended up pointing at a
-/// different item — and the app showed one item's prices under another item's name. Ids are
-/// stable now, but installs created before that fix still hold mismatched rows and would keep
-/// serving wrong prices forever, so they get repaired once here.
-///
-/// `slug` is the stable key every affected table already stores, so it's the source of truth.
-/// Tables whose primary key contains `item_id` can't be updated in place without risking a
-/// collision — those are caches, so their stale rows are dropped and refetched instead.
-pub fn repair_stale_item_ids(app: &tauri::AppHandle) -> Result<ItemIdRepairSummary> {
-    let catalog = open_catalog_database(app)?;
-    let mut correct_ids: HashMap<String, i64> = HashMap::new();
-    {
-        let mut statement = catalog.prepare("SELECT slug, item_id FROM wfm_items")?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        for row in rows {
-            let (slug, item_id) = row?;
-            correct_ids.insert(slug, item_id);
-        }
-    }
-    if correct_ids.is_empty() {
-        // No catalog yet — repairing against an empty map would delete everything.
-        return Ok(ItemIdRepairSummary::default());
-    }
-
-    let observatory = open_market_observatory_database(app)?;
-    let mut summary = ItemIdRepairSummary::default();
-
-    // Remappable: `item_id` is not part of the primary key, so an in-place update is safe.
-    for (table, slug_column, id_column) in [
-        ("owned_set_components", "component_slug", "component_item_id"),
-        ("set_completion_screenshot_baseline", "component_slug", "component_item_id"),
-        ("orderbook_snapshots", "slug", "item_id"),
-        ("recommendation_outcomes", "slug", "item_id"),
-        ("tracked_items", "slug", "item_id"),
-    ] {
-        summary.remapped += remap_table_item_ids(&observatory, table, slug_column, id_column, &correct_ids)?;
-    }
-
-    // Cache tables with `item_id` inside the primary key — remapped in two passes so the price
-    // history survives instead of being thrown away and refetched.
-    for (table, slug_column, id_column) in [
-        ("statistics_cache", "slug", "item_id"),
-        ("analytics_cache", "slug", "item_id"),
-    ] {
-        summary.remapped += remap_cache_table_item_ids(&observatory, table, slug_column, id_column, &correct_ids)?;
-    }
-
-    Ok(summary)
-}
-
-/// What a repair pass changed — surfaced so a silent no-op is distinguishable from a real fix.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ItemIdRepairSummary {
-    pub remapped: usize,
-    pub dropped: usize,
-}
-
-impl ItemIdRepairSummary {
-    pub fn changed_anything(&self) -> bool {
-        self.remapped > 0 || self.dropped > 0
-    }
-}
-
-/// Points a table's rows back at the id their slug actually resolves to.
-fn remap_table_item_ids(
-    connection: &Connection,
-    table: &str,
-    slug_column: &str,
-    id_column: &str,
-    correct_ids: &HashMap<String, i64>,
-) -> Result<usize> {
-    let stale: Vec<(String, i64)> = {
-        let mut statement = connection.prepare(&format!(
-            "SELECT DISTINCT {slug_column}, {id_column} FROM {table} WHERE {slug_column} IS NOT NULL"
-        ))?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        rows.filter_map(Result::ok)
-            .filter(|(slug, id)| correct_ids.get(slug).is_some_and(|correct| correct != id))
-            .collect()
-    };
-
-    let mut updated = 0;
-    for (slug, stale_id) in stale {
-        let Some(correct) = correct_ids.get(&slug) else { continue };
-        // OR REPLACE: a row may already exist under the correct id (e.g. re-tracked after a
-        // rebuild); the correctly-keyed one wins rather than the update failing.
-        updated += connection.execute(
-            &format!(
-                "UPDATE OR REPLACE {table} SET {id_column} = ?1 WHERE {slug_column} = ?2 AND {id_column} = ?3"
-            ),
-            params![correct, slug, stale_id],
-        )?;
-    }
-    Ok(updated)
-}
-
-/// Repoints cache rows whose slug no longer resolves to the id they were stored under.
-///
-/// These tables have `item_id` inside their PRIMARY KEY, so a direct update can collide with rows
-/// already sitting on the destination id. Two passes avoid that entirely: first move every stale
-/// row into a negative id (a namespace nothing else uses), which vacates the destinations, then
-/// move them onto the correct id. Deleting instead would be simpler but would throw away the
-/// 90-day price history every recommendation is built from.
-fn remap_cache_table_item_ids(
-    connection: &Connection,
-    table: &str,
-    slug_column: &str,
-    id_column: &str,
-    correct_ids: &HashMap<String, i64>,
-) -> Result<usize> {
-    let stale: Vec<(String, i64)> = {
-        let mut statement = connection.prepare(&format!(
-            "SELECT DISTINCT {slug_column}, {id_column} FROM {table} WHERE {slug_column} IS NOT NULL"
-        ))?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        rows.filter_map(Result::ok)
-            .filter(|(slug, id)| correct_ids.get(slug).is_some_and(|correct| correct != id))
-            .collect()
-    };
-    if stale.is_empty() {
-        return Ok(0);
-    }
-
-    // Pass 1 — vacate.
-    for (slug, stale_id) in &stale {
-        connection.execute(
-            &format!(
-                "UPDATE OR REPLACE {table} SET {id_column} = -{id_column} \
-                 WHERE {slug_column} = ?1 AND {id_column} = ?2"
-            ),
-            params![slug, stale_id],
-        )?;
-    }
-    // Pass 2 — land on the real id.
-    let mut moved = 0;
-    for (slug, stale_id) in &stale {
-        let Some(correct) = correct_ids.get(slug) else { continue };
-        moved += connection.execute(
-            &format!(
-                "UPDATE OR REPLACE {table} SET {id_column} = ?1 \
-                 WHERE {slug_column} = ?2 AND {id_column} = ?3"
-            ),
-            params![correct, slug, -stale_id],
-        )?;
-    }
-
-    // Anything still negative would be invisible to every lookup, so it must not survive.
-    let stranded = connection.execute(
-        &format!("DELETE FROM {table} WHERE {id_column} < 0"),
-        [],
-    )?;
-    if stranded > 0 {
-        moved = moved.saturating_sub(stranded);
-    }
-    Ok(moved)
 }
 
 pub(crate) fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
@@ -3482,11 +3263,11 @@ fn resolve_variants_from_catalog(
     _item_key: &str,
     slug: &str,
 ) -> Result<Vec<MarketVariant>> {
-    let connection = open_catalog_database(app)?;
+    let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let max_rank = connection
         .query_row(
             "SELECT max_rank
-             FROM wfm_items
+             FROM items
              WHERE slug = ?1
              LIMIT 1",
             params![slug],
@@ -4949,10 +4730,6 @@ fn build_action_card(
     }
 }
 
-fn bool_from_i64(value: Option<i64>) -> Option<bool> {
-    value.map(|entry| entry != 0)
-}
-
 fn round_price_option(value: Option<f64>) -> Option<f64> {
     value.map(round_platinum)
 }
@@ -6162,332 +5939,300 @@ fn extract_rank_stat_highlights(raw_json: &str) -> Result<(Option<String>, Vec<S
     ))
 }
 
-struct ItemDetailRow {
-    name: String,
-    slug: String,
-    image_path: Option<String>,
-    wiki_link: Option<String>,
-    description: Option<String>,
-    item_family: Option<String>,
-    category: Option<String>,
-    item_type: Option<String>,
-    rarity: Option<String>,
-    compat_name: Option<String>,
-    product_category: Option<String>,
-    polarity: Option<String>,
-    stance_polarity: Option<String>,
-    mod_set: Option<String>,
-    mastery_req: Option<i64>,
-    max_rank: Option<i64>,
-    base_drain: Option<i64>,
-    fusion_limit: Option<i64>,
-    ducats: Option<i64>,
-    market_cost: Option<i64>,
-    build_price: Option<i64>,
-    build_quantity: Option<i64>,
-    build_time: Option<i64>,
-    skip_build_time_price: Option<i64>,
-    item_count: Option<i64>,
-    tradable: Option<i64>,
-    prime: Option<i64>,
-    vaulted: Option<i64>,
-    relic_tier: Option<String>,
-    relic_code: Option<String>,
-    critical_chance: Option<f64>,
-    critical_multiplier: Option<f64>,
-    status_chance: Option<f64>,
-    fire_rate: Option<f64>,
-    reload_time: Option<f64>,
-    magazine_size: Option<i64>,
-    multishot: Option<i64>,
-    total_damage: Option<f64>,
-    disposition: Option<i64>,
-    range: Option<f64>,
-    follow_through: Option<f64>,
-    blocking_angle: Option<i64>,
-    combo_duration: Option<f64>,
-    heavy_attack_damage: Option<i64>,
-    slam_attack: Option<i64>,
-    heavy_slam_attack: Option<i64>,
-    wind_up: Option<f64>,
-    health: Option<i64>,
-    shield: Option<i64>,
-    armor: Option<i64>,
-    sprint_speed: Option<f64>,
-    power: Option<i64>,
-    stamina: Option<i64>,
-    noise: Option<String>,
-    trigger: Option<String>,
-    release_date: Option<String>,
-    estimated_vault_date: Option<String>,
-    vault_date: Option<String>,
-    raw_json: Option<String>,
+/// Reads a WFStat raw-JSON string field by its wire key (camelCase, as WFStat sends it on the
+/// wire — these are the same field names warframestat.us's own `/items/` API documents).
+fn wfstat_str(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+fn wfstat_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
+    value.get(key).and_then(|v| v.as_i64())
+}
+fn wfstat_f64(value: &serde_json::Value, key: &str) -> Option<f64> {
+    value.get(key).and_then(|v| v.as_f64())
+}
+fn wfstat_bool(value: &serde_json::Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(|v| v.as_bool())
+}
+fn wfstat_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+fn wfstat_named_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| wfstat_str(entry, "name"))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
+/// Item-detail enrichment, migrated onto the v2 catalog. `items`/`item_i18n` cover identity and
+/// localization the same as everywhere else in v2; the wide WFStat stat block (fire rate,
+/// polarities, abilities, level-scaling text, etc.) is read out of `wfstat_matches.raw_json` —
+/// the verbatim WFStat item this catalog matched, kept precisely so this enrichment doesn't need
+/// its own copy of WFStat's ~85-column schema (see `build_wfstat_raw_json_map`). An item with no
+/// WFStat match simply has no enrichment fields — `Option`/`Vec::new()`, not a guess.
 fn load_item_detail_summary(
     app: &tauri::AppHandle,
     item_key: &str,
     slug: &str,
 ) -> Result<ItemDetailSummary> {
-    let connection = open_catalog_database(app)?;
-    let catalog_item_id = resolve_item_id_by_slug(&connection, slug)?.unwrap_or_default();
-    let detail_row = connection.query_row(
-        "SELECT
-           COALESCE(i.preferred_name, w.name_en, ws.name, i.canonical_name, ?2),
-           COALESCE(i.wfm_slug, w.slug, ?2),
-           COALESCE(i.preferred_image, w.thumb, w.icon, ws.wikia_thumbnail),
-           COALESCE(ws.wikia_url, json_extract(w.raw_json, '$.i18n.en.wikiLink')),
-           ws.description,
-           i.item_family,
-           ws.category,
-           ws.type,
-           ws.rarity,
-           ws.compat_name,
-           ws.product_category,
-           ws.polarity,
-           ws.stance_polarity,
-           ws.mod_set,
-           ws.mastery_req,
-           w.max_rank,
-           ws.base_drain,
-           ws.fusion_limit,
-           w.ducats,
-           ws.market_cost,
-           ws.build_price,
-           ws.build_quantity,
-           ws.build_time,
-           ws.skip_build_time_price,
-           ws.item_count,
-           ws.tradable,
-           ws.is_prime,
-           COALESCE(ws.vaulted, w.vaulted),
-           i.relic_tier,
-           i.relic_code,
-           ws.critical_chance,
-           ws.critical_multiplier,
-           ws.proc_chance,
-           ws.fire_rate,
-           ws.reload_time,
-           ws.magazine_size,
-           ws.multishot,
-           ws.total_damage,
-           ws.disposition,
-           ws.range,
-           ws.follow_through,
-           ws.blocking_angle,
-           ws.combo_duration,
-           ws.heavy_attack_damage,
-           ws.slam_attack,
-           ws.heavy_slam_attack,
-           ws.wind_up,
-           ws.health,
-           ws.shield,
-           ws.armor,
-           ws.sprint_speed,
-           ws.power,
-           ws.stamina,
-           ws.noise,
-           ws.trigger,
-           ws.release_date,
-           ws.estimated_vault_date,
-           ws.vault_date,
-           ws.raw_json
-         FROM items i
-         LEFT JOIN wfm_items w ON w.item_id = i.item_id
-         LEFT JOIN wfstat_items ws ON ws.item_id = i.item_id
-         WHERE i.item_id = ?1 OR i.wfm_slug = ?2 OR i.preferred_slug = ?2
-         LIMIT 1",
-        params![catalog_item_id, slug],
+    let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
+    let (resolved_key, name, resolved_slug, item_family, max_rank, ducats, relic_tier, icon, thumb): (
+        String,
+        String,
+        String,
+        String,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = connection.query_row(
+        "SELECT item_key, name_en, slug, item_family, max_rank, ducats, relic_tier, icon, thumb
+         FROM items WHERE item_key = ?1 OR slug = ?2 LIMIT 1",
+        params![item_key, slug],
         |row| {
-            Ok(ItemDetailRow {
-                name: row.get(0)?,
-                slug: row.get(1)?,
-                image_path: row.get(2)?,
-                wiki_link: row.get(3)?,
-                description: row.get(4)?,
-                item_family: row.get(5)?,
-                category: row.get(6)?,
-                item_type: row.get(7)?,
-                rarity: row.get(8)?,
-                compat_name: row.get(9)?,
-                product_category: row.get(10)?,
-                polarity: row.get(11)?,
-                stance_polarity: row.get(12)?,
-                mod_set: row.get(13)?,
-                mastery_req: row.get(14)?,
-                max_rank: row.get(15)?,
-                base_drain: row.get(16)?,
-                fusion_limit: row.get(17)?,
-                ducats: row.get(18)?,
-                market_cost: row.get(19)?,
-                build_price: row.get(20)?,
-                build_quantity: row.get(21)?,
-                build_time: row.get(22)?,
-                skip_build_time_price: row.get(23)?,
-                item_count: row.get(24)?,
-                tradable: row.get(25)?,
-                prime: row.get(26)?,
-                vaulted: row.get(27)?,
-                relic_tier: row.get(28)?,
-                relic_code: row.get(29)?,
-                critical_chance: row.get(30)?,
-                critical_multiplier: row.get(31)?,
-                status_chance: row.get(32)?,
-                fire_rate: row.get(33)?,
-                reload_time: row.get(34)?,
-                magazine_size: row.get(35)?,
-                multishot: row.get(36)?,
-                total_damage: row.get(37)?,
-                disposition: row.get(38)?,
-                range: row.get(39)?,
-                follow_through: row.get(40)?,
-                blocking_angle: row.get(41)?,
-                combo_duration: row.get(42)?,
-                heavy_attack_damage: row.get(43)?,
-                slam_attack: row.get(44)?,
-                heavy_slam_attack: row.get(45)?,
-                wind_up: row.get(46)?,
-                health: row.get(47)?,
-                shield: row.get(48)?,
-                armor: row.get(49)?,
-                sprint_speed: row.get(50)?,
-                power: row.get(51)?,
-                stamina: row.get(52)?,
-                noise: row.get(53)?,
-                trigger: row.get(54)?,
-                release_date: row.get(55)?,
-                estimated_vault_date: row.get(56)?,
-                vault_date: row.get(57)?,
-                raw_json: row.get(58)?,
-            })
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+            ))
         },
     )?;
+    let image_path = thumb.or(icon);
 
-    let tags = {
-        let mut statement = connection.prepare(
-            "SELECT DISTINCT tag
-             FROM wfm_item_tags
-             JOIN wfm_items ON wfm_items.wfm_id = wfm_item_tags.wfm_id
-             WHERE wfm_items.item_id = ?1
-             ORDER BY tag ASC",
-        )?;
-        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
-    };
-    let polarities = {
-        let mut statement = connection.prepare(
-            "SELECT wfstat_item_polarities.polarity
-             FROM wfstat_item_polarities
-             JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_polarities.wfstat_unique_name
-             WHERE wfstat_items.item_id = ?1
-             ORDER BY wfstat_item_polarities.polarity_index ASC",
-        )?;
-        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
-    };
-    let parent_names = {
-        let mut statement = connection.prepare(
-            "SELECT wfstat_item_parents.parent_value
-             FROM wfstat_item_parents
-             JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_parents.wfstat_unique_name
-             WHERE wfstat_items.item_id = ?1
-             ORDER BY wfstat_item_parents.parent_index ASC",
-        )?;
-        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
-    };
-    let ability_names = {
-        let mut statement = connection.prepare(
-            "SELECT wfstat_item_abilities.ability_name
-             FROM wfstat_item_abilities
-             JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_abilities.wfstat_unique_name
-             WHERE wfstat_items.item_id = ?1
-               AND wfstat_item_abilities.ability_name IS NOT NULL
-             ORDER BY wfstat_item_abilities.ability_index ASC",
-        )?;
-        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
-    };
-    let attack_names = {
-        let mut statement = connection.prepare(
-            "SELECT wfstat_item_attacks.attack_name
-             FROM wfstat_item_attacks
-             JOIN wfstat_items ON wfstat_items.wfstat_unique_name = wfstat_item_attacks.wfstat_unique_name
-             WHERE wfstat_items.item_id = ?1
-               AND wfstat_item_attacks.attack_name IS NOT NULL
-             ORDER BY wfstat_item_attacks.attack_index ASC",
-        )?;
-        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
-    };
+    let raw_json: Option<String> = connection
+        .query_row(
+            "SELECT raw_json FROM wfstat_matches WHERE item_key = ?1",
+            params![resolved_key],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let raw_value: Option<serde_json::Value> = raw_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .context("failed to parse wfstat raw json for item details")?;
 
-    let (rank_scale_label, stat_highlights) = detail_row
-        .raw_json
+    let (
+        wiki_link,
+        description,
+        category,
+        item_type,
+        rarity,
+        compat_name,
+        product_category,
+        polarity,
+        stance_polarity,
+        mod_set,
+        mastery_req,
+        base_drain,
+        fusion_limit,
+        market_cost,
+        build_price,
+        build_quantity,
+        build_time,
+        skip_build_time_price,
+        item_count,
+        tradable,
+        prime,
+        vaulted,
+        critical_chance,
+        critical_multiplier,
+        status_chance,
+        fire_rate,
+        reload_time,
+        magazine_size,
+        multishot,
+        total_damage,
+        disposition,
+        range,
+        follow_through,
+        blocking_angle,
+        combo_duration,
+        heavy_attack_damage,
+        slam_attack,
+        heavy_slam_attack,
+        wind_up,
+        health,
+        shield,
+        armor,
+        sprint_speed,
+        power,
+        stamina,
+        noise,
+        trigger,
+        release_date,
+        estimated_vault_date,
+        vault_date,
+        polarities,
+        parent_names,
+        ability_names,
+        attack_names,
+    ) = (
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "wikiaUrl")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "description")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "category")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "type")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "rarity")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "compatName")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "productCategory")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "polarity")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "stancePolarity")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "modSet")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "masteryReq")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "baseDrain")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "fusionLimit")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "marketCost")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "buildPrice")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "buildQuantity")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "buildTime")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "skipBuildTimePrice")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "itemCount")),
+        raw_value.as_ref().and_then(|v| wfstat_bool(v, "tradable")),
+        raw_value.as_ref().and_then(|v| wfstat_bool(v, "isPrime")),
+        raw_value.as_ref().and_then(|v| wfstat_bool(v, "vaulted")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "criticalChance")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "criticalMultiplier")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "procChance")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "fireRate")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "reloadTime")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "magazineSize")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "multishot")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "totalDamage")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "disposition")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "range")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "followThrough")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "blockingAngle")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "comboDuration")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "heavyAttackDamage")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "slamAttack")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "heavySlamAttack")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "windUp")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "health")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "shield")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "armor")),
+        raw_value.as_ref().and_then(|v| wfstat_f64(v, "sprintSpeed")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "power")),
+        raw_value.as_ref().and_then(|v| wfstat_i64(v, "stamina")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "noise")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "trigger")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "releaseDate")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "estimatedVaultDate")),
+        raw_value.as_ref().and_then(|v| wfstat_str(v, "vaultDate")),
+        raw_value
+            .as_ref()
+            .map(|v| wfstat_string_array(v, "polarities"))
+            .unwrap_or_default(),
+        raw_value
+            .as_ref()
+            .map(|v| wfstat_string_array(v, "parents"))
+            .unwrap_or_default(),
+        raw_value
+            .as_ref()
+            .map(|v| wfstat_named_array(v, "abilities"))
+            .unwrap_or_default(),
+        raw_value
+            .as_ref()
+            .map(|v| wfstat_named_array(v, "attacks"))
+            .unwrap_or_default(),
+    );
+    let image_path = raw_value
+        .as_ref()
+        .and_then(|value| wfstat_str(value, "wikiaThumbnail"))
+        .or(image_path);
+
+    // WFM's own per-item `tags` array isn't persisted anywhere in the v2 catalog (only the
+    // single derived `item_family` is) — this is a known, deliberate gap versus the old
+    // catalog's `wfm_item_tags` table, left empty rather than guessed at.
+    let tags: Vec<String> = Vec::new();
+
+    let (rank_scale_label, stat_highlights) = raw_json
         .as_deref()
         .map(extract_rank_stat_highlights)
         .transpose()?
         .unwrap_or((None, Vec::new()));
 
     Ok(ItemDetailSummary {
-        item_key: item_key.to_string(),
-        name: detail_row.name,
-        slug: detail_row.slug,
-        image_path: detail_row.image_path,
-        wiki_link: detail_row.wiki_link,
-        description: detail_row.description,
-        item_family: detail_row.item_family,
-        category: detail_row.category,
-        item_type: detail_row.item_type,
-        rarity: detail_row.rarity,
-        compat_name: detail_row.compat_name,
-        product_category: detail_row.product_category,
-        polarity: detail_row.polarity,
-        stance_polarity: detail_row.stance_polarity,
-        mod_set: detail_row.mod_set,
-        mastery_req: detail_row.mastery_req,
-        max_rank: detail_row.max_rank,
-        base_drain: detail_row.base_drain,
-        fusion_limit: detail_row.fusion_limit,
-        ducats: detail_row.ducats,
-        market_cost: detail_row.market_cost,
-        build_price: detail_row.build_price,
-        build_quantity: detail_row.build_quantity,
-        build_time: detail_row.build_time,
-        skip_build_time_price: detail_row.skip_build_time_price,
-        item_count: detail_row.item_count,
-        tradable: bool_from_i64(detail_row.tradable),
-        prime: bool_from_i64(detail_row.prime),
-        vaulted: bool_from_i64(detail_row.vaulted),
-        relic_tier: detail_row.relic_tier,
-        relic_code: detail_row.relic_code,
-        critical_chance: detail_row.critical_chance,
-        critical_multiplier: detail_row.critical_multiplier,
-        status_chance: detail_row.status_chance,
-        fire_rate: detail_row.fire_rate,
-        reload_time: detail_row.reload_time,
-        magazine_size: detail_row.magazine_size,
-        multishot: detail_row.multishot,
-        total_damage: detail_row.total_damage,
-        disposition: detail_row.disposition,
-        range: detail_row.range,
-        follow_through: detail_row.follow_through,
-        blocking_angle: detail_row.blocking_angle,
-        combo_duration: detail_row.combo_duration,
-        heavy_attack_damage: detail_row.heavy_attack_damage,
-        slam_attack: detail_row.slam_attack,
-        heavy_slam_attack: detail_row.heavy_slam_attack,
-        wind_up: detail_row.wind_up,
-        health: detail_row.health,
-        shield: detail_row.shield,
-        armor: detail_row.armor,
-        sprint_speed: detail_row.sprint_speed,
-        power: detail_row.power,
-        stamina: detail_row.stamina,
-        noise: detail_row.noise,
-        trigger: detail_row.trigger,
-        release_date: detail_row.release_date,
-        estimated_vault_date: detail_row.estimated_vault_date,
-        vault_date: detail_row.vault_date,
+        item_key: resolved_key,
+        name,
+        slug: resolved_slug,
+        image_path,
+        wiki_link,
+        description,
+        item_family: Some(item_family),
+        category,
+        item_type,
+        rarity,
+        compat_name,
+        product_category,
+        polarity,
+        stance_polarity,
+        mod_set,
+        mastery_req,
+        max_rank,
+        base_drain,
+        fusion_limit,
+        ducats,
+        market_cost,
+        build_price,
+        build_quantity,
+        build_time,
+        skip_build_time_price,
+        item_count,
+        tradable,
+        prime,
+        vaulted,
+        relic_tier,
+        relic_code: None,
+        critical_chance,
+        critical_multiplier,
+        status_chance,
+        fire_rate,
+        reload_time,
+        magazine_size,
+        multishot,
+        total_damage,
+        disposition,
+        range,
+        follow_through,
+        blocking_angle,
+        combo_duration,
+        heavy_attack_damage,
+        slam_attack,
+        heavy_slam_attack,
+        wind_up,
+        health,
+        shield,
+        armor,
+        sprint_speed,
+        power,
+        stamina,
+        noise,
+        trigger,
+        release_date,
+        estimated_vault_date,
+        vault_date,
         tags,
         polarities,
         parent_names,
@@ -6498,116 +6243,68 @@ fn load_item_detail_summary(
     })
 }
 
-fn resolve_item_id_by_slug(connection: &Connection, slug: &str) -> Result<Option<i64>> {
-    connection
-        .query_row(
-            "SELECT item_id
-             FROM items
-             WHERE wfm_slug = ?1 OR preferred_slug = ?1
-             LIMIT 1",
-            params![slug],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(Into::into)
-}
+/// Set/component data straight from the v2 catalog's own `items`/`set_parts` tables — the
+/// replacement for the old scanner-set-map snapshot file. That file was written once by a
+/// scanner run and never existed at all on a fresh install (nothing ever populated it before the
+/// first scan), silently no-opping this whole feature for every new install; reading the live
+/// catalog instead means set-vs-parts arbitrage and inventory valuation work from first launch.
+fn load_scanner_sets_from_map(
+    app: &tauri::AppHandle,
+    _catalog_connection: &Connection,
+) -> Result<Vec<(SetRootCatalogRecord, Vec<CachedSetComponentRecord>)>> {
+    let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
+    let generated_at = format_timestamp(now_utc())?;
 
-fn load_scanner_set_map_file(path: &Path) -> Result<Option<ScannerSetMapFile>> {
-    if !path.exists() {
-        return Ok(None);
-    }
+    let mut set_stmt = connection.prepare(
+        "SELECT item_key, slug, name_en, COALESCE(thumb, icon) FROM items WHERE set_root = 1",
+    )?;
+    let set_roots: Vec<(String, String, String, Option<String>)> = set_stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read scanner set map at {}", path.display()))?;
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
+    let mut sets = Vec::with_capacity(set_roots.len());
+    for (set_item_key, set_slug, set_name, set_image) in set_roots {
+        let set_root = SetRootCatalogRecord {
+            item_key: set_item_key.clone(),
+            slug: set_slug.clone(),
+            name: set_name.clone(),
+            image_path: set_image.clone(),
+        };
 
-    let file = serde_json::from_str::<ScannerSetMapFile>(&raw)
-        .with_context(|| format!("failed to parse scanner set map at {}", path.display()))?;
-    Ok(Some(file))
-}
-
-fn load_catalog_item_brief_by_slug(
-    connection: &Connection,
-    slug: &str,
-) -> Result<Option<(i64, String, Option<String>)>> {
-    connection
-        .query_row(
-            "SELECT
-               i.item_id,
-               COALESCE(i.preferred_name, i.canonical_name, i.wfstat_name, i.wfm_slug, ?1) AS item_name,
-               COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path
-             FROM items i
-             LEFT JOIN wfm_items w ON w.item_id = i.item_id
-             WHERE i.wfm_slug = ?1
-                OR i.preferred_slug = ?1
-             LIMIT 1",
-            params![slug],
-            |row| {
+        let mut part_stmt = connection.prepare(
+            "SELECT p.item_key, p.slug, p.name_en, COALESCE(p.thumb, p.icon), sp.quantity_in_set
+             FROM set_parts sp JOIN items p ON p.item_key = sp.part_key
+             WHERE sp.set_key = ?1
+             ORDER BY p.name_en",
+        )?;
+        let parts: Vec<(String, String, String, Option<String>, i64)> = part_stmt
+            .query_map(params![set_item_key], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
-                    row.get::<_, Option<String>>(2)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
                 ))
-            },
-        )
-        .optional()
-        .map_err(Into::into)
-}
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
-fn load_scanner_sets_from_map(
-    app: &tauri::AppHandle,
-    catalog_connection: &Connection,
-) -> Result<Vec<(SetRootCatalogRecord, Vec<CachedSetComponentRecord>)>> {
-    let map_path = resolve_scanner_set_map_path(app)?;
-    let set_map = load_scanner_set_map_file(&map_path)?
-        .ok_or_else(|| anyhow!("scanner set map is unavailable at {}", map_path.display()))?;
-    let generated_at = set_map.generated_at.clone();
-    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
-        .context("failed to load the item catalog v2 slug map for the scanner set map")?;
-
-    let mut sets = Vec::with_capacity(set_map.sets.len());
-    for set_record in set_map.sets {
-        let Some((_, resolved_name, resolved_image)) =
-            load_catalog_item_brief_by_slug(catalog_connection, &set_record.slug)?
-        else {
-            continue;
-        };
-        let Some(set_item_key) = slug_to_item_key.get(&set_record.slug).cloned() else {
-            continue;
-        };
-
-        let set_root = SetRootCatalogRecord {
-            item_key: set_item_key,
-            slug: set_record.slug.clone(),
-            name: if set_record.name.trim().is_empty() {
-                resolved_name
-            } else {
-                set_record.name.clone()
-            },
-            image_path: set_record.image_path.or(resolved_image),
-        };
-
-        let mut components = Vec::with_capacity(set_record.components.len());
-        for (index, component) in set_record.components.iter().enumerate() {
-            let Some((_, component_name, component_image_path)) =
-                load_catalog_item_brief_by_slug(catalog_connection, &component.slug)?
-            else {
-                continue;
-            };
-            let component_item_key = slug_to_item_key.get(&component.slug).cloned();
-
+        let mut components = Vec::with_capacity(parts.len());
+        for (index, (part_key, part_slug, part_name, part_image, quantity_in_set)) in
+            parts.into_iter().enumerate()
+        {
             components.push(CachedSetComponentRecord {
                 set_item_key: set_root.item_key.clone(),
                 set_slug: set_root.slug.clone(),
                 set_name: set_root.name.clone(),
                 set_image_path: set_root.image_path.clone(),
-                component_item_key,
-                component_slug: component.slug.clone(),
-                component_name,
-                component_image_path,
-                quantity_in_set: component.quantity_in_set.max(1),
+                component_item_key: Some(part_key),
+                component_slug: part_slug,
+                component_name: part_name,
+                component_image_path: part_image,
+                quantity_in_set: quantity_in_set.max(1),
                 sort_order: index as i64,
                 fetched_at: generated_at.clone(),
             });
@@ -6624,29 +6321,31 @@ fn load_scanner_sets_from_map(
 fn list_relic_roots_from_catalog(connection: &Connection) -> Result<Vec<RelicRootCatalogRecord>> {
     let mut statement = connection.prepare(
         "SELECT
-           i.item_id,
-           i.wfm_slug,
-           i.preferred_name,
-           COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path,
-           COALESCE(MAX(wi.vaulted), 0) AS vaulted
+           i.item_key,
+           i.slug,
+           i.name_en,
+           COALESCE(i.thumb, i.icon),
+           wm.raw_json
          FROM items i
-         LEFT JOIN wfm_items w ON w.item_id = i.item_id
-         LEFT JOIN wfstat_items wi ON wi.item_id = i.item_id
-         WHERE i.relic_tier IS NOT NULL
-           AND i.relic_code IS NOT NULL
-           AND i.wfm_slug IS NOT NULL
+         LEFT JOIN wfstat_matches wm ON wm.item_key = i.item_key
+         WHERE i.item_family = 'relic'
+           AND i.relic_tier IS NOT NULL
            AND LOWER(i.relic_tier) <> 'requiem'
-         GROUP BY i.item_id, i.wfm_slug, i.preferred_name, image_path
-         ORDER BY i.preferred_name ASC",
+         ORDER BY i.name_en ASC",
     )?;
 
     let rows = statement.query_map([], |row| {
+        let raw_json: Option<String> = row.get(4)?;
         Ok(RelicRootCatalogRecord {
-            item_id: row.get(0)?,
+            item_key: row.get(0)?,
             slug: row.get(1)?,
             name: row.get(2)?,
             image_path: row.get(3)?,
-            vaulted: row.get::<_, i64>(4)? != 0,
+            vaulted: raw_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .and_then(|value| wfstat_bool(&value, "vaulted"))
+                .unwrap_or(false),
         })
     })?;
 
@@ -6725,102 +6424,51 @@ fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
     (now_utc() - fetched_at) < TimeDuration::days(SET_COMPOSITION_CACHE_RETENTION_DAYS)
 }
 
+/// v2 replacement: `set_parts` already carries each component's real `quantity_in_set` (sourced
+/// live from WFM's own `quantityInSet` at build time — see `item_catalog_v2::apply_set_details`),
+/// so this is a direct join instead of the old catalog's WFStat-component detour.
 fn load_catalog_set_components(
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
     catalog_connection: &Connection,
     set_root: &SetRootCatalogRecord,
     fetched_at: &str,
 ) -> Result<Vec<CachedSetComponentRecord>> {
-    let set_unique_name = catalog_connection
-        .query_row(
-            "SELECT primary_wfstat_unique_name
-             FROM items
-             WHERE wfm_slug = ?1 OR preferred_slug = ?1
-             LIMIT 1",
-            params![set_root.slug],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
-
-    let Some(set_unique_name) = set_unique_name else {
-        return Ok(Vec::new());
-    };
-    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
-        .context("failed to load the item catalog v2 slug map for set components")?;
-
     let mut statement = catalog_connection.prepare(
-        "
-        SELECT
-          COALESCE(ci.wfm_slug, ci.preferred_slug) AS component_slug,
-          COALESCE(
-            ci.preferred_name,
-            ci.canonical_name,
-            ci.wfstat_name,
-            ci.wfm_slug
-          ) AS component_name,
-          COALESCE(ci.preferred_image, w.thumb, w.icon) AS component_image_path,
-          c.item_count,
-          c.raw_json,
-          c.component_index
-        FROM wfstat_item_components c
-        JOIN items ci ON ci.item_id = c.component_item_id
-        LEFT JOIN wfm_items w ON w.item_id = ci.item_id
-        WHERE c.wfstat_unique_name = ?1
-          AND (ci.wfm_slug IS NOT NULL OR ci.preferred_slug IS NOT NULL)
-        ORDER BY c.component_index ASC, component_slug ASC
-        ",
+        "SELECT p.item_key, p.slug, p.name_en, COALESCE(p.thumb, p.icon), sp.quantity_in_set
+         FROM set_parts sp JOIN items p ON p.item_key = sp.part_key
+         WHERE sp.set_key = ?1
+         ORDER BY p.name_en",
     )?;
-
-    let rows = statement.query_map(params![set_unique_name], |row| {
-        let raw_json: Option<String> = row.get(4)?;
-        let quantity_from_raw = raw_json
-            .as_deref()
-            .and_then(extract_component_quantity_from_raw);
-        let quantity_in_set = row
-            .get::<_, Option<i64>>(3)?
-            .or(quantity_from_raw)
-            .unwrap_or(1)
-            .max(1);
-        let component_slug: String = row.get(0)?;
+    let rows = statement.query_map(params![set_root.item_key], |row| {
         Ok((
-            component_slug,
+            row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            quantity_in_set,
-            row.get::<_, i64>(5)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, i64>(4)?,
         ))
     })?;
 
     let mut components = Vec::new();
-    for row in rows {
-        let (component_slug, component_name, component_image_path, quantity_in_set, sort_order) =
+    for (index, row) in rows.enumerate() {
+        let (component_item_key, component_slug, component_name, component_image_path, quantity_in_set) =
             row?;
-        let component_item_key = slug_to_item_key.get(&component_slug).cloned();
         components.push(CachedSetComponentRecord {
             set_item_key: set_root.item_key.clone(),
             set_slug: set_root.slug.clone(),
             set_name: set_root.name.clone(),
             set_image_path: set_root.image_path.clone(),
-            component_item_key,
+            component_item_key: Some(component_item_key),
             component_slug,
             component_name,
             component_image_path,
-            quantity_in_set,
-            sort_order,
+            quantity_in_set: quantity_in_set.max(1),
+            sort_order: index as i64,
             fetched_at: fetched_at.to_string(),
         });
     }
 
     Ok(components)
-}
-
-fn extract_component_quantity_from_raw(raw_json: &str) -> Option<i64> {
-    let payload = serde_json::from_str::<serde_json::Value>(raw_json).ok()?;
-    payload
-        .get("itemCount")
-        .and_then(serde_json::Value::as_i64)
-        .or_else(|| payload.get("count").and_then(serde_json::Value::as_i64))
 }
 
 fn persist_set_component_cache(
@@ -7486,26 +7134,19 @@ pub fn compute_set_completion_inventory_value(
 
     let mut total = 0.0_f64;
 
-    // Set-vs-parts for every complete set the user fully owns. Set/component identity here
-    // comes from the OLD catalog's scanner set map (slug-keyed); resolve each slug through
-    // item_catalog_v2's slug -> item_key map so lookups line up with `remaining` above, which
-    // is keyed by the new catalog's item_key.
-    if let (Ok(catalog), Ok(slug_to_item_key)) = (
-        open_catalog_database(app),
-        crate::item_catalog_v2::load_slug_to_item_key_map(app),
-    ) {
-        let slug_to_item_key: HashMap<String, String> = slug_to_item_key;
+    // Set-vs-parts for every complete set the user fully owns. Set/component identity now comes
+    // straight from item_catalog_v2's own `items`/`set_parts` tables — `load_scanner_sets_from_map`
+    // already returns v2 `item_key`s directly, so no slug indirection is needed here anymore.
+    if let Ok(catalog) = item_catalog_v2::open_catalog_v2_readonly(app) {
         if let Ok(sets) = load_scanner_sets_from_map(app, &catalog) {
             for (set_root, components) in &sets {
-                let Some(set_item_key) = slug_to_item_key.get(&set_root.slug) else {
-                    continue;
-                };
+                let set_item_key = set_root.item_key.as_str();
                 let comp: Vec<(&str, i64)> = components
                     .iter()
                     .filter_map(|c| {
-                        slug_to_item_key
-                            .get(&c.component_slug)
-                            .map(|key| (key.as_str(), c.quantity_in_set.max(1)))
+                        c.component_item_key
+                            .as_deref()
+                            .map(|key| (key, c.quantity_in_set.max(1)))
                     })
                     .collect();
                 // Only evaluate sets we can fully resolve.
@@ -8197,11 +7838,12 @@ fn load_arbitrage_scanner_state(connection: &Connection) -> Result<ArbitrageScan
     })
 }
 
-/// Resolves a WFM slug to its WFM item id (the hex string the realtime firehose carries).
+/// Resolves a WFM slug to its WFM item id (the hex string the realtime firehose carries) — in
+/// the v2 catalog `item_key` IS that id (WFM's own identifier), so this is a direct column read.
 fn resolve_wfm_item_id(connection: &Connection, slug: &str) -> Option<String> {
     connection
         .query_row(
-            "SELECT wfm_id FROM wfm_items WHERE slug = ?1 AND wfm_id IS NOT NULL AND wfm_id <> '' LIMIT 1",
+            "SELECT item_key FROM items WHERE slug = ?1 LIMIT 1",
             params![slug],
             |row| row.get::<_, String>(0),
         )
@@ -8217,15 +7859,13 @@ pub(crate) fn update_recommended_prices_from_scan(
     app: &tauri::AppHandle,
     response: &ArbitrageScannerResponse,
 ) {
-    let Ok(connection) = open_catalog_database(app) else {
+    let Ok(connection) = item_catalog_v2::open_catalog_v2_readonly(app) else {
         return;
     };
 
-    // The scan touches many components, so load slug → wfm_id once.
+    // The scan touches many components, so load slug → item_key (WFM's own id) once.
     let mut slug_to_wfm: HashMap<String, String> = HashMap::new();
-    if let Ok(mut statement) = connection
-        .prepare("SELECT slug, wfm_id FROM wfm_items WHERE wfm_id IS NOT NULL AND wfm_id <> ''")
-    {
+    if let Ok(mut statement) = connection.prepare("SELECT slug, item_key FROM items") {
         if let Ok(rows) = statement
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
         {
@@ -8266,7 +7906,7 @@ pub(crate) fn update_recommended_prices_from_analysis(
     app: &tauri::AppHandle,
     analysis: &ItemAnalysisResponse,
 ) {
-    let Ok(connection) = open_catalog_database(app) else {
+    let Ok(connection) = item_catalog_v2::open_catalog_v2_readonly(app) else {
         return;
     };
 
@@ -8325,53 +7965,64 @@ fn emit_arbitrage_scanner_progress(app: &tauri::AppHandle, progress: &ArbitrageS
     let _ = app.emit(ARBITRAGE_SCANNER_PROGRESS_EVENT, progress.clone());
 }
 
+/// Reads one item's `drops` array (where the item itself drops from) plus its WFStat
+/// `components[].drops` (drop tables for named sub-parts, e.g. a Zaw strike's own drop
+/// locations) — both live inside the single raw WFStat JSON blob `wfstat_matches.raw_json`
+/// already carries, so no separate drop tables are needed the way the old catalog needed them.
+fn drop_entries_from_wfstat_value(value: &serde_json::Value) -> Vec<DropSourceEntry> {
+    let mut sources = Vec::new();
+    let extract = |drops: &serde_json::Value, out: &mut Vec<DropSourceEntry>| {
+        let Some(drops) = drops.as_array() else { return };
+        for drop in drops {
+            out.push(DropSourceEntry {
+                location: wfstat_str(drop, "place")
+                    .or_else(|| wfstat_str(drop, "location"))
+                    .unwrap_or_default(),
+                chance: wfstat_f64(drop, "chance"),
+                rarity: wfstat_str(drop, "rarity"),
+                source_type: wfstat_str(drop, "item"),
+            });
+        }
+    };
+    if let Some(drops) = value.get("drops") {
+        extract(drops, &mut sources);
+    }
+    if let Some(components) = value.get("components").and_then(|v| v.as_array()) {
+        for component in components {
+            if let Some(drops) = component.get("drops") {
+                extract(drops, &mut sources);
+            }
+        }
+    }
+    sources
+}
+
 fn load_drop_sources(app: &tauri::AppHandle, slug: &str) -> Result<Vec<DropSourceEntry>> {
-    let connection = open_catalog_database(app)?;
-    let primary_unique_name = connection
+    let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
+    let item_key: Option<String> = connection
         .query_row(
-            "SELECT primary_wfstat_unique_name
-             FROM items
-             WHERE wfm_slug = ?1 OR preferred_slug = ?1",
+            "SELECT item_key FROM items WHERE slug = ?1",
             params![slug],
-            |row| row.get::<_, Option<String>>(0),
+            |row| row.get(0),
         )
-        .optional()?
-        .flatten();
+        .optional()?;
 
     let mut sources = Vec::new();
-    if let Some(unique_name) = primary_unique_name {
-        let mut statement = connection.prepare(
-            "SELECT location, chance, rarity, type
-             FROM wfstat_item_drops
-             WHERE wfstat_unique_name = ?1",
-        )?;
-        let rows = statement.query_map(params![unique_name], |row| {
-            Ok(DropSourceEntry {
-                location: row.get(0)?,
-                chance: row.get(1)?,
-                rarity: row.get(2)?,
-                source_type: row.get(3)?,
-            })
-        })?;
-        sources.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
+    if let Some(item_key) = item_key {
+        let raw_json: Option<String> = connection
+            .query_row(
+                "SELECT raw_json FROM wfstat_matches WHERE item_key = ?1",
+                params![item_key],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(raw_json) = raw_json {
+            let value: serde_json::Value = serde_json::from_str(&raw_json)
+                .context("failed to parse wfstat raw json for drop sources")?;
+            sources.extend(drop_entries_from_wfstat_value(&value));
+        }
     }
-
-    let catalog_item_id = resolve_item_id_by_slug(&connection, slug)?.unwrap_or_default();
-    let mut component_statement = connection.prepare(
-        "SELECT cd.location, cd.chance, cd.rarity, cd.type
-         FROM wfstat_component_drops cd
-         JOIN wfstat_item_components c ON c.component_id = cd.component_id
-         WHERE c.component_item_id = ?1",
-    )?;
-    let component_rows = component_statement.query_map(params![catalog_item_id], |row| {
-        Ok(DropSourceEntry {
-            location: row.get(0)?,
-            chance: row.get(1)?,
-            rarity: row.get(2)?,
-            source_type: row.get(3)?,
-        })
-    })?;
-    sources.extend(component_rows.collect::<std::result::Result<Vec<_>, _>>()?);
 
     let mut deduped = BTreeMap::<(String, Option<String>, Option<String>), DropSourceEntry>::new();
     for source in sources {
@@ -8476,7 +8127,7 @@ fn build_supply_context(
         item_details.tags.iter().any(|tag| tag == "set") || item_details.name.ends_with(" Set");
 
     if looks_like_set {
-        let catalog_connection = open_catalog_database(app)?;
+        let catalog_connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
         let observatory_connection = open_market_observatory_database(app)?;
         let set_root = SetRootCatalogRecord {
             item_key: item_key.to_string(),
@@ -8840,32 +8491,17 @@ fn normalized_relic_chance(chance_percent: f64) -> f64 {
 
 fn load_relic_reward_profiles(
     catalog_connection: &Connection,
-    relic_item_id: i64,
+    relic_item_key: &str,
     slug_to_item_key: &HashMap<String, String>,
 ) -> Result<Vec<RelicRoiDropEntry>> {
-    let mut statement = catalog_connection.prepare(
-        "SELECT variant_value, raw_json
-         FROM wfstat_items
-         WHERE item_id = ?1
-           AND variant_kind = 'relic_refinement'
-         ORDER BY variant_rank ASC, variant_value ASC",
-    )?;
-
-    let rows = statement.query_map(params![relic_item_id], |row| {
-        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
-    })?;
+    let variants = item_catalog_v2::load_relic_variant_raw_json(catalog_connection, relic_item_key)?;
 
     let mut reward_map = BTreeMap::<String, RelicRoiDropEntry>::new();
-    for row in rows {
-        let (variant_value, raw_json) = row?;
-        let refinement_key = match variant_value
-            .as_deref()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("exceptional") => RELIC_REFINEMENT_EXCEPTIONAL,
-            Some("flawless") => RELIC_REFINEMENT_FLAWLESS,
-            Some("radiant") => RELIC_REFINEMENT_RADIANT,
+    for (refinement, raw_json) in variants {
+        let refinement_key = match refinement.trim().to_ascii_lowercase().as_str() {
+            "exceptional" => RELIC_REFINEMENT_EXCEPTIONAL,
+            "flawless" => RELIC_REFINEMENT_FLAWLESS,
+            "radiant" => RELIC_REFINEMENT_RADIANT,
             _ => RELIC_REFINEMENT_INTACT,
         };
 
@@ -8891,22 +8527,17 @@ fn load_relic_reward_profiles(
                 continue;
             };
 
-            let resolved_item_id = resolve_item_id_by_slug(catalog_connection, &reward_slug)?;
             let item_key = slug_to_item_key.get(&reward_slug).cloned();
-            let image_path = resolved_item_id.and_then(|resolved_item_id| {
-                catalog_connection
-                    .query_row(
-                        "SELECT preferred_image
-                             FROM items
-                             WHERE item_id = ?1",
-                        params![resolved_item_id],
-                        |row| row.get::<_, Option<String>>(0),
-                    )
-                    .optional()
-                    .ok()
-                    .flatten()
-                    .flatten()
-            });
+            let image_path = catalog_connection
+                .query_row(
+                    "SELECT COALESCE(thumb, icon) FROM items WHERE slug = ?1",
+                    params![reward_slug],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .flatten();
 
             let entry =
                 reward_map
@@ -8992,6 +8623,10 @@ fn relic_rarity_rank(rarity: Option<&str>) -> u8 {
     }
 }
 
+/// v2 has no separate `relic_code` column (the old catalog's own derived field) — a relic's code
+/// is only ever present as part of its `name_en` ("Lith K1 Relic"), so this matches on
+/// `relic_tier` + the same "{tier} {code} Relic" name pattern the old catalog's own fallback
+/// path already used.
 fn resolve_relic_catalog_entry(
     catalog_connection: &Connection,
     relic_tier: &str,
@@ -8999,88 +8634,32 @@ fn resolve_relic_catalog_entry(
 ) -> Result<Option<RelicCatalogEntry>> {
     let tier = relic_tier.trim();
     let code = relic_code.trim();
+    let expected_name = format!("{tier} {code} Relic");
 
-    let has_relic_columns = catalog_connection
-        .prepare("PRAGMA table_info(items)")
-        .and_then(|mut statement| {
-            let rows = statement
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows.iter().any(|column| column == "relic_tier")
-                && rows.iter().any(|column| column == "relic_code"))
-        })
-        .unwrap_or(false);
+    let lookup = catalog_connection
+        .query_row(
+            "SELECT item_key, slug, name_en, COALESCE(thumb, icon)
+             FROM items
+             WHERE relic_tier = ?1 COLLATE NOCASE
+               AND name_en = ?2 COLLATE NOCASE
+             LIMIT 1",
+            params![tier, expected_name],
+            |row| {
+                Ok(RelicCatalogEntry {
+                    item_key: row.get(0)?,
+                    slug: row.get(1)?,
+                    name: row.get(2)?,
+                    image_path: row.get::<_, Option<String>>(3)?,
+                })
+            },
+        )
+        .optional();
 
-    if has_relic_columns {
-        let lookup = catalog_connection
-            .query_row(
-                "SELECT
-                   i.item_id,
-                   i.wfm_slug,
-                   COALESCE(i.preferred_name, i.canonical_name, i.wfm_slug),
-                   COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path
-                 FROM items i
-                 LEFT JOIN wfm_items w ON w.item_id = i.item_id
-                 WHERE i.relic_tier = ?1 COLLATE NOCASE
-                   AND i.relic_code = ?2 COLLATE NOCASE
-                 LIMIT 1",
-                params![tier, code],
-                |row| {
-                    Ok(RelicCatalogEntry {
-                        item_id: row.get(0)?,
-                        slug: row.get(1)?,
-                        name: row.get(2)?,
-                        image_path: row.get::<_, Option<String>>(3)?,
-                    })
-                },
-            )
-            .optional();
-
-        return match lookup {
-            Ok(entry) => Ok(entry),
-            Err(error) => {
-                eprintln!(
-                    "Relic catalog lookup failed for {} {}: {}",
-                    tier, code, error
-                );
-                Ok(None)
-            }
-        };
-    } else {
-        let fallback_name = format!("{tier} {code} Relic");
-        let lookup = catalog_connection
-            .query_row(
-                "SELECT
-                   i.item_id,
-                   i.wfm_slug,
-                   COALESCE(i.preferred_name, i.canonical_name, i.wfm_slug),
-                   COALESCE(i.preferred_image, w.thumb, w.icon) AS image_path
-                 FROM items i
-                 LEFT JOIN wfm_items w ON w.item_id = i.item_id
-                 WHERE i.preferred_name = ?1 COLLATE NOCASE
-                    OR i.canonical_name = ?1 COLLATE NOCASE
-                 LIMIT 1",
-                params![fallback_name],
-                |row| {
-                    Ok(RelicCatalogEntry {
-                        item_id: row.get(0)?,
-                        slug: row.get(1)?,
-                        name: row.get(2)?,
-                        image_path: row.get::<_, Option<String>>(3)?,
-                    })
-                },
-            )
-            .optional();
-
-        match lookup {
-            Ok(entry) => Ok(entry),
-            Err(error) => {
-                eprintln!(
-                    "Relic catalog lookup failed for {} {}: {}",
-                    tier, code, error
-                );
-                Ok(None)
-            }
+    match lookup {
+        Ok(entry) => Ok(entry),
+        Err(error) => {
+            eprintln!("Relic catalog lookup failed for {} {}: {}", tier, code, error);
+            Ok(None)
         }
     }
 }
@@ -9139,7 +8718,7 @@ where
     F: FnMut(&str, &str, &str) -> Result<Option<ScannerPriceModel>>,
 {
     let mut drops =
-        load_relic_reward_profiles(catalog_connection, relic_root.item_id, slug_to_item_key)?;
+        load_relic_reward_profiles(catalog_connection, &relic_root.item_key, slug_to_item_key)?;
     if drops.is_empty() {
         return Ok(None);
     }
@@ -9252,7 +8831,7 @@ where
         .unwrap_or_else(|| "No intact ROI summary available.".to_string());
 
     Ok(Some(RelicRoiEntry {
-        relic_item_id: relic_root.item_id,
+        relic_item_id: relic_root.item_key.clone(),
         slug: relic_root.slug.clone(),
         name: relic_root.name.clone(),
         image_path: relic_root.image_path.clone(),
@@ -9269,7 +8848,7 @@ fn build_arbitrage_scanner_inner(
     app: tauri::AppHandle,
     mut on_progress: impl FnMut(ArbitrageScannerProgress),
 ) -> Result<ArbitrageScannerRunOutcome> {
-    let catalog_connection = open_catalog_database(&app)?;
+    let catalog_connection = item_catalog_v2::open_catalog_v2_readonly(&app)?;
     let observatory_connection = open_market_observatory_database(&app)?;
     let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(&app)
         .context("failed to load the item catalog v2 slug map for the arbitrage scanner")?;
@@ -9647,8 +9226,8 @@ fn build_arbitrage_scanner_inner(
                         reason: error.to_string(),
                     });
                     eprintln!(
-                        "[scanner] failed to process relic '{}' (item_id={}): {}",
-                        relic_root.slug, relic_root.item_id, error
+                        "[scanner] failed to process relic '{}' (item_key={}): {}",
+                        relic_root.slug, relic_root.item_key, error
                     );
                 }
             }
@@ -11445,13 +11024,13 @@ fn load_owned_relic_inventory_cache(
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to read owned relic inventory cache")?;
 
-    let catalog_connection = open_catalog_database(app)?;
+    let catalog_connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let mut entries = Vec::new();
     for row in rows {
         let catalog_entry = resolve_relic_catalog_entry(&catalog_connection, &row.tier, &row.code)?;
         let (relic_item_id, slug, name, image_path) = match catalog_entry {
             Some(entry) => (
-                Some(entry.item_id),
+                Some(entry.item_key),
                 Some(entry.slug),
                 entry.name,
                 entry.image_path,
@@ -11459,10 +11038,10 @@ fn load_owned_relic_inventory_cache(
             None => (None, None, format!("{} {} Relic", row.tier, row.code), None),
         };
 
-        let drops = if let Some(item_id) = relic_item_id {
+        let drops = if let Some(item_key) = &relic_item_id {
             let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
                 .context("failed to load the item catalog v2 slug map for owned relics")?;
-            load_relic_reward_profiles(&catalog_connection, item_id, &slug_to_item_key)?
+            load_relic_reward_profiles(&catalog_connection, item_key, &slug_to_item_key)?
                 .into_iter()
                 .map(|drop| OwnedRelicDropEntry {
                     item_key: drop.item_key,
@@ -11970,81 +11549,6 @@ pub async fn stop_arbitrage_scanner(app: tauri::AppHandle) -> Result<bool, Strin
 #[cfg(test)]
 mod tests {
 
-    /// The repair that rescues installs corrupted before item ids became stable.
-    ///
-    /// Reproduces the real failure: a cache row stored under an id that now belongs to a
-    /// different item. Two passes are required because `item_id` sits inside the primary key,
-    /// so the destination may already be occupied.
-    #[test]
-    fn repairs_cache_rows_left_on_another_items_id() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE statistics_cache (
-                item_id INTEGER NOT NULL,
-                slug TEXT,
-                variant_key TEXT NOT NULL,
-                domain_key TEXT NOT NULL,
-                bucket_origin TEXT NOT NULL,
-                bucket_at TEXT NOT NULL,
-                source_kind TEXT NOT NULL,
-                PRIMARY KEY (item_id, variant_key, domain_key, bucket_origin, bucket_at, source_kind)
-            );",
-        )
-        .unwrap();
-        let insert = |id: i64, slug: &str, bucket: &str| {
-            conn.execute(
-                "INSERT INTO statistics_cache VALUES (?1, ?2, 'base', '90days', 'wfm', ?3, 'closed')",
-                params![id, slug, bucket],
-            )
-            .unwrap();
-        };
-        // Two items whose ids were swapped by a rebuild — the case a one-pass update cannot fix,
-        // because each one's destination is occupied by the other.
-        insert(10, "mesa_prime_set", "2026-01-01");
-        insert(20, "rhino_prime_set", "2026-01-01");
-
-        let mut correct = HashMap::new();
-        correct.insert("mesa_prime_set".to_string(), 20_i64);
-        correct.insert("rhino_prime_set".to_string(), 10_i64);
-
-        let moved = super::remap_cache_table_item_ids(
-            &conn, "statistics_cache", "slug", "item_id", &correct,
-        )
-        .expect("repair runs");
-        assert!(moved > 0, "should have moved rows");
-
-        let pairs: Vec<(String, i64)> = {
-            let mut st = conn.prepare("SELECT slug, item_id FROM statistics_cache ORDER BY slug").unwrap();
-            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().filter_map(Result::ok).collect()
-        };
-        assert_eq!(
-            pairs,
-            vec![("mesa_prime_set".to_string(), 20), ("rhino_prime_set".to_string(), 10)],
-            "every row must end up on the id its slug resolves to"
-        );
-        // No row may be left parked in the temporary negative namespace — it would be invisible.
-        let negatives: i64 = conn
-            .query_row("SELECT COUNT(*) FROM statistics_cache WHERE item_id < 0", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(negatives, 0);
-    }
-
-    #[test]
-    fn repair_is_a_no_op_when_ids_already_match() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE tracked_items (item_id INTEGER NOT NULL, slug TEXT, variant_key TEXT NOT NULL,
-             PRIMARY KEY (item_id, slug, variant_key));",
-        )
-        .unwrap();
-        conn.execute("INSERT INTO tracked_items VALUES (7, 'mesa_prime_set', 'base')", []).unwrap();
-        let mut correct = HashMap::new();
-        correct.insert("mesa_prime_set".to_string(), 7_i64);
-
-        let moved = super::remap_table_item_ids(&conn, "tracked_items", "slug", "item_id", &correct)
-            .expect("repair runs");
-        assert_eq!(moved, 0, "matching ids must not be rewritten");
-    }
     use super::{
         build_action_card, build_confidence_summary, build_entry_exit_zone_overview,
         build_liquidity_confidence, build_manipulation_risk, build_market_snapshot,
@@ -12061,8 +11565,7 @@ mod tests {
         WfmStatisticsRowApi,
     };
     use crate::wfm_scheduler::RequestPriority;
-    use rusqlite::{params, Connection};
-    use std::collections::HashMap;
+    use rusqlite::Connection;
     fn sample_order(
         order_type: &str,
         platinum: f64,

@@ -482,7 +482,7 @@ function RelicRoiRow({
               <ItemName
                 name={entry.name}
                 slug={entry.slug}
-                itemId={entry.relicItemId}
+                wfmId={entry.relicItemId}
                 imagePath={entry.imagePath}
               />
             </span>

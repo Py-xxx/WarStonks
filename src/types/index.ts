@@ -1353,7 +1353,9 @@ export interface RelicRoiRefinementSummary {
 }
 
 export interface RelicRoiEntry {
-  relicItemId: number;
+  /** The WFM item id (was a locally-renumbered integer id; now the catalog's own stable string
+   * identity, same value `wfmId` carries elsewhere). */
+  relicItemId: string;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -1501,7 +1503,7 @@ export interface OwnedRelicDropEntry {
 }
 
 export interface OwnedRelicEntry {
-  relicItemId: number | null;
+  relicItemId: string | null;
   slug: string | null;
   name: string;
   tier: string;

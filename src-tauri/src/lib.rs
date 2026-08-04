@@ -1,16 +1,14 @@
 mod commands;
 mod data_transfer;
 mod error_log;
-mod item_catalog;
-// The v2 item catalog rebuild. Builds its own separate database file in the background at
-// startup and exposes one read command (`lookup_item_v2`) — the old `item_catalog` module and
-// its database are completely untouched. See the module doc comment for cutover status.
+// The item catalog. Identity is the WFM item id (`item_key`), never a positional rowid, which
+// was the root cause of a class of "price shown under the wrong item" bugs in the predecessor
+// of this module. See the module doc comment for the full design rationale.
 mod item_catalog_v2;
 mod maintenance;
 mod market_observatory;
-// Self-contained, tested migration logic for Market Observatory's item_id -> item_key rename.
-// Not yet wired into market_observatory.rs's real schema or queries — see the module doc
-// comment for why that has to land in the same pass as the query rewrite, not before it.
+// Migration logic for Market Observatory's item_id -> item_key rename, wired into
+// `open_market_observatory_database` (see market_observatory.rs).
 mod market_observatory_migration;
 mod opportunities;
 mod order_flow;

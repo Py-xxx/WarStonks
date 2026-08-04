@@ -1,4 +1,5 @@
 use crate::error_log::{log_feature_error_best_effort, log_feature_event_best_effort};
+use crate::item_catalog_v2;
 use crate::market_observatory::{
     apply_owned_set_component_deltas, load_cached_trade_health_context,
     load_set_completion_screenshot_import_cutoff, replace_owned_set_component_deltas,
@@ -19,7 +20,7 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -33,7 +34,6 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
-const ITEM_CATALOG_DATABASE_FILE: &str = "item_catalog.sqlite";
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
 const TRADES_DIR_NAME: &str = "trades";
 const TRADES_SESSION_FILE_NAME: &str = "wfm-session.json";
@@ -51,7 +51,6 @@ const KEYCHAIN_WFM_SESSION_KEY: &str = "wfm-session";
 const KEYCHAIN_WFM_CREDENTIALS_KEY: &str = "wfm-credentials";
 const KEYCHAIN_WFM_DEVICE_ID_KEY: &str = "wfm-device-id";
 const TRADES_CACHE_DATABASE_FILE: &str = "trades-cache.sqlite";
-const TRADE_SET_MAP_FILE_NAME: &str = "wfm-set-map.json";
 const TRADE_SET_COMPONENT_CACHE_RETENTION_DAYS: i64 = 30;
 const TRADE_LOG_DERIVED_VERSION: i64 = 3;
 const PORTFOLIO_PNL_CHART_BUCKET_LIMIT: usize = 90;
@@ -735,32 +734,6 @@ struct TradeNotificationCandidate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TradeSetMapFile {
-    #[serde(default)]
-    warstonks_version: Option<String>,
-    api_version: Option<String>,
-    generated_at: String,
-    sets: Vec<TradeSetMapSetRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TradeSetMapSetRecord {
-    slug: String,
-    name: String,
-    image_path: Option<String>,
-    components: Vec<TradeSetMapComponentRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TradeSetMapComponentRecord {
-    slug: String,
-    quantity_in_set: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TradeSetMapSummary {
     pub ready: bool,
     pub refreshed: bool,
@@ -1109,14 +1082,6 @@ fn reset_auto_signin_state(app: &tauri::AppHandle) {
     write_auto_signin_state(app, AutoSigninState::default());
 }
 
-fn build_item_catalog_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve app data directory")?;
-    Ok(app_data_dir.join(ITEM_CATALOG_DATABASE_FILE))
-}
-
 fn build_market_observatory_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     let app_data_dir = app
         .path()
@@ -1133,14 +1098,6 @@ fn build_trades_cache_database_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     Ok(app_data_dir
         .join(TRADES_DIR_NAME)
         .join(TRADES_CACHE_DATABASE_FILE))
-}
-
-fn build_trade_set_map_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve app data directory")?;
-    Ok(app_data_dir.join("data").join(TRADE_SET_MAP_FILE_NAME))
 }
 
 fn load_trade_credentials(app: &tauri::AppHandle) -> Result<Option<StoredTradeCredentials>> {
@@ -1285,21 +1242,6 @@ fn cleanup_legacy_trade_files(app: &tauri::AppHandle) {
             let _ = fs::remove_file(&path);
         }
     }
-}
-
-fn open_catalog_database(app: &tauri::AppHandle) -> Result<Connection> {
-    let db_path = build_item_catalog_path(app)?;
-    let connection = Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .context("failed to open item catalog")?;
-    // The catalog DB takes large write transactions (startup refresh, language-pack population).
-    // Without a busy timeout a concurrent write surfaces as an instant SQLITE_BUSY on reads.
-    connection
-        .busy_timeout(Duration::from_secs(5))
-        .context("failed to configure item catalog connection")?;
-    Ok(connection)
 }
 
 fn open_market_observatory_database(app: &tauri::AppHandle) -> Result<Connection> {
@@ -4104,124 +4046,25 @@ fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSumma
     )
 }
 
+/// v2 replacement for the old catalog's alias-table lookup. `lookup_item_v2_inner` folds and
+/// normalizes the query the same way at both build and query time, and — unlike the old alias
+/// table — refuses ambiguous keys outright rather than falling back to an ORDER BY tie-break to
+/// pick one arbitrary winner among a thousand candidates. Not a downgrade: a deterministic,
+/// ambiguity-rejecting lookup is exactly the property this whole catalog rewrite exists for.
 fn resolve_catalog_trade_item_by_alias(
     connection: &Connection,
     alias_value: &str,
 ) -> Result<Option<CatalogTradeItemMeta>> {
-    let normalized = normalize_alias_lookup_value(alias_value);
     let trimmed = alias_value.trim();
-    let preferred_name = prettify_alecaframe_name(trimmed);
-    let normalized_preferred_name = normalize_alias_lookup_value(&preferred_name);
-
-    let queries = [
-        (
-            "
-            SELECT
-              items.item_id,
-              COALESCE(items.wfm_id, wfm_items.wfm_id),
-              COALESCE(items.wfm_slug, wfm_items.slug, ''),
-              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
-              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank,
-              wfm_items.bulk_tradable
-            FROM items
-            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
-            WHERE items.primary_wfstat_unique_name = ?2
-            LIMIT 1
-            ",
-            params![preferred_name.as_str(), trimmed],
-        ),
-        (
-            "
-            SELECT
-              items.item_id,
-              COALESCE(items.wfm_id, wfm_items.wfm_id),
-              COALESCE(items.wfm_slug, wfm_items.slug, ''),
-              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
-              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank
-            FROM wfstat_item_components
-            JOIN items ON items.item_id = wfstat_item_components.component_item_id
-            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
-            WHERE wfstat_item_components.component_unique_name = ?2
-            LIMIT 1
-            ",
-            params![preferred_name.as_str(), trimmed],
-        ),
-        (
-            "
-            SELECT
-              items.item_id,
-              COALESCE(items.wfm_id, wfm_items.wfm_id),
-              COALESCE(items.wfm_slug, wfm_items.slug, ''),
-              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
-              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank,
-              wfm_items.bulk_tradable
-            FROM item_aliases
-            JOIN items ON items.item_id = item_aliases.item_id
-            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
-            WHERE item_aliases.alias_value = ?2
-               OR item_aliases.normalized_alias_value = ?3
-            -- Thousands of alias values map to more than one item (the bare word blueprint alone
-            -- matches over a thousand), so without a full tie-break LIMIT 1 returns an arbitrary
-            -- row and the same trade can resolve differently on different runs. Every term below
-            -- is deterministic.
-            ORDER BY CASE
-              WHEN item_aliases.alias_value = ?2 THEN 0
-              WHEN item_aliases.normalized_alias_value = ?3 THEN 1
-              ELSE 2
-            END,
-              -- Prefer a primary alias, then one that resolves to a real tradeable WFM item,
-              -- then the lowest id purely so the outcome is stable and reproducible.
-              CASE WHEN item_aliases.is_primary = 1 THEN 0 ELSE 1 END,
-              CASE WHEN wfm_items.wfm_id IS NOT NULL THEN 0 ELSE 1 END,
-              items.item_id
-            LIMIT 1
-            ",
-            params![preferred_name.as_str(), trimmed, normalized.as_str()],
-        ),
-        (
-            "
-            SELECT
-              items.item_id,
-              COALESCE(items.wfm_id, wfm_items.wfm_id),
-              COALESCE(items.wfm_slug, wfm_items.slug, ''),
-              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
-              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank,
-              wfm_items.bulk_tradable
-            FROM items
-            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
-            WHERE LOWER(COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, '')) = ?2
-            LIMIT 1
-            ",
-            params![preferred_name.as_str(), normalized_preferred_name.as_str()],
-        ),
-    ];
-
-    for (sql, params) in queries {
-        let resolved = connection
-            .query_row(sql, params, |row| {
-                Ok(CatalogTradeItemMeta {
-                    item_id: row.get(0)?,
-                    wfm_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    slug: row.get(2)?,
-                    name: row.get(3)?,
-                    image_path: row.get(4)?,
-                    max_rank: row.get(5)?,
-                    bulk_tradable: row.get::<_, Option<i64>>(6)?.unwrap_or(0) == 1,
-                })
-            })
-            .optional()
-            .context("failed to resolve catalog item by alias")?;
-
-        if resolved.is_some() {
-            return Ok(resolved);
-        }
+    if trimmed.is_empty() {
+        return Ok(None);
     }
-
-    Ok(None)
+    let preferred_name = prettify_alecaframe_name(trimmed);
+    let lookup = item_catalog_v2::lookup_item_v2_inner(connection, trimmed)
+        .context("failed to resolve catalog item by alias")?
+        .or(item_catalog_v2::lookup_item_v2_inner(connection, &preferred_name)
+            .context("failed to resolve catalog item by alias")?);
+    Ok(lookup.map(catalog_trade_item_meta_from_v2))
 }
 
 fn resolve_catalog_trade_item_by_slug(
@@ -4233,37 +4076,24 @@ fn resolve_catalog_trade_item_by_slug(
         return Ok(None);
     }
 
-    connection
-        .query_row(
-            "
-            SELECT
-              items.item_id,
-              COALESCE(items.wfm_id, wfm_items.wfm_id, ''),
-              COALESCE(items.wfm_slug, wfm_items.slug, ''),
-              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name, ?1),
-              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon),
-              wfm_items.max_rank,
-              wfm_items.bulk_tradable
-            FROM items
-            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
-            WHERE COALESCE(items.wfm_slug, wfm_items.slug) = ?2
-            LIMIT 1
-            ",
-            params![trimmed, trimmed],
-            |row| {
-                Ok(CatalogTradeItemMeta {
-                    item_id: row.get(0)?,
-                    wfm_id: row.get(1)?,
-                    slug: row.get(2)?,
-                    name: row.get(3)?,
-                    image_path: row.get(4)?,
-                    max_rank: row.get(5)?,
-                    bulk_tradable: row.get::<_, Option<i64>>(6)?.unwrap_or(0) == 1,
-                })
-            },
-        )
-        .optional()
-        .context("failed to resolve catalog item by slug")
+    Ok(item_catalog_v2::lookup_item_v2_inner(connection, trimmed)
+        .context("failed to resolve catalog item by slug")?
+        .map(catalog_trade_item_meta_from_v2))
+}
+
+/// `item_id` (the old catalog's own renumbered rowid) has no v2 equivalent — `item_key` is the
+/// stable identity now and lives in `wfm_id` below, same as everywhere else in this module. Left
+/// `None` rather than a fabricated number; every caller already treats it as optional.
+fn catalog_trade_item_meta_from_v2(item: item_catalog_v2::ItemV2Lookup) -> CatalogTradeItemMeta {
+    CatalogTradeItemMeta {
+        item_id: None,
+        wfm_id: item.item_key,
+        slug: item.slug,
+        name: item.name_en,
+        image_path: item.thumb.or(item.icon),
+        max_rank: item.max_rank,
+        bulk_tradable: item.bulk_tradable,
+    }
 }
 
 fn observatory_contains_set_component_slug(connection: &Connection, slug: &str) -> Result<bool> {
@@ -4522,7 +4352,7 @@ fn build_trade_notification_items_for_wfm_entry(
         return Ok(build_trade_notification_items_from_entry(entry));
     }
 
-    let catalog = open_catalog_database(app)?;
+    let catalog = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let trade_quantity = entry.quantity.max(1);
     let mut items = Vec::new();
 
@@ -5020,7 +4850,7 @@ fn build_alecaframe_trade_entries_from_payload(
 ) -> Result<Vec<PortfolioTradeLogEntry>> {
     let baseline = parse_date_start_utc(baseline_date)?;
     let trades = normalize_alecaframe_trade_payload(payload);
-    let catalog = open_catalog_database(app)?;
+    let catalog = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let mut imported = Vec::new();
 
     for trade in trades {
@@ -5673,71 +5503,27 @@ fn persist_trade_set_component_cache(
     Ok(())
 }
 
+/// v2 replacement: `set_parts` already carries each component's real `quantity_in_set` directly
+/// (sourced live from WFM's own `quantityInSet`), so this is a single join instead of the old
+/// catalog's item-id -> wfstat-unique-name -> component-table detour.
 fn load_trade_set_components_from_catalog(
     catalog_connection: &Connection,
     set_slug: &str,
 ) -> Result<Vec<TradeSetComponentRecord>> {
-    let set_item_id = catalog_connection
-        .query_row(
-            "SELECT item_id
-             FROM items
-             WHERE wfm_slug = ?1 OR preferred_slug = ?1
-             LIMIT 1",
-            params![set_slug],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .context("failed to resolve set item id for catalog component lookup")?;
-
-    let Some(set_item_id) = set_item_id else {
-        return Ok(Vec::new());
-    };
-
-    let set_unique_name = catalog_connection
-        .query_row(
-            "SELECT primary_wfstat_unique_name
-             FROM items
-             WHERE item_id = ?1
-             LIMIT 1",
-            params![set_item_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .context("failed to resolve set wfstat unique name for catalog component lookup")?
-        .flatten();
-    let Some(set_unique_name) = set_unique_name else {
-        return Ok(Vec::new());
-    };
-
     let fetched_at = format_timestamp(now_utc())?;
     let mut statement = catalog_connection.prepare(
-        "
-        SELECT
-          COALESCE(ci.wfm_slug, ci.preferred_slug) AS component_slug,
-          c.item_count,
-          c.raw_json,
-          c.component_index
-        FROM wfstat_item_components c
-        JOIN items ci ON ci.item_id = c.component_item_id
-        WHERE c.wfstat_unique_name = ?1
-          AND (ci.wfm_slug IS NOT NULL OR ci.preferred_slug IS NOT NULL)
-        ORDER BY c.component_index ASC, component_slug ASC
-        ",
+        "SELECT p.slug, sp.quantity_in_set
+         FROM set_parts sp
+         JOIN items s ON s.item_key = sp.set_key
+         JOIN items p ON p.item_key = sp.part_key
+         WHERE s.slug = ?1
+         ORDER BY p.name_en",
     )?;
     let rows = statement
-        .query_map(params![set_unique_name], |row| {
-            let raw_json: Option<String> = row.get(2)?;
-            let quantity_from_raw = raw_json
-                .as_deref()
-                .and_then(extract_component_quantity_from_raw);
-            let quantity_in_set = row
-                .get::<_, Option<i64>>(1)?
-                .or(quantity_from_raw)
-                .unwrap_or(1)
-                .max(1);
+        .query_map(params![set_slug], |row| {
             Ok(TradeSetComponentRecord {
                 component_slug: row.get(0)?,
-                quantity_in_set,
+                quantity_in_set: row.get::<_, i64>(1)?.max(1),
                 fetched_at: fetched_at.clone(),
             })
         })?
@@ -5747,33 +5533,13 @@ fn load_trade_set_components_from_catalog(
     Ok(rows)
 }
 
-fn extract_component_quantity_from_raw(raw_json: &str) -> Option<i64> {
-    let payload = serde_json::from_str::<serde_json::Value>(raw_json).ok()?;
-    payload
-        .get("itemCount")
-        .and_then(serde_json::Value::as_i64)
-        .or_else(|| payload.get("count").and_then(serde_json::Value::as_i64))
-}
-
 fn list_trade_set_roots_from_catalog(connection: &Connection) -> Result<Vec<TradeSetRootRecord>> {
     let mut statement = connection
         .prepare(
-            "
-            SELECT
-              COALESCE(items.wfm_slug, wfm_items.slug) AS slug,
-              COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name) AS name,
-              COALESCE(items.preferred_image, wfm_items.thumb, wfm_items.icon) AS image_path
-            FROM items
-            JOIN wfm_items
-              ON wfm_items.wfm_id = items.wfm_id
-            WHERE EXISTS (
-              SELECT 1
-              FROM wfm_item_tags
-              WHERE wfm_item_tags.wfm_id = wfm_items.wfm_id
-                AND wfm_item_tags.tag = 'set'
-            )
-            ORDER BY LOWER(COALESCE(items.preferred_name, wfm_items.name_en, items.canonical_name)) ASC
-            ",
+            "SELECT slug, name_en, COALESCE(thumb, icon)
+             FROM items
+             WHERE set_root = 1
+             ORDER BY LOWER(name_en) ASC",
         )
         .context("failed to prepare trade set root catalog query")?;
 
@@ -5792,174 +5558,45 @@ fn list_trade_set_roots_from_catalog(connection: &Connection) -> Result<Vec<Trad
     Ok(rows)
 }
 
-fn load_trade_set_map_file(path: &Path) -> Result<Option<TradeSetMapFile>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read trade set map at {}", path.display()))?;
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let file = serde_json::from_str::<TradeSetMapFile>(&raw)
-        .with_context(|| format!("failed to parse trade set map at {}", path.display()))?;
-    Ok(Some(file))
-}
-
-fn map_trade_set_components_from_file(
-    set_map: &TradeSetMapFile,
-    set_slug: &str,
-) -> Vec<TradeSetComponentRecord> {
-    let target_slug = set_slug.trim();
-    if target_slug.is_empty() {
-        return Vec::new();
-    }
-
-    let Some(set_record) = set_map
-        .sets
-        .iter()
-        .find(|record| record.slug == target_slug)
-    else {
-        return Vec::new();
-    };
-
-    set_record
-        .components
-        .iter()
-        .map(|component| TradeSetComponentRecord {
-            component_slug: component.slug.clone(),
-            quantity_in_set: component.quantity_in_set.max(1),
-            fetched_at: set_map.generated_at.clone(),
-        })
-        .collect()
-}
-
+/// Direct-from-catalog fallback used when the trades cache DB doesn't have this set's components
+/// yet — replaces the old scanner-set-map-file fallback (see `build_trade_set_map_inner`'s doc
+/// comment for why that file is gone entirely).
 fn load_trade_set_components_from_map(
     app: &tauri::AppHandle,
     set_slug: &str,
 ) -> Result<Vec<TradeSetComponentRecord>> {
-    let map_path = build_trade_set_map_path(app)?;
-    let Some(file) = load_trade_set_map_file(&map_path)? else {
-        return Ok(Vec::new());
-    };
-
-    Ok(map_trade_set_components_from_file(&file, set_slug))
+    let catalog_connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
+    load_trade_set_components_from_catalog(&catalog_connection, set_slug)
 }
 
-fn save_trade_set_map_file(path: &Path, file: &TradeSetMapFile) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create trade set map directory {}",
-                parent.display()
-            )
-        })?;
-    }
-
-    let mut updated = file.clone();
-    updated.warstonks_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    let raw =
-        serde_json::to_string_pretty(&updated).context("failed to serialize trade set map")?;
-    fs::write(path, raw)
-        .with_context(|| format!("failed to write trade set map at {}", path.display()))
-}
-
-fn persist_trade_set_map_into_cache(
-    connection: &Connection,
-    set_map: &TradeSetMapFile,
-) -> Result<()> {
-    for set_record in &set_map.sets {
-        let components = set_record
-            .components
-            .iter()
-            .map(|component| TradeSetComponentRecord {
-                component_slug: component.slug.clone(),
-                quantity_in_set: component.quantity_in_set.max(1),
-                fetched_at: set_map.generated_at.clone(),
-            })
-            .collect::<Vec<_>>();
-        persist_trade_set_component_cache(connection, &set_record.slug, &components)?;
-    }
-
-    Ok(())
-}
-
+/// v2 replacement for the old scanner-set-map snapshot/cache dance: that file existed only to
+/// avoid re-deriving the set/component list on every call, which mattered when deriving it meant
+/// a live WFStat fetch. Deriving it now is a handful of local SQLite reads against the v2
+/// catalog (already rebuilt at every app startup), so there is nothing left worth caching to a
+/// file — this rebuilds the trades cache DB's set/component rows straight from the catalog every
+/// time and always reports `refreshed: true`.
 fn build_trade_set_map_inner(
     app: &tauri::AppHandle,
-    api_version: Option<&str>,
+    _api_version: Option<&str>,
 ) -> Result<TradeSetMapSummary> {
-    let map_path = build_trade_set_map_path(app)?;
-    let app_version = env!("CARGO_PKG_VERSION");
-    let version_key = api_version
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-
-    if let Some(existing) = load_trade_set_map_file(&map_path)? {
-        let existing_version = existing
-            .api_version
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let existing_app_version = existing
-            .warstonks_version
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if existing_version == version_key && existing_app_version == Some(app_version) {
-            let cache_connection = open_trades_cache_database(app)?;
-            persist_trade_set_map_into_cache(&cache_connection, &existing)?;
-            return Ok(TradeSetMapSummary {
-                ready: true,
-                refreshed: false,
-                api_version: existing.api_version,
-                set_count: existing.sets.len() as i64,
-                file_path: map_path.display().to_string(),
-            });
-        }
-    }
-
-    let catalog_connection = open_catalog_database(app)?;
+    let catalog_connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let set_roots = list_trade_set_roots_from_catalog(&catalog_connection)?;
-    let generated_at = format_timestamp(now_utc())?;
-    let mut sets = Vec::with_capacity(set_roots.len());
+    let cache_connection = open_trades_cache_database(app)?;
 
     for set_root in &set_roots {
         let components =
-            load_trade_set_components_from_catalog(&catalog_connection, &set_root.slug)?
-                .into_iter()
-                .map(|component| TradeSetMapComponentRecord {
-                    slug: component.component_slug,
-                    quantity_in_set: component.quantity_in_set.max(1),
-                })
-                .collect::<Vec<_>>();
-
-        sets.push(TradeSetMapSetRecord {
-            slug: set_root.slug.clone(),
-            name: set_root.name.clone(),
-            image_path: set_root.image_path.clone(),
-            components,
-        });
+            load_trade_set_components_from_catalog(&catalog_connection, &set_root.slug)?;
+        persist_trade_set_component_cache(&cache_connection, &set_root.slug, &components)?;
     }
-
-    let set_map = TradeSetMapFile {
-        warstonks_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        api_version: version_key.map(str::to_string),
-        generated_at: generated_at.clone(),
-        sets,
-    };
-
-    save_trade_set_map_file(&map_path, &set_map)?;
-    let cache_connection = open_trades_cache_database(app)?;
-    persist_trade_set_map_into_cache(&cache_connection, &set_map)?;
 
     Ok(TradeSetMapSummary {
         ready: true,
         refreshed: true,
-        api_version: set_map.api_version,
-        set_count: set_map.sets.len() as i64,
-        file_path: map_path.display().to_string(),
+        api_version: None,
+        set_count: set_roots.len() as i64,
+        file_path: item_catalog_v2::catalog_v2_database_path(app)
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
     })
 }
 
@@ -6381,7 +6018,7 @@ fn build_stored_trade_record_from_entry(entry: &PortfolioTradeLogEntry) -> Store
 fn load_trade_set_definitions(
     app: &tauri::AppHandle,
 ) -> Result<Vec<(TradeSetRootRecord, Vec<TradeSetComponentRecord>)>> {
-    let catalog = open_catalog_database(app)?;
+    let catalog = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let set_roots = list_trade_set_roots_from_catalog(&catalog)?;
     let mut set_definitions = Vec::new();
     for set_root in set_roots {
@@ -6421,7 +6058,7 @@ fn build_owned_set_component_deltas_for_entries(
     }
 
     let normalized_records = normalize_trade_entries_for_owned_component_sync(app, entries)?;
-    let catalog = open_catalog_database(app)?;
+    let catalog = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let observatory = open_market_observatory_database(app)?;
     let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app).unwrap_or_default();
 
@@ -6915,7 +6552,7 @@ fn normalize_grouped_trade_sets_inner(
         return Ok(false);
     }
 
-    let catalog = open_catalog_database(app)?;
+    let catalog = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let set_roots = list_trade_set_roots_from_catalog(&catalog)?;
     let mut set_definitions = Vec::new();
     for set_root in set_roots {
@@ -7686,52 +7323,35 @@ fn query_latest_statistics_reference_price(
         .map_err(Into::into)
 }
 
+/// Bulk slug -> metadata resolution for portfolio grouping — the exact use case
+/// `item_catalog_v2::lookup_items_v2_batch` was built for (one connection, one pass over every
+/// distinct slug in the trade log, instead of a query per row).
 fn load_portfolio_catalog_meta_map(
     app: &tauri::AppHandle,
     records: &[StoredTradeLogRecord],
 ) -> Result<HashMap<String, PortfolioCatalogMeta>> {
-    let connection = open_catalog_database(app)?;
+    let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let unique_slugs = records
         .iter()
         .map(|record| record.slug.trim().to_string())
         .filter(|slug| !slug.is_empty())
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<Vec<_>>();
 
-    let mut statement = connection
-        .prepare(
-            "
-            SELECT
-              items.item_family
-            FROM items
-            LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
-            WHERE COALESCE(items.wfm_slug, wfm_items.slug) = ?1
-            LIMIT 1
-            ",
-        )
-        .context("failed to prepare portfolio catalog metadata query")?;
+    let resolved = item_catalog_v2::lookup_items_v2_batch(&connection, &unique_slugs)
+        .context("failed to resolve portfolio catalog metadata")?;
 
-    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
-        .unwrap_or_default();
-
-    let mut metadata = HashMap::new();
-    for slug in unique_slugs {
-        let maybe_meta = statement
-            .query_row(params![slug.as_str()], |row| {
-                Ok(PortfolioCatalogMeta {
-                    item_key: None,
-                    item_family: row.get(0)?,
-                })
-            })
-            .optional()
-            .context("failed to resolve portfolio catalog metadata")?;
-
-        if let Some(mut meta) = maybe_meta {
-            meta.item_key = slug_to_item_key.get(&slug).cloned();
-            metadata.insert(slug, meta);
-        }
-    }
-
-    Ok(metadata)
+    Ok(resolved
+        .into_iter()
+        .map(|(slug, item)| {
+            (
+                slug,
+                PortfolioCatalogMeta {
+                    item_key: Some(item.item_key),
+                    item_family: Some(item.item_family),
+                },
+            )
+        })
+        .collect())
 }
 
 fn classify_portfolio_category(
@@ -10036,6 +9656,8 @@ fn try_restore_trade_session_state(app: &tauri::AppHandle) -> Result<TradeSessio
     }
 }
 
+/// `wfm_id` here IS the v2 catalog's `item_key` (WFM's own item id) — same identity, no mapping
+/// needed.
 fn resolve_catalog_trade_item_meta(
     connection: &Connection,
     wfm_id: &str,
@@ -10043,26 +9665,25 @@ fn resolve_catalog_trade_item_meta(
     connection
         .query_row(
             "SELECT
-                item_id,
-                wfm_id,
+                item_key,
                 slug,
                 COALESCE(NULLIF(name_en, ''), slug),
                 COALESCE(NULLIF(thumb, ''), NULLIF(icon, '')),
                 max_rank,
                 bulk_tradable
-             FROM wfm_items
-             WHERE wfm_id = ?1
+             FROM items
+             WHERE item_key = ?1
              LIMIT 1",
             params![wfm_id],
             |row| {
                 Ok(CatalogTradeItemMeta {
-                    item_id: row.get(0)?,
-                    wfm_id: row.get(1)?,
-                    slug: row.get(2)?,
-                    name: row.get(3)?,
-                    image_path: row.get(4)?,
-                    max_rank: row.get(5)?,
-                    bulk_tradable: row.get::<_, Option<i64>>(6)?.unwrap_or(0) == 1,
+                    item_id: None,
+                    wfm_id: row.get(0)?,
+                    slug: row.get(1)?,
+                    name: row.get(2)?,
+                    image_path: row.get(3)?,
+                    max_rank: row.get(4)?,
+                    bulk_tradable: row.get::<_, i64>(5)? != 0,
                 })
             },
         )
@@ -10245,7 +9866,7 @@ pub async fn verify_market_listing(
 
 fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
     let mut session = ensure_authenticated_session(app)?;
-    let connection = open_catalog_database(app)?;
+    let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let client = shared_wfm_client()?;
     let orders = match fetch_my_orders(&client, &session.token) {
         Ok(orders) => orders,
@@ -10356,17 +9977,17 @@ fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Res
     })
 }
 
-/// Looks up whether an item is bulk-tradable (e.g. arcanes) from the local catalog.
+/// Looks up whether an item is bulk-tradable (e.g. arcanes) from the local catalog. `wfm_id` is
+/// the v2 catalog's `item_key`.
 fn catalog_item_is_bulk_tradable(connection: &Connection, wfm_id: &str) -> Result<bool> {
     let value = connection
         .query_row(
-            "SELECT bulk_tradable FROM wfm_items WHERE wfm_id = ?1 LIMIT 1",
+            "SELECT bulk_tradable FROM items WHERE item_key = ?1 LIMIT 1",
             params![wfm_id],
-            |row| row.get::<_, Option<i64>>(0),
+            |row| row.get::<_, i64>(0),
         )
         .optional()
-        .context("failed to look up the item's bulk-tradable flag")?
-        .flatten();
+        .context("failed to look up the item's bulk-tradable flag")?;
     Ok(value.unwrap_or(0) == 1)
 }
 
@@ -10376,9 +9997,7 @@ fn catalog_item_is_bulk_tradable(connection: &Connection, wfm_id: &str) -> Resul
 /// must be omitted (sending it for those is equally rejected).
 pub(crate) fn catalog_item_subtypes(connection: &Connection, wfm_id: &str) -> Result<Vec<String>> {
     let mut statement = connection
-        .prepare(
-            "SELECT subtype FROM wfm_item_subtypes WHERE wfm_id = ?1 ORDER BY subtype_index ASC",
-        )
+        .prepare("SELECT subtype FROM item_subtypes WHERE item_key = ?1 ORDER BY ord ASC")
         .context("failed to prepare the item subtype lookup")?;
     let subtypes = statement
         .query_map(params![wfm_id], |row| row.get::<_, String>(0))
@@ -10442,7 +10061,7 @@ fn create_order_inner(
         payload["rank"] = json!(rank);
     }
     // Bulk-tradable items (e.g. arcanes) require `perTrade`; non-bulk items forbid it.
-    let catalog = open_catalog_database(app)?;
+    let catalog = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let bulk_tradable = catalog_item_is_bulk_tradable(&catalog, &input.wfm_id)?;
     if let Some(per_trade) = resolve_per_trade(bulk_tradable, input.per_trade, input.quantity)? {
         payload["perTrade"] = json!(per_trade);
@@ -10557,7 +10176,7 @@ fn update_order_inner(
     // passes the item id, so non-bulk / id-less updates simply omit it.
     let bulk_tradable = match input.wfm_id.as_deref() {
         Some(wfm_id) if !wfm_id.is_empty() => {
-            catalog_item_is_bulk_tradable(&open_catalog_database(app)?, wfm_id)?
+            catalog_item_is_bulk_tradable(&item_catalog_v2::open_catalog_v2_readonly(app)?, wfm_id)?
         }
         _ => false,
     };
@@ -10914,13 +10533,13 @@ pub async fn set_watchlist_targets(
     let resolved = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         move || -> Result<std::collections::HashMap<String, WatchlistTarget>> {
-            let connection = open_catalog_database(&app)?;
+            let connection = item_catalog_v2::open_catalog_v2_readonly(&app)?;
             let mut map = std::collections::HashMap::new();
             for target in targets {
                 // Resolve slug -> WFM item id; skip items the catalog doesn't know.
                 let wfm_id: Option<String> = connection
                     .query_row(
-                        "SELECT wfm_id FROM wfm_items WHERE slug = ?1 LIMIT 1",
+                        "SELECT item_key FROM items WHERE slug = ?1 LIMIT 1",
                         params![target.slug],
                         |row| row.get(0),
                     )
@@ -11164,7 +10783,7 @@ pub async fn get_wfm_item_subtypes(
     wfm_id: String,
 ) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let catalog = open_catalog_database(&app)?;
+        let catalog = item_catalog_v2::open_catalog_v2_readonly(&app)?;
         catalog_item_subtypes(&catalog, &wfm_id)
     })
     .await
@@ -11481,7 +11100,7 @@ mod tests {
         initialize_trades_cache_schema, insert_smart_manage_log, parse_timestamp,
         smart_change_rate_state, smart_failure_streak,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
-        map_trade_set_components_from_file, merge_wfm_trade_log_entries,
+        merge_wfm_trade_log_entries,
         normalize_alecaframe_trade_payload, normalize_avatar_url, normalize_status_set_request,
         parse_status_from_payload, prune_stale_trade_log_overrides_inner, resolve_per_trade,
         replace_trade_log_rows_inner, save_trade_log_rows_inner,
@@ -11489,7 +11108,7 @@ mod tests {
         is_listing_underpriced, underpriced_trigger_ratio, UNDERPRICED_TRIGGER_BASE_RATIO,
         AlecaframeRawTradeRecord, AlecaframeTradeItemRecord, AlecaframeTradeResponse,
         PortfolioTradeLogEntry, StoredTradeLogRecord, TradeSetComponentRecord,
-        TradeSetMapComponentRecord, TradeSetMapFile, TradeSetMapSetRecord, TradeSetRootRecord,
+        TradeSetRootRecord,
         WfmProfileClosedOrder, WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName,
         WfmProfileStatisticsPayload,
     };
@@ -12523,38 +12142,6 @@ mod tests {
         );
 
         assert_eq!(fingerprint, same_trade_fingerprint);
-    }
-
-    #[test]
-    fn map_trade_set_components_from_file_returns_components() {
-        let set_map = TradeSetMapFile {
-            warstonks_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            api_version: Some("0.0.0".to_string()),
-            generated_at: "2026-03-10T09:00:00Z".to_string(),
-            sets: vec![TradeSetMapSetRecord {
-                slug: "wisp_prime_set".to_string(),
-                name: "Wisp Prime Set".to_string(),
-                image_path: None,
-                components: vec![
-                    TradeSetMapComponentRecord {
-                        slug: "wisp_prime_blueprint".to_string(),
-                        quantity_in_set: 1,
-                    },
-                    TradeSetMapComponentRecord {
-                        slug: "wisp_prime_chassis".to_string(),
-                        quantity_in_set: 2,
-                    },
-                ],
-            }],
-        };
-
-        let components = map_trade_set_components_from_file(&set_map, "wisp_prime_set");
-        assert_eq!(components.len(), 2);
-        assert_eq!(components[0].component_slug, "wisp_prime_blueprint");
-        assert_eq!(components[0].quantity_in_set, 1);
-        assert_eq!(components[1].component_slug, "wisp_prime_chassis");
-        assert_eq!(components[1].quantity_in_set, 2);
-        assert_eq!(components[0].fetched_at, "2026-03-10T09:00:00Z");
     }
 
     #[test]
