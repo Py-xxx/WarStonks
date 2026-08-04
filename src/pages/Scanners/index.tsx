@@ -232,7 +232,7 @@ function ArbitrageComponentRow({
 }) {
   const { t } = useTranslation();
   const imageUrl = resolveWfmAssetUrl(component.imagePath);
-  const isDisabled = !component.itemId || !targetValue.trim();
+  const isDisabled = !component.itemKey || !targetValue.trim();
 
   return (
     <div className="scanner-component-row">
@@ -247,7 +247,7 @@ function ArbitrageComponentRow({
               <ItemName
                 name={component.name}
                 slug={component.slug}
-                itemId={component.itemId ?? undefined}
+                wfmId={component.itemKey ?? undefined}
                 imagePath={component.imagePath}
               />
             </span>
@@ -327,7 +327,7 @@ function ArbitrageRow({
               <ItemName
                 name={entry.name}
                 slug={entry.slug}
-                itemId={entry.setItemId}
+                wfmId={entry.setItemKey}
                 imagePath={entry.imagePath}
               />
             </span>
@@ -865,7 +865,7 @@ export function ScannersPage() {
   }, []);
 
   const addComponentToWatchlist = (component: ArbitrageScannerComponentEntry) => {
-    if (component.itemId === null) {
+    if (component.itemKey === null) {
       return;
     }
     // Want only the shortfall. No inventory loaded (or item absent) reads as 0 owned, so the
@@ -880,8 +880,8 @@ export function ScannersPage() {
     }
 
     const item: WfmAutocompleteItem = {
-      itemId: component.itemId,
-      wfmId: null,
+      itemId: 0,
+      wfmId: component.itemKey,
       name: component.name,
       slug: component.slug,
       maxRank: null,

@@ -48,6 +48,7 @@ export type AppUpdateInstallState = 'available' | 'downloading' | 'installing' |
 export interface WatchlistItem {
   id: string;
   itemId: number;
+  wfmId: string | null;
   name: string;
   displayName: string;
   slug: string;
@@ -1069,7 +1070,7 @@ export interface AnalyticsChartPoint {
 }
 
 export interface ItemAnalyticsResponse {
-  itemId: number;
+  itemKey: string;
   slug: string;
   variantKey: string;
   variantLabel: string;
@@ -1172,7 +1173,7 @@ export interface TimeOfDayLiquiditySummary {
 }
 
 export interface ItemDetailSummary {
-  itemId: number;
+  itemKey: string;
   name: string;
   slug: string;
   imagePath: string | null;
@@ -1241,7 +1242,7 @@ export interface ItemDetailSummary {
 }
 
 export interface SetComponentAnalysisEntry {
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -1267,7 +1268,7 @@ export interface ItemSupplyContext {
 }
 
 export interface ItemAnalysisResponse {
-  itemId: number;
+  itemKey: string;
   slug: string;
   variantKey: string;
   variantLabel: string;
@@ -1285,7 +1286,7 @@ export interface ItemAnalysisResponse {
 }
 
 export interface ArbitrageScannerComponentEntry {
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -1300,7 +1301,7 @@ export interface ArbitrageScannerComponentEntry {
 }
 
 export interface ArbitrageScannerSetEntry {
-  setItemId: number;
+  setItemKey: string;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -1327,7 +1328,7 @@ export interface RelicRefinementChanceProfile {
 }
 
 export interface RelicRoiDropEntry {
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -1410,7 +1411,7 @@ export interface ArbitrageScannerState {
 
 /** One selectable reward in an active farming session. */
 export interface FarmingSessionDrop {
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -1475,7 +1476,7 @@ export interface FarmingSession {
 }
 
 export interface SetCompletionOwnedItem {
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -1492,7 +1493,7 @@ export interface OwnedRelicRefinementCounts {
 }
 
 export interface OwnedRelicDropEntry {
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;

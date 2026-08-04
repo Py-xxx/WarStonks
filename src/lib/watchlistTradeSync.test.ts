@@ -37,6 +37,7 @@ function createWatchlistItem(input: Pick<WatchlistItem, 'id' | 'slug' | 'variant
   return {
     id: input.id,
     itemId: 1,
+    wfmId: 'test-wfm-id',
     name: 'Test Item',
     displayName: 'Test Item',
     slug: input.slug,

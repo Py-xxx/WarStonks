@@ -1849,7 +1849,7 @@ function AnalyticsTab() {
   }, [chartDomain, chartBucket]);
 
   useEffect(() => {
-    if (!selectedItem || !selectedMarketVariantKey) {
+    if (!selectedItem || !selectedMarketVariantKey || !selectedItem.wfmId) {
       clearRevealTimeouts(revealTimeoutsRef);
       analyticsIdentityRef.current = null;
       setAnalytics(null);
@@ -1860,6 +1860,7 @@ function AnalyticsTab() {
     }
 
     let isMounted = true;
+    const itemKey = selectedItem.wfmId;
     const selectionIdentity = buildMarketSelectionIdentity(
       selectedItem.itemId,
       selectedMarketVariantKey,
@@ -1878,7 +1879,7 @@ function AnalyticsTab() {
     }
 
     void getItemAnalytics(
-      selectedItem.itemId,
+      itemKey,
       selectedItem.slug,
       selectedMarketVariantKey,
       sellerMode,
@@ -1916,7 +1917,7 @@ function AnalyticsTab() {
       isMounted = false;
       clearRevealTimeouts(revealTimeoutsRef);
       void stopMarketTracking(
-        selectedItem.itemId,
+        itemKey,
         selectedItem.slug,
         selectedMarketVariantKey,
         'analytics',
@@ -2347,7 +2348,7 @@ function AnalysisTab() {
   }, [selectedItem?.itemId, selectedMarketVariantKey]);
 
   useEffect(() => {
-    if (!selectedItem || !selectedMarketVariantKey) {
+    if (!selectedItem || !selectedMarketVariantKey || !selectedItem.wfmId) {
       clearRevealTimeouts(revealTimeoutsRef);
       setItemDetails(null);
       setItemDetailsLoading(false);
@@ -2371,7 +2372,7 @@ function AnalysisTab() {
       itemDetails: false,
     });
 
-    void getItemDetailSummary(selectedItem.itemId, selectedItem.slug)
+    void getItemDetailSummary(selectedItem.wfmId, selectedItem.slug)
       .then((response) => {
         if (!isMounted) {
           return;
@@ -2857,10 +2858,10 @@ function AnalysisTab() {
                   const imageUrl = resolveWfmAssetUrl(component.imagePath);
                   const targetValue = componentTargets[component.slug] ?? '';
                   const watchlistItem: WfmAutocompleteItem | null =
-                    component.itemId !== null
+                    component.itemKey !== null
                       ? {
-                          itemId: component.itemId,
-                          wfmId: null,
+                          itemId: 0,
+                          wfmId: component.itemKey,
                           name: component.name,
                           slug: component.slug,
                           maxRank: null,

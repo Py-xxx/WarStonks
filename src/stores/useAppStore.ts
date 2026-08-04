@@ -986,6 +986,7 @@ function createWatchlistItem(
     id: `${buildWatchlistId(item)}:${variantKey}`,
     quantity: Math.max(1, Math.round(quantity)),
     itemId: item.itemId,
+    wfmId: item.wfmId ?? null,
     name: item.name,
     displayName: buildMarketDisplayName(item.name, variantLabel),
     slug: item.slug,
@@ -1236,7 +1237,7 @@ function buildWatchlistUpdateState(
 }
 
 async function stopTrackedSelection(
-  trackedSelection: { itemId: number; slug: string; variantKey: string } | null,
+  trackedSelection: { itemKey: string; slug: string; variantKey: string } | null,
 ) {
   if (!trackedSelection) {
     return;
@@ -1244,7 +1245,7 @@ async function stopTrackedSelection(
 
   try {
     await stopMarketTracking(
-      trackedSelection.itemId,
+      trackedSelection.itemKey,
       trackedSelection.slug,
       trackedSelection.variantKey,
       'search',
@@ -1309,15 +1310,15 @@ async function loadQuickViewOrdersForBestVariant(
 }
 
 async function syncSearchTrackingSelection(
-  previousSelection: { itemId: number; slug: string; variantKey: string } | null,
+  previousSelection: { itemKey: string; slug: string; variantKey: string } | null,
   item: WfmAutocompleteItem,
   variantKey: string | null,
   sellerMode: SellerMode,
 ): Promise<{
-  nextTrackedSelection: { itemId: number; slug: string; variantKey: string } | null;
+  nextTrackedSelection: { itemKey: string; slug: string; variantKey: string } | null;
   selectedVariantLabel: string | null;
 }> {
-  if (!variantKey) {
+  if (!variantKey || !item.wfmId) {
     await stopTrackedSelection(previousSelection);
     return {
       nextTrackedSelection: null,
@@ -1327,7 +1328,7 @@ async function syncSearchTrackingSelection(
 
   if (
     previousSelection &&
-    previousSelection.itemId === item.itemId &&
+    previousSelection.itemKey === item.wfmId &&
     previousSelection.slug === item.slug &&
     previousSelection.variantKey === variantKey
   ) {
@@ -1340,9 +1341,9 @@ async function syncSearchTrackingSelection(
   }
 
   await stopTrackedSelection(previousSelection);
-  await ensureMarketTracking(item.itemId, item.slug, variantKey, sellerMode, 'search');
+  await ensureMarketTracking(item.wfmId, item.slug, variantKey, sellerMode, 'search');
   const nextTrackedSelection = {
-    itemId: item.itemId,
+    itemKey: item.wfmId,
     slug: item.slug,
     variantKey,
   };
@@ -1356,10 +1357,10 @@ async function syncSearchTrackingSelection(
 }
 
 async function persistSearchedItemSelection(
-  previousSelection: { itemId: number; slug: string; variantKey: string } | null,
+  previousSelection: { itemKey: string; slug: string; variantKey: string } | null,
   item: WfmAutocompleteItem,
   sellerMode: SellerMode,
-): Promise<{ itemId: number; slug: string; variantKey: string } | null> {
+): Promise<{ itemKey: string; slug: string; variantKey: string } | null> {
   const syncedSelection = await syncSearchTrackingSelection(
     previousSelection,
     item,
@@ -1706,7 +1707,7 @@ interface AppStore {
   selectedMarketVariantKey: string | null;
   selectedMarketVariantLabel: string | null;
   searchTrackingSource: {
-    itemId: number;
+    itemKey: string;
     slug: string;
     variantKey: string;
   } | null;
@@ -3105,17 +3106,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return nextState;
     });
 
-    void ensureMarketTracking(
-      selectedItem.itemId,
-      selectedItem.slug,
-      variantKey,
-      state.sellerMode,
-      'watchlist',
-    ).catch(
-      (error) => {
+    if (selectedItem.wfmId) {
+      void ensureMarketTracking(
+        selectedItem.wfmId,
+        selectedItem.slug,
+        variantKey,
+        state.sellerMode,
+        'watchlist',
+      ).catch((error) => {
         console.error('[watchlist] failed to start tracking item', error);
-      },
-    );
+      });
+    }
 
     if (state.tradeAccount && state.autoWatchlistBuyOrdersEnabled) {
       void syncWatchlistBuyOrder(
@@ -3176,13 +3177,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
           (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
         );
 
-        const trackingPromise = ensureMarketTracking(
-          item.itemId,
-          item.slug,
-          variantKey,
-          latestState.sellerMode,
-          'watchlist',
-        );
+        const trackingPromise = item.wfmId
+          ? ensureMarketTracking(
+              item.wfmId,
+              item.slug,
+              variantKey,
+              latestState.sellerMode,
+              'watchlist',
+            )
+          : Promise.resolve();
         const orderPromise =
           latestState.tradeAccount && latestState.autoWatchlistBuyOrdersEnabled
             ? syncWatchlistBuyOrder(
@@ -3220,9 +3223,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const state = get();
     watchlistRefreshGenerations.delete(id);
     const itemToRemove = state.watchlist.find((item) => item.id === id);
-    if (itemToRemove) {
+    if (itemToRemove && itemToRemove.wfmId) {
       void stopMarketTracking(
-        itemToRemove.itemId,
+        itemToRemove.wfmId,
         itemToRemove.slug,
         itemToRemove.variantKey,
         'watchlist',
@@ -3289,7 +3292,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           const owned = await getSetCompletionOwnedItems();
           const current = owned.find((entry) => entry.slug === item.slug)?.quantity ?? 0;
           await setSetCompletionOwnedItemQuantity({
-            itemId: item.itemId,
+            itemKey: item.wfmId,
             slug: item.slug,
             name: item.name,
             imagePath: item.imagePath,
@@ -4109,7 +4112,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const owned = await getSetCompletionOwnedItems();
       const current = owned.find((item) => item.slug === drop.slug)?.quantity ?? 0;
       await setSetCompletionOwnedItemQuantity({
-        itemId: drop.itemId,
+        itemKey: drop.itemKey,
         slug: drop.slug,
         name: drop.name,
         imagePath: drop.imagePath,
@@ -4144,7 +4147,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const entry = owned.find((item) => item.slug === last.dropSlug);
       if (entry && entry.quantity > 0) {
         await setSetCompletionOwnedItemQuantity({
-          itemId: entry.itemId,
+          itemKey: entry.itemKey,
           slug: entry.slug,
           name: entry.name,
           imagePath: entry.imagePath,
@@ -4397,7 +4400,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
 
     try {
-      const variants = await getItemVariantsForMarket(item.itemId, item.slug);
+      if (!item.wfmId) {
+        throw new Error('Item is missing a WFM id.');
+      }
+      const itemKey = item.wfmId;
+      const variants = await getItemVariantsForMarket(itemKey, item.slug);
       const defaultVariantKey =
         variants.find((variant) => variant.isDefault)?.key
         ?? variants[0]?.key
@@ -4462,7 +4469,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
 
       void getItemAnalytics(
-        item.itemId,
+        itemKey,
         item.slug,
         nextSelectedVariantKey,
         sellerMode,
@@ -4597,38 +4604,40 @@ export const useAppStore = create<AppStore>((set, get) => ({
         },
       }));
 
-      void getItemAnalytics(
-        selectedItem.itemId,
-        selectedItem.slug,
-        variantKey,
-        sellerMode,
-        '48h',
-        '1h',
-      )
-        .then((analytics) => {
-          if (requestId !== quickViewRequestSequence) {
-            return;
-          }
-          set((currentState) => ({
-            quickView: {
-              ...currentState.quickView,
-              sparklinePoints: extractQuickViewSparklinePoints(analytics.chartPoints),
-              sparklineLoading: false,
-            },
-          }));
-        })
-        .catch(() => {
-          if (requestId !== quickViewRequestSequence) {
-            return;
-          }
-          set((currentState) => ({
-            quickView: {
-              ...currentState.quickView,
-              sparklinePoints: [],
-              sparklineLoading: false,
-            },
-          }));
-        });
+      if (selectedItem.wfmId) {
+        void getItemAnalytics(
+          selectedItem.wfmId,
+          selectedItem.slug,
+          variantKey,
+          sellerMode,
+          '48h',
+          '1h',
+        )
+          .then((analytics) => {
+            if (requestId !== quickViewRequestSequence) {
+              return;
+            }
+            set((currentState) => ({
+              quickView: {
+                ...currentState.quickView,
+                sparklinePoints: extractQuickViewSparklinePoints(analytics.chartPoints),
+                sparklineLoading: false,
+              },
+            }));
+          })
+          .catch(() => {
+            if (requestId !== quickViewRequestSequence) {
+              return;
+            }
+            set((currentState) => ({
+              quickView: {
+                ...currentState.quickView,
+                sparklinePoints: [],
+                sparklineLoading: false,
+              },
+            }));
+          });
+      }
     } catch (error) {
       const friendlyMessage = formatHomeErrorMessage('dashboard-quick-view-load', error);
       const marketFriendlyMessage = formatMarketErrorMessage('market-variant-load', error);
@@ -4652,7 +4661,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const sellerMode = state.sellerMode;
     const force = options?.force ?? false;
 
-    if (!selectedItem || !selectedVariantKey) {
+    if (!selectedItem || !selectedVariantKey || !selectedItem.wfmId) {
       set({
         selectedMarketAnalysis: null,
         selectedMarketAnalysisLoading: false,
@@ -4660,6 +4669,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
       return null;
     }
+    const itemKey = selectedItem.wfmId;
 
     const cacheKey = buildMarketAnalysisCacheKey(selectedItem.itemId, selectedVariantKey, sellerMode);
     const cached = state.marketAnalysisCache[cacheKey] ?? null;
@@ -4696,7 +4706,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     loadPromise = (async () => {
       try {
         const analysis = await getItemAnalysis(
-          selectedItem.itemId,
+          itemKey,
           selectedItem.slug,
           selectedVariantKey,
           sellerMode,

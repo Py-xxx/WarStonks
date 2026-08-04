@@ -40,7 +40,7 @@ function withFiller(drops: FarmingSessionDrop[]): FarmingSessionDrop[] {
   return [
     ...drops,
     {
-      itemId: null,
+      itemKey: null,
       slug: FILLER_DROP_SLUG,
       name: 'Forma Blueprint',
       imagePath: null,
@@ -105,7 +105,7 @@ export function buildFarmingRelic(
 
   const drops = withFiller(
     relic.drops.map((drop) => ({
-      itemId: drop.itemId,
+      itemKey: drop.itemKey,
       slug: drop.slug,
       name: drop.name,
       imagePath: drop.imagePath,

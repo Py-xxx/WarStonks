@@ -719,7 +719,7 @@ export async function getTradeMarketLow(
 }
 
 export async function getTradeSellOrderHealth(
-  itemId: number | null,
+  itemKey: string | null,
   slug: string,
   rank: number | null,
   yourPrice: number,
@@ -734,7 +734,7 @@ export async function getTradeSellOrderHealth(
   bulkTradable: boolean | null,
 ): Promise<TradeListingHealth> {
   return invoke<TradeListingHealth>('get_trade_sell_order_health', {
-    itemId,
+    itemKey,
     slug,
     rank,
     yourPrice,
@@ -755,7 +755,7 @@ export async function getHealthPredictionAccuracy(): Promise<HealthPredictionAcc
 }
 
 export async function getTradeBuyOrderHealth(
-  itemId: number | null,
+  itemKey: string | null,
   slug: string,
   rank: number | null,
   yourPrice: number,
@@ -763,7 +763,7 @@ export async function getTradeBuyOrderHealth(
   priority: 'high' | 'medium' | 'low',
 ): Promise<TradeListingHealth> {
   return invoke<TradeListingHealth>('get_trade_buy_order_health', {
-    itemId,
+    itemKey,
     slug,
     rank,
     yourPrice,
@@ -808,14 +808,14 @@ export async function getWfmItemOrders(
 }
 
 export async function ensureMarketTracking(
-  itemId: number,
+  itemKey: string,
   slug: string,
   variantKey: string | null,
   sellerMode: SellerMode,
   source: MarketTrackingSource,
 ): Promise<MarketSnapshot> {
   return invoke<MarketSnapshot>('ensure_market_tracking', {
-    itemId,
+    itemKey,
     slug,
     variantKey,
     sellerMode,
@@ -824,13 +824,13 @@ export async function ensureMarketTracking(
 }
 
 export async function stopMarketTracking(
-  itemId: number,
+  itemKey: string,
   slug: string,
   variantKey: string | null,
   source: MarketTrackingSource,
 ): Promise<void> {
   return invoke<void>('stop_market_tracking', {
-    itemId,
+    itemKey,
     slug,
     variantKey,
     source,
@@ -844,17 +844,17 @@ export async function refreshMarketTracking(
 }
 
 export async function getItemVariantsForMarket(
-  itemId: number,
+  itemKey: string,
   slug: string,
 ): Promise<MarketVariant[]> {
   return invoke<MarketVariant[]>('get_item_variants_for_market', {
-    itemId,
+    itemKey,
     slug,
   });
 }
 
 export async function getItemAnalytics(
-  itemId: number,
+  itemKey: string,
   slug: string,
   variantKey: string | null,
   sellerMode: SellerMode,
@@ -862,7 +862,7 @@ export async function getItemAnalytics(
   bucketSizeKey: AnalyticsBucketSizeKey,
 ): Promise<ItemAnalyticsResponse> {
   return invoke<ItemAnalyticsResponse>('get_item_analytics', {
-    itemId,
+    itemKey,
     slug,
     variantKey,
     sellerMode,
@@ -872,23 +872,23 @@ export async function getItemAnalytics(
 }
 
 export async function getItemDetailSummary(
-  itemId: number,
+  itemKey: string,
   slug: string,
 ): Promise<ItemDetailSummary> {
   return invoke<ItemDetailSummary>('get_item_detail_summary', {
-    itemId,
+    itemKey,
     slug,
   });
 }
 
 export async function getItemAnalysis(
-  itemId: number,
+  itemKey: string,
   slug: string,
   variantKey: string | null,
   sellerMode: SellerMode,
 ): Promise<ItemAnalysisResponse> {
   return invoke<ItemAnalysisResponse>('get_item_analysis', {
-    itemId,
+    itemKey,
     slug,
     variantKey,
     sellerMode,
@@ -916,14 +916,14 @@ export async function getSetCompletionOwnedItems(): Promise<SetCompletionOwnedIt
 }
 
 export async function setSetCompletionOwnedItemQuantity(input: {
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;
   quantity: number;
 }): Promise<SetCompletionOwnedItem[]> {
   return invoke<SetCompletionOwnedItem[]>('set_set_completion_owned_item_quantity', {
-    itemId: input.itemId,
+    itemKey: input.itemKey,
     slug: input.slug,
     name: input.name,
     imagePath: input.imagePath,
@@ -932,7 +932,7 @@ export async function setSetCompletionOwnedItemQuantity(input: {
 }
 
 export async function applySetCompletionScreenshotImportRows(rows: Array<{
-  itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;

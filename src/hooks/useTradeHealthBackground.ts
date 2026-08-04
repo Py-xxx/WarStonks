@@ -43,7 +43,7 @@ export function useTradeHealthBackground(): void {
       try {
         if (order.orderType === 'sell') {
           return await getTradeSellOrderHealth(
-            order.itemId,
+            order.wfmId,
             order.slug,
             order.rank,
             order.yourPrice,
@@ -59,7 +59,7 @@ export function useTradeHealthBackground(): void {
           );
         }
         return await getTradeBuyOrderHealth(
-          order.itemId,
+          order.wfmId,
           order.slug,
           order.rank,
           order.yourPrice,

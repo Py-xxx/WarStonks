@@ -11,6 +11,7 @@ function createWatchlistItem(input: Partial<WatchlistItem> & Pick<WatchlistItem,
   return {
     id: input.id,
     itemId: input.itemId ?? 1,
+    wfmId: input.wfmId ?? 'test-wfm-id',
     name: input.name ?? 'Test Item',
     displayName: input.displayName ?? 'Test Item',
     slug: input.slug,

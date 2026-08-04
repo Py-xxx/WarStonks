@@ -266,7 +266,7 @@ function useTradeSellHealthRefresh({
       const request =
         kind === 'sell'
           ? getTradeSellOrderHealth(
-              order.itemId,
+              order.wfmId,
               order.slug,
               order.rank,
               order.yourPrice,
@@ -281,7 +281,7 @@ function useTradeSellHealthRefresh({
               order.bulkTradable,
             )
           : getTradeBuyOrderHealth(
-              order.itemId,
+              order.wfmId,
               order.slug,
               order.rank,
               order.yourPrice,
@@ -2012,14 +2012,14 @@ function ListingsTab() {
   const analysisVariantKey = analysisRank.trim() !== '' ? `rank:${analysisRank.trim()}` : null;
 
   useEffect(() => {
-    if (!analysisItem) {
+    if (!analysisItem || !analysisItem.wfmId) {
       setListingAnalysis(null);
       return;
     }
 
     setListingAnalysis({ analysis: null, analytics: null, loading: true, error: null });
     let cancelled = false;
-    const { itemId, slug } = analysisItem;
+    const { wfmId: itemKey, slug } = analysisItem;
 
     // Debounced: both calls run at Instant priority on the WFM scheduler, and the variant key
     // changes on every keystroke in the rank field — without the delay, typing "15" would fire
@@ -2027,7 +2027,7 @@ function ListingsTab() {
     const timeoutId = window.setTimeout(() => {
       // Fire analytics in background — fills in market snapshot once it arrives.
       // Analytics failure is non-fatal; the main analysis section still renders.
-      void getItemAnalytics(itemId ?? 0, slug, analysisVariantKey, sellerMode, '48h', '1h')
+      void getItemAnalytics(itemKey, slug, analysisVariantKey, sellerMode, '48h', '1h')
         .then((analytics) => {
           if (!cancelled) {
             setListingAnalysis((prev) => (prev ? { ...prev, analytics } : null));
@@ -2036,7 +2036,7 @@ function ListingsTab() {
         .catch(() => { /* non-fatal */ });
 
       // Main analysis fires at Instant priority — panel renders as soon as this resolves.
-      void getItemAnalysis(itemId ?? 0, slug, analysisVariantKey, sellerMode)
+      void getItemAnalysis(itemKey, slug, analysisVariantKey, sellerMode)
         .then((analysis) => {
           if (!cancelled) {
             setListingAnalysis((prev) =>

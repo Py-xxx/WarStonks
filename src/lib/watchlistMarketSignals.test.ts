@@ -9,6 +9,7 @@ function makeItem(overrides: Partial<WatchlistItem>): WatchlistItem {
   return {
     id: overrides.id ?? crypto.randomUUID(),
     itemId: overrides.itemId ?? 1,
+    wfmId: overrides.wfmId ?? 'test-wfm-id',
     name: overrides.name ?? 'Test Prime Blueprint',
     displayName: overrides.displayName ?? 'Test Prime Blueprint',
     slug: overrides.slug ?? 'test_prime_blueprint',

@@ -624,17 +624,20 @@ fn scan_void_trader_prices_inner(
         return Ok(result);
     };
 
-    // Resolve names → (item_id, slug); track which result index each maps to.
-    let mut resolved: Vec<(usize, i64, String)> = Vec::new();
+    // Resolve names → (index, item_key, slug), dropping any item the v2 catalog can't resolve.
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app).unwrap_or_default();
+    let mut resolved: Vec<(usize, String, String)> = Vec::new();
     for (index, item) in items.iter().enumerate() {
-        if let Some((item_id, slug)) = resolve_catalog_item_id_and_slug_by_name(&catalog, item)? {
-            resolved.push((index, item_id, slug));
+        if let Some((_item_id, slug)) = resolve_catalog_item_id_and_slug_by_name(&catalog, item)? {
+            if let Some(item_key) = slug_to_item_key.get(&slug) {
+                resolved.push((index, item_key.clone(), slug));
+            }
         }
     }
 
-    let pairs: Vec<(i64, String)> = resolved
+    let pairs: Vec<(String, String)> = resolved
         .iter()
-        .map(|(_, item_id, slug)| (*item_id, slug.clone()))
+        .map(|(_, item_key, slug)| (item_key.clone(), slug.clone()))
         .collect();
     let prices = crate::market_observatory::scan_recommended_exit_prices(app, &pairs)?;
 
@@ -1126,6 +1129,14 @@ fn run_initialize_app_catalog(
                 );
             }
         }
+
+        // Build (or freshness-check) the v2 item catalog on the same loading screen, right after
+        // the current catalog settles. Deliberately blocking, not a background thread: this whole
+        // rebuild is allowed to leave the app unusable until every piece lands, so there is no
+        // reason to hide this step underneath a UI the user can already interact with. Best-effort
+        // internally — nothing running today reads from the v2 catalog yet, so a failure here is
+        // logged and never blocks the rest of startup.
+        crate::item_catalog_v2::initialize_catalog_v2_on_startup(&app);
     }
 
     let mut state = state_lock.lock().map_err(|_| {

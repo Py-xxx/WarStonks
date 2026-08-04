@@ -2,12 +2,16 @@ mod commands;
 mod data_transfer;
 mod error_log;
 mod item_catalog;
-// Phase 1 of the catalog rebuild — pure transformation logic only, proven against real WFM/
-// WFStat data via its own tests. Deliberately not registered as a Tauri command and not called
-// from startup: nothing in the running app consumes it yet.
+// The v2 item catalog rebuild. Builds its own separate database file in the background at
+// startup and exposes one read command (`lookup_item_v2`) — the old `item_catalog` module and
+// its database are completely untouched. See the module doc comment for cutover status.
 mod item_catalog_v2;
 mod maintenance;
 mod market_observatory;
+// Self-contained, tested migration logic for Market Observatory's item_id -> item_key rename.
+// Not yet wired into market_observatory.rs's real schema or queries — see the module doc
+// comment for why that has to land in the same pass as the query rewrite, not before it.
+mod market_observatory_migration;
 mod opportunities;
 mod order_flow;
 mod recommended_prices;
@@ -80,6 +84,9 @@ pub fn run() {
             // signed in (surviving re-auth) and the newOrders subscription when there are
             // tracked items. Idles with no connection until either is true.
             trades::start_ws_manager(app.handle().clone());
+            // The v2 item catalog build is NOT started here — it runs as a blocking step of the
+            // startup sequence (see `commands::run_initialize_app_catalog`), on the same loading
+            // screen as the existing catalog, not in the background underneath a usable app.
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -91,6 +98,7 @@ pub fn run() {
             commands::get_wfm_scheduler_snapshot,
             commands::open_external_url,
             commands::initialize_app_catalog,
+            item_catalog_v2::lookup_item_v2,
             commands::get_wfm_autocomplete_items,
             commands::get_language_pack_status,
             commands::populate_language_item_names,

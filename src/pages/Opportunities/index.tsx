@@ -158,6 +158,7 @@ type FarmNowSetCompletionRow = {
 
 type PlannerCatalogItem = {
   itemId: number | null;
+  itemKey: string | null;
   slug: string;
   name: string;
   imagePath: string | null;
@@ -203,6 +204,7 @@ function mapAutocompleteItemsToPlannerCatalog(
     if (!bySlug.has(item.slug)) {
       bySlug.set(item.slug, {
         itemId: item.itemId,
+        itemKey: item.wfmId ?? null,
         slug: item.slug,
         name: item.name,
         imagePath: item.imagePath,
@@ -681,7 +683,7 @@ function SetPlannerRow({
     const targetKey = `${planner.entry.slug}:${component.slug}`;
     const effectiveTarget = targetInputs[targetKey] ?? buildPlannerDefaultTarget(component);
     const relicHints =
-      (component.itemId !== null ? ownedRelicHints.get(`item:${component.itemId}`) : undefined) ??
+      (component.itemKey !== null ? ownedRelicHints.get(`item:${component.itemKey}`) : undefined) ??
       ownedRelicHints.get(`slug:${component.slug}`) ??
       [];
     const partImage = resolveWfmAssetUrl(component.imagePath);
@@ -696,7 +698,7 @@ function SetPlannerRow({
               <ItemName
                 name={component.name}
                 slug={component.slug}
-                itemId={component.itemId ?? undefined}
+                wfmId={component.itemKey ?? undefined}
                 imagePath={component.imagePath}
               />
             </span>
@@ -740,7 +742,7 @@ function SetPlannerRow({
             <button
               type="button"
               className="btn-sm sp-part-watch-btn"
-              disabled={!effectiveTarget.trim() || !component.itemId}
+              disabled={!effectiveTarget.trim() || !component.itemKey}
               onClick={() => onAddToWatchlist(component, componentState.missingQuantity)}
             >
               <SpPlus /> {t('wl.addToWatchlist')}
@@ -865,7 +867,7 @@ function SetPlannerRow({
                           <ItemName
                             name={componentState.component.name}
                             slug={componentState.component.slug}
-                            itemId={componentState.component.itemId ?? undefined}
+                            wfmId={componentState.component.itemKey ?? undefined}
                             imagePath={componentState.component.imagePath}
                           />
                         </span>
@@ -1478,7 +1480,8 @@ export function OpportunitiesPage({
       for (const component of setEntry.components) {
         if (!bySlug.has(component.slug)) {
           bySlug.set(component.slug, {
-            itemId: component.itemId,
+            itemId: null,
+            itemKey: component.itemKey,
             slug: component.slug,
             name: component.name,
             imagePath: component.imagePath,
@@ -1699,7 +1702,7 @@ export function OpportunitiesPage({
 
       for (const drop of relic.drops) {
         const keys = [
-          drop.itemId !== null ? `item:${drop.itemId}` : null,
+          drop.itemKey !== null ? `item:${drop.itemKey}` : null,
           drop.slug ? `slug:${drop.slug}` : null,
         ].filter((value): value is string => Boolean(value));
 
@@ -2010,7 +2013,7 @@ export function OpportunitiesPage({
         }
 
         const keys = [
-          component.component.itemId !== null ? `item:${component.component.itemId}` : null,
+          component.component.itemKey !== null ? `item:${component.component.itemKey}` : null,
           component.component.slug ? `slug:${component.component.slug}` : null,
         ].filter((value): value is string => Boolean(value));
 
@@ -2056,7 +2059,7 @@ export function OpportunitiesPage({
 
       const drops = relic.drops.map<FarmNowSetCompletionDrop>((drop) => {
         const neededMatch =
-          (drop.itemId !== null ? farmNowMissingComponents.get(`item:${drop.itemId}`) : undefined) ??
+          (drop.itemKey !== null ? farmNowMissingComponents.get(`item:${drop.itemKey}`) : undefined) ??
           farmNowMissingComponents.get(`slug:${drop.slug}`);
         const setNames = neededMatch ? [...neededMatch.sets.keys()].sort() : [];
         for (const setName of setNames) {
@@ -2235,7 +2238,7 @@ export function OpportunitiesPage({
   // the ref (updated synchronously) instead of each computing from the same render-time base —
   // which previously lost increments — and one write per slug runs at a time, coalescing any
   // clicks that arrived while it was in flight.
-  type OwnedQuantityItem = { itemId: number | null; slug: string; name: string; imagePath: string | null };
+  type OwnedQuantityItem = { itemKey: string | null; slug: string; name: string; imagePath: string | null };
   const ownedTargetRef = useRef(new Map<string, number>());
   const ownedPersistInFlightRef = useRef(new Set<string>());
 
@@ -2254,7 +2257,7 @@ export function OpportunitiesPage({
       while (ownedTargetRef.current.get(slug) !== persisted) {
         const target = ownedTargetRef.current.get(slug) ?? 0;
         const nextOwnedItems = await setSetCompletionOwnedItemQuantity({
-          itemId: item.itemId,
+          itemKey: item.itemKey,
           slug,
           name: item.name,
           imagePath: item.imagePath,
@@ -2301,7 +2304,7 @@ export function OpportunitiesPage({
       let latest: SetCompletionOwnedItem[] | null = null;
       for (const item of targets) {
         latest = await setSetCompletionOwnedItemQuantity({
-          itemId: item.itemId,
+          itemKey: item.itemKey,
           slug: item.slug,
           name: item.name,
           imagePath: item.imagePath,
@@ -2519,7 +2522,7 @@ export function OpportunitiesPage({
     }
 
     const rows = resolvedScreenshotImportRows.map((row) => ({
-      itemId: row.candidate?.itemId ?? null,
+      itemKey: row.candidate?.itemKey ?? null,
       slug: row.candidate?.slug ?? '',
       name: row.candidate?.name ?? '',
       imagePath: row.candidate?.imagePath ?? null,
@@ -2573,7 +2576,7 @@ export function OpportunitiesPage({
     setSlug: string,
     missingQuantity: number,
   ) => {
-    if (!component.itemId) {
+    if (!component.itemKey) {
       return;
     }
 
@@ -2585,8 +2588,8 @@ export function OpportunitiesPage({
     }
 
     const watchlistItem: WfmAutocompleteItem = {
-      itemId: component.itemId,
-      wfmId: null,
+      itemId: 0,
+      wfmId: component.itemKey,
       name: component.name,
       slug: component.slug,
       maxRank: null,

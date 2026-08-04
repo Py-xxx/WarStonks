@@ -1064,12 +1064,22 @@ pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Oppor
         .map(|order| order.slug.clone())
         .collect();
 
-    // Reprice: active sell listings sitting well above where the item actually sells.
-    let order_item_ids: Vec<i64> = cached_orders.iter().filter_map(|o| o.item_id).collect();
-    let order_exits = crate::market_observatory::recommended_exit_prices_for_items(app, &order_item_ids)
-        .unwrap_or_default();
+    // Reprice: active sell listings sitting well above where the item actually sells. Cached
+    // orders only carry the OLD catalog's item_id, so resolve each listing's slug to the new
+    // catalog's item_key before pricing.
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app).unwrap_or_default();
+    let order_item_keys: Vec<String> = cached_orders
+        .iter()
+        .filter_map(|o| slug_to_item_key.get(&o.slug).cloned())
+        .collect();
+    let order_exits =
+        crate::market_observatory::recommended_exit_prices_for_items(app, &order_item_keys)
+            .unwrap_or_default();
     for order in &cached_orders {
-        let Some(exit) = order.item_id.and_then(|id| order_exits.get(&id).copied()) else {
+        let Some(exit) = slug_to_item_key
+            .get(&order.slug)
+            .and_then(|key| order_exits.get(key).copied())
+        else {
             continue;
         };
         if let Some(opportunity) = evaluate_reprice(order, exit, &config) {

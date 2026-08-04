@@ -18,6 +18,11 @@ const ITEM_CATALOG_SCHEMA_SQL: &str = include_str!("../sql/item_catalog.sql");
 const MANUAL_ALIAS_SEED_JSON: &str = include_str!("../sql/manual_aliases.json");
 
 const STARTUP_PROGRESS_EVENT: &str = "startup-progress";
+// This module's own "startup-complete" markers report 0.6, not 1.0 — item_catalog_v2's build and
+// the (future) Market Observatory migration both run after this catalog settles, and the
+// frontend's progress bar never decreases (`Math.max` in useStartupInitialization.ts). Emitting
+// 1.0 here would make the bar look finished while several more minutes of real work followed it.
+// 0.6-1.0 is reserved for whatever runs after this file's own steps.
 const WFM_ITEMS_URL: &str = "https://api.warframe.market/v2/items";
 const WFM_VERSIONS_URL: &str = "https://api.warframe.market/v2/versions";
 const WFSTAT_ITEMS_URL: &str = "https://api.warframestat.us/items/";
@@ -332,7 +337,7 @@ pub fn initialize_app_catalog(app: AppHandle) -> Result<StartupSummary, String> 
     initialize_app_catalog_inner(app).map_err(|error| error.to_string())
 }
 
-fn startup_step<T, F>(
+pub(crate) fn startup_step<T, F>(
     app: &AppHandle,
     stage_key: &str,
     stage_label: &str,
@@ -533,7 +538,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
                 } else {
                     "The local item catalog is already current (no download needed)."
                 },
-                1.0,
+                0.6,
             );
             if let Err(error) = write_installed_version(&app, current_version) {
                 startup_warning(
@@ -679,7 +684,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
             "startup-complete",
             "Catalog ready",
             "The local item catalog is already current.",
-            1.0,
+            0.6,
         );
 
         if let Err(error) = write_installed_version(&app, current_version) {
@@ -883,7 +888,7 @@ fn initialize_app_catalog_inner(app: AppHandle) -> Result<StartupSummary> {
         "startup-complete",
         "Catalog ready",
         "Startup item import completed successfully.",
-        1.0,
+        0.6,
     );
 
     if let Err(error) = write_installed_version(&app, current_version) {
@@ -3538,7 +3543,7 @@ fn fetch_wfm_to_file(
 /// Fetches the `collections.items` hash from `/v2/versions`. This tiny request tells us
 /// whether the item catalog changed, so we can skip the multi-MB `/v2/items` download when
 /// our cached catalog is already current.
-fn fetch_items_collection_version() -> Result<String> {
+pub(crate) fn fetch_items_collection_version() -> Result<String> {
     let bytes = fetch_wfm_bytes(
         WFM_VERSIONS_URL,
         "en",
@@ -3731,7 +3736,7 @@ fn reuse_existing_catalog_summary(
         } else {
             "The local item catalog is ready."
         },
-        1.0,
+        0.6,
     );
     if let Err(error) = write_installed_version(app, current_version.to_string()) {
         startup_warning(
@@ -3928,7 +3933,7 @@ fn update_stats_for_match(stats: &mut ImportStats, method: &str) {
     }
 }
 
-fn emit_progress(
+pub(crate) fn emit_progress(
     app: &AppHandle,
     stage_key: &str,
     stage_label: &str,

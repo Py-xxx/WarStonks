@@ -434,7 +434,7 @@ pub struct PortfolioPnlSummary {
 
 #[derive(Debug, Clone)]
 struct PortfolioCatalogMeta {
-    item_id: Option<i64>,
+    item_key: Option<String>,
     item_family: Option<String>,
 }
 
@@ -3404,7 +3404,7 @@ pub async fn get_trade_sell_order_market_low(
 #[tauri::command]
 pub async fn get_trade_sell_order_health(
     app: tauri::AppHandle,
-    item_id: Option<i64>,
+    item_key: Option<String>,
     slug: String,
     rank: Option<i64>,
     your_price: i64,
@@ -3433,7 +3433,7 @@ pub async fn get_trade_sell_order_health(
         let session = ensure_authenticated_session(&app_for_work)?;
         let observatory = open_market_observatory_database(&app_for_work)?;
         let variant_key = trade_health_variant_key(rank);
-        let mut cached_context = item_id
+        let mut cached_context = item_key.as_deref()
             .map(|value| load_cached_trade_health_context(&observatory, value, &variant_key, &seller_mode))
             .transpose()?
             .flatten();
@@ -3634,7 +3634,7 @@ pub async fn get_trade_sell_order_health(
 #[tauri::command]
 pub async fn get_trade_buy_order_health(
     app: tauri::AppHandle,
-    item_id: Option<i64>,
+    item_key: Option<String>,
     slug: String,
     rank: Option<i64>,
     your_price: i64,
@@ -3650,7 +3650,7 @@ pub async fn get_trade_buy_order_health(
         let session = ensure_authenticated_session(&app_for_work)?;
         let observatory = open_market_observatory_database(&app_for_work)?;
         let variant_key = trade_health_variant_key(rank);
-        let cached_context = item_id
+        let cached_context = item_key.as_deref()
             .map(|value| load_cached_trade_health_context(&observatory, value, &variant_key, &seller_mode))
             .transpose()?
             .flatten();
@@ -6423,6 +6423,7 @@ fn build_owned_set_component_deltas_for_entries(
     let normalized_records = normalize_trade_entries_for_owned_component_sync(app, entries)?;
     let catalog = open_catalog_database(app)?;
     let observatory = open_market_observatory_database(app)?;
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app).unwrap_or_default();
 
     // Any trade that closed before the screenshot import is irrelevant — its
     // effect is already captured in the protected baseline.
@@ -6477,7 +6478,7 @@ fn build_owned_set_component_deltas_for_entries(
 
                 deltas.push(OwnedSetComponentDelta {
                     sync_key: format!("trade-owned:{trade_sync_key}:{}", component.component_slug),
-                    item_id: meta.item_id,
+                    item_key: slug_to_item_key.get(&meta.slug).cloned(),
                     slug: meta.slug,
                     name: meta.name,
                     image_path: meta.image_path,
@@ -6501,7 +6502,7 @@ fn build_owned_set_component_deltas_for_entries(
 
         deltas.push(OwnedSetComponentDelta {
             sync_key: format!("trade-owned:{trade_sync_key}:{}", record.slug),
-            item_id: meta.item_id,
+            item_key: slug_to_item_key.get(&meta.slug).cloned(),
             slug: meta.slug,
             name: meta.name,
             image_path: meta.image_path,
@@ -7643,7 +7644,7 @@ fn build_trade_variant_key(rank: Option<i64>) -> String {
 
 fn query_latest_statistics_reference_price(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     domain_key: &str,
     source_kind: &str,
@@ -7658,13 +7659,13 @@ fn query_latest_statistics_reference_price(
                closed_price,
                open_price
              FROM statistics_cache
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND variant_key = ?2
                AND domain_key = ?3
                AND source_kind = ?4
              ORDER BY bucket_at DESC
              LIMIT 1",
-            params![item_id, variant_key, domain_key, source_kind],
+            params![item_key, variant_key, domain_key, source_kind],
             |row| {
                 let min_price = row.get::<_, Option<f64>>(0)?;
                 let median = row.get::<_, Option<f64>>(1)?;
@@ -7700,7 +7701,6 @@ fn load_portfolio_catalog_meta_map(
         .prepare(
             "
             SELECT
-              items.item_id,
               items.item_family
             FROM items
             LEFT JOIN wfm_items ON wfm_items.wfm_id = items.wfm_id
@@ -7710,19 +7710,23 @@ fn load_portfolio_catalog_meta_map(
         )
         .context("failed to prepare portfolio catalog metadata query")?;
 
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
+        .unwrap_or_default();
+
     let mut metadata = HashMap::new();
     for slug in unique_slugs {
         let maybe_meta = statement
             .query_row(params![slug.as_str()], |row| {
                 Ok(PortfolioCatalogMeta {
-                    item_id: row.get(0)?,
-                    item_family: row.get(1)?,
+                    item_key: None,
+                    item_family: row.get(0)?,
                 })
             })
             .optional()
             .context("failed to resolve portfolio catalog metadata")?;
 
-        if let Some(meta) = maybe_meta {
+        if let Some(mut meta) = maybe_meta {
+            meta.item_key = slug_to_item_key.get(&slug).cloned();
             metadata.insert(slug, meta);
         }
     }
@@ -7765,7 +7769,7 @@ fn classify_portfolio_category(
 
 fn latest_local_market_estimate(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     rank: Option<i64>,
 ) -> Result<Option<i64>> {
     let variant_key = build_trade_variant_key(rank);
@@ -7774,7 +7778,7 @@ fn latest_local_market_estimate(
     // spiky latest bucket can't swing every holding's valuation. The single-bucket reference
     // chain below stays as the fallback for items with too little history for a zone model.
     if let Some(value) =
-        crate::market_observatory::zone_recommended_exit_price(connection, item_id, &variant_key)
+        crate::market_observatory::zone_recommended_exit_price(connection, item_key, &variant_key)
     {
         return Ok(Some(round_money(value)));
     }
@@ -7786,7 +7790,7 @@ fn latest_local_market_estimate(
     ] {
         if let Some(value) = query_latest_statistics_reference_price(
             connection,
-            item_id,
+            item_key,
             &variant_key,
             domain_key,
             source_kind,
@@ -7889,7 +7893,7 @@ fn build_portfolio_pnl_summary_inner(
     let mut inventory_rows = Vec::<PortfolioInventoryRow>::new();
     // Market estimates now come from the 30-day zone model, which is far heavier than the old
     // single-row lookup — memoize per (item, rank) since holdings repeat items constantly.
-    let mut market_estimate_cache = HashMap::<(i64, Option<i64>), Option<i64>>::new();
+    let mut market_estimate_cache = HashMap::<(String, Option<i64>), Option<i64>>::new();
     let mut audit_rows = Vec::<PortfolioAuditRow>::new();
     let mut ambiguous_group_ids = HashSet::<String>::new();
     let mut alecaframe_audit_ids = HashSet::<String>::new();
@@ -7917,16 +7921,20 @@ fn build_portfolio_pnl_summary_inner(
 
                 let maybe_estimate = metadata_by_slug
                     .get(record.slug.as_str())
-                    .and_then(|meta| meta.item_id)
-                    .and_then(|item_id| {
+                    .and_then(|meta| meta.item_key.clone())
+                    .and_then(|item_key| {
                         *market_estimate_cache
-                            .entry((item_id, record.rank))
+                            .entry((item_key.clone(), record.rank))
                             .or_insert_with(|| {
                                 market_connection
                                     .as_ref()
                                     .and_then(|connection| {
-                                        latest_local_market_estimate(connection, item_id, record.rank)
-                                            .ok()
+                                        latest_local_market_estimate(
+                                            connection,
+                                            &item_key,
+                                            record.rank,
+                                        )
+                                        .ok()
                                     })
                                     .flatten()
                             })

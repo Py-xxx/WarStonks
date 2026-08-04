@@ -14,7 +14,7 @@ use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
-use crate::error_log::log_feature_error_best_effort;
+use crate::error_log::{log_feature_error_best_effort, log_feature_event_best_effort};
 use crate::settings;
 use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
@@ -396,7 +396,7 @@ pub struct AnalyticsActionCard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemAnalyticsResponse {
-    pub item_id: i64,
+    pub item_key: String,
     pub slug: String,
     pub variant_key: String,
     pub variant_label: String,
@@ -596,7 +596,7 @@ pub struct TimeOfDayLiquiditySummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemDetailSummary {
-    pub item_id: i64,
+    pub item_key: String,
     pub name: String,
     pub slug: String,
     pub image_path: Option<String>,
@@ -667,7 +667,7 @@ pub struct ItemDetailSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetComponentAnalysisEntry {
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -699,7 +699,7 @@ pub struct ItemSupplyContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemAnalysisResponse {
-    pub item_id: i64,
+    pub item_key: String,
     pub slug: String,
     pub variant_key: String,
     pub variant_label: String,
@@ -719,7 +719,7 @@ pub struct ItemAnalysisResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArbitrageScannerComponentEntry {
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -736,7 +736,7 @@ pub struct ArbitrageScannerComponentEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArbitrageScannerSetEntry {
-    pub set_item_id: i64,
+    pub set_item_key: String,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -767,7 +767,7 @@ pub struct RelicRefinementChanceProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelicRoiDropEntry {
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -821,7 +821,7 @@ pub struct OwnedRelicRefinementCounts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedRelicDropEntry {
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -915,7 +915,7 @@ pub struct ArbitrageScannerState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetCompletionOwnedItem {
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -926,7 +926,7 @@ pub struct SetCompletionOwnedItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetCompletionScreenshotImportRow {
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -936,7 +936,7 @@ pub struct SetCompletionScreenshotImportRow {
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedSetComponentDelta {
     pub sync_key: String,
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub slug: String,
     pub name: String,
     pub image_path: Option<String>,
@@ -971,7 +971,7 @@ enum ScannerWorkKind {
 
 #[derive(Debug, Clone)]
 struct ScannerWorkUnit {
-    item_id: Option<i64>,
+    item_key: Option<String>,
     slug: String,
     display_name: String,
     stage_label: &'static str,
@@ -1039,7 +1039,7 @@ struct WfmOrdersApiResponse {
 
 #[derive(Debug, Clone)]
 struct SetRootCatalogRecord {
-    item_id: i64,
+    item_key: String,
     slug: String,
     name: String,
     image_path: Option<String>,
@@ -1047,11 +1047,11 @@ struct SetRootCatalogRecord {
 
 #[derive(Debug, Clone)]
 struct CachedSetComponentRecord {
-    set_item_id: i64,
+    set_item_key: String,
     set_slug: String,
     set_name: String,
     set_image_path: Option<String>,
-    component_item_id: Option<i64>,
+    component_item_key: Option<String>,
     component_slug: String,
     component_name: String,
     component_image_path: Option<String>,
@@ -1114,7 +1114,7 @@ struct ScannerPriceModel {
 /// HTTP fetch thread can hand off the write work and continue immediately
 /// without waiting for any disk I/O.
 struct WriteTask {
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: String,
     fetched_at: String,
@@ -1242,7 +1242,7 @@ struct InternalStatsRow {
 
 #[derive(Debug)]
 struct TrackingTarget {
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: String,
     seller_mode: String,
@@ -1467,12 +1467,62 @@ pub(crate) fn open_market_observatory_database(app: &tauri::AppHandle) -> Result
         std::fs::create_dir_all(parent_dir).context("failed to create app data directory")?;
     }
 
-    let connection = Connection::open(db_path).context("failed to open market observatory db")?;
+    let mut connection =
+        Connection::open(db_path).context("failed to open market observatory db")?;
     connection
         .busy_timeout(Duration::from_secs(30))
         .context("failed to configure market observatory busy timeout")?;
+    run_item_key_migration_if_needed(app, &mut connection)?;
     initialize_market_observatory_schema(&connection)?;
     Ok(connection)
+}
+
+/// Runs the one-time `item_id` -> `item_key` migration (see `market_observatory_migration.rs`)
+/// if, and only if, this database is still on the old schema. Called on every
+/// `open_market_observatory_database`, which is why the check has to be cheap and the migration
+/// itself idempotent — this is not a special startup-only path.
+///
+/// The v2-catalog-readiness guard matters more than it looks: `open_market_observatory_database`
+/// gets called from background loops (`lib.rs`'s `setup()` starts some immediately) that can run
+/// before the boot sequence's catalog v2 build finishes. If migration ran with an empty (not-yet
+/// -built) v2 catalog, every preserved row would resolve to a null `item_key` — and because the
+/// schema itself is what `needs_migration` checks, THAT would look like "already migrated" and
+/// never get a second chance to resolve correctly. Deferring to a later call, once the v2
+/// catalog genuinely exists, is what avoids permanently orphaning the watchlist and owned parts.
+fn run_item_key_migration_if_needed(
+    app: &tauri::AppHandle,
+    connection: &mut Connection,
+) -> Result<()> {
+    if !crate::market_observatory_migration::needs_migration(connection)
+        .context("failed to check whether market observatory needs the item_key migration")?
+    {
+        return Ok(());
+    }
+    let catalog_v2_path = crate::item_catalog_v2::catalog_v2_database_path(app)?;
+    if !catalog_v2_path.exists() {
+        // Not an error — just not our turn yet. The next call (there will be one; this function
+        // runs on every database open) tries again.
+        return Ok(());
+    }
+
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
+        .context("failed to load the item catalog v2 slug map for migration")?;
+    let summary = crate::market_observatory_migration::migrate(connection, &slug_to_item_key)
+        .context("failed to migrate market observatory to item_key")?;
+    log_feature_event_best_effort(
+        app,
+        "market-observatory",
+        "item-key-migration",
+        &format!(
+            "Migrated market observatory to item_key: {} cache tables rebuilt empty, {} rows \
+             preserved ({} with an item that no longer resolves in the current catalog — kept, \
+             not dropped).",
+            summary.tables_rebuilt_empty,
+            summary.rows_preserved,
+            summary.rows_with_unresolved_item_key
+        ),
+    );
+    Ok(())
 }
 
 fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
@@ -1480,120 +1530,19 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         "
         PRAGMA journal_mode = WAL;
         PRAGMA foreign_keys = ON;
+        ",
+    )?;
 
-        CREATE TABLE IF NOT EXISTS tracked_items (
-          item_id INTEGER NOT NULL,
-          slug TEXT NOT NULL,
-          variant_key TEXT NOT NULL,
-          seller_mode TEXT NOT NULL DEFAULT 'ingame',
-          variant_label TEXT NOT NULL,
-          tracking_sources TEXT NOT NULL,
-          first_tracked_at TEXT NOT NULL,
-          last_tracked_at TEXT NOT NULL,
-          last_snapshot_at TEXT,
-          next_snapshot_at TEXT,
-          is_active INTEGER NOT NULL DEFAULT 1,
-          PRIMARY KEY (item_id, slug, variant_key)
-        );
+    // The 16 item-keyed tables live in one place now (shared with the migration, which recreates
+    // these same tables after dropping the old ones) — a fresh install and a just-migrated
+    // install end up with byte-for-byte the same schema, which is the whole point of having only
+    // one definition instead of this function slowly drifting from the migration's over time.
+    crate::market_observatory_migration::create_new_schema(connection)?;
 
-        -- Stream-derived order-flow samples from the newOrders firehose, for items the user
-        -- uses. Keyed by the WFM hex item id (what the firehose carries). Removal-agnostic:
-        -- these are arrival rates, not orderbook state.
-        CREATE TABLE IF NOT EXISTS order_flow_sample (
-          sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
-          wfm_item_id TEXT NOT NULL,
-          variant_key TEXT NOT NULL,
-          captured_at TEXT NOT NULL,
-          sell_arrivals_per_hour REAL NOT NULL,
-          buy_arrivals_per_hour REAL NOT NULL,
-          undercut_per_hour REAL NOT NULL,
-          observed_floor REAL,
-          sample_seconds REAL NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_order_flow_sample_lookup
-          ON order_flow_sample (wfm_item_id, variant_key, captured_at DESC);
-
-        CREATE TABLE IF NOT EXISTS orderbook_snapshots (
-          snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
-          item_id INTEGER NOT NULL,
-          slug TEXT NOT NULL,
-          variant_key TEXT NOT NULL,
-          seller_mode TEXT NOT NULL DEFAULT 'ingame',
-          captured_at TEXT NOT NULL,
-          lowest_sell REAL,
-          median_sell REAL,
-          highest_buy REAL,
-          spread REAL,
-          spread_pct REAL,
-          sell_order_count INTEGER NOT NULL,
-          sell_quantity INTEGER NOT NULL,
-          buy_order_count INTEGER NOT NULL,
-          buy_quantity INTEGER NOT NULL,
-          near_floor_seller_count INTEGER NOT NULL,
-          near_floor_quantity INTEGER NOT NULL,
-          unique_sell_users INTEGER NOT NULL,
-          unique_buy_users INTEGER NOT NULL,
-          pressure_ratio REAL,
-          entry_depth REAL NOT NULL,
-          exit_depth REAL NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_orderbook_snapshots_lookup
-          ON orderbook_snapshots (item_id, variant_key, seller_mode, captured_at DESC);
-
-        CREATE TABLE IF NOT EXISTS orderbook_snapshot_levels (
-          snapshot_id INTEGER NOT NULL,
-          side TEXT NOT NULL,
-          price REAL NOT NULL,
-          quantity INTEGER NOT NULL,
-          order_count INTEGER NOT NULL,
-          band_kind TEXT NOT NULL,
-          PRIMARY KEY (snapshot_id, side, price, band_kind),
-          FOREIGN KEY (snapshot_id) REFERENCES orderbook_snapshots(snapshot_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS statistics_cache (
-          item_id INTEGER NOT NULL,
-          slug TEXT NOT NULL,
-          variant_key TEXT NOT NULL,
-          domain_key TEXT NOT NULL,
-          bucket_origin TEXT NOT NULL,
-          bucket_at TEXT NOT NULL,
-          source_kind TEXT NOT NULL,
-          volume REAL NOT NULL,
-          min_price REAL,
-          max_price REAL,
-          open_price REAL,
-          closed_price REAL,
-          avg_price REAL,
-          wa_price REAL,
-          median REAL,
-          moving_avg REAL,
-          donch_top REAL,
-          donch_bot REAL,
-          fetched_at TEXT NOT NULL,
-          PRIMARY KEY (item_id, variant_key, domain_key, bucket_origin, bucket_at, source_kind)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_statistics_cache_lookup
-          ON statistics_cache (item_id, variant_key, domain_key, source_kind, bucket_at DESC);
-
-        CREATE TABLE IF NOT EXISTS set_component_cache (
-          set_item_id INTEGER NOT NULL,
-          set_slug TEXT NOT NULL,
-          set_name TEXT NOT NULL,
-          set_image_path TEXT,
-          component_item_id INTEGER,
-          component_slug TEXT NOT NULL,
-          component_name TEXT NOT NULL,
-          component_image_path TEXT,
-          quantity_in_set INTEGER NOT NULL DEFAULT 1,
-          sort_order INTEGER NOT NULL,
-          fetched_at TEXT NOT NULL,
-          PRIMARY KEY (set_slug, component_slug)
-        );
-
+    // The 2 tables with no item identity column at all — untouched by the migration, defined
+    // only here.
+    connection.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS owned_relic_inventory_cache (
           relic_tier TEXT NOT NULL,
           relic_code TEXT NOT NULL,
@@ -1610,281 +1559,8 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
           cache_key TEXT PRIMARY KEY,
           updated_at TEXT NOT NULL
         );
-
-        CREATE INDEX IF NOT EXISTS idx_set_component_cache_set_slug
-          ON set_component_cache (set_slug, sort_order ASC);
-
-        CREATE TABLE IF NOT EXISTS owned_set_components (
-          component_slug TEXT PRIMARY KEY,
-          component_item_id INTEGER,
-          component_name TEXT NOT NULL,
-          component_image_path TEXT,
-          quantity INTEGER NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_owned_set_components_name
-          ON owned_set_components (component_name COLLATE NOCASE ASC);
-
-        CREATE TABLE IF NOT EXISTS owned_set_component_trade_sync (
-          sync_key TEXT PRIMARY KEY,
-          component_slug TEXT NOT NULL,
-          applied_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS set_completion_screenshot_baseline (
-          component_slug TEXT PRIMARY KEY,
-          component_item_id INTEGER,
-          component_name TEXT NOT NULL,
-          component_image_path TEXT,
-          quantity INTEGER NOT NULL,
-          imported_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS set_completion_import_meta (
-          meta_key TEXT PRIMARY KEY,
-          value_text TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS scanner_cache (
-          scanner_key TEXT PRIMARY KEY,
-          computed_at TEXT NOT NULL,
-          payload_json TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS opportunity_board_cache (
-          cache_key TEXT PRIMARY KEY,
-          payload_json TEXT NOT NULL,
-          computed_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS trade_sell_order_cache (
-          cache_key TEXT PRIMARY KEY,
-          payload_json TEXT NOT NULL,
-          computed_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS scanner_progress (
-          scanner_key TEXT PRIMARY KEY,
-          status TEXT NOT NULL,
-          progress_value REAL NOT NULL,
-          stage_label TEXT NOT NULL,
-          status_text TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          started_at TEXT,
-          last_completed_at TEXT,
-          last_error TEXT,
-          current_set_name TEXT,
-          current_component_name TEXT,
-          completed_set_count INTEGER NOT NULL DEFAULT 0,
-          total_set_count INTEGER NOT NULL DEFAULT 0,
-          completed_component_count INTEGER NOT NULL DEFAULT 0,
-          total_component_count INTEGER NOT NULL DEFAULT 0,
-          skipped_entry_count INTEGER NOT NULL DEFAULT 0,
-          retrying_item_name TEXT,
-          retry_attempt INTEGER,
-          stop_requested INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS analytics_cache (
-          item_id INTEGER NOT NULL,
-          slug TEXT NOT NULL,
-          variant_key TEXT NOT NULL,
-          seller_mode TEXT NOT NULL DEFAULT 'ingame',
-          domain_key TEXT NOT NULL,
-          bucket_size_key TEXT NOT NULL,
-          cache_version INTEGER NOT NULL DEFAULT 1,
-          computed_at TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          source_snapshot_at TEXT,
-          source_stats_fetched_at TEXT,
-          PRIMARY KEY (item_id, variant_key, seller_mode, domain_key, bucket_size_key)
-        );
-
-        CREATE TABLE IF NOT EXISTS recommendation_outcomes (
-          outcome_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-          item_id             INTEGER NOT NULL,
-          slug                TEXT NOT NULL,
-          variant_key         TEXT NOT NULL,
-          seller_mode         TEXT NOT NULL,
-          outcome_type        TEXT NOT NULL DEFAULT 'buy_trade',
-          recommended_at      TEXT NOT NULL,
-          efficiency_score    REAL,
-          efficiency_label    TEXT,
-          liquidity_score     REAL,
-          liquidity_label     TEXT,
-          pressure_label      TEXT,
-          suggested_action    TEXT,
-          action_tone         TEXT,
-          entry_zone_low      REAL,
-          entry_zone_high     REAL,
-          exit_zone_low       REAL,
-          exit_zone_high      REAL,
-          floor_at_rec        REAL,
-          entry_window_hours  INTEGER NOT NULL DEFAULT 48,
-          holding_window_days INTEGER NOT NULL DEFAULT 7,
-          entry_triggered     INTEGER,
-          entry_price         REAL,
-          entry_triggered_at  TEXT,
-          exit_triggered      INTEGER,
-          exit_price          REAL,
-          exit_triggered_at   TEXT,
-          mark_to_market_price REAL,
-          realized_return     REAL,
-          return_per_day      REAL,
-          days_held           REAL,
-          outcome_graded_at   TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_rec_outcomes_grading
-          ON recommendation_outcomes (outcome_graded_at, recommended_at);
-
-        CREATE INDEX IF NOT EXISTS idx_rec_outcomes_item
-          ON recommendation_outcomes (item_id, variant_key, seller_mode, recommended_at DESC);
         ",
     )?;
-
-    let has_cache_version = connection
-        .query_row(
-            "SELECT 1
-             FROM pragma_table_info('analytics_cache')
-             WHERE name = 'cache_version'
-             LIMIT 1",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .is_some();
-    if !has_cache_version {
-        connection.execute(
-            "ALTER TABLE analytics_cache
-             ADD COLUMN cache_version INTEGER NOT NULL DEFAULT 1",
-            [],
-        )?;
-    }
-
-    for (table_name, column_name, column_sql) in [
-        (
-            "tracked_items",
-            "seller_mode",
-            "ALTER TABLE tracked_items ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'",
-        ),
-        (
-            "orderbook_snapshots",
-            "seller_mode",
-            "ALTER TABLE orderbook_snapshots ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'",
-        ),
-        (
-            "analytics_cache",
-            "seller_mode",
-            "ALTER TABLE analytics_cache ADD COLUMN seller_mode TEXT NOT NULL DEFAULT 'ingame'",
-        ),
-        (
-            "scanner_progress",
-            "stop_requested",
-            "ALTER TABLE scanner_progress ADD COLUMN stop_requested INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "scanner_progress",
-            "current_set_name",
-            "ALTER TABLE scanner_progress ADD COLUMN current_set_name TEXT",
-        ),
-        (
-            "scanner_progress",
-            "current_component_name",
-            "ALTER TABLE scanner_progress ADD COLUMN current_component_name TEXT",
-        ),
-        (
-            "scanner_progress",
-            "completed_set_count",
-            "ALTER TABLE scanner_progress ADD COLUMN completed_set_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "scanner_progress",
-            "total_set_count",
-            "ALTER TABLE scanner_progress ADD COLUMN total_set_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "scanner_progress",
-            "completed_component_count",
-            "ALTER TABLE scanner_progress ADD COLUMN completed_component_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "scanner_progress",
-            "total_component_count",
-            "ALTER TABLE scanner_progress ADD COLUMN total_component_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "scanner_progress",
-            "skipped_entry_count",
-            "ALTER TABLE scanner_progress ADD COLUMN skipped_entry_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "scanner_progress",
-            "retrying_item_name",
-            "ALTER TABLE scanner_progress ADD COLUMN retrying_item_name TEXT",
-        ),
-        (
-            "scanner_progress",
-            "retry_attempt",
-            "ALTER TABLE scanner_progress ADD COLUMN retry_attempt INTEGER",
-        ),
-    ] {
-        let has_column = connection
-            .query_row(
-                &format!(
-                    "SELECT 1 FROM pragma_table_info('{table_name}') WHERE name = '{column_name}' LIMIT 1"
-                ),
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?
-            .is_some();
-        if !has_column {
-            connection.execute(column_sql, [])?;
-        }
-    }
-
-    // Rebuild analytics_cache if its PRIMARY KEY predates the seller_mode column.
-    // SQLite cannot ALTER a PRIMARY KEY in place, so we check the stored CREATE TABLE
-    // statement and recreate the table when seller_mode is absent from the key.
-    let analytics_cache_sql = connection
-        .query_row(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'analytics_cache'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    let needs_pk_rebuild = analytics_cache_sql
-        .map(|sql| !sql.contains("seller_mode, domain_key"))
-        .unwrap_or(false);
-    if needs_pk_rebuild {
-        connection.execute_batch(
-            "
-            ALTER TABLE analytics_cache RENAME TO analytics_cache_old;
-            CREATE TABLE analytics_cache (
-              item_id INTEGER NOT NULL,
-              slug TEXT NOT NULL,
-              variant_key TEXT NOT NULL,
-              seller_mode TEXT NOT NULL DEFAULT 'ingame',
-              domain_key TEXT NOT NULL,
-              bucket_size_key TEXT NOT NULL,
-              cache_version INTEGER NOT NULL DEFAULT 1,
-              computed_at TEXT NOT NULL,
-              payload_json TEXT NOT NULL,
-              source_snapshot_at TEXT,
-              source_stats_fetched_at TEXT,
-              PRIMARY KEY (item_id, variant_key, seller_mode, domain_key, bucket_size_key)
-            );
-            INSERT OR IGNORE INTO analytics_cache
-              SELECT item_id, slug, variant_key, seller_mode, domain_key, bucket_size_key,
-                     cache_version, computed_at, payload_json, source_snapshot_at,
-                     source_stats_fetched_at
-              FROM analytics_cache_old;
-            DROP TABLE analytics_cache_old;
-            ",
-        )?;
-    }
 
     Ok(())
 }
@@ -2072,7 +1748,7 @@ fn normalize_statistics_rows(
 
 fn insert_statistics_rows_for_domain(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     domain_key: &str,
@@ -2081,10 +1757,10 @@ fn insert_statistics_rows_for_domain(
 ) -> Result<()> {
     connection.execute(
         "DELETE FROM statistics_cache
-         WHERE item_id = ?1
+         WHERE item_key = ?1
            AND variant_key = ?2
            AND domain_key = ?3",
-        params![item_id, variant_key, domain_key],
+        params![item_key, variant_key, domain_key],
     )?;
 
     let mut deduped_rows = BTreeMap::<(String, String), InternalStatsRow>::new();
@@ -2095,7 +1771,7 @@ fn insert_statistics_rows_for_domain(
 
     let mut statement = connection.prepare(
         "INSERT INTO statistics_cache (
-           item_id,
+           item_key,
            slug,
            variant_key,
            domain_key,
@@ -2115,7 +1791,7 @@ fn insert_statistics_rows_for_domain(
            donch_bot,
            fetched_at
          ) VALUES (?1, ?2, ?3, ?4, 'native', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
-         ON CONFLICT(item_id, variant_key, domain_key, bucket_origin, bucket_at, source_kind)
+         ON CONFLICT(item_key, variant_key, domain_key, bucket_origin, bucket_at, source_kind)
          DO UPDATE SET
            slug = excluded.slug,
            volume = excluded.volume,
@@ -2134,7 +1810,7 @@ fn insert_statistics_rows_for_domain(
 
     for ((bucket_at, _), row) in deduped_rows {
         statement.execute(params![
-            item_id,
+            item_key,
             slug,
             variant_key,
             domain_key,
@@ -2160,7 +1836,7 @@ fn insert_statistics_rows_for_domain(
 
 fn fetch_and_cache_statistics_impl<C>(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     priority: RequestPriority,
@@ -2241,7 +1917,7 @@ where
         for (domain_key, rows) in rows_by_domain {
             insert_statistics_rows_for_domain(
                 connection,
-                item_id,
+                item_key,
                 slug,
                 variant_key,
                 &domain_key,
@@ -2261,14 +1937,14 @@ where
 
 fn fetch_and_cache_statistics(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     priority: RequestPriority,
 ) -> Result<()> {
     fetch_and_cache_statistics_impl(
         connection,
-        item_id,
+        item_key,
         slug,
         variant_key,
         priority,
@@ -2279,7 +1955,7 @@ fn fetch_and_cache_statistics(
 
 fn statistics_cache_is_usable(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     domain_key: AnalyticsDomainKey,
 ) -> Result<bool> {
@@ -2311,11 +1987,11 @@ fn statistics_cache_is_usable(
                  END
                )
              FROM statistics_cache
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND variant_key = ?2
                AND domain_key = ?3
                AND source_kind = 'closed'",
-            params![item_id, variant_key, source_domain],
+            params![item_key, variant_key, source_domain],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -2338,7 +2014,7 @@ fn statistics_cache_is_usable(
 
 fn load_statistics_rows_for_domain(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     source_domain: &str,
 ) -> Result<(Vec<InternalStatsRow>, Vec<InternalStatsRow>, Option<String>)> {
@@ -2359,12 +2035,12 @@ fn load_statistics_rows_for_domain(
            donch_bot,
            fetched_at
          FROM statistics_cache
-         WHERE item_id = ?1
+         WHERE item_key = ?1
            AND variant_key = ?2
            AND domain_key = ?3
          ORDER BY bucket_at ASC",
     )?;
-    let rows = statement.query_map(params![item_id, variant_key, source_domain], |row| {
+    let rows = statement.query_map(params![item_key, variant_key, source_domain], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -2451,7 +2127,7 @@ fn merge_latest_fetched_at(current: Option<String>, candidate: Option<String>) -
 
 fn load_chart_statistics_rows(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     domain_key: AnalyticsDomainKey,
 ) -> Result<(Vec<InternalStatsRow>, Vec<InternalStatsRow>, Option<String>)> {
@@ -2472,7 +2148,7 @@ fn load_chart_statistics_rows(
 
     for source_domain in source_domains {
         let (domain_closed_rows, domain_live_buy_rows, fetched_at) =
-            load_statistics_rows_for_domain(connection, item_id, variant_key, source_domain)?;
+            load_statistics_rows_for_domain(connection, item_key, variant_key, source_domain)?;
         latest_fetched_at = merge_latest_fetched_at(latest_fetched_at, fetched_at);
 
         let include_row = |row: &InternalStatsRow| -> bool {
@@ -2499,16 +2175,16 @@ fn load_chart_statistics_rows(
 
 fn latest_statistics_fetch_timestamp(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
 ) -> Result<Option<OffsetDateTime>> {
     let fetched_at = connection
         .query_row(
             "SELECT MAX(fetched_at)
              FROM statistics_cache
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND variant_key = ?2",
-            params![item_id, variant_key],
+            params![item_key, variant_key],
             |row| row.get::<_, Option<String>>(0),
         )
         .optional()?
@@ -2520,7 +2196,7 @@ fn latest_statistics_fetch_timestamp(
 #[allow(dead_code)]
 fn ensure_statistics_cached_for_scan<C>(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     mut is_cancelled: C,
@@ -2530,10 +2206,10 @@ where
 {
     let needs_refresh = !statistics_cache_is_usable(
         connection,
-        item_id,
+        item_key,
         variant_key,
         AnalyticsDomainKey::ThirtyDays,
-    )? || latest_statistics_fetch_timestamp(connection, item_id, variant_key)?
+    )? || latest_statistics_fetch_timestamp(connection, item_key, variant_key)?
         .map(|value| (now_utc() - value) >= TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS))
         .unwrap_or(true);
 
@@ -2543,7 +2219,7 @@ where
 
     if let Err(error) = fetch_and_cache_statistics_impl(
         connection,
-        item_id,
+        item_key,
         slug,
         variant_key,
         RequestPriority::Low,
@@ -2552,7 +2228,7 @@ where
     ) {
         if statistics_cache_is_usable(
             connection,
-            item_id,
+            item_key,
             variant_key,
             AnalyticsDomainKey::ThirtyDays,
         )? {
@@ -2572,7 +2248,7 @@ where
 /// parsed rows as a [`WriteTask`], without touching SQLite at all.
 /// The caller is responsible for persisting the rows (via the writer thread).
 fn fetch_statistics_for_pipeline<C>(
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     mut is_cancelled: C,
@@ -2642,7 +2318,7 @@ where
     }
 
     Ok(WriteTask {
-        item_id,
+        item_key: item_key.to_string(),
         slug: slug.to_string(),
         variant_key: variant_key.to_string(),
         fetched_at,
@@ -2772,7 +2448,7 @@ fn write_statistics_task(connection: &Connection, task: &WriteTask) -> Result<()
         for (domain_key, rows) in &task.rows_by_domain {
             insert_statistics_rows_for_domain(
                 connection,
-                task.item_id,
+                &task.item_key,
                 &task.slug,
                 &task.variant_key,
                 domain_key,
@@ -2815,7 +2491,7 @@ fn run_statistics_writer(db_path: PathBuf, rx: mpsc::Receiver<WriteTask>) {
 
 fn latest_live_sell_reference_price(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
 ) -> Result<Option<f64>> {
     connection
@@ -2828,13 +2504,13 @@ fn latest_live_sell_reference_price(
                closed_price,
                open_price
              FROM statistics_cache
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND variant_key = ?2
                AND domain_key = '48hours'
                AND source_kind = 'live_sell'
              ORDER BY bucket_at DESC
              LIMIT 1",
-            params![item_id, variant_key],
+            params![item_key, variant_key],
             |row| {
                 let min_price = row.get::<_, Option<f64>>(0)?;
                 let median = row.get::<_, Option<f64>>(1)?;
@@ -2925,10 +2601,10 @@ fn score_stats_liquidity(rows: &[InternalStatsRow]) -> (f64, String) {
 /// 30-day zone model instead of the single latest stats bucket.
 pub(crate) fn zone_recommended_exit_price(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
 ) -> Option<f64> {
-    build_statistics_price_model(connection, item_id, variant_key)
+    build_statistics_price_model(connection, item_key, variant_key)
         .ok()
         .flatten()
         .and_then(|model| model.recommended_exit_price)
@@ -2936,12 +2612,12 @@ pub(crate) fn zone_recommended_exit_price(
 
 fn build_statistics_price_model(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
 ) -> Result<Option<ScannerPriceModel>> {
     let (closed_rows, _, _) = load_chart_statistics_rows(
         connection,
-        item_id,
+        item_key,
         variant_key,
         AnalyticsDomainKey::ThirtyDays,
     )?;
@@ -2974,7 +2650,7 @@ fn build_statistics_price_model(
         build_confidence_summary("low", vec!["Thin history".to_string()])
     };
     let current_stats_price =
-        latest_live_sell_reference_price(connection, item_id, variant_key)?.map(round_platinum);
+        latest_live_sell_reference_price(connection, item_key, variant_key)?.map(round_platinum);
     let (liquidity_score, sale_state) = score_stats_liquidity(&closed_rows);
     let recommended_entry_price = recommended_entry_price_from_zone(zone_bands.as_ref());
     let shared_exit_pricing = build_shared_exit_pricing(
@@ -3014,7 +2690,7 @@ fn build_statistics_price_model(
 
 fn load_snapshot_chart_points(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     seller_mode: &str,
     domain_key: AnalyticsDomainKey,
@@ -3024,14 +2700,14 @@ fn load_snapshot_chart_points(
     let mut statement = connection.prepare(
         "SELECT captured_at, lowest_sell, median_sell, highest_buy
          FROM orderbook_snapshots
-         WHERE item_id = ?1
+         WHERE item_key = ?1
            AND variant_key = ?2
            AND seller_mode = ?3
            AND captured_at >= ?4
          ORDER BY captured_at ASC",
     )?;
 
-    let rows = statement.query_map(params![item_id, variant_key, seller_mode, cutoff], |row| {
+    let rows = statement.query_map(params![item_key, variant_key, seller_mode, cutoff], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<f64>>(1)?,
@@ -3516,7 +3192,7 @@ fn fetch_filtered_orders_labeled(
 
 fn persist_snapshot(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
@@ -3524,7 +3200,7 @@ fn persist_snapshot(
 ) -> Result<()> {
     connection.execute(
         "INSERT INTO orderbook_snapshots (
-           item_id,
+           item_key,
            slug,
            variant_key,
            seller_mode,
@@ -3547,7 +3223,7 @@ fn persist_snapshot(
            exit_depth
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
-            item_id,
+            item_key,
             slug,
             variant_key,
             seller_mode,
@@ -3630,7 +3306,7 @@ fn prune_old_rows(connection: &Connection) -> Result<()> {
 
 fn update_tracking_row(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
@@ -3652,7 +3328,7 @@ fn update_tracking_row(
 
     connection.execute(
         "INSERT INTO tracked_items (
-           item_id,
+           item_key,
            slug,
            variant_key,
            seller_mode,
@@ -3664,7 +3340,7 @@ fn update_tracking_row(
            next_snapshot_at,
            is_active
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, ?10)
-         ON CONFLICT(item_id, slug, variant_key) DO UPDATE SET
+         ON CONFLICT(item_key, slug, variant_key) DO UPDATE SET
            seller_mode = excluded.seller_mode,
            variant_label = excluded.variant_label,
            tracking_sources = excluded.tracking_sources,
@@ -3673,7 +3349,7 @@ fn update_tracking_row(
            next_snapshot_at = excluded.next_snapshot_at,
            is_active = excluded.is_active",
         params![
-            item_id,
+            item_key,
             slug,
             variant_key,
             seller_mode,
@@ -3691,7 +3367,7 @@ fn update_tracking_row(
 
 fn get_existing_sources(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
 ) -> Result<BTreeSet<MarketTrackingSource>> {
@@ -3699,10 +3375,10 @@ fn get_existing_sources(
         .query_row(
             "SELECT tracking_sources
              FROM tracked_items
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND slug = ?2
                AND variant_key = ?3",
-            params![item_id, slug, variant_key],
+            params![item_key, slug, variant_key],
             |row| row.get::<_, String>(0),
         )
         .optional()?;
@@ -3715,7 +3391,7 @@ fn get_existing_sources(
 
 fn get_tracking_seller_mode(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
 ) -> Result<String> {
@@ -3723,10 +3399,10 @@ fn get_tracking_seller_mode(
         .query_row(
             "SELECT seller_mode
              FROM tracked_items
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND slug = ?2
                AND variant_key = ?3",
-            params![item_id, slug, variant_key],
+            params![item_key, slug, variant_key],
             |row| row.get::<_, String>(0),
         )
         .optional()?
@@ -3735,7 +3411,7 @@ fn get_tracking_seller_mode(
 
 fn capture_tracking_snapshot_with_priority(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
@@ -3743,7 +3419,7 @@ fn capture_tracking_snapshot_with_priority(
 ) -> Result<MarketSnapshot> {
     let (_, _, snapshot) = capture_tracking_snapshot_with_orders_priority(
         connection,
-        item_id,
+        item_key,
         slug,
         variant_key,
         seller_mode,
@@ -3754,7 +3430,7 @@ fn capture_tracking_snapshot_with_priority(
 
 fn capture_tracking_snapshot_with_orders_priority(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
@@ -3767,16 +3443,16 @@ fn capture_tracking_snapshot_with_orders_priority(
     // writes are grouped so a failure between them can't leave a snapshot without its depth
     // levels, or a tracking row whose next_snapshot_at disagrees with what was actually saved.
     let tx = connection.unchecked_transaction()?;
-    persist_snapshot(&tx, item_id, slug, variant_key, seller_mode, &snapshot)?;
+    persist_snapshot(&tx, item_key, slug, variant_key, seller_mode, &snapshot)?;
     prune_old_rows(&tx)?;
     update_tracking_row(
         &tx,
-        item_id,
+        item_key,
         slug,
         variant_key,
         seller_mode,
         &derive_variant_label(variant_key),
-        &get_existing_sources(&tx, item_id, slug, variant_key)?,
+        &get_existing_sources(&tx, item_key, slug, variant_key)?,
         false,
         Some(snapshot.captured_at.as_str()),
     )?;
@@ -3786,14 +3462,14 @@ fn capture_tracking_snapshot_with_orders_priority(
 
 fn capture_tracking_snapshot(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<MarketSnapshot> {
     capture_tracking_snapshot_with_priority(
         connection,
-        item_id,
+        item_key,
         slug,
         variant_key,
         seller_mode,
@@ -3803,7 +3479,7 @@ fn capture_tracking_snapshot(
 
 fn resolve_variants_from_catalog(
     app: &tauri::AppHandle,
-    item_id: i64,
+    _item_key: &str,
     slug: &str,
 ) -> Result<Vec<MarketVariant>> {
     let connection = open_catalog_database(app)?;
@@ -3811,9 +3487,9 @@ fn resolve_variants_from_catalog(
         .query_row(
             "SELECT max_rank
              FROM wfm_items
-             WHERE item_id = ?1 OR slug = ?2
+             WHERE slug = ?1
              LIMIT 1",
-            params![item_id, slug],
+            params![slug],
             |row| row.get::<_, Option<i64>>(0),
         )
         .optional()?
@@ -3842,7 +3518,7 @@ fn resolve_variants_from_catalog(
 
 fn latest_snapshot_for_item(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<Option<MarketSnapshot>> {
@@ -3868,12 +3544,12 @@ fn latest_snapshot_for_item(
                entry_depth,
                exit_depth
              FROM orderbook_snapshots
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND variant_key = ?2
                AND seller_mode = ?3
              ORDER BY captured_at DESC
              LIMIT 1",
-            params![item_id, variant_key, seller_mode],
+            params![item_key, variant_key, seller_mode],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -5902,7 +5578,7 @@ fn efficiency_label(score: Option<f64>) -> String {
 
 fn recent_snapshots(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     seller_mode: &str,
     limit: i64,
@@ -5927,14 +5603,14 @@ fn recent_snapshots(
            entry_depth,
            exit_depth
          FROM orderbook_snapshots
-         WHERE item_id = ?1
+         WHERE item_key = ?1
            AND variant_key = ?2
            AND seller_mode = ?3
          ORDER BY captured_at DESC
          LIMIT ?4",
     )?;
 
-    let rows = statement.query_map(params![item_id, variant_key, seller_mode, limit], |row| {
+    let rows = statement.query_map(params![item_key, variant_key, seller_mode, limit], |row| {
         Ok(MarketSnapshot {
             captured_at: row.get(0)?,
             lowest_sell: row.get(1)?,
@@ -6148,7 +5824,7 @@ fn build_manipulation_risk(
 
 fn build_time_of_day_liquidity(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<TimeOfDayLiquiditySummary> {
@@ -6173,13 +5849,13 @@ fn build_time_of_day_liquidity(
            entry_depth,
            exit_depth
          FROM orderbook_snapshots
-         WHERE item_id = ?1
+         WHERE item_key = ?1
            AND variant_key = ?2
            AND seller_mode = ?3
          AND captured_at >= ?4
          ORDER BY captured_at ASC",
     )?;
-    let rows = statement.query_map(params![item_id, variant_key, seller_mode, cutoff], |row| {
+    let rows = statement.query_map(params![item_key, variant_key, seller_mode, cutoff], |row| {
         Ok(MarketSnapshot {
             captured_at: row.get(0)?,
             lowest_sell: row.get(1)?,
@@ -6235,7 +5911,7 @@ fn build_time_of_day_liquidity(
     }
 
     let (closed_rows, _, _) =
-        load_statistics_rows_for_domain(connection, item_id, variant_key, "48hours")?;
+        load_statistics_rows_for_domain(connection, item_key, variant_key, "48hours")?;
     for row in closed_rows {
         let weekday = row.bucket_at.weekday().number_days_from_monday() as i64;
         let bucket_index = row.bucket_at.hour() as i64 / 2;
@@ -6550,10 +6226,11 @@ struct ItemDetailRow {
 
 fn load_item_detail_summary(
     app: &tauri::AppHandle,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
 ) -> Result<ItemDetailSummary> {
     let connection = open_catalog_database(app)?;
+    let catalog_item_id = resolve_item_id_by_slug(&connection, slug)?.unwrap_or_default();
     let detail_row = connection.query_row(
         "SELECT
            COALESCE(i.preferred_name, w.name_en, ws.name, i.canonical_name, ?2),
@@ -6618,9 +6295,9 @@ fn load_item_detail_summary(
          FROM items i
          LEFT JOIN wfm_items w ON w.item_id = i.item_id
          LEFT JOIN wfstat_items ws ON ws.item_id = i.item_id
-         WHERE i.item_id = ?1
+         WHERE i.item_id = ?1 OR i.wfm_slug = ?2 OR i.preferred_slug = ?2
          LIMIT 1",
-        params![item_id, slug],
+        params![catalog_item_id, slug],
         |row| {
             Ok(ItemDetailRow {
                 name: row.get(0)?,
@@ -6694,7 +6371,7 @@ fn load_item_detail_summary(
              WHERE wfm_items.item_id = ?1
              ORDER BY tag ASC",
         )?;
-        let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let polarities = {
@@ -6705,7 +6382,7 @@ fn load_item_detail_summary(
              WHERE wfstat_items.item_id = ?1
              ORDER BY wfstat_item_polarities.polarity_index ASC",
         )?;
-        let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let parent_names = {
@@ -6716,7 +6393,7 @@ fn load_item_detail_summary(
              WHERE wfstat_items.item_id = ?1
              ORDER BY wfstat_item_parents.parent_index ASC",
         )?;
-        let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let ability_names = {
@@ -6728,7 +6405,7 @@ fn load_item_detail_summary(
                AND wfstat_item_abilities.ability_name IS NOT NULL
              ORDER BY wfstat_item_abilities.ability_index ASC",
         )?;
-        let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let attack_names = {
@@ -6740,7 +6417,7 @@ fn load_item_detail_summary(
                AND wfstat_item_attacks.attack_name IS NOT NULL
              ORDER BY wfstat_item_attacks.attack_index ASC",
         )?;
-        let rows = statement.query_map(params![item_id], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map(params![catalog_item_id], |row| row.get::<_, String>(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
 
@@ -6752,7 +6429,7 @@ fn load_item_detail_summary(
         .unwrap_or((None, Vec::new()));
 
     Ok(ItemDetailSummary {
-        item_id,
+        item_key: item_key.to_string(),
         name: detail_row.name,
         slug: detail_row.slug,
         image_path: detail_row.image_path,
@@ -6887,17 +6564,22 @@ fn load_scanner_sets_from_map(
     let set_map = load_scanner_set_map_file(&map_path)?
         .ok_or_else(|| anyhow!("scanner set map is unavailable at {}", map_path.display()))?;
     let generated_at = set_map.generated_at.clone();
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
+        .context("failed to load the item catalog v2 slug map for the scanner set map")?;
 
     let mut sets = Vec::with_capacity(set_map.sets.len());
     for set_record in set_map.sets {
-        let Some((set_item_id, resolved_name, resolved_image)) =
+        let Some((_, resolved_name, resolved_image)) =
             load_catalog_item_brief_by_slug(catalog_connection, &set_record.slug)?
         else {
             continue;
         };
+        let Some(set_item_key) = slug_to_item_key.get(&set_record.slug).cloned() else {
+            continue;
+        };
 
         let set_root = SetRootCatalogRecord {
-            item_id: set_item_id,
+            item_key: set_item_key,
             slug: set_record.slug.clone(),
             name: if set_record.name.trim().is_empty() {
                 resolved_name
@@ -6909,18 +6591,19 @@ fn load_scanner_sets_from_map(
 
         let mut components = Vec::with_capacity(set_record.components.len());
         for (index, component) in set_record.components.iter().enumerate() {
-            let Some((component_item_id, component_name, component_image_path)) =
+            let Some((_, component_name, component_image_path)) =
                 load_catalog_item_brief_by_slug(catalog_connection, &component.slug)?
             else {
                 continue;
             };
+            let component_item_key = slug_to_item_key.get(&component.slug).cloned();
 
             components.push(CachedSetComponentRecord {
-                set_item_id: set_root.item_id,
+                set_item_key: set_root.item_key.clone(),
                 set_slug: set_root.slug.clone(),
                 set_name: set_root.name.clone(),
                 set_image_path: set_root.image_path.clone(),
-                component_item_id: Some(component_item_id),
+                component_item_key,
                 component_slug: component.slug.clone(),
                 component_name,
                 component_image_path,
@@ -6995,11 +6678,11 @@ fn load_cached_set_components(
 ) -> Result<Vec<CachedSetComponentRecord>> {
     let mut statement = connection.prepare(
         "SELECT
-           set_item_id,
+           set_item_key,
            set_slug,
            set_name,
            set_image_path,
-           component_item_id,
+           component_item_key,
            component_slug,
            component_name,
            component_image_path,
@@ -7013,11 +6696,11 @@ fn load_cached_set_components(
 
     let rows = statement.query_map(params![set_slug], |row| {
         Ok(CachedSetComponentRecord {
-            set_item_id: row.get(0)?,
+            set_item_key: row.get(0)?,
             set_slug: row.get(1)?,
             set_name: row.get(2)?,
             set_image_path: row.get(3)?,
-            component_item_id: row.get(4)?,
+            component_item_key: row.get(4)?,
             component_slug: row.get(5)?,
             component_name: row.get(6)?,
             component_image_path: row.get(7)?,
@@ -7043,6 +6726,7 @@ fn set_component_cache_is_fresh(entries: &[CachedSetComponentRecord]) -> bool {
 }
 
 fn load_catalog_set_components(
+    app: &tauri::AppHandle,
     catalog_connection: &Connection,
     set_root: &SetRootCatalogRecord,
     fetched_at: &str,
@@ -7051,9 +6735,9 @@ fn load_catalog_set_components(
         .query_row(
             "SELECT primary_wfstat_unique_name
              FROM items
-             WHERE item_id = ?1
+             WHERE wfm_slug = ?1 OR preferred_slug = ?1
              LIMIT 1",
-            params![set_root.item_id],
+            params![set_root.slug],
             |row| row.get::<_, Option<String>>(0),
         )
         .optional()?
@@ -7062,11 +6746,12 @@ fn load_catalog_set_components(
     let Some(set_unique_name) = set_unique_name else {
         return Ok(Vec::new());
     };
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
+        .context("failed to load the item catalog v2 slug map for set components")?;
 
     let mut statement = catalog_connection.prepare(
         "
         SELECT
-          ci.item_id,
           COALESCE(ci.wfm_slug, ci.preferred_slug) AS component_slug,
           COALESCE(
             ci.preferred_name,
@@ -7088,32 +6773,46 @@ fn load_catalog_set_components(
     )?;
 
     let rows = statement.query_map(params![set_unique_name], |row| {
-        let raw_json: Option<String> = row.get(5)?;
+        let raw_json: Option<String> = row.get(4)?;
         let quantity_from_raw = raw_json
             .as_deref()
             .and_then(extract_component_quantity_from_raw);
         let quantity_in_set = row
-            .get::<_, Option<i64>>(4)?
+            .get::<_, Option<i64>>(3)?
             .or(quantity_from_raw)
             .unwrap_or(1)
             .max(1);
-        Ok(CachedSetComponentRecord {
-            set_item_id: set_root.item_id,
+        let component_slug: String = row.get(0)?;
+        Ok((
+            component_slug,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            quantity_in_set,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+
+    let mut components = Vec::new();
+    for row in rows {
+        let (component_slug, component_name, component_image_path, quantity_in_set, sort_order) =
+            row?;
+        let component_item_key = slug_to_item_key.get(&component_slug).cloned();
+        components.push(CachedSetComponentRecord {
+            set_item_key: set_root.item_key.clone(),
             set_slug: set_root.slug.clone(),
             set_name: set_root.name.clone(),
             set_image_path: set_root.image_path.clone(),
-            component_item_id: row.get::<_, i64>(0).ok(),
-            component_slug: row.get(1)?,
-            component_name: row.get(2)?,
-            component_image_path: row.get(3)?,
+            component_item_key,
+            component_slug,
+            component_name,
+            component_image_path,
             quantity_in_set,
-            sort_order: row.get(6)?,
+            sort_order,
             fetched_at: fetched_at.to_string(),
-        })
-    })?;
+        });
+    }
 
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
+    Ok(components)
 }
 
 fn extract_component_quantity_from_raw(raw_json: &str) -> Option<i64> {
@@ -7137,11 +6836,11 @@ fn persist_set_component_cache(
 
     let mut statement = observatory_connection.prepare(
         "INSERT INTO set_component_cache (
-           set_item_id,
+           set_item_key,
            set_slug,
            set_name,
            set_image_path,
-           component_item_id,
+           component_item_key,
            component_slug,
            component_name,
            component_image_path,
@@ -7153,11 +6852,11 @@ fn persist_set_component_cache(
 
     for component in components {
         statement.execute(params![
-            component.set_item_id,
+            component.set_item_key,
             component.set_slug,
             component.set_name,
             component.set_image_path,
-            component.component_item_id,
+            component.component_item_key,
             component.component_slug,
             component.component_name,
             component.component_image_path,
@@ -7171,6 +6870,7 @@ fn persist_set_component_cache(
 }
 
 fn ensure_set_components_cached(
+    app: &tauri::AppHandle,
     catalog_connection: &Connection,
     observatory_connection: &Connection,
     set_root: &SetRootCatalogRecord,
@@ -7181,7 +6881,7 @@ fn ensure_set_components_cached(
     }
 
     let fetched_at = format_timestamp(now_utc())?;
-    let components = load_catalog_set_components(catalog_connection, set_root, &fetched_at)?;
+    let components = load_catalog_set_components(app, catalog_connection, set_root, &fetched_at)?;
 
     persist_set_component_cache(observatory_connection, set_root, &components)?;
     Ok((components, true))
@@ -7608,7 +7308,7 @@ fn persist_arbitrage_scanner_cache(
 
 fn load_set_completion_owned_items(connection: &Connection) -> Result<Vec<SetCompletionOwnedItem>> {
     let mut statement = connection.prepare(
-        "SELECT component_item_id,
+        "SELECT component_item_key,
                 component_slug,
                 component_name,
                 component_image_path,
@@ -7621,7 +7321,7 @@ fn load_set_completion_owned_items(connection: &Connection) -> Result<Vec<SetCom
 
     let rows = statement.query_map([], |row| {
         Ok(SetCompletionOwnedItem {
-            item_id: row.get(0)?,
+            item_key: row.get(0)?,
             slug: row.get(1)?,
             name: row.get(2)?,
             image_path: row.get(3)?,
@@ -7652,7 +7352,7 @@ pub struct SetCompletionInventoryValue {
 #[serde(rename_all = "camelCase")]
 pub struct SetCompletionOwnedItemValue {
     pub slug: String,
-    pub item_id: Option<i64>,
+    pub item_key: Option<String>,
     pub recommended_exit_price: Option<i64>,
 }
 
@@ -7660,14 +7360,14 @@ pub struct SetCompletionOwnedItemValue {
 /// the opportunities engine's reprice detector to judge whether an active listing is overpriced.
 pub(crate) fn recommended_exit_prices_for_items(
     app: &tauri::AppHandle,
-    item_ids: &[i64],
-) -> Result<HashMap<i64, i64>> {
+    item_keys: &[String],
+) -> Result<HashMap<String, i64>> {
     let observatory = open_market_observatory_database(app)?;
-    let mut memo: HashMap<i64, Option<f64>> = HashMap::new();
+    let mut memo: HashMap<String, Option<f64>> = HashMap::new();
     let mut out = HashMap::new();
-    for &item_id in item_ids {
-        if let Some(price) = cached_recommended_exit_price(&observatory, &mut memo, item_id) {
-            out.insert(item_id, price.round() as i64);
+    for item_key in item_keys {
+        if let Some(price) = cached_recommended_exit_price(&observatory, &mut memo, item_key) {
+            out.insert(item_key.clone(), price.round() as i64);
         }
     }
     Ok(out)
@@ -7678,16 +7378,17 @@ pub fn compute_set_completion_owned_item_prices(
 ) -> Result<Vec<SetCompletionOwnedItemValue>> {
     let observatory = open_market_observatory_database(app)?;
     let owned = load_set_completion_owned_items(&observatory)?;
-    let mut exit_cache: HashMap<i64, Option<f64>> = HashMap::new();
+    let mut exit_cache: HashMap<String, Option<f64>> = HashMap::new();
     let mut values = Vec::with_capacity(owned.len());
     for item in &owned {
         let price = item
-            .item_id
-            .and_then(|id| cached_recommended_exit_price(&observatory, &mut exit_cache, id))
+            .item_key
+            .as_deref()
+            .and_then(|key| cached_recommended_exit_price(&observatory, &mut exit_cache, key))
             .map(|price| price.round() as i64);
         values.push(SetCompletionOwnedItemValue {
             slug: item.slug.clone(),
-            item_id: item.item_id,
+            item_key: item.item_key.clone(),
             recommended_exit_price: price,
         });
     }
@@ -7700,13 +7401,14 @@ pub fn compute_set_completion_owned_item_prices(
 /// a fetch/pricing failure for one item yields `None` and never aborts the whole scan.
 pub fn scan_recommended_exit_prices(
     app: &tauri::AppHandle,
-    items: &[(i64, String)],
+    items: &[(String, String)],
 ) -> Result<Vec<Option<i64>>> {
     let observatory = open_market_observatory_database(app)?;
     let mut prices = Vec::with_capacity(items.len());
-    for (item_id, slug) in items {
-        let _ = ensure_statistics_cached_for_scan(&observatory, *item_id, slug, "base", || false);
-        let price = build_statistics_price_model(&observatory, *item_id, "base")
+    for (item_key, slug) in items {
+        let _ =
+            ensure_statistics_cached_for_scan(&observatory, item_key, slug, "base", || false);
+        let price = build_statistics_price_model(&observatory, item_key, "base")
             .ok()
             .flatten()
             .and_then(|model| model.recommended_exit_price)
@@ -7719,17 +7421,17 @@ pub fn scan_recommended_exit_prices(
 /// Cache-only recommended exit price for an item (no network), memoized per call.
 fn cached_recommended_exit_price(
     observatory: &Connection,
-    cache: &mut HashMap<i64, Option<f64>>,
-    item_id: i64,
+    cache: &mut HashMap<String, Option<f64>>,
+    item_key: &str,
 ) -> Option<f64> {
-    if let Some(value) = cache.get(&item_id) {
+    if let Some(value) = cache.get(item_key) {
         return *value;
     }
-    let value = build_statistics_price_model(observatory, item_id, "base")
+    let value = build_statistics_price_model(observatory, item_key, "base")
         .ok()
         .flatten()
         .and_then(|model| model.recommended_exit_price);
-    cache.insert(item_id, value);
+    cache.insert(item_key.to_string(), value);
     value
 }
 
@@ -7754,15 +7456,18 @@ pub fn compute_set_completion_inventory_value(
 
     let last_scan_at = owned.iter().map(|item| item.updated_at.clone()).max();
 
-    let mut exit_cache: HashMap<i64, Option<f64>> = HashMap::new();
+    let mut exit_cache: HashMap<String, Option<f64>> = HashMap::new();
 
     // Distinct-item priced/unpriced counts (honesty note for the UI).
     let mut priced_count = 0_i64;
     let mut unpriced_count = 0_i64;
     for item in &owned {
         let priced = item
-            .item_id
-            .map(|id| cached_recommended_exit_price(&observatory, &mut exit_cache, id).is_some())
+            .item_key
+            .as_deref()
+            .map(|key| {
+                cached_recommended_exit_price(&observatory, &mut exit_cache, key).is_some()
+            })
             .unwrap_or(false);
         if priced {
             priced_count += 1;
@@ -7771,23 +7476,37 @@ pub fn compute_set_completion_inventory_value(
         }
     }
 
-    // Remaining owned quantity per item id (consumed as complete sets are valued).
-    let mut remaining: HashMap<i64, i64> = HashMap::new();
+    // Remaining owned quantity per item key (consumed as complete sets are valued).
+    let mut remaining: HashMap<String, i64> = HashMap::new();
     for item in &owned {
-        if let Some(id) = item.item_id {
-            *remaining.entry(id).or_insert(0) += item.quantity.max(0);
+        if let Some(key) = &item.item_key {
+            *remaining.entry(key.clone()).or_insert(0) += item.quantity.max(0);
         }
     }
 
     let mut total = 0.0_f64;
 
-    // Set-vs-parts for every complete set the user fully owns.
-    if let Ok(catalog) = open_catalog_database(app) {
+    // Set-vs-parts for every complete set the user fully owns. Set/component identity here
+    // comes from the OLD catalog's scanner set map (slug-keyed); resolve each slug through
+    // item_catalog_v2's slug -> item_key map so lookups line up with `remaining` above, which
+    // is keyed by the new catalog's item_key.
+    if let (Ok(catalog), Ok(slug_to_item_key)) = (
+        open_catalog_database(app),
+        crate::item_catalog_v2::load_slug_to_item_key_map(app),
+    ) {
+        let slug_to_item_key: HashMap<String, String> = slug_to_item_key;
         if let Ok(sets) = load_scanner_sets_from_map(app, &catalog) {
             for (set_root, components) in &sets {
-                let comp: Vec<(i64, i64)> = components
+                let Some(set_item_key) = slug_to_item_key.get(&set_root.slug) else {
+                    continue;
+                };
+                let comp: Vec<(&str, i64)> = components
                     .iter()
-                    .filter_map(|c| c.component_item_id.map(|id| (id, c.quantity_in_set.max(1))))
+                    .filter_map(|c| {
+                        slug_to_item_key
+                            .get(&c.component_slug)
+                            .map(|key| (key.as_str(), c.quantity_in_set.max(1)))
+                    })
                     .collect();
                 // Only evaluate sets we can fully resolve.
                 if comp.is_empty() || comp.len() != components.len() {
@@ -7795,7 +7514,7 @@ pub fn compute_set_completion_inventory_value(
                 }
                 let complete_sets = comp
                     .iter()
-                    .map(|(id, req)| remaining.get(id).copied().unwrap_or(0) / req)
+                    .map(|(key, req)| remaining.get(*key).copied().unwrap_or(0) / req)
                     .min()
                     .unwrap_or(0);
                 if complete_sets <= 0 {
@@ -7803,11 +7522,11 @@ pub fn compute_set_completion_inventory_value(
                 }
 
                 let set_exit =
-                    cached_recommended_exit_price(&observatory, &mut exit_cache, set_root.item_id);
+                    cached_recommended_exit_price(&observatory, &mut exit_cache, set_item_key);
                 let parts_exit: Option<f64> = comp
                     .iter()
-                    .map(|(id, req)| {
-                        cached_recommended_exit_price(&observatory, &mut exit_cache, *id)
+                    .map(|(key, req)| {
+                        cached_recommended_exit_price(&observatory, &mut exit_cache, key)
                             .map(|price| price * *req as f64)
                     })
                     .sum();
@@ -7821,8 +7540,8 @@ pub fn compute_set_completion_inventory_value(
                     total += per_set * complete_sets as f64;
                 }
 
-                for (id, req) in &comp {
-                    if let Some(qty) = remaining.get_mut(id) {
+                for (key, req) in &comp {
+                    if let Some(qty) = remaining.get_mut(*key) {
                         *qty = (*qty - req * complete_sets).max(0);
                     }
                 }
@@ -7831,11 +7550,12 @@ pub fn compute_set_completion_inventory_value(
     }
 
     // Leftover loose parts (not absorbed into a complete set), valued individually.
-    for (item_id, qty) in &remaining {
+    for (item_key, qty) in &remaining {
         if *qty <= 0 {
             continue;
         }
-        if let Some(price) = cached_recommended_exit_price(&observatory, &mut exit_cache, *item_id) {
+        if let Some(price) = cached_recommended_exit_price(&observatory, &mut exit_cache, item_key)
+        {
             total += price * *qty as f64;
         }
     }
@@ -7850,7 +7570,7 @@ pub fn compute_set_completion_inventory_value(
 
 fn upsert_set_completion_owned_item(
     connection: &Connection,
-    item_id: Option<i64>,
+    item_key: Option<String>,
     slug: &str,
     name: &str,
     image_path: Option<&str>,
@@ -7886,19 +7606,19 @@ fn upsert_set_completion_owned_item(
     connection.execute(
         "INSERT INTO owned_set_components (
            component_slug,
-           component_item_id,
+           component_item_key,
            component_name,
            component_image_path,
            quantity,
            updated_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(component_slug) DO UPDATE SET
-           component_item_id = excluded.component_item_id,
+           component_item_key = excluded.component_item_key,
            component_name = excluded.component_name,
            component_image_path = excluded.component_image_path,
            quantity = excluded.quantity,
            updated_at = excluded.updated_at",
-        params![slug, item_id, name, image_path, quantity, updated_at],
+        params![slug, item_key, name, image_path, quantity, updated_at],
     )?;
 
     // Persist the manually-set quantity into the baseline so it survives
@@ -7906,19 +7626,19 @@ fn upsert_set_completion_owned_item(
     connection.execute(
         "INSERT INTO set_completion_screenshot_baseline (
            component_slug,
-           component_item_id,
+           component_item_key,
            component_name,
            component_image_path,
            quantity,
            imported_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(component_slug) DO UPDATE SET
-           component_item_id = excluded.component_item_id,
+           component_item_key = excluded.component_item_key,
            component_name = excluded.component_name,
            component_image_path = excluded.component_image_path,
            quantity = excluded.quantity,
            imported_at = excluded.imported_at",
-        params![slug, item_id, name, image_path, quantity, updated_at],
+        params![slug, item_key, name, image_path, quantity, updated_at],
     )?;
 
     load_set_completion_owned_items(connection)
@@ -7970,7 +7690,7 @@ fn replace_set_completion_owned_items(
         transaction.execute(
             "INSERT INTO set_completion_screenshot_baseline (
                component_slug,
-               component_item_id,
+               component_item_key,
                component_name,
                component_image_path,
                quantity,
@@ -7978,7 +7698,7 @@ fn replace_set_completion_owned_items(
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 row.slug,
-                row.item_id,
+                row.item_key,
                 row.name,
                 row.image_path,
                 row.quantity,
@@ -7998,7 +7718,7 @@ fn replace_set_completion_owned_items(
         transaction.execute(
             "INSERT INTO owned_set_components (
                component_slug,
-               component_item_id,
+               component_item_key,
                component_name,
                component_image_path,
                quantity,
@@ -8006,7 +7726,7 @@ fn replace_set_completion_owned_items(
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 row.slug,
-                row.item_id,
+                row.item_key,
                 row.name,
                 row.image_path,
                 row.quantity,
@@ -8081,21 +7801,21 @@ fn apply_owned_set_component_deltas_inner(
             transaction.execute(
                 "INSERT INTO owned_set_components (
                    component_slug,
-                   component_item_id,
+                   component_item_key,
                    component_name,
                    component_image_path,
                    quantity,
                    updated_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(component_slug) DO UPDATE SET
-                   component_item_id = excluded.component_item_id,
+                   component_item_key = excluded.component_item_key,
                    component_name = excluded.component_name,
                    component_image_path = excluded.component_image_path,
                    quantity = excluded.quantity,
                    updated_at = excluded.updated_at",
                 params![
                     delta.slug.as_str(),
-                    delta.item_id,
+                    delta.item_key,
                     delta.name.as_str(),
                     delta.image_path.as_deref(),
                     next_quantity,
@@ -8156,14 +7876,14 @@ fn replace_owned_set_component_deltas_inner(
     // Load the protected baseline (screenshot imports + manual edits). Trade
     // deltas are layered on top — they never erase this baseline.
     struct BaselineRow {
-        item_id: Option<i64>,
+        item_key: Option<String>,
         name: String,
         image_path: Option<String>,
         quantity: i64,
     }
     let baseline: BTreeMap<String, BaselineRow> = {
         let mut stmt = transaction.prepare(
-            "SELECT component_slug, component_item_id, component_name,
+            "SELECT component_slug, component_item_key, component_name,
                     component_image_path, quantity
              FROM set_completion_screenshot_baseline",
         )?;
@@ -8171,7 +7891,7 @@ fn replace_owned_set_component_deltas_inner(
             Ok((
                 row.get::<_, String>(0)?,
                 BaselineRow {
-                    item_id: row.get(1)?,
+                    item_key: row.get(1)?,
                     name: row.get(2)?,
                     image_path: row.get(3)?,
                     quantity: row.get(4)?,
@@ -8203,7 +7923,7 @@ fn replace_owned_set_component_deltas_inner(
                 .entry(delta.slug.clone())
                 .or_insert_with(|| OwnedSetComponentDelta {
                     sync_key: String::new(),
-                    item_id: delta.item_id,
+                    item_key: delta.item_key.clone(),
                     slug: delta.slug.clone(),
                     name: delta.name.clone(),
                     image_path: delta.image_path.clone(),
@@ -8211,8 +7931,8 @@ fn replace_owned_set_component_deltas_inner(
                 });
 
         entry.quantity_delta += delta.quantity_delta;
-        if entry.item_id.is_none() {
-            entry.item_id = delta.item_id;
+        if entry.item_key.is_none() {
+            entry.item_key = delta.item_key.clone();
         }
         if entry.name.trim().is_empty() {
             entry.name = delta.name.clone();
@@ -8240,10 +7960,10 @@ fn replace_owned_set_component_deltas_inner(
         }
 
         // Prefer catalog-resolved metadata from the delta; fall back to baseline.
-        let (item_id, name, image_path) = if let Some(d) = aggregated.get(slug) {
-            (d.item_id, d.name.as_str(), d.image_path.as_deref())
+        let (item_key, name, image_path) = if let Some(d) = aggregated.get(slug) {
+            (d.item_key.as_deref(), d.name.as_str(), d.image_path.as_deref())
         } else if let Some(b) = baseline.get(slug) {
-            (b.item_id, b.name.as_str(), b.image_path.as_deref())
+            (b.item_key.as_deref(), b.name.as_str(), b.image_path.as_deref())
         } else {
             continue;
         };
@@ -8251,13 +7971,13 @@ fn replace_owned_set_component_deltas_inner(
         transaction.execute(
             "INSERT INTO owned_set_components (
                component_slug,
-               component_item_id,
+               component_item_key,
                component_name,
                component_image_path,
                quantity,
                updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![slug, item_id, name, image_path, next_quantity, rebuilt_at.as_str()],
+            params![slug, item_key, name, image_path, next_quantity, rebuilt_at.as_str()],
         )?;
     }
 
@@ -8605,14 +8325,14 @@ fn emit_arbitrage_scanner_progress(app: &tauri::AppHandle, progress: &ArbitrageS
     let _ = app.emit(ARBITRAGE_SCANNER_PROGRESS_EVENT, progress.clone());
 }
 
-fn load_drop_sources(app: &tauri::AppHandle, item_id: i64) -> Result<Vec<DropSourceEntry>> {
+fn load_drop_sources(app: &tauri::AppHandle, slug: &str) -> Result<Vec<DropSourceEntry>> {
     let connection = open_catalog_database(app)?;
     let primary_unique_name = connection
         .query_row(
             "SELECT primary_wfstat_unique_name
              FROM items
-             WHERE item_id = ?1",
-            params![item_id],
+             WHERE wfm_slug = ?1 OR preferred_slug = ?1",
+            params![slug],
             |row| row.get::<_, Option<String>>(0),
         )
         .optional()?
@@ -8636,13 +8356,14 @@ fn load_drop_sources(app: &tauri::AppHandle, item_id: i64) -> Result<Vec<DropSou
         sources.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
     }
 
+    let catalog_item_id = resolve_item_id_by_slug(&connection, slug)?.unwrap_or_default();
     let mut component_statement = connection.prepare(
         "SELECT cd.location, cd.chance, cd.rarity, cd.type
          FROM wfstat_component_drops cd
          JOIN wfstat_item_components c ON c.component_id = cd.component_id
          WHERE c.component_item_id = ?1",
     )?;
-    let component_rows = component_statement.query_map(params![item_id], |row| {
+    let component_rows = component_statement.query_map(params![catalog_item_id], |row| {
         Ok(DropSourceEntry {
             location: row.get(0)?,
             chance: row.get(1)?,
@@ -8746,7 +8467,7 @@ fn build_trend_summary(breakdown: &TrendQualityBreakdown) -> TrendSummary {
 
 fn build_supply_context(
     app: &tauri::AppHandle,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     item_details: &ItemDetailSummary,
     _seller_mode: &str,
@@ -8758,19 +8479,24 @@ fn build_supply_context(
         let catalog_connection = open_catalog_database(app)?;
         let observatory_connection = open_market_observatory_database(app)?;
         let set_root = SetRootCatalogRecord {
-            item_id,
+            item_key: item_key.to_string(),
             slug: slug.to_string(),
             name: item_details.name.clone(),
             image_path: item_details.image_path.clone(),
         };
-        let (cached_components, _) =
-            ensure_set_components_cached(&catalog_connection, &observatory_connection, &set_root)?;
+        let (cached_components, _) = ensure_set_components_cached(
+            app,
+            &catalog_connection,
+            &observatory_connection,
+            &set_root,
+        )?;
         let mut components = Vec::new();
         for component in cached_components {
             let model = component
-                .component_item_id
-                .map(|component_item_id| {
-                    build_statistics_price_model(&observatory_connection, component_item_id, "base")
+                .component_item_key
+                .as_deref()
+                .map(|component_item_key| {
+                    build_statistics_price_model(&observatory_connection, component_item_key, "base")
                 })
                 .transpose()?
                 .flatten();
@@ -8780,7 +8506,7 @@ fn build_supply_context(
                 .and_then(|entry| entry.recommended_entry_price.or(entry.current_stats_price));
 
             components.push(SetComponentAnalysisEntry {
-                item_id: component.component_item_id,
+                item_key: component.component_item_key,
                 slug: component.component_slug,
                 name: component.component_name,
                 image_path: component.component_image_path,
@@ -8813,7 +8539,7 @@ fn build_supply_context(
         });
     }
 
-    let drop_sources = load_drop_sources(app, item_id)?;
+    let drop_sources = load_drop_sources(app, slug)?;
     let mode = if drop_sources.is_empty() {
         "none".to_string()
     } else {
@@ -8940,7 +8666,7 @@ fn build_arbitrage_set_entry(
         }
 
         components.push(ArbitrageScannerComponentEntry {
-            item_id: component_record.component_item_id,
+            item_key: component_record.component_item_key.clone(),
             slug: component_record.component_slug.clone(),
             name: component_record.component_name.clone(),
             image_path: component_record.component_image_path.clone(),
@@ -9015,7 +8741,7 @@ fn build_arbitrage_set_entry(
     );
 
     ArbitrageScannerSetEntry {
-        set_item_id: set_root.item_id,
+        set_item_key: set_root.item_key.clone(),
         slug: set_root.slug.clone(),
         name: set_root.name.clone(),
         image_path: set_root.image_path.clone(),
@@ -9037,9 +8763,9 @@ fn build_arbitrage_set_entry(
 
 fn get_or_build_scanner_price_model<C>(
     observatory_connection: &Connection,
-    shared_model_cache: &Arc<Mutex<HashMap<i64, Option<ScannerPriceModel>>>>,
+    shared_model_cache: &Arc<Mutex<HashMap<String, Option<ScannerPriceModel>>>>,
     write_tx: &mpsc::Sender<WriteTask>,
-    item_id: i64,
+    item_key: &str,
     slug: &str,
     refreshed_statistics_count: &mut usize,
     mut is_cancelled: C,
@@ -9052,27 +8778,27 @@ where
         let cache = shared_model_cache
             .lock()
             .expect("shared_model_cache lock poisoned");
-        if let Some(existing) = cache.get(&item_id) {
+        if let Some(existing) = cache.get(item_key) {
             return Ok(existing.clone());
         }
     }
 
     let model = if statistics_cache_is_usable(
         observatory_connection,
-        item_id,
+        item_key,
         "base",
         AnalyticsDomainKey::ThirtyDays,
-    )? && latest_statistics_fetch_timestamp(observatory_connection, item_id, "base")?
+    )? && latest_statistics_fetch_timestamp(observatory_connection, item_key, "base")?
         .map(|ts| (now_utc() - ts) < TimeDuration::hours(SCANNER_STATS_FRESHNESS_HOURS))
         .unwrap_or(false)
     {
         // Warm cache: build model from existing SQLite rows — no network call.
-        build_statistics_price_model(observatory_connection, item_id, "base")?
+        build_statistics_price_model(observatory_connection, item_key, "base")?
     } else {
         // Cold cache: fetch from WFM, compute model from the in-memory rows
         // immediately, then hand the write task to the background writer so the
         // HTTP fetch thread is never blocked waiting for SQLite I/O.
-        let task = fetch_statistics_for_pipeline(item_id, slug, "base", || is_cancelled())?;
+        let task = fetch_statistics_for_pipeline(item_key, slug, "base", || is_cancelled())?;
         let model = build_price_model_from_rows(&task.rows_by_domain);
         // Best-effort: if the writer thread has already exited (e.g. during
         // cancellation) we still return the model rather than failing the scan.
@@ -9084,7 +8810,7 @@ where
     shared_model_cache
         .lock()
         .expect("shared_model_cache lock poisoned")
-        .insert(item_id, model.clone());
+        .insert(item_key.to_string(), model.clone());
     Ok(model)
 }
 
@@ -9115,6 +8841,7 @@ fn normalized_relic_chance(chance_percent: f64) -> f64 {
 fn load_relic_reward_profiles(
     catalog_connection: &Connection,
     relic_item_id: i64,
+    slug_to_item_key: &HashMap<String, String>,
 ) -> Result<Vec<RelicRoiDropEntry>> {
     let mut statement = catalog_connection.prepare(
         "SELECT variant_value, raw_json
@@ -9164,8 +8891,9 @@ fn load_relic_reward_profiles(
                 continue;
             };
 
-            let item_id = resolve_item_id_by_slug(catalog_connection, &reward_slug)?;
-            let image_path = item_id.and_then(|resolved_item_id| {
+            let resolved_item_id = resolve_item_id_by_slug(catalog_connection, &reward_slug)?;
+            let item_key = slug_to_item_key.get(&reward_slug).cloned();
+            let image_path = resolved_item_id.and_then(|resolved_item_id| {
                 catalog_connection
                     .query_row(
                         "SELECT preferred_image
@@ -9184,7 +8912,7 @@ fn load_relic_reward_profiles(
                 reward_map
                     .entry(reward_slug.clone())
                     .or_insert_with(|| RelicRoiDropEntry {
-                        item_id,
+                        item_key,
                         slug: reward_slug.clone(),
                         name: reward_name.clone(),
                         image_path,
@@ -9404,20 +9132,24 @@ fn build_relic_roi_note(
 fn build_relic_roi_entry<F>(
     catalog_connection: &Connection,
     relic_root: &RelicRootCatalogRecord,
+    slug_to_item_key: &HashMap<String, String>,
     mut fetch_price_model: F,
 ) -> Result<Option<RelicRoiEntry>>
 where
-    F: FnMut(i64, &str, &str) -> Result<Option<ScannerPriceModel>>,
+    F: FnMut(&str, &str, &str) -> Result<Option<ScannerPriceModel>>,
 {
-    let mut drops = load_relic_reward_profiles(catalog_connection, relic_root.item_id)?;
+    let mut drops =
+        load_relic_reward_profiles(catalog_connection, relic_root.item_id, slug_to_item_key)?;
     if drops.is_empty() {
         return Ok(None);
     }
 
     let mut entry_confidence_refs = Vec::new();
     for drop in &mut drops {
-        let reward_model = match drop.item_id {
-            Some(reward_item_id) => fetch_price_model(reward_item_id, &drop.slug, &drop.name)?,
+        let reward_model = match drop.item_key.clone() {
+            Some(reward_item_key) => {
+                fetch_price_model(&reward_item_key, &drop.slug, &drop.name)?
+            }
             None => None,
         };
         drop.recommended_exit_low = reward_model.as_ref().and_then(|entry| entry.exit_low);
@@ -9539,6 +9271,8 @@ fn build_arbitrage_scanner_inner(
 ) -> Result<ArbitrageScannerRunOutcome> {
     let catalog_connection = open_catalog_database(&app)?;
     let observatory_connection = open_market_observatory_database(&app)?;
+    let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(&app)
+        .context("failed to load the item catalog v2 slug map for the arbitrage scanner")?;
 
     // Resolve the DB path once so prefetch threads can open their own connections
     // without needing the AppHandle (avoids cloning a non-trivial handle per thread).
@@ -9559,7 +9293,7 @@ fn build_arbitrage_scanner_inner(
     // results-building phase after the scan completes.
     // Using Arc<Mutex<_>> so multiple worker threads can write concurrently.
     let shared_price_model_cache =
-        Arc::new(Mutex::new(HashMap::<i64, Option<ScannerPriceModel>>::new()));
+        Arc::new(Mutex::new(HashMap::<String, Option<ScannerPriceModel>>::new()));
 
     let scanned_sets = load_scanner_sets_from_map(&app, &catalog_connection)?;
     let relic_roots = list_relic_roots_from_catalog(&catalog_connection)?;
@@ -9617,7 +9351,7 @@ fn build_arbitrage_scanner_inner(
     let mut work_queue = VecDeque::<ScannerWorkUnit>::new();
     for (set_root, components) in &scanned_sets {
         work_queue.push_back(ScannerWorkUnit {
-            item_id: Some(set_root.item_id),
+            item_key: Some(set_root.item_key.clone()),
             slug: set_root.slug.clone(),
             display_name: set_root.name.clone(),
             stage_label: "Scanning Sets",
@@ -9629,7 +9363,7 @@ fn build_arbitrage_scanner_inner(
         });
         for component in components {
             work_queue.push_back(ScannerWorkUnit {
-                item_id: component.component_item_id,
+                item_key: component.component_item_key.clone(),
                 slug: component.component_slug.clone(),
                 display_name: component.component_name.clone(),
                 stage_label: "Scanning Sets",
@@ -9662,8 +9396,8 @@ fn build_arbitrage_scanner_inner(
             let rtx = result_tx.clone();
             std::thread::spawn(move || {
                 let item_started = Instant::now();
-                let (error, refreshed_delta) = match work_unit.item_id {
-                    Some(item_id) => {
+                let (error, refreshed_delta) = match work_unit.item_key.clone() {
+                    Some(item_key) => {
                         let mut refreshed = 0_usize;
                         let result = Connection::open(&db_path)
                             .map_err(|e| anyhow::anyhow!("{e}"))
@@ -9672,7 +9406,7 @@ fn build_arbitrage_scanner_inner(
                                     &conn,
                                     &cache,
                                     &tx,
-                                    item_id,
+                                    &item_key,
                                     &work_unit.slug,
                                     &mut refreshed,
                                     || {
@@ -9755,9 +9489,9 @@ fn build_arbitrage_scanner_inner(
                     let next_attempt = result.work_unit.attempt + 1;
                     if next_attempt < SCANNER_ITEM_MAX_ATTEMPTS {
                         eprintln!(
-                            "[scanner] deferring '{}' (item_id={:?}) attempt {}/{} after error: {}",
+                            "[scanner] deferring '{}' (item_key={:?}) attempt {}/{} after error: {}",
                             result.work_unit.slug,
-                            result.work_unit.item_id,
+                            result.work_unit.item_key,
                             next_attempt,
                             SCANNER_ITEM_MAX_ATTEMPTS,
                             error_msg,
@@ -9799,9 +9533,9 @@ fn build_arbitrage_scanner_inner(
                         runtime.retrying_item_name = None;
                         runtime.retry_attempt = None;
                         eprintln!(
-                            "[scanner] skipped '{}' (item_id={:?}) after {} attempts: {}",
+                            "[scanner] skipped '{}' (item_key={:?}) after {} attempts: {}",
                             result.work_unit.slug,
-                            result.work_unit.item_id,
+                            result.work_unit.item_key,
                             SCANNER_ITEM_MAX_ATTEMPTS,
                             error_msg,
                         );
@@ -9845,15 +9579,16 @@ fn build_arbitrage_scanner_inner(
     let mut results = Vec::new();
     for (set_root, components) in &scanned_sets {
         let set_model = price_model_snapshot
-            .get(&set_root.item_id)
+            .get(&set_root.item_key)
             .cloned()
             .flatten();
         let component_models = components
             .iter()
             .map(|component| {
                 component
-                    .component_item_id
-                    .and_then(|item_id| price_model_snapshot.get(&item_id).cloned().flatten())
+                    .component_item_key
+                    .as_ref()
+                    .and_then(|item_key| price_model_snapshot.get(item_key).cloned().flatten())
             })
             .collect::<Vec<_>>();
         results.push(build_arbitrage_set_entry(
@@ -9892,11 +9627,16 @@ fn build_arbitrage_scanner_inner(
                     relic_roots.len()
                 ),
             )?;
-            match build_relic_roi_entry(&catalog_connection, relic_root, |item_id, slug, name| {
-                let _ = slug;
-                let _ = name;
-                Ok(price_model_snapshot.get(&item_id).cloned().flatten())
-            }) {
+            match build_relic_roi_entry(
+                &catalog_connection,
+                relic_root,
+                &slug_to_item_key,
+                |item_key, slug, name| {
+                    let _ = slug;
+                    let _ = name;
+                    Ok(price_model_snapshot.get(item_key).cloned().flatten())
+                },
+            ) {
                 Ok(Some(entry)) => relic_entries.push(entry),
                 Ok(None) => {}
                 Err(error) => {
@@ -10024,7 +9764,7 @@ fn build_arbitrage_scanner_inner(
 
 fn build_item_analysis_inner(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
@@ -10033,7 +9773,7 @@ fn build_item_analysis_inner(
     let seller_mode = normalize_seller_mode(seller_mode.as_deref());
     let analytics = build_item_analytics_inner(
         app.clone(),
-        item_id,
+        item_key.clone(),
         slug.clone(),
         Some(variant_key.clone()),
         Some(seller_mode.clone()),
@@ -10054,10 +9794,10 @@ fn build_item_analysis_inner(
         .unwrap_or_default();
 
     let connection = open_market_observatory_database(&app)?;
-    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, &seller_mode, 12)?;
+    let recent_snapshots = recent_snapshots(&connection, &item_key, &variant_key, &seller_mode, 12)?;
     let (stats_rows, _, _) = load_chart_statistics_rows(
         &connection,
-        item_id,
+        &item_key,
         &variant_key,
         AnalyticsDomainKey::ThirtyDays,
     )?;
@@ -10065,7 +9805,7 @@ fn build_item_analysis_inner(
     let manipulation_risk = build_manipulation_risk(&current_snapshot, &recent_snapshots);
     let liquidity_score = liquidity_score_percent(&current_snapshot);
     let liquidity_confidence = build_liquidity_confidence(&current_snapshot, &recent_snapshots);
-    let shared_price_model = build_statistics_price_model(&connection, item_id, &variant_key)?;
+    let shared_price_model = build_statistics_price_model(&connection, &item_key, &variant_key)?;
     let current_floor_price = round_price_option(current_snapshot.lowest_sell);
     let entry_price = resolved_recommended_entry_price(
         shared_price_model
@@ -10121,8 +9861,8 @@ fn build_item_analysis_inner(
         None => "Balanced",
     };
     let trend = build_trend_summary(&analytics.trend_quality_breakdown);
-    let item_details = load_item_detail_summary(&app, item_id, &slug)?;
-    let supply_context = build_supply_context(&app, item_id, &slug, &item_details, &seller_mode)?;
+    let item_details = load_item_detail_summary(&app, &item_key, &slug)?;
+    let supply_context = build_supply_context(&app, &item_key, &slug, &item_details, &seller_mode)?;
     let headline_confidence = combined_confidence(
         &[
             &analytics.entry_exit_zone_overview.confidence_summary,
@@ -10143,7 +9883,7 @@ fn build_item_analysis_inner(
     );
 
     Ok(ItemAnalysisResponse {
-        item_id,
+        item_key: item_key.clone(),
         slug,
         variant_key: analytics.variant_key.clone(),
         variant_label: analytics.variant_label.clone(),
@@ -10181,7 +9921,7 @@ fn build_item_analysis_inner(
         manipulation_risk,
         time_of_day_liquidity: build_time_of_day_liquidity(
             &connection,
-            item_id,
+            &item_key,
             &variant_key,
             &seller_mode,
         )?,
@@ -10192,7 +9932,7 @@ fn build_item_analysis_inner(
 
 fn load_cached_analytics(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     seller_mode: &str,
     domain_key: AnalyticsDomainKey,
@@ -10204,13 +9944,13 @@ fn load_cached_analytics(
         .query_row(
             "SELECT payload_json, source_snapshot_at, source_stats_fetched_at, cache_version
              FROM analytics_cache
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND variant_key = ?2
                AND seller_mode = ?3
                AND domain_key = ?4
                AND bucket_size_key = ?5",
             params![
-                item_id,
+                item_key,
                 variant_key,
                 seller_mode,
                 domain_key.as_str(),
@@ -10247,7 +9987,7 @@ fn load_cached_analytics(
 
 fn load_latest_trade_health_analytics(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<Option<ItemAnalyticsResponse>> {
@@ -10257,7 +9997,7 @@ fn load_latest_trade_health_analytics(
         .query_row(
             "SELECT payload_json
              FROM analytics_cache
-             WHERE item_id = ?1
+             WHERE item_key = ?1
                AND variant_key = ?2
                AND seller_mode = ?3
                AND domain_key = '48h'
@@ -10265,7 +10005,7 @@ fn load_latest_trade_health_analytics(
                AND cache_version = ?4
              ORDER BY computed_at DESC
              LIMIT 1",
-            params![item_id, variant_key, seller_mode, ANALYTICS_CACHE_VERSION],
+            params![item_key, variant_key, seller_mode, ANALYTICS_CACHE_VERSION],
             |row| row.get::<_, String>(0),
         )
         .optional()?;
@@ -10360,12 +10100,12 @@ fn derive_trade_health_confidence(
 
 pub(crate) fn load_cached_trade_health_context(
     connection: &Connection,
-    item_id: i64,
+    item_key: &str,
     variant_key: &str,
     seller_mode: &str,
 ) -> Result<Option<CachedTradeHealthContext>> {
     if let Some(analytics) =
-        load_latest_trade_health_analytics(connection, item_id, variant_key, seller_mode)?
+        load_latest_trade_health_analytics(connection, item_key, variant_key, seller_mode)?
     {
         let trend = build_trend_summary(&analytics.trend_quality_breakdown);
         let latest_snapshot = analytics.current_snapshot.as_ref();
@@ -10383,10 +10123,10 @@ pub(crate) fn load_cached_trade_health_context(
             || trend.confidence_summary.is_degraded;
 
         // Undercut velocity + time-of-day factor both need recent snapshot history.
-        let recent = recent_snapshots(connection, item_id, variant_key, seller_mode, 24)?;
+        let recent = recent_snapshots(connection, item_key, variant_key, seller_mode, 24)?;
         let undercut_velocity = undercut_velocity_per_hour(&recent);
         let current_hour_volume_factor =
-            build_time_of_day_liquidity(connection, item_id, variant_key, seller_mode)
+            build_time_of_day_liquidity(connection, item_key, variant_key, seller_mode)
                 .ok()
                 .and_then(|summary| current_hour_volume_factor(&summary));
         // Graded confidence: take the weakest of the section confidences (a chain is only as
@@ -10419,7 +10159,7 @@ pub(crate) fn load_cached_trade_health_context(
         }));
     }
 
-    let recent = recent_snapshots(connection, item_id, variant_key, seller_mode, 12)?;
+    let recent = recent_snapshots(connection, item_key, variant_key, seller_mode, 12)?;
     Ok(build_fallback_trade_health_context(&recent))
 }
 
@@ -10432,7 +10172,7 @@ fn persist_analytics_cache(
 ) -> Result<()> {
     connection.execute(
         "INSERT INTO analytics_cache (
-           item_id,
+           item_key,
            slug,
            variant_key,
            seller_mode,
@@ -10444,7 +10184,7 @@ fn persist_analytics_cache(
            source_snapshot_at,
            source_stats_fetched_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-         ON CONFLICT(item_id, variant_key, seller_mode, domain_key, bucket_size_key) DO UPDATE SET
+         ON CONFLICT(item_key, variant_key, seller_mode, domain_key, bucket_size_key) DO UPDATE SET
            slug = excluded.slug,
            seller_mode = excluded.seller_mode,
            cache_version = excluded.cache_version,
@@ -10453,7 +10193,7 @@ fn persist_analytics_cache(
            source_snapshot_at = excluded.source_snapshot_at,
            source_stats_fetched_at = excluded.source_stats_fetched_at",
         params![
-            response.item_id,
+            response.item_key,
             response.slug,
             response.variant_key,
             seller_mode,
@@ -10472,7 +10212,7 @@ fn persist_analytics_cache(
 
 fn build_item_analytics_inner(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
@@ -10496,14 +10236,14 @@ fn build_item_analytics_inner(
 
     if let Err(error) = fetch_and_cache_statistics(
         &connection,
-        item_id,
+        &item_key,
         &slug,
         &variant_key,
         RequestPriority::Instant,
     ) {
         if !statistics_cache_is_usable(
             &connection,
-            item_id,
+            &item_key,
             &variant_key,
             AnalyticsDomainKey::FortyEightHours,
         )? {
@@ -10513,14 +10253,14 @@ fn build_item_analytics_inner(
 
     let (live_sell_orders, _, snapshot) = capture_tracking_snapshot_with_orders_priority(
         &connection,
-        item_id,
+        &item_key,
         &slug,
         &variant_key,
         &seller_mode,
         RequestPriority::Instant,
     )?;
     let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
-        load_statistics_rows_for_domain(&connection, item_id, &variant_key, "48hours")?;
+        load_statistics_rows_for_domain(&connection, &item_key, &variant_key, "48hours")?;
     let trend_points = resample_rows(
         &hourly_closed_rows,
         &hourly_live_buy_rows,
@@ -10528,10 +10268,10 @@ fn build_item_analytics_inner(
         AnalyticsBucketSizeKey::OneHour,
     );
     let (chart_closed_rows, chart_live_buy_rows, chart_stats_fetched_at) =
-        load_chart_statistics_rows(&connection, item_id, &variant_key, analytics_domain_key)?;
+        load_chart_statistics_rows(&connection, &item_key, &variant_key, analytics_domain_key)?;
     let (support_closed_rows, _, _) = load_chart_statistics_rows(
         &connection,
-        item_id,
+        &item_key,
         &variant_key,
         AnalyticsDomainKey::ThirtyDays,
     )?;
@@ -10561,7 +10301,7 @@ fn build_item_analytics_inner(
         ),
         load_snapshot_chart_points(
             &connection,
-            item_id,
+            &item_key,
             &variant_key,
             &seller_mode,
             analytics_domain_key,
@@ -10585,7 +10325,7 @@ fn build_item_analytics_inner(
     let source_snapshot_at = Some(snapshot.captured_at.clone());
     if let Some(cached) = load_cached_analytics(
         &connection,
-        item_id,
+        &item_key,
         &variant_key,
         &seller_mode,
         analytics_domain_key,
@@ -10596,7 +10336,7 @@ fn build_item_analytics_inner(
         return Ok(cached);
     }
 
-    let recent_snapshots = recent_snapshots(&connection, item_id, &variant_key, &seller_mode, 12)?;
+    let recent_snapshots = recent_snapshots(&connection, &item_key, &variant_key, &seller_mode, 12)?;
     let liquidity_confidence = build_liquidity_confidence(&snapshot, &recent_snapshots);
     let manipulation_confidence = build_manipulation_confidence(&recent_snapshots);
     let zone_overview = build_entry_exit_zone_overview(
@@ -10615,7 +10355,7 @@ fn build_item_analytics_inner(
         Some(&snapshot),
     );
     let response = ItemAnalyticsResponse {
-        item_id,
+        item_key: item_key.clone(),
         slug,
         variant_key: variant_key.clone(),
         variant_label,
@@ -10682,9 +10422,9 @@ fn maybe_emit_recommendation_outcome(
     // Guard 1: skip if we emitted a row for this item recently.
     let recent_exists: bool = connection.query_row(
         "SELECT COUNT(*) > 0 FROM recommendation_outcomes
-         WHERE item_id = ?1 AND variant_key = ?2 AND seller_mode = ?3
+         WHERE item_key = ?1 AND variant_key = ?2 AND seller_mode = ?3
            AND recommended_at > ?4",
-        params![response.item_id, response.variant_key, seller_mode, emit_cutoff],
+        params![response.item_key, response.variant_key, seller_mode, emit_cutoff],
         |row| row.get(0),
     )?;
     if recent_exists {
@@ -10695,10 +10435,10 @@ fn maybe_emit_recommendation_outcome(
     // enforces non-overlapping trades so autocorrelated snapshots aren't double-counted.
     let open_trade_exists: bool = connection.query_row(
         "SELECT COUNT(*) > 0 FROM recommendation_outcomes
-         WHERE item_id = ?1 AND variant_key = ?2 AND seller_mode = ?3
+         WHERE item_key = ?1 AND variant_key = ?2 AND seller_mode = ?3
            AND outcome_graded_at IS NULL
            AND (entry_triggered IS NULL OR entry_triggered = 0)",
-        params![response.item_id, response.variant_key, seller_mode],
+        params![response.item_key, response.variant_key, seller_mode],
         |row| row.get(0),
     )?;
     if open_trade_exists {
@@ -10711,7 +10451,7 @@ fn maybe_emit_recommendation_outcome(
 
     connection.execute(
         "INSERT INTO recommendation_outcomes (
-           item_id, slug, variant_key, seller_mode, outcome_type,
+           item_key, slug, variant_key, seller_mode, outcome_type,
            recommended_at,
            liquidity_score, liquidity_label,
            pressure_label, suggested_action, action_tone,
@@ -10728,7 +10468,7 @@ fn maybe_emit_recommendation_outcome(
            ?16, ?17
          )",
         params![
-            response.item_id,
+            response.item_key,
             response.slug,
             response.variant_key,
             seller_mode,
@@ -10781,7 +10521,7 @@ fn grade_pending_outcomes_inner(connection: &Connection) -> Result<i64> {
 
     // Load outcomes that are past their holding window and have not been graded.
     let mut stmt = connection.prepare(
-        "SELECT outcome_id, item_id, variant_key, seller_mode,
+        "SELECT outcome_id, item_key, variant_key, seller_mode,
                 recommended_at, entry_zone_high, exit_zone_low,
                 entry_window_hours, holding_window_days
          FROM recommendation_outcomes
@@ -10791,7 +10531,7 @@ fn grade_pending_outcomes_inner(connection: &Connection) -> Result<i64> {
 
     struct PendingOutcome {
         outcome_id: i64,
-        item_id: i64,
+        item_key: String,
         variant_key: String,
         seller_mode: String,
         recommended_at: String,
@@ -10805,7 +10545,7 @@ fn grade_pending_outcomes_inner(connection: &Connection) -> Result<i64> {
         .query_map(params![window_cutoff], |row| {
             Ok(PendingOutcome {
                 outcome_id: row.get(0)?,
-                item_id: row.get(1)?,
+                item_key: row.get(1)?,
                 variant_key: row.get(2)?,
                 seller_mode: row.get(3)?,
                 recommended_at: row.get(4)?,
@@ -10838,14 +10578,14 @@ fn grade_pending_outcomes_inner(connection: &Connection) -> Result<i64> {
         let mut snap_stmt = connection.prepare(
             "SELECT captured_at, lowest_sell
              FROM orderbook_snapshots
-             WHERE item_id = ?1 AND variant_key = ?2 AND seller_mode = ?3
+             WHERE item_key = ?1 AND variant_key = ?2 AND seller_mode = ?3
                AND captured_at >= ?4 AND captured_at <= ?5
              ORDER BY captured_at ASC",
         )?;
         let snapshots: Vec<(OffsetDateTime, Option<f64>)> = snap_stmt
             .query_map(
                 params![
-                    outcome.item_id,
+                    &outcome.item_key,
                     outcome.variant_key,
                     outcome.seller_mode,
                     coarse_lower,
@@ -11135,11 +10875,11 @@ pub async fn get_backtest_summary(
 #[tauri::command]
 pub async fn get_item_variants_for_market(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
 ) -> Result<Vec<MarketVariant>, String> {
     let app_for_work = app.clone();
-    tauri::async_runtime::spawn_blocking(move || resolve_variants_from_catalog(&app_for_work, item_id, &slug))
+    tauri::async_runtime::spawn_blocking(move || resolve_variants_from_catalog(&app_for_work, &item_key, &slug))
         .await
         .map_err(|error| {
             let error = anyhow!("failed to join market variant worker: {error}");
@@ -11211,7 +10951,7 @@ pub async fn get_wfm_item_orders(
 #[tauri::command]
 pub async fn ensure_market_tracking(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
@@ -11222,11 +10962,11 @@ pub async fn ensure_market_tracking(
         let seller_mode = normalize_seller_mode(seller_mode.as_deref());
         let variant_label = derive_variant_label(&variant_key);
         let connection = open_market_observatory_database(&app)?;
-        let mut sources = get_existing_sources(&connection, item_id, &slug, &variant_key)?;
+        let mut sources = get_existing_sources(&connection, &item_key, &slug, &variant_key)?;
         sources.insert(source);
         update_tracking_row(
             &connection,
-            item_id,
+            &item_key,
             &slug,
             &variant_key,
             &seller_mode,
@@ -11237,7 +10977,7 @@ pub async fn ensure_market_tracking(
         )?;
         let snapshot = capture_tracking_snapshot_with_priority(
             &connection,
-            item_id,
+            &item_key,
             &slug,
             &variant_key,
             &seller_mode,
@@ -11253,7 +10993,7 @@ pub async fn ensure_market_tracking(
 #[tauri::command]
 pub async fn stop_market_tracking(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: Option<String>,
     source: MarketTrackingSource,
@@ -11262,28 +11002,28 @@ pub async fn stop_market_tracking(
         let variant_key = normalize_variant_key(variant_key.as_deref());
         let variant_label = derive_variant_label(&variant_key);
         let connection = open_market_observatory_database(&app)?;
-        let seller_mode = get_tracking_seller_mode(&connection, item_id, &slug, &variant_key)?;
-        let mut sources = get_existing_sources(&connection, item_id, &slug, &variant_key)?;
+        let seller_mode = get_tracking_seller_mode(&connection, &item_key, &slug, &variant_key)?;
+        let mut sources = get_existing_sources(&connection, &item_key, &slug, &variant_key)?;
         if sources.is_empty() {
             return Ok::<_, anyhow::Error>(());
         }
         sources.remove(&source);
         if !sources.is_empty()
-            || latest_snapshot_for_item(&connection, item_id, &variant_key, &seller_mode)?.is_some()
+            || latest_snapshot_for_item(&connection, &item_key, &variant_key, &seller_mode)?.is_some()
         {
             let _ =
-                capture_tracking_snapshot(&connection, item_id, &slug, &variant_key, &seller_mode);
+                capture_tracking_snapshot(&connection, &item_key, &slug, &variant_key, &seller_mode);
         }
         update_tracking_row(
             &connection,
-            item_id,
+            &item_key,
             &slug,
             &variant_key,
             &seller_mode,
             &variant_label,
             &sources,
             false,
-            latest_snapshot_for_item(&connection, item_id, &variant_key, &seller_mode)?
+            latest_snapshot_for_item(&connection, &item_key, &variant_key, &seller_mode)?
                 .as_ref()
                 .map(|entry| entry.captured_at.as_str()),
         )?;
@@ -11310,7 +11050,7 @@ pub async fn refresh_market_tracking(
             params![seller_mode],
         )?;
         let mut statement = connection.prepare(
-            "SELECT item_id, slug, variant_key, seller_mode
+            "SELECT item_key, slug, variant_key, seller_mode
              FROM tracked_items
              WHERE is_active = 1
                AND next_snapshot_at IS NOT NULL
@@ -11322,7 +11062,7 @@ pub async fn refresh_market_tracking(
         let rows = statement.query_map(params![now], |row| {
             let stored_seller_mode = row.get::<_, String>(3)?;
             Ok(TrackingTarget {
-                item_id: row.get(0)?,
+                item_key: row.get(0)?,
                 slug: row.get(1)?,
                 variant_key: row.get(2)?,
                 seller_mode: normalize_seller_mode(Some(stored_seller_mode.as_str())),
@@ -11335,7 +11075,7 @@ pub async fn refresh_market_tracking(
         for target in targets {
             if capture_tracking_snapshot(
                 &connection,
-                target.item_id,
+                &target.item_key,
                 &target.slug,
                 &target.variant_key,
                 &target.seller_mode,
@@ -11363,7 +11103,7 @@ pub async fn refresh_market_tracking(
 #[tauri::command]
 pub async fn get_item_analytics(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
@@ -11374,7 +11114,7 @@ pub async fn get_item_analytics(
     tauri::async_runtime::spawn_blocking(move || {
         build_item_analytics_inner(
             app_for_work,
-            item_id,
+            item_key,
             slug,
             variant_key,
             seller_mode,
@@ -11409,11 +11149,11 @@ pub async fn get_item_analytics(
 #[tauri::command]
 pub async fn get_item_detail_summary(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
 ) -> Result<ItemDetailSummary, String> {
     let app_for_work = app.clone();
-    tauri::async_runtime::spawn_blocking(move || load_item_detail_summary(&app_for_work, item_id, &slug))
+    tauri::async_runtime::spawn_blocking(move || load_item_detail_summary(&app_for_work, &item_key, &slug))
         .await
         .map_err(|error| {
             let error = anyhow!("failed to join item detail worker: {error}");
@@ -11441,14 +11181,14 @@ pub async fn get_item_detail_summary(
 #[tauri::command]
 pub async fn get_item_analysis(
     app: tauri::AppHandle,
-    item_id: i64,
+    item_key: String,
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
 ) -> Result<ItemAnalysisResponse, String> {
     let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analysis_inner(app_for_work, item_id, slug, variant_key, seller_mode)
+        build_item_analysis_inner(app_for_work, item_key, slug, variant_key, seller_mode)
     })
     .await
     .map_err(|error| {
@@ -11553,7 +11293,7 @@ pub async fn get_set_completion_owned_items(
 #[tauri::command]
 pub async fn set_set_completion_owned_item_quantity(
     app: tauri::AppHandle,
-    item_id: Option<i64>,
+    item_key: Option<String>,
     slug: String,
     name: String,
     image_path: Option<String>,
@@ -11563,7 +11303,7 @@ pub async fn set_set_completion_owned_item_quantity(
         let connection = open_market_observatory_database(&app)?;
         let result = upsert_set_completion_owned_item(
             &connection,
-            item_id,
+            item_key,
             &slug,
             &name,
             image_path.as_deref(),
@@ -11720,10 +11460,12 @@ fn load_owned_relic_inventory_cache(
         };
 
         let drops = if let Some(item_id) = relic_item_id {
-            load_relic_reward_profiles(&catalog_connection, item_id)?
+            let slug_to_item_key = crate::item_catalog_v2::load_slug_to_item_key_map(app)
+                .context("failed to load the item catalog v2 slug map for owned relics")?;
+            load_relic_reward_profiles(&catalog_connection, item_id, &slug_to_item_key)?
                 .into_iter()
                 .map(|drop| OwnedRelicDropEntry {
-                    item_id: drop.item_id,
+                    item_key: drop.item_key,
                     slug: drop.slug,
                     name: drop.name,
                     image_path: drop.image_path,
@@ -13016,7 +12758,7 @@ mod tests {
         let connection = Connection::open_in_memory().expect("in-memory sqlite");
         initialize_market_observatory_schema(&connection).expect("schema");
 
-        let item_id = 42_i64;
+        let item_key = "42";
         let variant_key = "base";
         let seller_mode = "ingame";
         let slug = "test_item";
@@ -13025,7 +12767,7 @@ mod tests {
 
         persist_snapshot(
             &connection,
-            item_id,
+            item_key,
             slug,
             variant_key,
             seller_mode,
@@ -13034,7 +12776,7 @@ mod tests {
         .expect("persist first snapshot");
         persist_snapshot(
             &connection,
-            item_id,
+            item_key,
             slug,
             variant_key,
             seller_mode,
@@ -13077,7 +12819,7 @@ mod tests {
 
         insert_statistics_rows_for_domain(
             &connection,
-            item_id,
+            item_key,
             slug,
             variant_key,
             "48hours",
@@ -13086,7 +12828,7 @@ mod tests {
         )
         .expect("insert 48h stats");
 
-        let summary = build_time_of_day_liquidity(&connection, item_id, variant_key, seller_mode)
+        let summary = build_time_of_day_liquidity(&connection, item_key, variant_key, seller_mode)
             .expect("time of day summary");
 
         // 7 weekdays × 12 two-hour blocks.
@@ -13243,7 +12985,7 @@ mod tests {
 
         insert_statistics_rows_for_domain(
             &connection,
-            1,
+            "1",
             "test_item",
             "base",
             "48hours",
@@ -13256,7 +12998,7 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*)
                  FROM statistics_cache
-                 WHERE item_id = 1
+                 WHERE item_key = '1'
                    AND variant_key = 'base'
                    AND domain_key = '48hours'",
                 [],
@@ -13274,7 +13016,7 @@ mod tests {
 
         let items = super::upsert_set_completion_owned_item(
             &connection,
-            Some(42),
+            Some("42".to_string()),
             "wisp_prime_chassis",
             "Wisp Prime Chassis",
             Some("items/images/en/thumbs/wisp_prime_chassis.png"),
@@ -13288,7 +13030,7 @@ mod tests {
 
         let items = super::upsert_set_completion_owned_item(
             &connection,
-            Some(42),
+            Some("42".to_string()),
             "wisp_prime_chassis",
             "Wisp Prime Chassis",
             Some("items/images/en/thumbs/wisp_prime_chassis.png"),
@@ -13306,7 +13048,7 @@ mod tests {
 
         let delta = super::OwnedSetComponentDelta {
             sync_key: "trade-owned:wfm:abc:wisp_prime_chassis".to_string(),
-            item_id: Some(42),
+            item_key: Some("42".to_string()),
             slug: "wisp_prime_chassis".to_string(),
             name: "Wisp Prime Chassis".to_string(),
             image_path: Some("items/images/en/thumbs/wisp_prime_chassis.png".to_string()),
@@ -13343,7 +13085,7 @@ mod tests {
             &mut connection,
             &[super::OwnedSetComponentDelta {
                 sync_key: "trade-owned:wfm:old:wisp_prime_chassis".to_string(),
-                item_id: Some(42),
+                item_key: Some("42".to_string()),
                 slug: "wisp_prime_chassis".to_string(),
                 name: "Wisp Prime Chassis".to_string(),
                 image_path: None,
@@ -13356,7 +13098,7 @@ mod tests {
             &mut connection,
             &[super::OwnedSetComponentDelta {
                 sync_key: "trade-owned:wfm:new:wisp_prime_systems".to_string(),
-                item_id: Some(84),
+                item_key: Some("84".to_string()),
                 slug: "wisp_prime_systems".to_string(),
                 name: "Wisp Prime Systems".to_string(),
                 image_path: None,
@@ -13400,7 +13142,7 @@ mod tests {
 
         insert_statistics_rows_for_domain(
             &connection,
-            5,
+            "5",
             "wisp_prime_set",
             "base",
             "90days",
@@ -13411,7 +13153,7 @@ mod tests {
 
         assert!(!super::statistics_cache_is_usable(
             &connection,
-            5,
+            "5",
             "base",
             AnalyticsDomainKey::ThirtyDays
         )
@@ -13421,18 +13163,18 @@ mod tests {
     #[test]
     fn arbitrage_basket_cost_respects_component_quantities() {
         let set_root = super::SetRootCatalogRecord {
-            item_id: 1,
+            item_key: "1".to_string(),
             slug: "example_set".to_string(),
             name: "Example Set".to_string(),
             image_path: None,
         };
         let component_records = vec![
             super::CachedSetComponentRecord {
-                set_item_id: 1,
+                set_item_key: "1".to_string(),
                 set_slug: "example_set".to_string(),
                 set_name: "Example Set".to_string(),
                 set_image_path: None,
-                component_item_id: Some(2),
+                component_item_key: Some("2".to_string()),
                 component_slug: "first_part".to_string(),
                 component_name: "First Part".to_string(),
                 component_image_path: None,
@@ -13441,11 +13183,11 @@ mod tests {
                 fetched_at: "2026-03-12T00:00:00Z".to_string(),
             },
             super::CachedSetComponentRecord {
-                set_item_id: 1,
+                set_item_key: "1".to_string(),
                 set_slug: "example_set".to_string(),
                 set_name: "Example Set".to_string(),
                 set_image_path: None,
-                component_item_id: Some(3),
+                component_item_key: Some("3".to_string()),
                 component_slug: "second_part".to_string(),
                 component_name: "Second Part".to_string(),
                 component_image_path: None,
@@ -13577,7 +13319,7 @@ mod tests {
             confidence_summary: super::build_confidence_summary("high", Vec::new()),
         });
         let mut shared_price_model_cache = std::collections::HashMap::new();
-        shared_price_model_cache.insert(42_i64, cached_model.clone());
+        shared_price_model_cache.insert("42".to_string(), cached_model.clone());
         let shared_price_model_cache =
             std::sync::Arc::new(std::sync::Mutex::new(shared_price_model_cache));
         let (write_tx, _write_rx) = std::sync::mpsc::channel();
@@ -13587,7 +13329,7 @@ mod tests {
             &connection,
             &shared_price_model_cache,
             &write_tx,
-            42,
+            "42",
             "example_prime_part",
             &mut refreshed_statistics_count,
             || false,
