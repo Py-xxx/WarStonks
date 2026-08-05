@@ -1,16 +1,16 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import { useAppStore } from '../../stores/useAppStore';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import {
-  applyBaddieBundle,
-  exportMarketData,
-  exportUserData,
-  readBaddieFile,
-  type BaddieBundle,
-  type BaddieKind,
+  applyPendingImport,
+  exportMarketDataFile,
+  exportUserDataFile,
+  pickImportFile,
+  type PendingImport,
 } from '../../lib/dataTransfer';
+import type { TransferSummary } from '../../lib/tauriClient';
 
 const CloseIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -22,9 +22,39 @@ const CloseIcon = () => (
 // `message` is a raw string (e.g. an exception message); `messageKey` is a translation key.
 // Exactly one is set. Raw errors from the backend stay untranslated by design.
 type Status =
-  | { tone: 'success' | 'error' | 'info'; messageKey: TranslationKey }
+  | { tone: 'success' | 'error' | 'info'; messageKey: TranslationKey; summary?: TransferSummary }
   | { tone: 'success' | 'error' | 'info'; message: string }
   | null;
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** A row-count breakdown so the user can actually confirm an export/import did what they
+ * expected, instead of trusting a bare "success" message. */
+function TransferSummaryTable({ summary }: { summary: TransferSummary }) {
+  const nonEmptyTables = summary.tables.filter((entry) => entry.rowCount > 0);
+  return (
+    <div className="import-export-summary">
+      <div className="import-export-summary-totals">
+        <span>{summary.totalRows.toLocaleString()} rows</span>
+        <span>{formatFileSize(summary.fileSizeBytes)}</span>
+      </div>
+      {nonEmptyTables.length > 0 ? (
+        <ul className="import-export-summary-list">
+          {nonEmptyTables.map((entry) => (
+            <li key={entry.table}>
+              <span className="import-export-summary-table">{entry.table}</span>
+              <span className="import-export-summary-count">{entry.rowCount.toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
 
 export function ImportExportModal() {
   const modalOpen = useAppStore((state) => state.importExportModalOpen);
@@ -32,15 +62,12 @@ export function ImportExportModal() {
   const setDataMaintenanceActive = useAppStore((state) => state.setDataMaintenanceActive);
   const { t } = useTranslation();
   const modalRef = useModalA11y<HTMLDivElement>({ onClose: closeModal, active: modalOpen });
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [busy, setBusy] = useState(false);
   const [progressLabel, setProgressLabel] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>(null);
-  // A bundle awaiting the user's "this will overwrite" confirmation.
-  const [pendingImport, setPendingImport] = useState<{ kind: BaddieKind; bundle: BaddieBundle } | null>(
-    null,
-  );
+  // A file awaiting the user's "this will overwrite" confirmation.
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
 
   if (!modalOpen) {
     return null;
@@ -52,12 +79,15 @@ export function ImportExportModal() {
     setProgressLabel(t('ie.progress.starting'));
     setDataMaintenanceActive(true);
     try {
-      if (which === 'user') {
-        await exportUserData(setProgressLabel);
-        setStatus({ tone: 'success', messageKey: 'ie.status.exportedUser' });
-      } else {
-        await exportMarketData(setProgressLabel);
-        setStatus({ tone: 'success', messageKey: 'ie.status.exportedMarket' });
+      const summary = which === 'user'
+        ? await exportUserDataFile(setProgressLabel)
+        : await exportMarketDataFile(setProgressLabel);
+      if (summary) {
+        setStatus({
+          tone: 'success',
+          messageKey: which === 'user' ? 'ie.status.exportedUser' : 'ie.status.exportedMarket',
+          summary,
+        });
       }
     } catch (error) {
       setStatus({ tone: 'error', message: error instanceof Error ? error.message : String(error) });
@@ -68,28 +98,24 @@ export function ImportExportModal() {
     }
   };
 
-  const handleFilePicked = async (file: File | undefined) => {
-    if (!file) {
-      return;
-    }
+  const handleChooseFile = async () => {
     setBusy(true);
     setStatus(null);
     setProgressLabel(t('ie.progress.reading'));
     try {
-      const bundle = await readBaddieFile(file);
-      setPendingImport({ kind: bundle.kind, bundle });
-      setStatus({
-        tone: 'info',
-        messageKey: bundle.kind === 'user' ? 'ie.status.readyUser' : 'ie.status.readyMarket',
-      });
+      const picked = await pickImportFile();
+      if (picked) {
+        setPendingImport(picked);
+        setStatus({
+          tone: 'info',
+          messageKey: picked.kind === 'user' ? 'ie.status.readyUser' : 'ie.status.readyMarket',
+        });
+      }
     } catch (error) {
       setStatus({ tone: 'error', message: error instanceof Error ? error.message : String(error) });
     } finally {
       setBusy(false);
       setProgressLabel(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
     }
   };
 
@@ -102,13 +128,13 @@ export function ImportExportModal() {
     setProgressLabel(t('ie.progress.starting'));
     setDataMaintenanceActive(true);
     try {
-      await applyBaddieBundle(pendingImport.bundle, setProgressLabel);
+      const summary = await applyPendingImport(pendingImport, setProgressLabel);
       setPendingImport(null);
       setProgressLabel(t('ie.progress.done'));
-      setStatus({ tone: 'success', messageKey: 'ie.status.importComplete' });
+      setStatus({ tone: 'success', messageKey: 'ie.status.importComplete', summary });
       // Reload so the in-memory store and backend-fed views reflect the restored data
       // (a brief delay lets the success message render first).
-      window.setTimeout(() => window.location.reload(), 1200);
+      window.setTimeout(() => window.location.reload(), 1800);
     } catch (error) {
       setStatus({ tone: 'error', message: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -164,19 +190,12 @@ export function ImportExportModal() {
           <div className="settings-form-card">
             <span className="settings-field-label">{t('ie.import')}</span>
             <span className="settings-field-help">{t('ie.import.help')}</span>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".baddie"
-              className="import-export-file-input"
-              onChange={(event) => void handleFilePicked(event.target.files?.[0])}
-            />
             <div className="import-export-actions">
               <button
                 type="button"
                 className="btn-secondary"
                 disabled={busy}
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => void handleChooseFile()}
               >
                 {t('ie.import.chooseBtn')}
               </button>
@@ -193,6 +212,12 @@ export function ImportExportModal() {
                 </button>
               ) : null}
             </div>
+            {pendingImport?.exportedAt ? (
+              <span className="settings-field-help">
+                {t('ie.import.exportedOn')} {new Date(pendingImport.exportedAt).toLocaleString()}
+                {pendingImport.appVersion ? ` · WarStonks v${pendingImport.appVersion}` : ''}
+              </span>
+            ) : null}
           </div>
 
           {busy ? (
@@ -215,6 +240,7 @@ export function ImportExportModal() {
               }
             >
               {'messageKey' in status ? t(status.messageKey) : status.message}
+              {'summary' in status && status.summary ? <TransferSummaryTable summary={status.summary} /> : null}
             </div>
           ) : null}
         </div>

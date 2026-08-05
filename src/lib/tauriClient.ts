@@ -504,17 +504,57 @@ export async function getWfmTradeOverview(
 }
 
 // ---- Import / Export (.baddie) ----
-export async function exportUserDataPayload(): Promise<string> {
-  return invoke<string>('export_user_data');
+// Export/import both go straight to/from a file path the user picks via a native dialog (see
+// dataTransfer.ts) — never through a giant string return value. `statistics_cache` alone can
+// exceed 300k rows; round-tripping that as an `invoke()` string meant the Rust side building a
+// 100+MB string, Tauri's IPC layer serializing it again, and the webview `JSON.parse`-ing it, all
+// on one command call — which is what made large exports appear to hang or silently fail.
+
+export interface TransferTableCount {
+  table: string;
+  rowCount: number;
 }
-export async function exportMarketDataPayload(): Promise<string> {
-  return invoke<string>('export_market_data');
+
+export interface TransferSummary {
+  tables: TransferTableCount[];
+  totalRows: number;
+  fileSizeBytes: number;
 }
-export async function importUserDataPayload(payload: string): Promise<void> {
-  return invoke<void>('import_user_data', { payload });
+
+export interface UserDataImportResult {
+  summary: TransferSummary;
+  localStorage: Record<string, string>;
 }
-export async function importMarketDataPayload(payload: string): Promise<void> {
-  return invoke<void>('import_market_data', { payload });
+
+export interface BaddieHeader {
+  format: string;
+  kind: string;
+  schemaVersion: number | null;
+  appVersion: string | null;
+  exportedAt: string | null;
+}
+
+/** Reads just the envelope header (kind/version/exported-at) without touching the payload, so
+ * the UI can confirm "this will replace your [user/market] data" before running the real
+ * (destructive) import. */
+export async function peekBaddieFile(path: string): Promise<BaddieHeader> {
+  return invoke<BaddieHeader>('peek_baddie_file', { path });
+}
+
+export async function exportUserData(
+  path: string,
+  localStorage: Record<string, string>,
+): Promise<TransferSummary> {
+  return invoke<TransferSummary>('export_user_data', { path, localStorage });
+}
+export async function exportMarketData(path: string): Promise<TransferSummary> {
+  return invoke<TransferSummary>('export_market_data', { path });
+}
+export async function importUserData(path: string): Promise<UserDataImportResult> {
+  return invoke<UserDataImportResult>('import_user_data', { path });
+}
+export async function importMarketData(path: string): Promise<TransferSummary> {
+  return invoke<TransferSummary>('import_market_data', { path });
 }
 
 export async function getWfmProfileTradeLog(

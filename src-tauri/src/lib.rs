@@ -57,6 +57,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -177,6 +178,7 @@ pub fn run() {
             commands::scan_void_trader_prices,
             data_transfer::export_user_data,
             data_transfer::export_market_data,
+            data_transfer::peek_baddie_file,
             data_transfer::import_user_data,
             data_transfer::import_market_data,
             commands::get_worldstate_cycles,

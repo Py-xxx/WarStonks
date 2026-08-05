@@ -7,6 +7,8 @@
     "core:default",
     "updater:default",
     "notification:default",
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "dialog:allow-save",
+    "dialog:allow-open"
   ]
 }

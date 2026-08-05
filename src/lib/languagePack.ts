@@ -4,7 +4,7 @@
  * only handles the browser-side file plumbing (gzip, download, read) and calls the commands.
  */
 import { exportLanguagePack, importLanguagePack, type LanguagePackImportResult } from './tauriClient';
-import { maybeGzip, maybeGunzip, downloadBlob } from './dataTransfer';
+import { maybeGzip, maybeGunzip, downloadBlob } from './gzip';
 
 function timestampSlug(): string {
   return new Date().toISOString().slice(0, 10);
