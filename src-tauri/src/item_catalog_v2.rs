@@ -1,4 +1,4 @@
-//! The v2 item catalog (see the planning discussion for the full design rationale).
+//! The item catalog (see the planning discussion for the full design rationale).
 //!
 //! Design, in one sentence: **Warframe.Market is the spine; warframestat.us is optional
 //! decoration that can be entirely absent without breaking anything.**
@@ -8,17 +8,15 @@
 //! the wrong item." Every WFStat cross-reference is either exact (WFM's own `gameRef`/
 //! `setParts`/`marketInfo.id`) or explicitly bounded/uniqueness-checked — nothing falls back to
 //! a global fuzzy name search, because that mechanism is what produced 2,753 ambiguous aliases
-//! in the old catalog.
+//! in the old (now-deleted) catalog.
 //!
-//! Cutover status: this is the FIRST module of the rebuild wired into the running app.
-//! `initialize_catalog_v2_on_startup` runs as a BLOCKING step of the existing boot sequence (see
-//! `commands::run_initialize_app_catalog`), on the same loading screen as the current catalog —
-//! not a background thread underneath a usable app. It's freshness-gated like the current
-//! catalog (a cheap WFM version probe decides whether a full rebuild is even needed), so normal
-//! launches after the first one are fast. `lookup_item_v2` is the one Tauri command reading from
-//! the result so far, not yet consumed by any frontend page. The old `item_catalog.rs` catalog
-//! is completely untouched and still what the rest of the app runs on — this file writes to its
-//! own separate `item_catalog_v2.sqlite`, nothing shared, nothing at risk in the existing paths.
+//! This is the sole item catalog: `initialize_catalog_v2_on_startup` runs as a BLOCKING step of
+//! the app's boot sequence (see `commands::run_initialize_app_catalog`) — the loading screen
+//! stays up until it lands on first install, or the app boots immediately off a still-valid
+//! catalog file while a stale one refreshes in the background (see
+//! `spawn_background_catalog_v2_refresh`). It's freshness-gated (a cheap WFM version probe
+//! decides whether a full rebuild is even needed), so normal launches after the first one are
+//! fast. Data lives in its own `item_catalog_v2.sqlite`.
 //!
 //! `tests::build_real_catalog_v2_live` (`#[ignore]`d, so it never runs in a normal `cargo test`)
 //! calls the exact same production `build_catalog_v2` function against live WFM + WFStat data —
@@ -2281,23 +2279,79 @@ fn spawn_background_catalog_v2_refresh(
     });
 }
 
-/// Runs the v2 catalog freshness check as a blocking step in the app's existing startup sequence
-/// (see `commands::run_initialize_app_catalog`, which calls this right after the current catalog
-/// settles), and — depending on what it finds — either performs the rebuild inline or hands it
-/// off to a background thread:
+/// Runs the catalog freshness check as a blocking step in the app's startup sequence (see
+/// `commands::run_initialize_app_catalog`), and — depending on what it finds — either performs
+/// the rebuild inline or hands it off to a background thread:
 ///
 /// - **No catalog file exists at all** (first install): nothing else in the app can resolve an
-///   item's identity without one, so this blocks exactly as before — the loading screen stays up
-///   until the build lands, using the existing `startup-progress` event.
+///   item's identity without one, so this blocks — the loading screen stays up until the build
+///   lands, using the `startup-progress` event.
 /// - **A catalog file exists but is stale**: it's a complete, internally-consistent snapshot,
 ///   just not the newest one. Boot proceeds immediately serving it, and the refresh runs in the
 ///   background (see `spawn_background_catalog_v2_refresh`), reported on a separate event so a
 ///   small persistent indicator can track it without resurrecting the full-screen loading bar.
 ///
-/// Freshness-gated like the existing catalog: a cheap WFM version probe decides whether anything
-/// actually changed before paying for the full rebuild (bulk fetch + several hundred rate-limited
-/// per-item fetches + WFStat fetch, a few minutes total) — without this, EVERY launch would pay
-/// that cost, not just the first one or ones where the catalog actually changed.
+/// Freshness-gated: a cheap WFM version probe decides whether anything actually changed before
+/// paying for the full rebuild (bulk fetch + several hundred rate-limited per-item fetches +
+/// WFStat fetch, a few minutes total) — without this, EVERY launch would pay that cost, not just
+/// the first one or ones where the catalog actually changed.
+/// Removes the pre-v2 catalog's leftovers: `item_catalog.sqlite` (plus its WAL/SHM sidecar
+/// files) and the `data/` directory (`WFM-items.json`/`WFStat-items.json`/`wfm-set-map.json`).
+/// Nothing in the app has read or written any of these since the cutover to `item_catalog_v2` —
+/// they're just inert disk clutter on any install that predates it. Best-effort and silent on a
+/// clean install (nothing to remove): only logs when it actually deletes something, so this
+/// doesn't spam the log on every ordinary boot. Naturally one-time without needing a persisted
+/// marker — once removed, `exists()` is false forever after, so every later boot is a no-op.
+fn cleanup_pre_v2_catalog_artifacts(app: &tauri::AppHandle, app_data_dir: &Path) {
+    let mut removed = Vec::new();
+
+    let old_catalog_path = app_data_dir.join("item_catalog.sqlite");
+    for candidate in [
+        old_catalog_path.clone(),
+        app_data_dir.join("item_catalog.sqlite-wal"),
+        app_data_dir.join("item_catalog.sqlite-shm"),
+    ] {
+        if candidate.exists() {
+            match std::fs::remove_file(&candidate) {
+                Ok(()) => removed.push(candidate.display().to_string()),
+                Err(error) => log_feature_error_best_effort(
+                    app,
+                    "catalog-v2",
+                    "cleanup",
+                    &format!("Failed to remove leftover file {}.", candidate.display()),
+                    &anyhow!(error),
+                ),
+            }
+        }
+    }
+
+    let old_data_dir = app_data_dir.join("data");
+    if old_data_dir.exists() {
+        match std::fs::remove_dir_all(&old_data_dir) {
+            Ok(()) => removed.push(old_data_dir.display().to_string()),
+            Err(error) => log_feature_error_best_effort(
+                app,
+                "catalog-v2",
+                "cleanup",
+                &format!("Failed to remove leftover directory {}.", old_data_dir.display()),
+                &anyhow!(error),
+            ),
+        }
+    }
+
+    if !removed.is_empty() {
+        log_feature_event_best_effort(
+            app,
+            "catalog-v2",
+            "cleanup",
+            &format!(
+                "Removed pre-v2 catalog leftovers no longer used by the app: {}.",
+                removed.join(", ")
+            ),
+        );
+    }
+}
+
 pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<StartupSummary, String> {
     enum Decision {
         UpToDate,
@@ -2312,6 +2366,7 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
             .context("failed to resolve the app data directory")?;
         std::fs::create_dir_all(&app_data_dir)
             .with_context(|| format!("failed to create {}", app_data_dir.display()))?;
+        cleanup_pre_v2_catalog_artifacts(app, &app_data_dir);
         let final_path = app_data_dir.join(CATALOG_V2_DATABASE_FILE);
         let tmp_path = app_data_dir.join(CATALOG_V2_DATABASE_TMP_FILE);
 

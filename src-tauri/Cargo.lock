@@ -5340,7 +5340,6 @@ dependencies = [
  "futures-util",
  "hex",
  "keyring",
- "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

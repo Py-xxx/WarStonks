@@ -82,9 +82,9 @@ pub fn run() {
             // signed in (surviving re-auth) and the newOrders subscription when there are
             // tracked items. Idles with no connection until either is true.
             trades::start_ws_manager(app.handle().clone());
-            // The v2 item catalog build is NOT started here — it runs as a blocking step of the
-            // startup sequence (see `commands::run_initialize_app_catalog`), on the same loading
-            // screen as the existing catalog, not in the background underneath a usable app.
+            // The item catalog build is NOT started here — it runs as a blocking step of the
+            // startup sequence (see `commands::run_initialize_app_catalog`), keeping the loading
+            // screen up until it lands, not in the background underneath a usable app.
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

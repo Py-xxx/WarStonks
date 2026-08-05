@@ -15,7 +15,6 @@ import type {
   DiscordListingHealthNotificationInput,
   DiscordScannerStaleNotificationInput,
   DiscordAppUpdateNotificationInput,
-  ArbitrageScannerResponse,
   AnalyticsBucketSizeKey,
   AnalyticsDomainKey,
   AppSettings,
@@ -152,10 +151,6 @@ export interface WorldStateMarketNewsResponse {
 }
 
 let startupInitializationPromise: Promise<StartupSummary> | null = null;
-
-export async function getAppShellInfo(): Promise<AppShellInfo> {
-  return invoke<AppShellInfo>('get_app_shell_info');
-}
 
 export async function getAppVersion(): Promise<string> {
   return invoke<string>('get_app_version');
@@ -314,10 +309,6 @@ export async function sendAppUpdateDiscordNotification(
   input: DiscordAppUpdateNotificationInput,
 ): Promise<boolean> {
   return invoke<boolean>('send_app_update_discord_notification', { input });
-}
-
-export async function getCurrencyBalances(): Promise<WalletSnapshot> {
-  return invoke<WalletSnapshot>('get_currency_balances');
 }
 
 export async function refreshAlecaframeWalletSnapshot(): Promise<WalletSnapshot> {
@@ -484,10 +475,6 @@ export async function importLanguagePack(pack: string): Promise<LanguagePackImpo
     throw new Error('LANGPACK_BADFORMAT');
   }
   return invoke<LanguagePackImportResult>('import_language_pack', { pack });
-}
-
-export async function getWfmTradeSessionState(): Promise<TradeSessionState> {
-  return invoke<TradeSessionState>('get_wfm_trade_session_state');
 }
 
 export async function signInWfmTradeAccount(
@@ -709,15 +696,6 @@ export async function deleteWfmBuyOrder(
   return invoke<TradeOverview>('delete_wfm_buy_order', { orderId, sellerMode });
 }
 
-export async function getTradeMarketLow(
-  slug: string,
-  rank: number | null,
-  sellerMode: SellerMode,
-  priority: 'high' | 'medium' | 'low',
-): Promise<number | null> {
-  return invoke<number | null>('get_trade_sell_order_market_low', { slug, rank, sellerMode, priority });
-}
-
 export async function getTradeSellOrderHealth(
   itemKey: string | null,
   slug: string,
@@ -895,16 +873,8 @@ export async function getItemAnalysis(
   });
 }
 
-export async function gradeRecommendationOutcomes(): Promise<number> {
-  return invoke<number>('grade_recommendation_outcomes');
-}
-
 export async function getBacktestSummary(): Promise<BacktestSummary> {
   return invoke<BacktestSummary>('get_backtest_summary');
-}
-
-export async function getArbitrageScanner(): Promise<ArbitrageScannerResponse> {
-  return invoke<ArbitrageScannerResponse>('get_arbitrage_scanner');
 }
 
 export async function getArbitrageScannerState(): Promise<ArbitrageScannerState> {
