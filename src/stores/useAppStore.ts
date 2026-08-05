@@ -1809,12 +1809,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const state = get();
 
     // Resolve to a full autocomplete item. Most call sites already carry the itemId +
-    // slug; if only a name/slug is available we look it up in the local catalog.
+    // slug + wfmId; if wfmId is missing (e.g. a watchlist entry persisted before wfmId
+    // existed) or only a name/slug is available, fall back to a catalog lookup by slug.
     let resolved: WfmAutocompleteItem | null = null;
-    if (target.itemId != null && target.slug) {
+    if (target.itemId != null && target.slug && target.wfmId) {
       resolved = {
         itemId: target.itemId,
-        wfmId: target.wfmId ?? null,
+        wfmId: target.wfmId,
         name: target.name,
         slug: target.slug,
         maxRank: target.maxRank ?? null,

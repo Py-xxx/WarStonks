@@ -18,6 +18,7 @@ import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { tActive, useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { resolveLocalizedName } from '../../lib/itemNames';
+import { parseWarframeMarkupLines, splitWarframeMarkupLines } from '../../lib/warframeMarkup';
 import { tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
 import type { TranslationKey } from '../../i18n/en';
 import { translate } from '../../i18n';
@@ -265,18 +266,26 @@ function formatChartTimestamp(timestamp: number, _domain: ChartDomainKey): strin
   return formatShortLocalDateTime(new Date(timestamp).toISOString());
 }
 
-function normalizeStatHighlightText(value: string): string[] {
-  return value
-    .replace(/\\n/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
 function renderStatHighlightLine(line: string): ReactNode {
   const changedRangeMatch = line.match(/(\d[\d.,%+\-xX ]*->\s*\d[\d.,%+\-xX ]*)/);
+
+  // Render Warframe's own color markup (e.g. `<DT_FIRE_COLOR>Heat</DT_FIRE_COLOR>`) as colored
+  // text instead of leaking the raw tag onto the screen — see lib/warframeMarkup.
+  const renderSegments = (text: string, keyPrefix: string): ReactNode =>
+    parseWarframeMarkupLines(text)[0]?.map((segment, index) =>
+      segment.color ? (
+        <span key={`${keyPrefix}-${index}`} style={{ color: segment.color }}>
+          {segment.text}
+        </span>
+      ) : (
+        <span key={`${keyPrefix}-${index}`} className="market-detail-highlight-copy">
+          {segment.text}
+        </span>
+      ),
+    ) ?? null;
+
   if (!changedRangeMatch || changedRangeMatch.index === undefined) {
-    return <span className="market-detail-highlight-copy">{line}</span>;
+    return renderSegments(line, 'plain');
   }
 
   const rangeStart = changedRangeMatch.index;
@@ -286,9 +295,9 @@ function renderStatHighlightLine(line: string): ReactNode {
 
   return (
     <>
-      {label ? <span className="market-detail-highlight-copy">{label}</span> : null}
+      {label ? renderSegments(label, 'label') : null}
       <span className="market-detail-highlight-change">{changedText}</span>
-      {suffix ? <span className="market-detail-highlight-copy">{suffix}</span> : null}
+      {suffix ? renderSegments(suffix, 'suffix') : null}
     </>
   );
 }
@@ -3020,7 +3029,21 @@ function AnalysisTab() {
                 {effectiveItemDetails?.description ? (
                   <div className="market-copy-block">
                     <span className="market-copy-title">{t('mkt.description')}</span>
-                    <p>{effectiveItemDetails.description}</p>
+                    <p>
+                      {parseWarframeMarkupLines(effectiveItemDetails.description).map((line, lineIndex) => (
+                        <span key={lineIndex} className="market-detail-description-line">
+                          {line.map((segment, segmentIndex) =>
+                            segment.color ? (
+                              <span key={segmentIndex} style={{ color: segment.color }}>
+                                {segment.text}
+                              </span>
+                            ) : (
+                              <span key={segmentIndex}>{segment.text}</span>
+                            ),
+                          )}
+                        </span>
+                      ))}
+                    </p>
                   </div>
                 ) : null}
                 {(effectiveItemDetails?.statHighlights.length ?? 0) > 0 ? (
@@ -3031,7 +3054,7 @@ function AnalysisTab() {
                     <div className="market-detail-highlight-list">
                       {(effectiveItemDetails?.statHighlights ?? []).map((line) => (
                         <div key={line} className="market-detail-highlight">
-                          {normalizeStatHighlightText(line).map((segment, segmentIndex) => (
+                          {splitWarframeMarkupLines(line).map((segment, segmentIndex) => (
                             <div key={`${line}-${segmentIndex}`} className="market-detail-highlight-line">
                               {renderStatHighlightLine(segment)}
                             </div>

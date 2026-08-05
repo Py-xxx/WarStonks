@@ -27,6 +27,17 @@ function formatStartupStatusText(progress: StartupProgress): string {
     .trim() || 'Getting everything ready for launch.';
 }
 
+// These stage keys only ever fire on a genuine first-install catalog build (see
+// `item_catalog_v2::initialize_catalog_v2_on_startup` — a stale-but-already-present catalog now
+// refreshes off the boot path entirely, so reaching this blocking build path at all means there
+// was no catalog file to serve yet).
+const FIRST_BOOT_BUILD_STAGE_KEYS = new Set([
+  'catalog-v2-fetch',
+  'catalog-v2-sets',
+  'catalog-v2-wfstat',
+  'catalog-v2-writing',
+]);
+
 function formatStartupErrorMessage(errorMessage: string): string {
   const normalized = errorMessage.trim();
   if (!normalized) {
@@ -67,6 +78,7 @@ export function StartupScreen({
   const stats = summary?.stats;
   const friendlyStatusText = formatStartupStatusText(progress);
   const friendlyErrorMessage = errorMessage ? formatStartupErrorMessage(errorMessage) : null;
+  const isFirstBootBuild = !errorMessage && FIRST_BOOT_BUILD_STAGE_KEYS.has(progress.stageKey);
   const indexedItemsCount = stats
     ? (stats.totalWfmItems + stats.totalWfstatItems).toLocaleString()
     : t('su.preparing');
@@ -91,6 +103,12 @@ export function StartupScreen({
             <span className="startup-stage-state">{errorMessage ? t('su.error') : t('su.inProgress')}</span>
           </div>
           <p className="startup-status-text">{friendlyErrorMessage ?? friendlyStatusText}</p>
+          {isFirstBootBuild ? (
+            <p className="startup-first-boot-note">
+              First-time setup can take a few minutes — this only happens once. Every launch
+              after this will be quick.
+            </p>
+          ) : null}
           <div
             className="startup-progress-track"
             role="progressbar"

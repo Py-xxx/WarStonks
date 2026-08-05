@@ -4177,6 +4177,14 @@ body {
   margin-bottom: 16px;
 }
 
+.startup-first-boot-note {
+  color: var(--color-blue);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: -10px;
+  margin-bottom: 16px;
+}
+
 .startup-progress-track {
   height: 12px;
   border-radius: 999px;
@@ -5396,6 +5404,52 @@ body {
 
 .data-stale-banner-dismiss:hover {
   background: color-mix(in srgb, var(--color-amber) 18%, transparent);
+}
+
+.bg-catalog-refresh {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 480;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+  max-width: 300px;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--color-blue) 35%, transparent);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.bg-catalog-refresh-label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.bg-catalog-refresh-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-blue) 20%, var(--bg-surface));
+  overflow: hidden;
+}
+
+.bg-catalog-refresh-bar-fill {
+  height: 100%;
+  background: var(--color-blue);
+  transition: width 0.3s ease;
+}
+
+.bg-catalog-refresh-status {
+  color: var(--text-secondary);
+}
+
+.bg-catalog-refresh-caveat {
+  color: var(--color-amber);
+  font-size: 11px;
 }
 
 /* ── LEFT SIDEBAR ── */
@@ -12195,9 +12249,15 @@ body {
 }
 
 .market-detail-highlight-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  /* Plain inline flow, not flex — each child span must wrap as part of the same run of text
+     (like normal prose), not independently break onto its own row the way flex items with a
+     gap do. That mismatch used to show a spurious line break around the "1 -> 6%" style
+     rank-range span. */
+  display: block;
+}
+
+.market-detail-highlight-line > * {
+  display: inline;
 }
 
 .market-detail-highlight-line + .market-detail-highlight-line {
@@ -12211,6 +12271,7 @@ body {
 .market-detail-highlight-change {
   color: #5fe39b;
   font-weight: 700;
+  margin: 0 4px;
 }
 
 @media (max-width: 1200px) {
@@ -12493,6 +12554,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+.market-detail-description-line {
+  display: block;
+}
+.market-detail-description-line + .market-detail-description-line {
+  margin-top: 4px;
 }
 
 .market-copy-title {

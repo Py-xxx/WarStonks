@@ -39,6 +39,13 @@ use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHt
 /// verbatim (not renamed) so the frontend's existing `startup-progress` listener needs no
 /// changes now that this module owns the whole boot-time catalog build step.
 const STARTUP_PROGRESS_EVENT: &str = "startup-progress";
+/// Emitted instead of `startup-progress` when a refresh runs after boot has already handed
+/// control to the user (an existing, still-usable catalog file was found stale rather than
+/// missing) — a separate event so the frontend can drive a small persistent indicator instead of
+/// the full-screen loading bar, which must not reappear once the user is in the app.
+const CATALOG_V2_BACKGROUND_PROGRESS_EVENT: &str = "catalog-v2-background-progress";
+const CATALOG_V2_BACKGROUND_COMPLETE_EVENT: &str = "catalog-v2-background-complete";
+const CATALOG_V2_BACKGROUND_FAILED_EVENT: &str = "catalog-v2-background-failed";
 const WFM_VERSIONS_URL: &str = "https://api.warframe.market/v2/versions";
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +55,24 @@ pub struct StartupProgress {
     pub stage_label: String,
     pub status_text: String,
     pub progress_value: f64,
+}
+
+/// Same shape as `StartupProgress`, emitted on a different event for a background refresh — kept
+/// as a distinct type (rather than reusing `StartupProgress`) so the two progress streams can
+/// never be cross-wired on the frontend by accident.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundCatalogProgress {
+    pub status_text: String,
+    /// 0.0-1.0, relative to the background refresh only — unrelated to the boot progress bar's
+    /// 0.6-0.8 sub-range for the same phases.
+    pub progress_value: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundCatalogFailed {
+    pub message: String,
 }
 
 /// Moved from `item_catalog.rs` verbatim (field-for-field) — the frontend's `StartupSummary` TS
@@ -554,7 +579,10 @@ fn fold(value: &str) -> String {
 /// the direct fix for the old `item_aliases` table, where 2,753 values (`blueprint` alone
 /// matching 1,334 items) resolved via an undefined `LIMIT 1`, so the same input could resolve
 /// to a different item between runs.
-pub(crate) fn build_item_lookup(items: &[ItemRow]) -> (Vec<LookupRow>, Vec<RejectedLookupKey>) {
+pub(crate) fn build_item_lookup(
+    items: &[ItemRow],
+    wfstat_matches: &HashMap<String, (String, WfstatMatchTier)>,
+) -> (Vec<LookupRow>, Vec<RejectedLookupKey>) {
     let mut candidates: HashMap<(String, LookupKind), HashSet<String>> = HashMap::new();
     let mut add = |key: String, kind: LookupKind, item_key: &str| {
         candidates
@@ -575,6 +603,22 @@ pub(crate) fn build_item_lookup(items: &[ItemRow]) -> (Vec<LookupRow>, Vec<Rejec
         }
         if !item.name_en.trim().is_empty() {
             add(fold(&item.name_en), LookupKind::Name, &item.item_key);
+        }
+        // WFStat's `uniqueName` is the game's own true internal identifier, and diverges from
+        // WFM's own `gameRef` for some items — e.g. WFM calls a Warframe part's recipe
+        // `.../YareliPrimeSystemsBlueprint` while the game (and AlecaFrame, which reports raw
+        // in-game class names) calls it `.../YareliPrimeSystemsComponent`. Folded into the SAME
+        // GameRef/GameRefLeaf buckets as WFM's gameRef (not a separate kind) since both
+        // represent the identical concept — "the engine's own path for this item" — so the two
+        // sources naturally de-duplicate when they agree and correctly collide-and-reject
+        // (never guess) if they ever disagree.
+        if let Some((unique_name, _tier)) = wfstat_matches.get(&item.item_key) {
+            add(fold(unique_name), LookupKind::GameRef, &item.item_key);
+            if let Some((_, leaf)) = unique_name.rsplit_once('/') {
+                if !leaf.trim().is_empty() {
+                    add(fold(leaf), LookupKind::GameRefLeaf, &item.item_key);
+                }
+            }
         }
     }
 
@@ -1626,9 +1670,9 @@ pub(crate) fn build_and_write_catalog(
         build_item_rows(wfm_bulk_json).context("failed to parse WFM bulk item response")?;
     let set_parts = apply_set_details(&mut items, wfm_item_details_json_by_key)
         .context("failed to apply WFM per-item set details")?;
-    let (lookup, rejected) = build_item_lookup(&items);
     let wfstat_report = build_wfstat_matches(&items, wfstat_json, &set_parts)
         .context("failed to parse WFStat item response")?;
+    let (lookup, rejected) = build_item_lookup(&items, &wfstat_report.matches);
     let wfstat_category_map = build_wfstat_category_map(wfstat_json)
         .context("failed to parse WFStat category/type data")?;
     let wfstat_raw_json_map = build_wfstat_raw_json_map(wfstat_json)
@@ -1841,7 +1885,7 @@ const CATALOG_V2_DATABASE_TMP_FILE: &str = "item_catalog_v2.sqlite.building";
 /// `set_parts.quantity_in_set`, `wfstat_relic_variants`, `language_pack_meta`, etc. were added).
 /// Without this, a launch would silently keep reusing an older file missing those columns/tables
 /// forever, since nothing about WFM's data changed to trigger a rebuild.
-const CATALOG_V2_SCHEMA_VERSION: &str = "2";
+const CATALOG_V2_SCHEMA_VERSION: &str = "3";
 
 /// One point in the build the caller might want to report progress at. Internal plumbing only —
 /// no `Serialize`, nothing crosses the IPC boundary here; the startup caller translates each
@@ -2035,24 +2079,233 @@ fn read_stored_meta(path: &Path, meta_key: &str) -> Option<String> {
         .ok()
 }
 
-/// Runs the v2 catalog build as a blocking step in the app's existing startup sequence (see
-/// `commands::run_initialize_app_catalog`, which calls this right after the current catalog
-/// settles) — NOT a background thread. The whole rebuild is deliberately allowed to leave the
-/// app unusable until every piece of it lands; this is one piece of it, so it runs on the same
-/// loading screen the user already watches for the existing catalog, using the same
-/// `startup-progress` event the frontend already listens to.
+/// Fetches, cross-references, and atomically installs a fresh catalog at `final_path`: builds to
+/// `tmp_path` first, then renames it into place, so a reader querying at any point during the
+/// build only ever sees the complete old file or the complete new one — never a half-written one.
+/// `on_phase` is the caller's progress sink; this function has no opinion on which UI event that
+/// feeds (the foreground boot bar and the background refresh indicator both call through here).
+fn perform_catalog_v2_rebuild(
+    tmp_path: &Path,
+    final_path: &Path,
+    latest_collection_hash: Option<&str>,
+    on_phase: impl FnMut(BuildPhase),
+) -> Result<(CatalogBuildSummary, Option<String>)> {
+    // A previous run that crashed mid-build could leave this behind; starting from nothing is
+    // correct since `initialize_schema` cannot run twice against the same tables anyway.
+    let _ = std::fs::remove_file(tmp_path);
+
+    let (summary, wfstat_fetch_error) = build_catalog_v2_with_progress(tmp_path, on_phase)?;
+
+    // Record what we built against BEFORE the rename, so the file that lands at `final_path`
+    // already carries the hash a future launch needs — there is no window where the live file
+    // exists but is missing this.
+    {
+        let connection = Connection::open(tmp_path)
+            .with_context(|| format!("failed to reopen {}", tmp_path.display()))?;
+        if let Some(hash) = latest_collection_hash {
+            write_catalog_meta(&connection, "collection_hash", hash)?;
+        }
+        write_catalog_meta(&connection, "schema_version", CATALOG_V2_SCHEMA_VERSION)?;
+    }
+
+    std::fs::rename(tmp_path, final_path)
+        .with_context(|| format!("failed to finalize {}", final_path.display()))?;
+
+    Ok((summary, wfstat_fetch_error))
+}
+
+/// Maps a `BuildPhase` to the boot progress bar's 0.66-0.8 sub-range and emits it on
+/// `startup-progress` — the foreground (blocking) path's progress sink.
+fn emit_foreground_build_phase(app: &AppHandle, phase: BuildPhase) {
+    match phase {
+        BuildPhase::FetchingBulkItems => {}
+        BuildPhase::FetchingSetDetails { completed, total } => {
+            let fraction = if total == 0 {
+                0.74
+            } else {
+                0.66 + (completed as f64 / total as f64) * 0.08
+            };
+            emit_progress(
+                app,
+                "catalog-v2-sets",
+                "Mapping item sets",
+                &format!("Resolving set contents ({completed}/{total})."),
+                fraction,
+            );
+        }
+        BuildPhase::FetchingWfstat => {
+            emit_progress(
+                app,
+                "catalog-v2-wfstat",
+                "Cross-referencing item details",
+                "Matching items against warframestat.us for extra detail.",
+                0.76,
+            );
+        }
+        BuildPhase::Writing => {
+            emit_progress(
+                app,
+                "catalog-v2-writing",
+                "Finalizing item catalog",
+                "Saving the refreshed item catalog.",
+                0.79,
+            );
+        }
+    }
+}
+
+/// Same phase mapping as the foreground bar, but as an independent 0.0-1.0 fraction on the
+/// background-refresh event instead of the boot bar's sub-range.
+fn emit_background_build_phase(app: &AppHandle, phase: BuildPhase) {
+    let (status_text, fraction) = match phase {
+        BuildPhase::FetchingBulkItems => (
+            "Fetching the latest item list from Warframe Market.".to_string(),
+            0.05,
+        ),
+        BuildPhase::FetchingSetDetails { completed, total } => {
+            let fraction = if total == 0 { 0.8 } else { (completed as f64 / total as f64) * 0.8 };
+            (format!("Resolving set contents ({completed}/{total})."), fraction)
+        }
+        BuildPhase::FetchingWfstat => (
+            "Matching items against warframestat.us for extra detail.".to_string(),
+            0.85,
+        ),
+        BuildPhase::Writing => ("Saving the refreshed item catalog.".to_string(), 0.95),
+    };
+    let _ = app.emit(
+        CATALOG_V2_BACKGROUND_PROGRESS_EVENT,
+        BackgroundCatalogProgress { status_text, progress_value: fraction },
+    );
+}
+
+fn log_catalog_v2_build_result(
+    app: &AppHandle,
+    summary: &CatalogBuildSummary,
+    wfstat_fetch_error: &Option<String>,
+) -> bool {
+    let (t1, t2, t3, t4, t5) = summary.wfstat_tier_counts;
+    let matched = t1 + t2 + t3 + t4 + t5;
+    log_feature_event_best_effort(
+        app,
+        "catalog-v2",
+        "build",
+        &format!(
+            "Built item catalog v2: {} items, {} set roots ({} set-part links), {} \
+             lookup keys ({} rejected as ambiguous), WFStat matched {}/{} ({} unmatched, \
+             {t1}/{t2}/{t3}/{t4}/{t5} by tier).",
+            summary.item_count,
+            summary.set_root_count,
+            summary.set_part_count,
+            summary.lookup_key_count,
+            summary.rejected_key_count,
+            matched,
+            summary.item_count,
+            summary.wfstat_unmatched_count,
+        ),
+    );
+    // Logged as a distinct ERROR entry, not folded into the info line above — the first real run
+    // of this build silently produced 0/3837 WFStat matches with no trace of why, because the
+    // failure reason was discarded instead of surfaced. It must never be quiet again: a catalog
+    // with zero enrichment matches is a symptom, not a successful outcome, even though the build
+    // itself did not fail.
+    let wfstat_stale = wfstat_fetch_error.is_some();
+    if let Some(reason) = wfstat_fetch_error {
+        log_feature_error_best_effort(
+            app,
+            "catalog-v2",
+            "wfstat-fetch",
+            "Catalog v2 built successfully but WFStat was unreachable, so every item is missing \
+             enrichment data (damage/magazine/range/etc. once that layer exists). This is not \
+             fatal — the catalog is otherwise fully correct — but it should not happen every \
+             run. If it keeps happening, the fetch timeout or network conditions need attention.",
+            &anyhow!(reason.clone()),
+        );
+    }
+    wfstat_stale
+}
+
+/// True while a background refresh is in flight — guards against spawning a second one (e.g. a
+/// dev-mode double-invoked startup call, or the app being relaunched while one is still running)
+/// racing the same `tmp_path`/`final_path`.
+fn background_refresh_in_flight() -> &'static std::sync::atomic::AtomicBool {
+    static FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    &FLAG
+}
+
+/// Refreshes an already-usable (but stale) catalog off the main boot path. The app has already
+/// handed control to the user by the time this runs — see `initialize_catalog_v2_on_startup` —
+/// so failures here are logged and otherwise silent: the existing file just keeps serving until
+/// the next launch's freshness check tries again, exactly like any other reuse-last-good case.
+fn spawn_background_catalog_v2_refresh(
+    app: tauri::AppHandle,
+    final_path: std::path::PathBuf,
+    tmp_path: std::path::PathBuf,
+    latest_collection_hash: Option<String>,
+) {
+    use std::sync::atomic::Ordering;
+    if background_refresh_in_flight()
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let result = perform_catalog_v2_rebuild(
+            &tmp_path,
+            &final_path,
+            latest_collection_hash.as_deref(),
+            |phase| emit_background_build_phase(&app, phase),
+        );
+        match result {
+            Ok((summary, wfstat_fetch_error)) => {
+                log_catalog_v2_build_result(&app, &summary, &wfstat_fetch_error);
+                let _ = app.emit(CATALOG_V2_BACKGROUND_COMPLETE_EVENT, ());
+            }
+            Err(error) => {
+                log_feature_error_best_effort(
+                    &app,
+                    "catalog-v2",
+                    "background-build",
+                    "Background item catalog refresh failed — the previous catalog file is \
+                     untouched and keeps serving; this will be retried on the next launch.",
+                    &error,
+                );
+                let _ = app.emit(
+                    CATALOG_V2_BACKGROUND_FAILED_EVENT,
+                    BackgroundCatalogFailed { message: format!("{error:#}") },
+                );
+            }
+        }
+        background_refresh_in_flight().store(false, Ordering::SeqCst);
+    });
+}
+
+/// Runs the v2 catalog freshness check as a blocking step in the app's existing startup sequence
+/// (see `commands::run_initialize_app_catalog`, which calls this right after the current catalog
+/// settles), and — depending on what it finds — either performs the rebuild inline or hands it
+/// off to a background thread:
+///
+/// - **No catalog file exists at all** (first install): nothing else in the app can resolve an
+///   item's identity without one, so this blocks exactly as before — the loading screen stays up
+///   until the build lands, using the existing `startup-progress` event.
+/// - **A catalog file exists but is stale**: it's a complete, internally-consistent snapshot,
+///   just not the newest one. Boot proceeds immediately serving it, and the refresh runs in the
+///   background (see `spawn_background_catalog_v2_refresh`), reported on a separate event so a
+///   small persistent indicator can track it without resurrecting the full-screen loading bar.
 ///
 /// Freshness-gated like the existing catalog: a cheap WFM version probe decides whether anything
-/// actually changed before paying for the full rebuild (bulk fetch + up to ~230 rate-limited
+/// actually changed before paying for the full rebuild (bulk fetch + several hundred rate-limited
 /// per-item fetches + WFStat fetch, a few minutes total) — without this, EVERY launch would pay
 /// that cost, not just the first one or ones where the catalog actually changed.
-///
-/// Best-effort end to end: nothing in this module is read by the running app yet (see the module
-/// doc comment), so a failure here must never block startup or surface as an app-level error —
-/// it's logged, and the boot sequence continues exactly as if this step had succeeded but found
-/// nothing to do.
 pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<StartupSummary, String> {
-    let outcome = (|| -> Result<Option<(CatalogBuildSummary, Option<String>)>> {
+    enum Decision {
+        UpToDate,
+        RebuiltForeground(CatalogBuildSummary, Option<String>),
+        DeferredToBackground,
+    }
+
+    let outcome = (|| -> Result<Decision> {
         let app_data_dir = app
             .path()
             .app_data_dir()
@@ -2061,9 +2314,6 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
             .with_context(|| format!("failed to create {}", app_data_dir.display()))?;
         let final_path = app_data_dir.join(CATALOG_V2_DATABASE_FILE);
         let tmp_path = app_data_dir.join(CATALOG_V2_DATABASE_TMP_FILE);
-        // A previous run that crashed mid-build could leave this behind; starting from nothing
-        // is correct since `initialize_schema` cannot run twice against the same tables anyway.
-        let _ = std::fs::remove_file(&tmp_path);
 
         emit_progress(
             app,
@@ -2075,8 +2325,9 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
         let latest_collection_hash = fetch_items_collection_version().ok();
         let stored_collection_hash = read_stored_collection_hash(&final_path);
         let stored_schema_version = read_stored_schema_version(&final_path);
+        let file_exists = final_path.exists();
         let need_rebuild = catalog_v2_needs_rebuild(
-            final_path.exists(),
+            file_exists,
             latest_collection_hash.as_deref(),
             stored_collection_hash.as_deref(),
             stored_schema_version.as_deref(),
@@ -2090,81 +2341,52 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
                 "Using the cached item catalog — no changes detected.",
                 0.8,
             );
-            return Ok(None);
+            return Ok(Decision::UpToDate);
         }
 
-        emit_progress(
-            app,
-            "catalog-v2-fetch",
-            "Downloading market items",
-            "Fetching the latest item list from Warframe Market.",
-            0.64,
-        );
-        let (summary, wfstat_fetch_error) = build_catalog_v2_with_progress(&tmp_path, |phase| {
-            match phase {
-                BuildPhase::FetchingBulkItems => {}
-                BuildPhase::FetchingSetDetails { completed, total } => {
-                    let fraction = if total == 0 {
-                        0.74
-                    } else {
-                        0.66 + (completed as f64 / total as f64) * 0.08
-                    };
-                    emit_progress(
-                        app,
-                        "catalog-v2-sets",
-                        "Mapping item sets",
-                        &format!("Resolving set contents ({completed}/{total})."),
-                        fraction,
-                    );
-                }
-                BuildPhase::FetchingWfstat => {
-                    emit_progress(
-                        app,
-                        "catalog-v2-wfstat",
-                        "Cross-referencing item details",
-                        "Matching items against warframestat.us for extra detail.",
-                        0.76,
-                    );
-                }
-                BuildPhase::Writing => {
-                    emit_progress(
-                        app,
-                        "catalog-v2-writing",
-                        "Finalizing item catalog",
-                        "Saving the refreshed item catalog.",
-                        0.79,
-                    );
-                }
-            }
-        })?;
-
-        // Record what we built against BEFORE the rename, so the file that lands at `final_path`
-        // already carries the hash a future launch needs — there is no window where the live
-        // file exists but is missing this.
-        {
-            let connection = Connection::open(&tmp_path)
-                .with_context(|| format!("failed to reopen {}", tmp_path.display()))?;
-            if let Some(hash) = &latest_collection_hash {
-                write_catalog_meta(&connection, "collection_hash", hash)?;
-            }
-            write_catalog_meta(&connection, "schema_version", CATALOG_V2_SCHEMA_VERSION)?;
+        if !file_exists {
+            emit_progress(
+                app,
+                "catalog-v2-fetch",
+                "Downloading market items",
+                "Fetching the latest item list from Warframe Market.",
+                0.64,
+            );
+            let (summary, wfstat_fetch_error) = perform_catalog_v2_rebuild(
+                &tmp_path,
+                &final_path,
+                latest_collection_hash.as_deref(),
+                |phase| emit_foreground_build_phase(app, phase),
+            )?;
+            emit_progress(
+                app,
+                "catalog-v2-ready",
+                "Item catalog ready",
+                "Item catalog refreshed.",
+                0.8,
+            );
+            return Ok(Decision::RebuiltForeground(summary, wfstat_fetch_error));
         }
 
-        std::fs::rename(&tmp_path, &final_path)
-            .with_context(|| format!("failed to finalize {}", final_path.display()))?;
-
+        // A usable (if stale) catalog already exists — don't block boot on the refresh.
         emit_progress(
             app,
-            "catalog-v2-ready",
+            "catalog-v2-cached",
             "Item catalog ready",
-            "Item catalog refreshed.",
+            "Using the cached item catalog while a refresh runs in the background.",
             0.8,
         );
-        Ok(Some((summary, wfstat_fetch_error)))
+        spawn_background_catalog_v2_refresh(
+            app.clone(),
+            final_path,
+            tmp_path,
+            latest_collection_hash,
+        );
+        Ok(Decision::DeferredToBackground)
     })();
 
     match outcome {
-        Ok(None) => {
+        Ok(Decision::UpToDate) => {
             log_feature_event_best_effort(
                 app,
                 "catalog-v2",
@@ -2173,46 +2395,18 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
             );
             summary_from_existing_file(app, false)
         }
-        Ok(Some((summary, wfstat_fetch_error))) => {
-            let (t1, t2, t3, t4, t5) = summary.wfstat_tier_counts;
-            let matched = t1 + t2 + t3 + t4 + t5;
+        Ok(Decision::DeferredToBackground) => {
             log_feature_event_best_effort(
                 app,
                 "catalog-v2",
                 "build",
-                &format!(
-                    "Built item catalog v2: {} items, {} set roots ({} set-part links), {} \
-                     lookup keys ({} rejected as ambiguous), WFStat matched {}/{} ({} unmatched, \
-                     {t1}/{t2}/{t3}/{t4}/{t5} by tier).",
-                    summary.item_count,
-                    summary.set_root_count,
-                    summary.set_part_count,
-                    summary.lookup_key_count,
-                    summary.rejected_key_count,
-                    matched,
-                    summary.item_count,
-                    summary.wfstat_unmatched_count,
-                ),
+                "Item catalog v2 is stale — serving the existing file while a refresh runs in \
+                 the background.",
             );
-            // Logged as a distinct ERROR entry, not folded into the info line above — the first
-            // real run of this build silently produced 0/3837 WFStat matches with no trace of
-            // why, because the failure reason was discarded instead of surfaced. It must never
-            // be quiet again: a catalog with zero enrichment matches is a symptom, not a
-            // successful outcome, even though the build itself did not fail.
-            let wfstat_stale = wfstat_fetch_error.is_some();
-            if let Some(reason) = &wfstat_fetch_error {
-                log_feature_error_best_effort(
-                    app,
-                    "catalog-v2",
-                    "wfstat-fetch",
-                    "Catalog v2 built successfully but WFStat was unreachable, so every item is \
-                     missing enrichment data (damage/magazine/range/etc. once that layer exists). \
-                     This is not fatal — the catalog is otherwise fully correct — but it should \
-                     not happen every run. If it keeps happening, the fetch timeout or network \
-                     conditions during startup need attention.",
-                    &anyhow!(reason.clone()),
-                );
-            }
+            summary_from_existing_file(app, false)
+        }
+        Ok(Decision::RebuiltForeground(summary, wfstat_fetch_error)) => {
+            let wfstat_stale = log_catalog_v2_build_result(app, &summary, &wfstat_fetch_error);
             Ok(StartupSummary {
                 ready: true,
                 refreshed: true,
@@ -3320,7 +3514,7 @@ mod tests {
                 icon: None, thumb: None, subtypes: Vec::new(), relic_tier: None, preferred_image: None,
             },
         ];
-        let (accepted, rejected) = build_item_lookup(&items);
+        let (accepted, rejected) = build_item_lookup(&items, &HashMap::new());
 
         // The ambiguous name must not appear as a resolvable key at all.
         assert!(!accepted.iter().any(|row| row.lookup_key == "blueprint"));
@@ -3344,7 +3538,7 @@ mod tests {
             max_rank: None, ducats: None, bulk_tradable: false, set_root: false,
             icon: None, thumb: None, subtypes: Vec::new(), relic_tier: None, preferred_image: None,
         }];
-        let (accepted, rejected) = build_item_lookup(&items);
+        let (accepted, rejected) = build_item_lookup(&items, &HashMap::new());
         assert!(rejected.is_empty());
         assert!(accepted
             .iter()
@@ -3352,6 +3546,47 @@ mod tests {
         assert!(accepted
             .iter()
             .any(|row| row.kind == LookupKind::GameRef && row.item_key == "a"));
+    }
+
+    #[test]
+    fn wfstat_unique_name_resolves_when_it_diverges_from_wfm_game_ref() {
+        // Confirmed live: WFM's own gameRef for Yareli Prime's Systems part is
+        // `.../YareliPrimeSystemsBlueprint`, but the game's true internal class name — which
+        // WFStat's `uniqueName` carries and AlecaFrame reports verbatim in trade history — is
+        // `.../YareliPrimeSystemsComponent`. Without folding WFStat's uniqueName into the same
+        // GameRef/GameRefLeaf buckets, AlecaFrame trade names for items like this can never
+        // resolve, even though the mapping is fully deterministic (not a guess).
+        let items = vec![ItemRow {
+            item_key: "a".into(), slug: "yareli_prime_systems_blueprint".into(),
+            game_ref: Some(
+                "/Lotus/Types/Recipes/WarframeRecipes/YareliPrimeSystemsBlueprint".into(),
+            ),
+            name_en: "Yareli Prime Systems Blueprint".into(), item_family: "blueprint".into(),
+            max_rank: None, ducats: None, bulk_tradable: false, set_root: false,
+            icon: None, thumb: None, subtypes: Vec::new(), relic_tier: None, preferred_image: None,
+        }];
+        let mut wfstat_matches = HashMap::new();
+        wfstat_matches.insert(
+            "a".to_string(),
+            (
+                "/Lotus/Types/Recipes/WarframeRecipes/YareliPrimeSystemsComponent".to_string(),
+                WfstatMatchTier::GameRefExact,
+            ),
+        );
+
+        let (accepted, rejected) = build_item_lookup(&items, &wfstat_matches);
+        assert!(rejected.is_empty());
+        // The AlecaFrame-shaped leaf (WFStat's diverging uniqueName) also resolves, to the same item.
+        assert!(accepted.iter().any(|row| row.kind == LookupKind::GameRefLeaf
+            && row.lookup_key == fold("YareliPrimeSystemsComponent")
+            && row.item_key == "a"));
+        assert!(accepted.iter().any(|row| row.kind == LookupKind::GameRef
+            && row.lookup_key == fold("/Lotus/Types/Recipes/WarframeRecipes/YareliPrimeSystemsComponent")
+            && row.item_key == "a"));
+        // The original WFM gameRef leaf must still resolve too — this is additive, not a replacement.
+        assert!(accepted.iter().any(|row| row.kind == LookupKind::GameRefLeaf
+            && row.lookup_key == fold("YareliPrimeSystemsBlueprint")
+            && row.item_key == "a"));
     }
 
     fn wfstat_json(items: &[serde_json::Value]) -> String {

@@ -987,6 +987,49 @@ export async function listenToStartupProgress(
   });
 }
 
+export interface BackgroundCatalogProgress {
+  statusText: string;
+  progressValue: number;
+}
+
+export interface BackgroundCatalogFailed {
+  message: string;
+}
+
+/**
+ * A stale-but-usable item catalog refreshing off the boot path (see
+ * `item_catalog_v2::spawn_background_catalog_v2_refresh` on the Rust side) — distinct from
+ * `startup-progress`, which only ever fires before the app is usable.
+ */
+export async function listenToBackgroundCatalogRefresh(handlers: {
+  onProgress: (progress: BackgroundCatalogProgress) => void;
+  onComplete: () => void;
+  onFailed: (failure: BackgroundCatalogFailed) => void;
+}): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+
+  const { listen } = await import('@tauri-apps/api/event');
+  const unlistenProgress = await listen<BackgroundCatalogProgress>(
+    'catalog-v2-background-progress',
+    (event) => handlers.onProgress(event.payload),
+  );
+  const unlistenComplete = await listen('catalog-v2-background-complete', () => {
+    handlers.onComplete();
+  });
+  const unlistenFailed = await listen<BackgroundCatalogFailed>(
+    'catalog-v2-background-failed',
+    (event) => handlers.onFailed(event.payload),
+  );
+
+  return () => {
+    unlistenProgress();
+    unlistenComplete();
+    unlistenFailed();
+  };
+}
+
 export async function listenToArbitrageScannerProgress(
   onProgress: (progress: ArbitrageScannerProgress) => void,
 ): Promise<() => void> {
