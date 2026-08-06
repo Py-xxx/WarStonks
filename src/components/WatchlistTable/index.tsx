@@ -9,6 +9,7 @@ import { formatElapsedTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
+import type { WatchlistTone } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WatchlistItem } from '../../types';
@@ -18,12 +19,68 @@ const SUCCESS_DISMISS_DELAY_MS = 4000;
 
 type WatchlistTableVariant = 'compact' | 'full';
 
+/** How many rows the dashboard card shows before deferring to the full tab. */
+const COMPACT_ROW_LIMIT = 3;
+
+/** Urgency order for the compact card: target hit first, then closest to target. */
+const TONE_RANK: Record<WatchlistTone, number> = { green: 0, amber: 1, neutral: 2 };
+
+/** The three row actions, always rendered as one adjacent group so the column never changes
+ *  width and the buttons never move. An action that doesn't apply is disabled, not removed. */
+function RowActions({
+  canCopy,
+  copied,
+  onCopy,
+  onMarkBought,
+  onRemove,
+  copyLabel,
+  boughtLabel,
+  removeLabel,
+}: {
+  canCopy: boolean;
+  copied: boolean;
+  onCopy: () => void;
+  onMarkBought: () => void;
+  onRemove: () => void;
+  copyLabel: string;
+  boughtLabel: string;
+  removeLabel: string;
+}) {
+  return (
+    <div className="wl-actions" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        className={`wl-action${copied ? ' copied' : ''}`}
+        title={copyLabel}
+        aria-label={copyLabel}
+        disabled={!canCopy}
+        onClick={onCopy}
+      >
+        <i className="ti ti-copy" aria-hidden="true" />
+      </button>
+      <button type="button" className="wl-action" title={boughtLabel} aria-label={boughtLabel} onClick={onMarkBought}>
+        <i className="ti ti-shopping-cart" aria-hidden="true" />
+      </button>
+      <button type="button" className="wl-action danger" title={removeLabel} aria-label={removeLabel} onClick={onRemove}>
+        <i className="ti ti-trash" aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 /**
  * Shared watchlist table used by both the dashboard Overview card and the full-screen
  * Watchlist tab. Centralises row actions (copy whisper, mark bought, remove) plus their
  * error/success handling so fixes only have to happen in one place.
  */
-export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) {
+export function WatchlistTable({
+  variant,
+  toneFilter = null,
+}: {
+  variant: WatchlistTableVariant;
+  /** Full tab only — restricts rows to one status. `null` shows everything. */
+  toneFilter?: WatchlistTone | null;
+}) {
   const { t } = useTranslation();
   const watchlist = useAppStore((state) => state.watchlist);
   const selectedId = useAppStore((state) => state.selectedWatchlistId);
@@ -105,175 +162,160 @@ export function WatchlistTable({ variant }: { variant: WatchlistTableVariant }) 
         </div>
       ) : null}
 
-      {watchlist.length === 0 ? (
-        <div className="empty-state">
-          <span className="empty-primary">{t('wl.noItems')}</span>
-          <span className="empty-sub">
-            {t('wl.searchToAddHint')}
-          </span>
-        </div>
-      ) : (
-        <>
-          <table className={variant === 'full' ? 'wl-fs-table' : 'wl-table'}>
-            <thead>
-              {variant === 'full' ? (
-                <tr>
-                  <th>{t('wl.item')}</th>
-                  <th>{t('wl.desired')}</th>
-                  <th>{t('wl.want')}</th>
-                  <th>{t('wl.lowest')}</th>
-                  <th>{t('wl.seller')}</th>
-                  <th>{t('wl.sellerStock')}</th>
-                  <th>{t('wl.rank')}</th>
-                  <th>{t('wl.lastScan')}</th>
-                  <th>{t('wl.status')}</th>
-                  <th>{t('wl.actions')}</th>
-                </tr>
-              ) : (
-                <tr>
-                  <th>{t('wl.item')}</th>
-                  <th>{t('wl.target')}</th>
-                  <th>{t('wl.want')}</th>
-                  <th>{t('wl.current')}</th>
-                  <th>{t('wl.status')}</th>
-                  <th>{t('wl.actions')}</th>
-                </tr>
-              )}
-            </thead>
-            <tbody>
-              {watchlist.map((item) => {
+      {(() => {
+        const ordered = [...watchlist].sort((left, right) => {
+          const leftState = getWatchlistVisualState(left);
+          const rightState = getWatchlistVisualState(right);
+          const byTone = TONE_RANK[leftState.tone] - TONE_RANK[rightState.tone];
+          if (byTone !== 0) {
+            return byTone;
+          }
+          // Within a tone, closest to its own target first — "how near am I?" is the question
+          // this card exists to answer, and it's comparable across items of different prices.
+          const distance = (item: WatchlistItem) =>
+            item.currentPrice === null || item.targetPrice <= 0
+              ? Number.POSITIVE_INFINITY
+              : (item.currentPrice - item.targetPrice) / item.targetPrice;
+          return distance(left) - distance(right);
+        });
+        const filtered = toneFilter
+          ? ordered.filter((item) => getWatchlistVisualState(item).tone === toneFilter)
+          : ordered;
+        const rows = variant === 'compact' ? filtered.slice(0, COMPACT_ROW_LIMIT) : filtered;
+
+        if (watchlist.length === 0) {
+          return (
+            <div className="empty-state">
+              <span className="empty-primary">{t('wl.noItems')}</span>
+              <span className="empty-sub">{t('wl.searchToAddHint')}</span>
+            </div>
+          );
+        }
+        if (rows.length === 0) {
+          return (
+            <div className="empty-state">
+              <span className="empty-primary">{t('wl.noneMatchFilter')}</span>
+            </div>
+          );
+        }
+
+        const renderActions = (item: WatchlistItem, canCopy: boolean) => (
+          <RowActions
+            canCopy={canCopy}
+            copied={copiedWatchlistId === item.id}
+            copyLabel={t('hm.copyMessage')}
+            boughtLabel={t('wl.markBought')}
+            removeLabel={t('wl.remove')}
+            onCopy={() => handleCopy(item)}
+            onMarkBought={() => {
+              setPurchaseError(null);
+              setPurchaseSuccess(null);
+              setPurchaseItemId(item.id);
+            }}
+            onRemove={() => setRemoveItemId(item.id)}
+          />
+        );
+
+        if (variant === 'compact') {
+          return (
+            <div className="wl-compact-list">
+              {rows.map((item) => {
                 const visualState = getWatchlistVisualState(item);
                 const imageUrl = resolveWfmAssetUrl(item.imagePath);
-                const hasRank = item.currentRank !== null && item.currentRank !== undefined;
                 const canCopy =
-                  visualState.tone === 'red' && Boolean(item.currentSeller) && item.currentPrice !== null;
+                  visualState.tone === 'green' && Boolean(item.currentSeller) && item.currentPrice !== null;
+                return (
+                  <div
+                    key={item.id}
+                    className={`wl-row tone-${visualState.tone}${selectedId === item.id ? ' selected' : ''}`}
+                    onClick={() => setSelected(item.id)}
+                  >
+                    <span className="wl-row-thumb">
+                      {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{item.displayName.slice(0, 1)}</span>}
+                    </span>
+                    <span className="wl-row-identity">
+                      <ItemName
+                        name={item.displayName}
+                        slug={item.slug}
+                        itemId={item.itemId}
+                        imagePath={item.imagePath}
+                      />
+                      <span className="wl-row-meta">
+                        {visualState.label}
+                        {item.currentSeller ? ` · ${item.currentSeller}` : ''}
+                      </span>
+                    </span>
+                    <span className="wl-row-prices">
+                      <span className={`wl-row-price tone-${visualState.tone}`}>
+                        {item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}
+                      </span>
+                      <span className="wl-row-target">{t('wl.targetShort', { n: item.targetPrice })}</span>
+                    </span>
+                    {renderActions(item, canCopy)}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }
 
+        return (
+          <table className="wl-fs-table">
+            <thead>
+              <tr>
+                <th>{t('wl.item')}</th>
+                <th className="wl-col-num">{t('wl.target')}</th>
+                <th className="wl-col-num">{t('wl.lowest')}</th>
+                <th className="wl-col-qty">{t('wl.want')}</th>
+                <th className="wl-col-seller">{t('wl.seller')}</th>
+                <th className="wl-col-actions">{t('wl.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((item) => {
+                const visualState = getWatchlistVisualState(item);
+                const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                const canCopy =
+                  visualState.tone === 'green' && Boolean(item.currentSeller) && item.currentPrice !== null;
                 return (
                   <tr
                     key={item.id}
                     onClick={() => setSelected(item.id)}
-                    className={`watchlist-row watchlist-row-${visualState.tone}${
-                      selectedId === item.id ? ' selected' : ''
-                    }`}
+                    className={`wl-row tone-${visualState.tone}${selectedId === item.id ? ' selected' : ''}`}
+                    title={t('wl.refreshedAt', { time: formatElapsedTime(item.lastUpdatedAt) })}
                   >
                     <td>
                       <div className="wl-item-cell">
-                        {variant === 'full' ? (
-                          <span className="wl-item-thumb">
-                            {imageUrl ? (
-                              <img src={imageUrl} alt="" loading="lazy" />
-                            ) : (
-                              <span>{item.displayName.slice(0, 1)}</span>
-                            )}
-                          </span>
-                        ) : null}
+                        <span className="wl-row-thumb">
+                          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{item.displayName.slice(0, 1)}</span>}
+                        </span>
                         <ItemName
                           name={item.displayName}
                           slug={item.slug}
                           itemId={item.itemId}
                           imagePath={item.imagePath}
                         />
-                        {variant === 'compact' ? (
-                          <span className="td-muted">{t('wl.refreshedAt', { time: formatElapsedTime(item.lastUpdatedAt) })}</span>
-                        ) : null}
                       </div>
                     </td>
-
-                    {variant === 'full' ? (
-                      <>
-                        <td>{item.targetPrice} pt</td>
-                        <td className="wl-qty-cell">
-                          <QuantityStepper
-                            value={item.quantity}
-                            onChange={(next) => setWatchlistItemQuantity(item.id, next)}
-                          />
-                        </td>
-                        <td
-                          className={`wl-price-cell${
-                            item.currentPrice !== null && item.currentPrice <= item.targetPrice
-                              ? ' wl-price-hit'
-                              : ''
-                          }`}
-                        >
-                          {item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}
-                        </td>
-                        <td>{item.currentSeller ?? '—'}</td>
-                        <td>{item.currentQuantity ?? '—'}</td>
-                        <td>{hasRank ? item.currentRank : '—'}</td>
-                        <td className="td-muted">{t('wl.refreshedAt', { time: formatElapsedTime(item.lastUpdatedAt) })}</td>
-                      </>
-                    ) : (
-                      <>
-                        <td className="td-muted">{item.targetPrice} pt</td>
-                        <td className="wl-qty-cell">
-                          <QuantityStepper
-                            value={item.quantity}
-                            onChange={(next) => setWatchlistItemQuantity(item.id, next)}
-                          />
-                        </td>
-                        <td>{item.currentPrice !== null ? `${item.currentPrice} pt` : '—'}</td>
-                      </>
-                    )}
-
-                    <td className={`watchlist-status watchlist-status-${visualState.tone}`}>
-                      {visualState.label}
+                    <td className="wl-col-num td-muted">{item.targetPrice}</td>
+                    <td className={`wl-col-num wl-row-price tone-${visualState.tone}`}>
+                      {item.currentPrice !== null ? item.currentPrice : '—'}
                     </td>
-                    <td>
-                      <div className="watchlist-actions">
-                        <button
-                          className="act-btn"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setPurchaseError(null);
-                            setPurchaseSuccess(null);
-                            setPurchaseItemId(item.id);
-                          }}
-                        >
-                          {t('wl.markAsBought')}
-                        </button>
-                        {canCopy ? (
-                          <button
-                            className="act-btn"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleCopy(item);
-                            }}
-                          >
-                            {copiedWatchlistId === item.id ? t('common.copied') : t('hm.copyMessage')}
-                          </button>
-                        ) : null}
-                        <button
-                          className="act-btn danger"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setRemoveItemId(item.id);
-                          }}
-                        >
-                          {t('wl.remove')}
-                        </button>
-                      </div>
+                    <td className="wl-col-qty">
+                      <QuantityStepper
+                        value={item.quantity}
+                        onChange={(next) => setWatchlistItemQuantity(item.id, next)}
+                      />
                     </td>
+                    <td className="wl-col-seller">{item.currentSeller ?? '—'}</td>
+                    <td className="wl-col-actions">{renderActions(item, canCopy)}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          <div className="wl-footer">
-            <span>{t('hm.adaptiveScans')}</span>
-            {variant === 'compact' && selectedId ? (
-              <span className="selected">
-                {t('wl.selectedLabel')}{' '}
-                <span className="wl-selected-name">
-                  {watchlist.find((entry) => entry.id === selectedId)?.displayName}
-                </span>
-              </span>
-            ) : null}
-          </div>
-        </>
-      )}
+        );
+      })()}
 
       {purchaseItem ? (
         <WatchlistPurchaseModal

@@ -123,13 +123,18 @@ export function getNextWatchlistScanDelayMs(
   return Math.max(0, nextScanAt - nowMs);
 }
 
+/** Watchlist row states, in the app's normal colour language: hitting your target price is the
+ *  good outcome, so it reads green. It previously rendered red, which everywhere else in the app
+ *  means something is wrong. */
+export type WatchlistTone = 'neutral' | 'amber' | 'green';
+
 export function getWatchlistVisualState(item: WatchlistItem): {
-  tone: 'neutral' | 'yellow' | 'red';
+  tone: WatchlistTone;
   label: string;
 } {
   if (item.currentPrice !== null && item.currentPrice <= item.targetPrice) {
     return {
-      tone: 'red',
+      tone: 'green',
       label: tActive('wl.found'),
     };
   }
@@ -139,7 +144,7 @@ export function getWatchlistVisualState(item: WatchlistItem): {
     item.currentPrice <= item.targetPrice * 1.1
   ) {
     return {
-      tone: 'yellow',
+      tone: 'amber',
       label: tActive('wl.within10'),
     };
   }

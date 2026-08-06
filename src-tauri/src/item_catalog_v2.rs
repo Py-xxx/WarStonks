@@ -335,6 +335,15 @@ pub(crate) enum LookupKind {
     Slug,
     GameRef,
     GameRefLeaf,
+    /// A gameRef leaf reduced to its stem — trailing structural tokens (`Blueprint`,
+    /// `Component`, tier markers like `Beginner`) stripped. AlecaFrame reports the game's own
+    /// class name, which decorates the same real item differently from WFM's `gameRef`
+    /// (confirmed live: AlecaFrame's `ZarimanShipFuselageComponent` is WFM's
+    /// `ZarimanShipFuselageBlueprint`). Both stem to the same key, so the item resolves instead
+    /// of leaking a raw class name into the trade log. Strictly less specific than
+    /// `GameRefLeaf`, so it is tried last and — like every other kind — is dropped entirely
+    /// when the stem is ambiguous, never guessed at.
+    GameRefStem,
     Name,
 }
 
@@ -407,6 +416,27 @@ impl WfstatMatchReport {
 /// WFM tags are unordered and not designed as a taxonomy, so this picks the single label the
 /// rest of the app actually branches on (set completion, relic odds, arcane handling), by
 /// priority — most specific tag wins.
+/// Whether an image path is real artwork rather than one of WFM's own stand-ins.
+///
+/// Two kinds of non-art come back from WFM: an empty string (the field is present but blank),
+/// and its explicit `items/unknown*` placeholder — confirmed live on 34 items, all of them
+/// brand-new releases WFM has no art for yet. Both are reported as "no image" so the UI renders
+/// its own styled fallback instead of a blank or a grey "unknown" box.
+///
+/// This matches on WFM's placeholder *filename convention*, never on item names. Note there is a
+/// third case this deliberately cannot catch: WFM also serves one byte-identical grey asset under
+/// per-item filenames for ~41 items (verified by md5). That is indistinguishable from legitimate
+/// shared art — every Axi relic correctly shares one image, for instance — so those still render
+/// exactly what warframe.market itself shows.
+fn is_real_item_art(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let file_name = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    !file_name.to_ascii_lowercase().starts_with("unknown.")
+}
+
 pub(crate) fn classify_item_family(tags: &[String]) -> String {
     // "component"/"blueprint" must outrank "warframe"/"weapon"/"sentinel"/"archwing": WFM tags a
     // part with BOTH its own kind and its parent's kind (Mesa Prime Blueprint carries
@@ -457,13 +487,24 @@ pub(crate) fn build_item_rows(bulk_json: &str) -> serde_json::Result<Vec<ItemRow
                 .filter(|value| !value.trim().is_empty());
             let item_family = classify_item_family(&item.tags);
             let name_en = en.and_then(|entry| entry.name.clone()).unwrap_or_default();
-            let icon = en.and_then(|entry| entry.icon.clone());
-            let thumb = en.and_then(|entry| entry.thumb.clone());
+            // WFM ships `""` (not a missing field) for art it doesn't have yet — confirmed live
+            // on 15 brand-new items, whose `thumb` is empty while `icon` falls back to WFM's own
+            // `items/unknown.png` placeholder. Treating `Some("")` as present is what left
+            // `preferred_image` empty for those rows and broke their icons downstream, so every
+            // image field is normalized to None here rather than carrying a blank string.
+            let icon = en
+                .and_then(|entry| entry.icon.clone())
+                .filter(|value| is_real_item_art(value));
+            let thumb = en
+                .and_then(|entry| entry.thumb.clone())
+                .filter(|value| is_real_item_art(value));
             let relic_tier = if item_family == "relic" {
                 name_en.split_whitespace().next().map(str::to_string)
             } else {
                 None
             };
+            // Thumb first: every consumer renders this at icon size, so the 128px asset is the
+            // right default and `icon` is the full-size fallback.
             let preferred_image = thumb.clone().or_else(|| icon.clone());
             ItemRow {
                 item_key: item.id,
@@ -596,6 +637,9 @@ pub(crate) fn build_item_lookup(
             if let Some((_, leaf)) = game_ref.rsplit_once('/') {
                 if !leaf.trim().is_empty() {
                     add(fold(leaf), LookupKind::GameRefLeaf, &item.item_key);
+                    if let Some(stem) = game_ref_stem(leaf) {
+                        add(stem, LookupKind::GameRefStem, &item.item_key);
+                    }
                 }
             }
         }
@@ -615,6 +659,9 @@ pub(crate) fn build_item_lookup(
             if let Some((_, leaf)) = unique_name.rsplit_once('/') {
                 if !leaf.trim().is_empty() {
                     add(fold(leaf), LookupKind::GameRefLeaf, &item.item_key);
+                    if let Some(stem) = game_ref_stem(leaf) {
+                        add(stem, LookupKind::GameRefStem, &item.item_key);
+                    }
                 }
             }
         }
@@ -715,6 +762,46 @@ const STRUCTURAL_PART_WORDS: &[&[&str]] = &[
 /// Only reached when no structural word matched — this is the item that IS the blueprint
 /// itself (e.g. "Zephyr Prime Blueprint"), which WFStat lists as a component named "Blueprint".
 const GENERIC_PART_WORDS: &[&[&str]] = &[&["blueprint", "component"]];
+
+/// Structural tokens the game appends to a class name that WFM's own `gameRef` may not carry.
+/// Stripping them lets AlecaFrame's raw class name line up with WFM's for the same real item.
+/// These are structural vocabulary, not item names — the same principle as
+/// `STRUCTURAL_PART_WORDS` above.
+const GAME_REF_STEM_SUFFIXES: &[&str] = &[
+    // Part-kind decorations: WFM and the game disagree on which one a recipe carries.
+    "blueprint",
+    "component",
+    // Mod tier markers: the game names the starter variant of a mod separately.
+    "beginner",
+    "intermediate",
+    "advanced",
+];
+
+/// Reduces a gameRef leaf to a comparable stem by repeatedly stripping the structural suffixes
+/// above — `zarimanshipfuselagecomponent` and `zarimanshipfuselageblueprint` both become
+/// `zarimanshipfuselage`.
+///
+/// Returns `None` when nothing was stripped (the stem would just duplicate the `GameRefLeaf`
+/// entry) or when stripping would leave too little to be a meaningful identifier, so a short
+/// generic remnant can never become a resolvable key.
+fn game_ref_stem(leaf: &str) -> Option<String> {
+    let mut stem = fold(leaf);
+    let mut stripped_any = false;
+    loop {
+        let Some(suffix) = GAME_REF_STEM_SUFFIXES
+            .iter()
+            .find(|suffix| stem.len() > suffix.len() && stem.ends_with(**suffix))
+        else {
+            break;
+        };
+        stem.truncate(stem.len() - suffix.len());
+        stripped_any = true;
+    }
+    if !stripped_any || stem.len() < 6 {
+        return None;
+    }
+    Some(stem)
+}
 
 /// Reduces a slug or name fragment to a comparable "part word" — e.g. both
 /// `zephyr_prime_chassis_blueprint` and a WFStat component named "Chassis" fold to `chassis`.
@@ -1527,6 +1614,7 @@ fn lookup_kind_label(kind: LookupKind) -> &'static str {
         LookupKind::Slug => "slug",
         LookupKind::GameRef => "game_ref",
         LookupKind::GameRefLeaf => "game_ref_leaf",
+        LookupKind::GameRefStem => "game_ref_stem",
         LookupKind::Name => "name",
     }
 }
@@ -1897,7 +1985,7 @@ const CATALOG_V2_DATABASE_TMP_FILE: &str = "item_catalog_v2.sqlite.building";
 /// `set_parts.quantity_in_set`, `wfstat_relic_variants`, `language_pack_meta`, etc. were added).
 /// Without this, a launch would silently keep reusing an older file missing those columns/tables
 /// forever, since nothing about WFM's data changed to trigger a rebuild.
-const CATALOG_V2_SCHEMA_VERSION: &str = "4";
+const CATALOG_V2_SCHEMA_VERSION: &str = "6";
 
 /// One point in the build the caller might want to report progress at. Internal plumbing only —
 /// no `Serialize`, nothing crosses the IPC boundary here; the startup caller translates each
@@ -2627,6 +2715,9 @@ pub struct ItemV2Lookup {
     pub set_root: bool,
     pub icon: Option<String>,
     pub thumb: Option<String>,
+    /// The icon to actually render — `thumb` falling back to `icon`, resolved once here so no
+    /// consumer has to re-derive it (and get the empty-string cases wrong).
+    pub preferred_image: Option<String>,
     /// Which key resolved the query — surfaced so the caller (or a developer testing this) can
     /// tell a slug hit from a name hit apart, rather than treating "found" as one undifferentiated
     /// outcome.
@@ -2668,6 +2759,8 @@ pub(crate) fn lookup_item_v2_inner(
         LookupKind::GameRef,
         LookupKind::GameRefLeaf,
         LookupKind::Name,
+        // Least specific, so it only ever answers what nothing above could.
+        LookupKind::GameRefStem,
     ];
 
     let mut resolved: Option<(String, LookupKind)> = None;
@@ -2688,7 +2781,18 @@ pub(crate) fn lookup_item_v2_inner(
         return Ok(None);
     };
 
-    let (slug, name_en, item_family, max_rank, ducats, bulk_tradable, set_root, icon, thumb): (
+    let (
+        slug,
+        name_en,
+        item_family,
+        max_rank,
+        ducats,
+        bulk_tradable,
+        set_root,
+        icon,
+        thumb,
+        preferred_image,
+    ): (
         String,
         String,
         String,
@@ -2696,10 +2800,12 @@ pub(crate) fn lookup_item_v2_inner(
         Option<i64>,
         i64,
         i64,
+        Option<String>,
         Option<String>,
         Option<String>,
     ) = connection.query_row(
-        "SELECT slug, name_en, item_family, max_rank, ducats, bulk_tradable, set_root, icon, thumb
+        "SELECT slug, name_en, item_family, max_rank, ducats, bulk_tradable, set_root, icon,
+                thumb, preferred_image
          FROM items WHERE item_key = ?1",
         params![item_key],
         |row| {
@@ -2713,6 +2819,7 @@ pub(crate) fn lookup_item_v2_inner(
                 row.get(6)?,
                 row.get(7)?,
                 row.get(8)?,
+                row.get(9)?,
             ))
         },
     )?;
@@ -2758,6 +2865,7 @@ pub(crate) fn lookup_item_v2_inner(
         set_root: set_root != 0,
         icon,
         thumb,
+        preferred_image,
         matched_kind: lookup_kind_label(matched_kind).to_string(),
         set_parts,
         wfstat_matched: wfstat_matched != 0,
@@ -2802,7 +2910,131 @@ pub(crate) fn catalog_v2_database_path(app: &tauri::AppHandle) -> Result<std::pa
         .path()
         .app_data_dir()
         .context("failed to resolve the app data directory")?;
-    Ok(app_data_dir.join(CATALOG_V2_DATABASE_FILE))
+    let path = app_data_dir.join(CATALOG_V2_DATABASE_FILE);
+    remember_catalog_path(&path);
+    Ok(path)
+}
+
+/// The catalog's location, remembered the first time anything resolves it, so image lookups can
+/// work from code paths that never receive an `AppHandle` (see `item_image`).
+static CATALOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+fn remember_catalog_path(path: &Path) {
+    let _ = CATALOG_PATH.set(path.to_path_buf());
+}
+
+struct ImageCache {
+    /// The catalog file's modification time when this snapshot was taken. A background refresh
+    /// swaps the file atomically (temp file + rename), so a changed mtime is exactly the signal
+    /// that the snapshot is stale — no explicit invalidation call to forget anywhere.
+    built_from_modified: Option<std::time::SystemTime>,
+    by_item_key: HashMap<String, String>,
+    by_slug: HashMap<String, String>,
+}
+
+static IMAGE_CACHE: std::sync::OnceLock<std::sync::RwLock<Option<ImageCache>>> =
+    std::sync::OnceLock::new();
+
+fn catalog_modified_time(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|meta| meta.modified().ok())
+}
+
+fn build_image_cache(path: &Path) -> Option<ImageCache> {
+    let connection =
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let mut statement = connection
+        .prepare(
+            "SELECT item_key, slug, preferred_image FROM items
+             WHERE preferred_image IS NOT NULL AND TRIM(preferred_image) <> ''",
+        )
+        .ok()?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .ok()?;
+
+    let mut by_item_key = HashMap::new();
+    let mut by_slug = HashMap::new();
+    for row in rows.flatten() {
+        let (item_key, slug, image) = row;
+        by_slug.insert(slug, image.clone());
+        by_item_key.insert(item_key, image);
+    }
+    Some(ImageCache {
+        built_from_modified: catalog_modified_time(path),
+        by_item_key,
+        by_slug,
+    })
+}
+
+/// **The** way to get an item's icon anywhere in this app.
+///
+/// Accepts either an `item_key` or a WFM slug, because call sites carry one or the other. Backed
+/// by a process-wide snapshot of the catalog's `preferred_image` column that rebuilds itself when
+/// the catalog file changes, so callers need no `AppHandle`, no connection, and no cache
+/// management of their own.
+///
+/// This exists because the market_observatory cache tables carry their own `*_image_path`
+/// columns which are frequently NULL — items simply rendered without an icon. Those columns are
+/// now treated as disposable; the catalog is the answer.
+pub(crate) fn item_image(key_or_slug: &str) -> Option<String> {
+    let key_or_slug = key_or_slug.trim();
+    if key_or_slug.is_empty() {
+        return None;
+    }
+    let path = CATALOG_PATH.get()?;
+    let lock = IMAGE_CACHE.get_or_init(|| std::sync::RwLock::new(None));
+
+    {
+        let guard = lock.read().ok()?;
+        if let Some(cache) = guard.as_ref() {
+            if cache.built_from_modified == catalog_modified_time(path) {
+                return cache
+                    .by_item_key
+                    .get(key_or_slug)
+                    .or_else(|| cache.by_slug.get(key_or_slug))
+                    .cloned();
+            }
+        }
+    }
+
+    let rebuilt = build_image_cache(path)?;
+    let result = rebuilt
+        .by_item_key
+        .get(key_or_slug)
+        .or_else(|| rebuilt.by_slug.get(key_or_slug))
+        .cloned();
+    if let Ok(mut guard) = lock.write() {
+        *guard = Some(rebuilt);
+    }
+    result
+}
+
+/// Opens the catalog read-only using the path remembered at startup, for code paths that have
+/// no `AppHandle` to resolve it from (see `item_image` for the same mechanism). `None` before
+/// anything has resolved the path, or if the catalog isn't on disk yet.
+pub(crate) fn open_catalog_v2_from_remembered_path() -> Option<Connection> {
+    let path = CATALOG_PATH.get()?;
+    Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
+}
+
+/// Resolves the first of `candidates` (item_key or slug) that the catalog has art for, then
+/// falls back to whatever the caller already had. Lets a call site prefer a precise key while
+/// still trying a slug, in one expression.
+pub(crate) fn item_image_or(
+    candidates: &[Option<&str>],
+    fallback: Option<String>,
+) -> Option<String> {
+    candidates
+        .iter()
+        .flatten()
+        .find_map(|candidate| item_image(candidate))
+        .or(fallback)
 }
 
 /// Opens the v2 catalog read-only. Shared by every read-side caller outside this module
@@ -2841,7 +3073,7 @@ pub(crate) fn load_autocomplete_items_v2(
             items.slug,
             items.max_rank,
             items.item_family,
-            COALESCE(NULLIF(items.thumb, ''), NULLIF(items.icon, '')),
+            items.preferred_image,
             items.bulk_tradable
          FROM items
          LEFT JOIN item_i18n i18n
@@ -2967,6 +3199,48 @@ pub(crate) fn load_slug_to_item_key_map(
         .context("failed to read items for the slug -> item_key map")?;
     rows.collect::<rusqlite::Result<HashMap<_, _>>>()
         .context("failed to collect the slug -> item_key map")
+}
+
+// ─── Item images: one source of truth ───────────────────────────────────────────────────────
+//
+// Every icon the UI renders resolves through here. The market_observatory cache tables carry
+// their own `*_image_path` columns, but those were populated by whatever data happened to be
+// available when a scan ran and are frequently NULL — items simply never rendered an icon. The
+// catalog knows the real answer for all 3,837 items, so these helpers are the only correct way
+// to ask "what image goes with this item?".
+//
+// `preferred_image` is the column to read: it's `thumb` (WFM's 128px asset, the right size for
+// every surface in this app) falling back to the full-size `icon`. `item_i18n.sub_icon` is NULL
+// for every row and must never be used.
+
+/// One item's image by its stable `item_key`. `None` only when the item genuinely has no art.
+pub(crate) fn image_for_item_key(connection: &Connection, item_key: &str) -> Option<String> {
+    connection
+        .query_row(
+            "SELECT preferred_image FROM items WHERE item_key = ?1",
+            params![item_key],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// One item's image by WFM slug — for the many call sites that only carry a slug.
+pub(crate) fn image_for_slug(connection: &Connection, slug: &str) -> Option<String> {
+    connection
+        .query_row(
+            "SELECT preferred_image FROM items WHERE slug = ?1",
+            params![slug],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// Resolves many query strings against the v2 catalog in one connection, keyed by the exact
@@ -3618,6 +3892,65 @@ mod tests {
     }
 
     #[test]
+    fn game_ref_stem_strips_structural_suffixes_so_aleca_and_wfm_agree() {
+        // The real divergence, confirmed live: AlecaFrame reports the game's own class name
+        // (`...Component`) for an item WFM's gameRef calls `...Blueprint`. Both must stem alike.
+        assert_eq!(
+            game_ref_stem("ZarimanShipFuselageComponent").as_deref(),
+            Some("zarimanshipfuselage")
+        );
+        assert_eq!(
+            game_ref_stem("ZarimanShipFuselageBlueprint").as_deref(),
+            Some("zarimanshipfuselage")
+        );
+        // Nothing to strip -> None, so the stem bucket never just duplicates GameRefLeaf.
+        assert_eq!(game_ref_stem("MesaPrime"), None);
+        // A stem too short to be a meaningful identifier is refused outright.
+        assert_eq!(game_ref_stem("Blueprint"), None);
+    }
+
+    #[test]
+    fn an_ambiguous_stem_is_rejected_rather_than_resolved_to_one_arbitrary_item() {
+        // Two real items whose leaves stem to the same string must poison that stem, exactly
+        // like every other lookup kind — a trade must never be labelled with the wrong item.
+        let items = vec![
+            ItemRow {
+                item_key: "a".into(), slug: "thing_blueprint".into(),
+                game_ref: Some("/Lotus/X/SharedThingBlueprint".into()),
+                name_en: "Thing Blueprint".into(), item_family: "blueprint".into(),
+                max_rank: None, ducats: None, bulk_tradable: false, set_root: false,
+                icon: None, thumb: None, subtypes: Vec::new(), relic_tier: None,
+                preferred_image: None,
+            },
+            ItemRow {
+                item_key: "b".into(), slug: "thing_component".into(),
+                game_ref: Some("/Lotus/X/SharedThingComponent".into()),
+                name_en: "Thing Component".into(), item_family: "component".into(),
+                max_rank: None, ducats: None, bulk_tradable: false, set_root: false,
+                icon: None, thumb: None, subtypes: Vec::new(), relic_tier: None,
+                preferred_image: None,
+            },
+        ];
+        let (accepted, rejected) = build_item_lookup(&items, &HashMap::new());
+        assert!(
+            !accepted.iter().any(|row| row.kind == LookupKind::GameRefStem),
+            "a colliding stem must not be resolvable"
+        );
+        assert!(rejected.iter().any(|entry| entry.lookup_key == "sharedthing"));
+    }
+
+    #[test]
+    fn wfm_placeholder_art_is_reported_as_no_image() {
+        // WFM's own `items/unknown*` stand-in must not reach the UI as if it were real art.
+        assert!(!is_real_item_art("items/unknown.png"));
+        assert!(!is_real_item_art("items/unknown.thumb.png"));
+        assert!(!is_real_item_art("   "));
+        assert!(is_real_item_art("items/images/en/thumbs/mesa_prime_set.abc.128x128.webp"));
+        // A real item that merely *contains* the word must still count as art.
+        assert!(is_real_item_art("items/images/en/unknown_soldier.abc.webp"));
+    }
+
+    #[test]
     fn wfstat_unique_name_resolves_when_it_diverges_from_wfm_game_ref() {
         // Confirmed live: WFM's own gameRef for Yareli Prime's Systems part is
         // `.../YareliPrimeSystemsBlueprint`, but the game's true internal class name — which
@@ -4014,6 +4347,52 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_thumb_falls_through_to_icon_instead_of_becoming_a_blank_image() {
+        // The real shape that broke icons: WFM sends `""` for art it doesn't have rather than
+        // omitting the field, so `Some("")` was treated as present and `preferred_image` ended
+        // up an empty string. Confirmed live on 15 brand-new items.
+        let entries = serde_json::json!([{
+            "id": "item-1",
+            "slug": "vadarya_prime_barrel",
+            "gameRef": null,
+            "tags": ["component"],
+            "ducats": null,
+            "maxRank": null,
+            "bulkTradable": false,
+            "i18n": { "en": {
+                "name": "Vadarya Prime Barrel",
+                "icon": "items/images/en/vadarya_prime_barrel.abc.webp",
+                "thumb": ""
+            }}
+        }]);
+        let items = build_item_rows(&serde_json::json!({"data": entries}).to_string())
+            .expect("parses");
+        assert_eq!(items[0].thumb, None, "an empty thumb must normalize to None");
+        assert_eq!(
+            items[0].preferred_image.as_deref(),
+            Some("items/images/en/vadarya_prime_barrel.abc.webp"),
+            "preferred_image must fall through to icon, never be a blank string"
+        );
+    }
+
+    #[test]
+    fn an_item_with_no_art_at_all_has_no_preferred_image() {
+        let entries = serde_json::json!([{
+            "id": "item-1",
+            "slug": "no_art",
+            "gameRef": null,
+            "tags": ["misc"],
+            "ducats": null,
+            "maxRank": null,
+            "bulkTradable": false,
+            "i18n": { "en": { "name": "No Art", "icon": "", "thumb": "" }}
+        }]);
+        let items = build_item_rows(&serde_json::json!({"data": entries}).to_string())
+            .expect("parses");
+        assert_eq!(items[0].preferred_image, None);
+    }
+
+    #[test]
     fn build_item_i18n_rows_captures_every_locale_not_just_english() {
         let entries = serde_json::json!([{
             "id": "item-1",
@@ -4302,3 +4681,4 @@ mod tests {
         assert_eq!(i18n_row_count_v2(&connection, "fr").unwrap(), 1);
     }
 }
+

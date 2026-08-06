@@ -210,22 +210,42 @@ function buildAnalysisPreviewLabel(analysis: ItemAnalysisResponse | null): Trans
   return 'mkt.hero.wait';
 }
 
+/** Kept in sync with `COMPACT_ROW_LIMIT` in WatchlistTable — the card triages rather than
+ *  duplicating the full tab, so it states plainly how many it isn't showing. */
+const COMPACT_WATCHLIST_ROWS = 3;
+
 function WatchlistCard() {
   const { t } = useTranslation();
   const watchlistCount = useAppStore((state) => state.watchlist.length);
+  const setHomeSubTab = useAppStore((state) => state.setHomeSubTab);
+  const hiddenCount = Math.max(0, watchlistCount - COMPACT_WATCHLIST_ROWS);
 
   return (
     <div className="card accent-green">
       <div className="card-header">
         <span className="card-label">{t('ov.watchlist')}</span>
         <span className="badge badge-blue">{t('hm.itemsCount', { count: watchlistCount })}</span>
+        <div className="card-actions">
+          <button className="text-btn" type="button" onClick={() => setHomeSubTab('watchlist')}>
+            {t('wl.manage')} →
+          </button>
+        </div>
       </div>
 
       <div className="card-body card-body-compact">
-        <WatchlistAddControls compact />
+        <WatchlistAddControls mode="selected" />
       </div>
 
       <WatchlistTable variant="compact" />
+
+      {hiddenCount > 0 ? (
+        <div className="wl-compact-foot">
+          {t('wl.closestToTarget', {
+            shown: String(Math.min(COMPACT_WATCHLIST_ROWS, watchlistCount)),
+            rest: String(hiddenCount),
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

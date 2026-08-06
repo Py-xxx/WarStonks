@@ -639,7 +639,7 @@ pub fn get_worldstate_vault_trader(app: tauri::AppHandle) -> Result<VaultTraderI
                     (
                         strip_trailing_set_suffix(&item.name_en),
                         Some(item.slug.clone()),
-                        item.thumb.clone().or_else(|| item.icon.clone()),
+                        item.preferred_image.clone(),
                         affected,
                     )
                 }

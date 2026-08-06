@@ -4742,6 +4742,16 @@ fn collapse_grouped_trade_sets(
     let mut seen_group_ids = HashMap::<String, bool>::new();
     let mut changed = false;
 
+    // A collapsed set is persisted under a deterministic id (`af-set-{group_id}`), so a later
+    // load sees BOTH that stored row and the original grouped rows it was built from. Collapsing
+    // again would emit a second copy of the same set. Anything already present under that id is
+    // recorded up front so the group it came from is dropped instead of re-collapsed.
+    let persisted_collapsed_ids: HashSet<&str> = records
+        .iter()
+        .filter(|record| record.group_id.is_none())
+        .map(|record| record.id.as_str())
+        .collect();
+
     for record in records {
         let Some(group_id) = &record.group_id else {
             collapsed.push(record.clone());
@@ -4752,6 +4762,13 @@ fn collapse_grouped_trade_sets(
             continue;
         }
         seen_group_ids.insert(group_id.clone(), true);
+
+        // This group was already collapsed and persisted on an earlier run; that stored row is
+        // passing through this same loop, so the group itself must not produce a second one.
+        if persisted_collapsed_ids.contains(format!("af-set-{group_id}").as_str()) {
+            changed = true;
+            continue;
+        }
 
         let Some(group) = grouped_records.get(group_id) else {
             continue;
@@ -5168,7 +5185,49 @@ fn load_stored_trade_log_records_inner(
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to collect stored trade log rows")?;
 
-    Ok(rows)
+    Ok(reresolve_records_against_catalog(rows))
+}
+
+/// Re-points every cached row's catalog-derived fields (display name, slug, image) at the item
+/// catalog.
+///
+/// The trade-log cache stores whatever those were at import time. Rows imported before an item
+/// could be resolved kept a raw in-game class name and a slug derived from it (e.g.
+/// `ZarimanShipFuselageComponent` / `zarimanshipfuselagecomponent`), and nothing ever revisited
+/// them — so improved resolution only helped *new* imports while old rows stayed wrong forever,
+/// and set-collapsing (which matches on component slugs) kept failing for them.
+///
+/// Treating these three fields as disposable and re-deriving them on read means the catalog is
+/// always the answer, and a resolution fix retroactively repairs existing history with no
+/// migration. A row the catalog still can't resolve is left exactly as it was.
+fn reresolve_records_against_catalog(
+    mut records: Vec<StoredTradeLogRecord>,
+) -> Vec<StoredTradeLogRecord> {
+    let Some(catalog) = crate::item_catalog_v2::open_catalog_v2_from_remembered_path() else {
+        return records;
+    };
+    // One lookup per distinct identifier, not per row — a long trade log repeats items heavily.
+    let mut resolved = HashMap::<String, Option<(String, String, Option<String>)>>::new();
+    for record in &mut records {
+        let key = record.slug.clone();
+        let entry = resolved.entry(key).or_insert_with(|| {
+            crate::item_catalog_v2::lookup_item_v2_inner(&catalog, &record.slug)
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    crate::item_catalog_v2::lookup_item_v2_inner(&catalog, &record.item_name)
+                        .ok()
+                        .flatten()
+                })
+                .map(|item| (item.name_en, item.slug, item.preferred_image))
+        });
+        if let Some((name, slug, image)) = entry {
+            record.item_name = name.clone();
+            record.slug = slug.clone();
+            record.image_path = image.clone().or_else(|| record.image_path.take());
+        }
+    }
+    records
 }
 
 fn load_trade_log_last_updated_at(
@@ -5536,7 +5595,7 @@ fn load_trade_set_components_from_catalog(
 fn list_trade_set_roots_from_catalog(connection: &Connection) -> Result<Vec<TradeSetRootRecord>> {
     let mut statement = connection
         .prepare(
-            "SELECT slug, name_en, COALESCE(thumb, icon)
+            "SELECT slug, name_en, preferred_image
              FROM items
              WHERE set_root = 1
              ORDER BY LOWER(name_en) ASC",
@@ -9668,7 +9727,7 @@ fn resolve_catalog_trade_item_meta(
                 item_key,
                 slug,
                 COALESCE(NULLIF(name_en, ''), slug),
-                COALESCE(NULLIF(thumb, ''), NULLIF(icon, '')),
+                preferred_image,
                 max_rank,
                 bulk_tradable
              FROM items
@@ -11865,6 +11924,38 @@ mod tests {
             allocation_total_platinum: Some(4),
             group_sort_order: group_id.map(|_| 0),
         }
+    }
+
+    #[test]
+    fn an_already_persisted_collapsed_set_is_not_collapsed_a_second_time() {
+        // The real double-display: a group was collapsed and its `af-set-{group_id}` row
+        // persisted, but the component rows it was built from stay in the cache. On the next
+        // load both are present, and collapsing again produced a SECOND set row alongside the
+        // stored one — the user saw the set twice (or, while the components were unresolvable,
+        // the raw "Multiple Item Trade" beside the set).
+        let mut persisted_set = stored_record(
+            "af-set-g1",
+            "bronco_prime_set",
+            "alecaframe",
+            None,
+            "2026-03-10T09:05:00.000+00:00",
+        );
+        persisted_set.item_name = "Bronco Prime Set".to_string();
+        let records = vec![
+            persisted_set,
+            stored_record("af-1", "bronco_prime_barrel", "alecaframe", Some("g1"), "2026-03-10T09:05:00.000+00:00"),
+            stored_record("af-2", "bronco_prime_blueprint", "alecaframe", Some("g1"), "2026-03-10T09:05:00.000+00:00"),
+        ];
+
+        let (collapsed, _changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        assert_eq!(
+            collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count(),
+            1,
+            "the persisted collapsed row must not be duplicated by re-collapsing its group"
+        );
+        assert!(collapsed.iter().any(|r| r.id == "af-set-g1"));
+        // The raw component rows must not leak through either.
+        assert!(!collapsed.iter().any(|r| r.group_id.is_some()));
     }
 
     #[test]

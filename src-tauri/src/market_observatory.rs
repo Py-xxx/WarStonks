@@ -5990,18 +5990,17 @@ fn load_item_detail_summary(
     slug: &str,
 ) -> Result<ItemDetailSummary> {
     let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
-    let (resolved_key, name, resolved_slug, item_family, max_rank, ducats, relic_tier, icon, thumb): (
+    let (resolved_key, name, resolved_slug, item_family, max_rank, ducats, relic_tier, image_path): (
         String,
         String,
         String,
         String,
         Option<i64>,
         Option<i64>,
-        Option<String>,
         Option<String>,
         Option<String>,
     ) = connection.query_row(
-        "SELECT item_key, name_en, slug, item_family, max_rank, ducats, relic_tier, icon, thumb
+        "SELECT item_key, name_en, slug, item_family, max_rank, ducats, relic_tier, preferred_image
          FROM items WHERE item_key = ?1 OR slug = ?2 LIMIT 1",
         params![item_key, slug],
         |row| {
@@ -6014,11 +6013,9 @@ fn load_item_detail_summary(
                 row.get(5)?,
                 row.get(6)?,
                 row.get(7)?,
-                row.get(8)?,
             ))
         },
     )?;
-    let image_path = thumb.or(icon);
 
     let raw_json: Option<String> = connection
         .query_row(
@@ -6256,7 +6253,7 @@ fn load_scanner_sets_from_map(
     let generated_at = format_timestamp(now_utc())?;
 
     let mut set_stmt = connection.prepare(
-        "SELECT item_key, slug, name_en, COALESCE(thumb, icon) FROM items WHERE set_root = 1",
+        "SELECT item_key, slug, name_en, preferred_image FROM items WHERE set_root = 1",
     )?;
     let set_roots: Vec<(String, String, String, Option<String>)> = set_stmt
         .query_map([], |row| {
@@ -6274,7 +6271,7 @@ fn load_scanner_sets_from_map(
         };
 
         let mut part_stmt = connection.prepare(
-            "SELECT p.item_key, p.slug, p.name_en, COALESCE(p.thumb, p.icon), sp.quantity_in_set
+            "SELECT p.item_key, p.slug, p.name_en, p.preferred_image, sp.quantity_in_set
              FROM set_parts sp JOIN items p ON p.item_key = sp.part_key
              WHERE sp.set_key = ?1
              ORDER BY p.name_en",
@@ -6324,7 +6321,7 @@ fn list_relic_roots_from_catalog(connection: &Connection) -> Result<Vec<RelicRoo
            i.item_key,
            i.slug,
            i.name_en,
-           COALESCE(i.thumb, i.icon),
+           i.preferred_image,
            wm.raw_json
          FROM items i
          LEFT JOIN wfstat_matches wm ON wm.item_key = i.item_key
@@ -6434,7 +6431,7 @@ fn load_catalog_set_components(
     fetched_at: &str,
 ) -> Result<Vec<CachedSetComponentRecord>> {
     let mut statement = catalog_connection.prepare(
-        "SELECT p.item_key, p.slug, p.name_en, COALESCE(p.thumb, p.icon), sp.quantity_in_set
+        "SELECT p.item_key, p.slug, p.name_en, p.preferred_image, sp.quantity_in_set
          FROM set_parts sp JOIN items p ON p.item_key = sp.part_key
          WHERE sp.set_key = ?1
          ORDER BY p.name_en",
@@ -6517,14 +6514,49 @@ fn persist_set_component_cache(
     Ok(())
 }
 
+/// Re-points every cached row's images at the item catalog.
+///
+/// `set_component_cache` stores `set_image_path`/`component_image_path` alongside the rest of the
+/// row, but those were written from whatever data a past scan happened to hold and are frequently
+/// NULL — the direct cause of items rendering without an icon. The catalog knows the real answer
+/// for every item, so the cached columns are treated as disposable and overwritten on read. A
+/// component the catalog can't resolve keeps whatever it already had rather than losing an image
+/// it did have.
+fn refresh_component_images_from_catalog(
+    catalog_connection: &Connection,
+    components: &mut [CachedSetComponentRecord],
+) {
+    for component in components {
+        if let Some(image) =
+            crate::item_catalog_v2::image_for_item_key(catalog_connection, &component.set_item_key)
+        {
+            component.set_image_path = Some(image);
+        }
+        let component_image = component
+            .component_item_key
+            .as_deref()
+            .and_then(|key| crate::item_catalog_v2::image_for_item_key(catalog_connection, key))
+            .or_else(|| {
+                crate::item_catalog_v2::image_for_slug(
+                    catalog_connection,
+                    &component.component_slug,
+                )
+            });
+        if let Some(image) = component_image {
+            component.component_image_path = Some(image);
+        }
+    }
+}
+
 fn ensure_set_components_cached(
     app: &tauri::AppHandle,
     catalog_connection: &Connection,
     observatory_connection: &Connection,
     set_root: &SetRootCatalogRecord,
 ) -> Result<(Vec<CachedSetComponentRecord>, bool)> {
-    let cached = load_cached_set_components(observatory_connection, &set_root.slug)?;
+    let mut cached = load_cached_set_components(observatory_connection, &set_root.slug)?;
     if !cached.is_empty() && set_component_cache_is_fresh(&cached) {
+        refresh_component_images_from_catalog(catalog_connection, &mut cached);
         return Ok((cached, false));
     }
 
@@ -6968,11 +7000,19 @@ fn load_set_completion_owned_items(connection: &Connection) -> Result<Vec<SetCom
     )?;
 
     let rows = statement.query_map([], |row| {
+        let item_key: Option<String> = row.get(0)?;
+        let slug: String = row.get(1)?;
+        let cached_image: Option<String> = row.get(3)?;
         Ok(SetCompletionOwnedItem {
-            item_key: row.get(0)?,
-            slug: row.get(1)?,
+            // The catalog is authoritative for the icon; the stored `component_image_path` is
+            // only a fallback for anything the catalog can't resolve.
+            image_path: crate::item_catalog_v2::item_image_or(
+                &[item_key.as_deref(), Some(slug.as_str())],
+                cached_image,
+            ),
+            item_key,
+            slug,
             name: row.get(2)?,
-            image_path: row.get(3)?,
             quantity: row.get(4)?,
             updated_at: row.get(5)?,
         })
@@ -8530,7 +8570,7 @@ fn load_relic_reward_profiles(
             let item_key = slug_to_item_key.get(&reward_slug).cloned();
             let image_path = catalog_connection
                 .query_row(
-                    "SELECT COALESCE(thumb, icon) FROM items WHERE slug = ?1",
+                    "SELECT preferred_image FROM items WHERE slug = ?1",
                     params![reward_slug],
                     |row| row.get::<_, Option<String>>(0),
                 )
@@ -8638,7 +8678,7 @@ fn resolve_relic_catalog_entry(
 
     let lookup = catalog_connection
         .query_row(
-            "SELECT item_key, slug, name_en, COALESCE(thumb, icon)
+            "SELECT item_key, slug, name_en, preferred_image
              FROM items
              WHERE relic_tier = ?1 COLLATE NOCASE
                AND name_en = ?2 COLLATE NOCASE
