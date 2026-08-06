@@ -89,6 +89,23 @@ export function tConfidence(t: TranslateFn, confidence: { level: string; label: 
   return key ? t(key) : confidence.label;
 }
 
+/** The palette tone a confidence level reads as, shared so every surface that shows confidence
+ *  colors it identically (Market panels and the Home analysis preview). */
+export function confidenceTone(
+  confidence: { level: string } | null | undefined,
+): 'neutral' | 'green' | 'amber' | 'red' {
+  switch (confidence?.level) {
+    case 'high':
+      return 'green';
+    case 'medium':
+      return 'amber';
+    case 'low':
+      return 'red';
+    default:
+      return 'neutral';
+  }
+}
+
 /** WFM order subtypes (closed set) → translation keys; relic refinements reuse `refine.*`.
  *  "Atragraph" is a Warframe proper noun and stays untranslated, like Archwing. */
 const SUBTYPE_LABEL_KEYS: Record<string, TranslationKey> = {

@@ -37,6 +37,7 @@ import {
   getWorldStateSyndicateMissions,
   getWorldStateVoidTrader,
   isTauriRuntime,
+  type VaultTraderInfo,
 } from './tauriClient';
 
 const WFSTAT_EVENTS_URL = 'https://api.warframestat.us/pc/events?language=en';
@@ -764,6 +765,25 @@ export function isWorldStateWindowActive(
   }
 
   return activationMs <= nowMs;
+}
+
+// ---------- Prime Resurgence (Varzia) ----------
+//
+// The backend (`commands::get_worldstate_vault_trader`) now does all of the real work: resolving
+// each inventory entry's `uniqueName` against the item catalog (fixing WFStat's inconsistent raw
+// names like "Astilla Prime Weapon" → the real "Astilla Prime"), filtering to warframes/weapons
+// only, grouping by family, attaching an icon, and computing `active` from the activation/expiry
+// window (WFStat's payload has no `active` field at all — confirmed live). This module just
+// narrows the `unknown` the generic `worldStateExtra` store hands back into that typed shape.
+export function parseVaultTraderPayload(payload: unknown): VaultTraderInfo | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  if (typeof record.active !== 'boolean' || !Array.isArray(record.tradeableItems)) {
+    return null;
+  }
+  return record as unknown as VaultTraderInfo;
 }
 
 export function selectVoidTraderRefreshAt(

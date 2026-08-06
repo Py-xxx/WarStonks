@@ -3,9 +3,7 @@ import { createPortal } from 'react-dom';
 import { WatchlistAddControls } from '../../components/WatchlistAddControls';
 import { WatchlistTable } from '../../components/WatchlistTable';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
-import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
-import { buildWatchlistMarketSignals } from '../../lib/watchlistMarketSignals';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { copyWhisperMessage } from '../../lib/marketMessages';
 import { resolveLocalizedName } from '../../lib/itemNames';
@@ -13,18 +11,13 @@ import { useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
-import { tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
+import { confidenceTone, tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
 import { useDocumentVisibility } from '../../hooks/useDocumentVisibility';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { useAppStore } from '../../stores/useAppStore';
 import type { ItemAnalysisResponse, WfmTopSellOrder } from '../../types';
 
 const COPY_RESET_DELAY_MS = 1800;
-const colorMap = {
-  green: 'var(--accent-green)',
-  amber: 'var(--accent-amber)',
-  red: 'var(--accent-red)',
-};
 
 function CardLoadingOverlay({ visible, label }: { visible: boolean; label: string }) {
   if (!visible) {
@@ -39,26 +32,103 @@ function CardLoadingOverlay({ visible, label }: { visible: boolean; label: strin
   );
 }
 
-function buildSparklinePath(points: number[]): string {
+const TREND_CHART_WIDTH = 300;
+const TREND_CHART_HEIGHT = 56;
+/** Vertical inset so the stroke and the end dot aren't clipped at the extremes. */
+const TREND_CHART_INSET = 5;
+
+interface TrendChartGeometry {
+  line: string;
+  area: string;
+  min: number;
+  max: number;
+  first: number;
+  last: number;
+  lastX: number;
+  lastY: number;
+}
+
+/**
+ * Geometry for the 24h price-trend chart: a line path plus the closed area beneath it, and the
+ * end-point coordinates so the caller can mark "where the price is now". Flat series (every
+ * bucket identical) fall back to a mid-height line rather than dividing by a zero range.
+ */
+function buildTrendChartGeometry(points: number[]): TrendChartGeometry | null {
   if (points.length === 0) {
-    return '';
+    return null;
   }
 
   const safePoints = points.length === 1 ? [points[0], points[0]] : points;
   const max = Math.max(...safePoints);
   const min = Math.min(...safePoints);
-  const range = max - min || 1;
-  const width = 300;
-  const height = 24;
-  const step = width / (safePoints.length - 1);
+  const range = max - min;
+  const usableHeight = TREND_CHART_HEIGHT - TREND_CHART_INSET * 2;
+  const step = TREND_CHART_WIDTH / (safePoints.length - 1);
 
-  return safePoints
-    .map((value, index) => {
-      const x = Math.round(index * step);
-      const y = Math.round(height - ((value - min) / range) * (height - 2) - 1);
-      return `${x},${y}`;
-    })
+  const coordinates = safePoints.map((value, index) => ({
+    x: index * step,
+    y:
+      range === 0
+        ? TREND_CHART_HEIGHT / 2
+        : TREND_CHART_INSET + (1 - (value - min) / range) * usableHeight,
+  }));
+
+  const line = coordinates
+    .map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
     .join(' ');
+  const lastPoint = coordinates[coordinates.length - 1];
+
+  return {
+    line,
+    area: `${line} L${TREND_CHART_WIDTH},${TREND_CHART_HEIGHT} L0,${TREND_CHART_HEIGHT} Z`,
+    min,
+    max,
+    first: safePoints[0],
+    last: safePoints[safePoints.length - 1],
+    lastX: lastPoint.x,
+    lastY: lastPoint.y,
+  };
+}
+
+type MarketPositionTone = 'green' | 'blue' | 'muted';
+
+/**
+ * Where the live cheapest listing sits relative to the analysis pipeline's recommended entry and
+ * exit prices — the "should I be buying or selling right now?" read that the raw numbers alone
+ * don't make obvious. Returns `null` when the analysis hasn't produced both bounds yet, so the
+ * badge is simply absent rather than showing a guess.
+ */
+function buildMarketPosition(
+  cheapestPrice: number | null,
+  entryPrice: number | null,
+  exitPrice: number | null,
+): { labelKey: TranslationKey; tone: MarketPositionTone } | null {
+  if (cheapestPrice === null || entryPrice === null || exitPrice === null) {
+    return null;
+  }
+  if (cheapestPrice <= entryPrice) {
+    return { labelKey: 'ov.pos.nearEntry', tone: 'green' };
+  }
+  if (cheapestPrice >= exitPrice) {
+    return { labelKey: 'ov.pos.nearExit', tone: 'blue' };
+  }
+  return { labelKey: 'ov.pos.fairValue', tone: 'muted' };
+}
+
+/** How close a listing is to the cheapest one — drives the green/amber row highlighting. */
+type SellerPriceTier = 'cheapest' | 'near' | 'normal';
+
+/** Listings within this many platinum of the cheapest are worth flagging as still competitive. */
+const NEAR_CHEAPEST_PLATINUM = 2;
+
+function getSellerPriceTier(platinum: number, cheapestPrice: number): SellerPriceTier {
+  if (platinum === cheapestPrice) {
+    return 'cheapest';
+  }
+  if (platinum - cheapestPrice <= NEAR_CHEAPEST_PLATINUM) {
+    return 'near';
+  }
+  return 'normal';
 }
 
 function calculateSpreadMetrics(orders: WfmTopSellOrder[]) {
@@ -273,76 +343,6 @@ function EventsCard() {
   );
 }
 
-function MetricsRow() {
-  const { t } = useTranslation();
-  const watchlist = useAppStore((state) => state.watchlist);
-  const signals = useMemo(() => buildWatchlistMarketSignals(watchlist), [watchlist]);
-
-  // The signals lib emits English strings (labels, tone words, templated subtitles, tooltips);
-  // translate the known closed set here, falling back to the raw string for anything new.
-  const SIG_MAP: Record<string, TranslationKey> = {
-    Momentum: 'sig.momentum',
-    'Spread Quality': 'sig.spreadQuality',
-    Volatility: 'sig.volatility',
-    Bullish: 'sig.bullish',
-    Weak: 'sig.weak',
-    Stable: 'sig.stable',
-    'Not enough fresh watchlist data': 'sig.notEnough',
-    'Weighted trimmed score from fresh watchlist items, combining 24h change (70%) with current price position inside the entry and exit zone (30%).':
-      'sig.momentumTip',
-    'Weighted trimmed quality score using exit headroom (55%), current alignment versus entry (25%), and watchlist liquidity from item volume (20%).':
-      'sig.spreadTip',
-    'Weighted trimmed 24h absolute move across fresh watchlist items. Lower means calmer pricing; higher means more unstable movement.':
-      'sig.volTip',
-  };
-  const tSig = (value: string): string => {
-    const key = SIG_MAP[value];
-    if (key) {
-      return t(key);
-    }
-    let match = value.match(/^Score (.+) · (\d+) items$/);
-    if (match) {
-      return t('sig.momentumSub', { score: match[1], count: match[2] });
-    }
-    match = value.match(/^(\d+) tradable items$/);
-    if (match) {
-      return t('sig.spreadSub', { count: match[1] });
-    }
-    match = value.match(/^24h absolute move · (\d+) items$/);
-    if (match) {
-      return t('sig.volSub', { count: match[1] });
-    }
-    return value;
-  };
-
-  return (
-    <div className="metrics-row">
-      {signals.map((signal) => (
-        <div key={signal.key} className="card metric-card" title={tSig(signal.tooltip)}>
-          <div className="card-label">{tSig(signal.label)}</div>
-          <div className="metric-value">{tSig(signal.valueText)}</div>
-          <div className="metric-sub">{tSig(signal.subtitle)}</div>
-          <div className="metric-bar">
-            <div
-              className="metric-bar-fill"
-              style={{
-                width: `${signal.fillPct}%`,
-                background:
-                  signal.tone === 'green'
-                    ? colorMap.green
-                    : signal.tone === 'red'
-                      ? colorMap.red
-                      : colorMap.amber,
-                opacity: signal.key === 'volatility' ? 0.8 : 1,
-              }}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function QuickViewCard() {
   const { t } = useTranslation();
   const quickView = useAppStore((s) => s.quickView);
@@ -360,44 +360,23 @@ function QuickViewCard() {
     onClose: () => setViewAllOpen(false),
     active: viewAllOpen && Boolean(selectedItem),
   });
-  const mainOrder = quickView.sellOrders[0] ?? null;
-  const compactOrders = quickView.sellOrders.slice(1, 5);
-  // Full snapshot, cheapest first, for the "View All" popup.
+  // Full snapshot, cheapest first — drives both the top-5 list and the "View All" popup.
   const allOrders = useMemo(
     () => [...quickView.sellOrders].sort((a, b) => a.platinum - b.platinum),
     [quickView.sellOrders],
   );
+  const mainOrder = allOrders[0] ?? null;
+  const topSellers = allOrders.slice(0, 5);
+  const cheapestPrice = mainOrder?.platinum ?? null;
   const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath);
-  const sparklinePath = buildSparklinePath(quickView.sparklinePoints);
   const spreadLabel = formatSpreadLabel(quickView.sellOrders, t);
-  // Use the same recommended exit the Market analysis computes for this item; it's the
-  // adaptive exit price from the shared analysis pipeline, not a placeholder.
-  const exitPrice = analysis?.headline.exitPrice ?? null;
-  const mainStats = [
-    {
-      label: t('mkt.entryPrice'),
-      value: `${mainOrder?.platinum ?? 0} pt`,
-      accent: 'var(--accent-green)',
-    },
-    {
-      label: t('mkt.exitPrice'),
-      value: exitPrice !== null ? `${Math.round(exitPrice)} pt` : analysisLoading ? t('hm.building') : '—',
-      pending: exitPrice === null,
-      accent: exitPrice !== null ? 'var(--accent-blue)' : undefined,
-    },
-    {
-      label: t('trades.col.quantity'),
-      value: `${mainOrder?.quantity ?? 0}`,
-    },
-    ...(mainOrder?.rank !== null && mainOrder?.rank !== undefined
-      ? [
-          {
-            label: t('pf.rank'),
-            value: `${mainOrder.rank}`,
-          },
-        ]
-      : []),
-  ];
+  // Both bounds come from the shared analysis pipeline (the same numbers the Market analysis
+  // shows), so the position badge agrees with the full analysis rather than re-deriving its own.
+  const marketPosition = buildMarketPosition(
+    cheapestPrice,
+    analysis?.headline.entryPrice ?? null,
+    analysis?.headline.exitPrice ?? null,
+  );
 
   useEffect(() => {
     setCopiedOrderId(null);
@@ -434,9 +413,6 @@ function QuickViewCard() {
       <div className="card-header">
         <span className="card-label">{t('ov.quickView')}</span>
         <span className="qv-title">{selectedItem?.itemFamily ?? t('ov.wfmItem')}</span>
-        <div className="card-actions">
-          {quickView.apiVersion ? <span className="badge badge-muted">WFM {quickView.apiVersion}</span> : null}
-        </div>
       </div>
 
       <div className="card-body dashboard-panel-shell">
@@ -488,74 +464,58 @@ function QuickViewCard() {
                     <span>{selectedItem.name.slice(0, 1)}</span>
                   )}
                 </span>
-                <div>
+                <div className="qv-focus-identity">
                   <div className="qv-stat-label">{t('ov.selectedItem')}</div>
                   <div className="qv-focus-item-name">{selectedItemName}</div>
                 </div>
               </div>
-              <div>
-                <div className="qv-stat-label">{t('ov.cheapestSeller')}</div>
-                <div className="qv-focus-user">{mainOrder.username}</div>
-                <div className="qv-focus-status">{mainOrder.status ?? t('hm.unknown')}</div>
-              </div>
-              <button className="btn-sm" onClick={() => void handleCopy(mainOrder)}>
-                {copiedOrderId === mainOrder.orderId ? t('common.copied') : t('hm.copyMessage')}
-              </button>
-            </div>
-
-            <div className="qv-grid">
-              {mainStats.map((stat) => (
-                <div key={stat.label}>
-                  <div className="qv-stat-label">{stat.label}</div>
-                  <div
-                    className={`qv-stat-value${stat.pending ? ' qv-stat-pending' : ''}`}
-                    style={stat.accent ? { color: stat.accent } : undefined}
-                  >
-                    {stat.value}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {sparklinePath ? (
-              <div className="sparkline-wrap">
-                <svg width="100%" height="24" viewBox="0 0 300 24" preserveAspectRatio="none">
-                  <polyline className="qv-sparkline-line" points={sparklinePath} fill="none" strokeWidth="1.5" opacity="0.8" />
-                  <polyline className="qv-sparkline-fill" points={`${sparklinePath} 300,24 0,24`} stroke="none" />
-                </svg>
-              </div>
-            ) : quickView.sparklineLoading ? (
-              <div className="sparkline-wrap">
-                <svg width="100%" height="24" viewBox="0 0 300 24" preserveAspectRatio="none">
-                  <line className="qv-sparkline-mid" x1="0" y1="12" x2="300" y2="12" strokeDasharray="4 4" />
-                </svg>
-              </div>
-            ) : null}
-
-            <div className="qv-order-list">
-              {compactOrders.map((order) => (
-                <button
-                  key={order.orderId}
-                  className={`qv-order-button${copiedOrderId === order.orderId ? ' copied' : ''}`}
-                  type="button"
-                  onClick={() => void handleCopy(order)}
-                >
-                  <span className="qv-order-copy">
-                    <span className="qv-order-primary">{order.username}</span>
-                    <span className="qv-order-secondary">
-                      {t('pf.qtyValue', { n: order.quantity })}
-                      {order.rank !== null && order.rank !== undefined ? ` • ${t('pf.rank')} ${order.rank}` : ''}
-                    </span>
+              <div className="qv-focus-metrics">
+                {marketPosition ? (
+                  <span className={`qv-position-badge tone-${marketPosition.tone}`}>
+                    {t(marketPosition.labelKey)}
                   </span>
-                  <span className="qv-order-price">{order.platinum} pt</span>
-                </button>
-              ))}
+                ) : analysisLoading ? (
+                  <span className="qv-position-badge tone-muted">{t('hm.building')}</span>
+                ) : null}
+                <div className="qv-focus-spread">
+                  <span className="qv-spread-label">{t('ov.spread')}</span>
+                  <span className="qv-spread-value">{spreadLabel}</span>
+                </div>
+              </div>
             </div>
-            {compactOrders.length > 0 ? (
-              <div className="qv-order-hint">{t('ov.orderHint')}</div>
-            ) : null}
 
-            {allOrders.length > 1 ? (
+            <div className="qv-seller-list">
+              {topSellers.map((order) => {
+                const tier = cheapestPrice !== null
+                  ? getSellerPriceTier(order.platinum, cheapestPrice)
+                  : 'normal';
+                return (
+                  <button
+                    key={order.orderId}
+                    className={`qv-seller-row tier-${tier}${copiedOrderId === order.orderId ? ' copied' : ''}`}
+                    type="button"
+                    onClick={() => void handleCopy(order)}
+                    title={t('ov.copyWhisperTitle', { user: order.username })}
+                  >
+                    <span className="qv-seller-identity">
+                      <span className="qv-seller-name">{order.username}</span>
+                      <span className="qv-seller-meta">
+                        {t('pf.qtyValue', { n: order.quantity })}
+                        {order.rank !== null && order.rank !== undefined
+                          ? ` • ${t('pf.rank')} ${order.rank}`
+                          : ''}
+                      </span>
+                    </span>
+                    <span className="qv-seller-price">{order.platinum} pt</span>
+                    <span className="qv-seller-action" aria-hidden="true">
+                      {copiedOrderId === order.orderId ? t('common.copied') : t('ov.copyShort')}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {allOrders.length > topSellers.length ? (
               <button
                 type="button"
                 className="btn-secondary qv-view-all-btn"
@@ -566,11 +526,6 @@ function QuickViewCard() {
             ) : null}
 
             {copyFeedback ? <div className="qv-copy-feedback">{copyFeedback}</div> : null}
-
-            <div className="qv-spread-row">
-              <span className="qv-spread-label">{t('ov.spread')}</span>
-              <span className="qv-spread-value">{spreadLabel}</span>
-            </div>
           </div>
         ) : null}
         <CardLoadingOverlay
@@ -606,30 +561,38 @@ function QuickViewCard() {
               </button>
             </div>
 
-            <div className="qv-viewall-list">
-              <div className="qv-viewall-row qv-viewall-row-head">
-                <span>{t('ov.price')}</span>
-                <span>{t('wl.qty')}</span>
-                <span>{t('ov.seller')}</span>
-                <span />
-              </div>
-              {allOrders.map((order) => (
-                <div key={order.orderId} className="qv-viewall-row">
-                  <span className="qv-viewall-price">{order.platinum} pt</span>
-                  <span className="qv-viewall-qty">{order.quantity}</span>
-                  <span className="qv-viewall-user" title={order.username}>
-                    {order.username}
-                    {order.status ? <span className="qv-viewall-status">{order.status}</span> : null}
-                  </span>
+            {/* Same row treatment as the Quick View's top-5 list — including the cheapest/near
+                price tiers — so the popup reads as "more of the same list", not a second design. */}
+            <div className="qv-viewall-list qv-seller-list">
+              {allOrders.map((order) => {
+                const tier = cheapestPrice !== null
+                  ? getSellerPriceTier(order.platinum, cheapestPrice)
+                  : 'normal';
+                return (
                   <button
+                    key={order.orderId}
+                    className={`qv-seller-row tier-${tier}${copiedOrderId === order.orderId ? ' copied' : ''}`}
                     type="button"
-                    className={`btn-sm qv-viewall-copy${copiedOrderId === order.orderId ? ' copied' : ''}`}
                     onClick={() => void handleCopy(order)}
+                    title={t('ov.copyWhisperTitle', { user: order.username })}
                   >
-                    {copiedOrderId === order.orderId ? t('common.copied') : t('hm.copyMessage')}
+                    <span className="qv-seller-identity">
+                      <span className="qv-seller-name">{order.username}</span>
+                      <span className="qv-seller-meta">
+                        {t('pf.qtyValue', { n: order.quantity })}
+                        {order.rank !== null && order.rank !== undefined
+                          ? ` • ${t('pf.rank')} ${order.rank}`
+                          : ''}
+                        {order.status ? ` • ${order.status}` : ''}
+                      </span>
+                    </span>
+                    <span className="qv-seller-price">{order.platinum} pt</span>
+                    <span className="qv-seller-action" aria-hidden="true">
+                      {copiedOrderId === order.orderId ? t('common.copied') : t('ov.copyShort')}
+                    </span>
                   </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {copyFeedback ? <div className="qv-copy-feedback">{copyFeedback}</div> : null}
@@ -641,12 +604,71 @@ function QuickViewCard() {
   );
 }
 
+/**
+ * The 24h low-price move, in more detail than a bare sparkline: the range it travelled between
+ * (min/max), where it ended up, and the net change over the window. Points are the last 24
+ * analytics buckets' lowest-sell values (see `extractQuickViewSparklinePoints`).
+ */
+function PriceTrendChart({ points, loading }: { points: number[]; loading: boolean }) {
+  const { t } = useTranslation();
+  const geometry = buildTrendChartGeometry(points);
+
+  if (!geometry) {
+    return loading ? (
+      <div className="trend-chart-shell">
+        <div className="trend-chart-head">
+          <span className="qv-stat-label">{t('ov.trend24h')}</span>
+          <span className="trend-chart-pending">{t('hm.building')}</span>
+        </div>
+      </div>
+    ) : null;
+  }
+
+  const change = geometry.last - geometry.first;
+  const changePercent = geometry.first > 0 ? (change / geometry.first) * 100 : null;
+  const tone = change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
+
+  return (
+    <div className="trend-chart-shell">
+      <div className="trend-chart-head">
+        <span className="qv-stat-label">{t('ov.trend24h')}</span>
+        <span className={`trend-chart-change tone-${tone}`}>
+          {change > 0 ? '+' : ''}
+          {Math.round(change)} pt
+          {changePercent !== null ? ` (${change > 0 ? '+' : ''}${changePercent.toFixed(1)}%)` : ''}
+        </span>
+      </div>
+      <div className={`trend-chart-body tone-${tone}`}>
+        <svg
+          width="100%"
+          height={TREND_CHART_HEIGHT}
+          viewBox={`0 0 ${TREND_CHART_WIDTH} ${TREND_CHART_HEIGHT}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={t('ov.trend24hAria', {
+            min: String(Math.round(geometry.min)),
+            max: String(Math.round(geometry.max)),
+          })}
+        >
+          <path className="trend-chart-area" d={geometry.area} />
+          <path className="trend-chart-line" d={geometry.line} fill="none" />
+          {/* Marks where the price sits now, so the eye lands on the current value first. */}
+          <circle className="trend-chart-dot" cx={geometry.lastX} cy={geometry.lastY} r="3" />
+        </svg>
+        <span className="trend-chart-bound trend-chart-bound-max">{Math.round(geometry.max)}</span>
+        <span className="trend-chart-bound trend-chart-bound-min">{Math.round(geometry.min)}</span>
+      </div>
+    </div>
+  );
+}
+
 function AnalysisCard() {
   const { t } = useTranslation();
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const quickViewLoading = useAppStore((state) => state.quickView.loading);
+  const sparklinePoints = useAppStore((state) => state.quickView.sparklinePoints);
+  const sparklineLoading = useAppStore((state) => state.quickView.sparklineLoading);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
-  const selectedMarketVariantLabel = useAppStore((state) => state.selectedMarketVariantLabel);
   const analysis = useAppStore((state) => state.selectedMarketAnalysis);
   const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
   const analysisError = useAppStore((state) => state.selectedMarketAnalysisError);
@@ -722,8 +744,9 @@ function AnalysisCard() {
                 </div>
               </div>
               <div className="analysis-preview-meta">
-                <span>{selectedMarketVariantLabel ?? t('hm.baseMarket')}</span>
-                <span>{tConfidence(t, analysis.headline.confidenceSummary)}</span>
+                <span className={`analysis-preview-confidence tone-${confidenceTone(analysis.headline.confidenceSummary)}`}>
+                  {tConfidence(t, analysis.headline.confidenceSummary)}
+                </span>
               </div>
             </div>
 
@@ -762,10 +785,7 @@ function AnalysisCard() {
               </div>
             </div>
 
-            <div className="analysis-preview-foot">
-              <span>{analysis.supplyContext.mode === 'set-components' ? t('hm.setBreakdownReady') : analysis.supplyContext.mode === 'drop-sources' ? t('hm.dropSourcesReady') : t('hm.noSourceContext')}</span>
-              <span>{analysis.computedAt ? t('hm.computedAt', { time: formatShortLocalDateTime(analysis.computedAt) }) : ''}</span>
-            </div>
+            <PriceTrendChart points={sparklinePoints} loading={sparklineLoading} />
           </div>
         ) : null}
 
@@ -781,9 +801,6 @@ function AnalysisCard() {
 export function Overview() {
   return (
     <div className="dashboard">
-      <ErrorBoundary label="Market signals">
-        <MetricsRow />
-      </ErrorBoundary>
       <div className="content-row">
         <ErrorBoundary label="Quick View">
           <QuickViewCard />

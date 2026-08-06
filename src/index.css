@@ -6444,28 +6444,6 @@ body {
   right: 8px;
 }
 
-/* ── METRICS ROW ── */
-.metrics-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-}
-.metric-card { padding: 8px 12px; }
-.metric-value {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: 1;
-  margin: 2px 0 2px;
-}
-.metric-value-sm {
-  font-size: 14px;
-  line-height: 1.25;
-}
-.metric-sub { font-size: 10px; color: var(--text-secondary); margin-bottom: 4px; }
-.metric-bar { height: 2px; background: var(--border); border-radius: 1px; overflow: hidden; }
-.metric-bar-fill { height: 100%; border-radius: 1px; }
 
 /* ── CONTENT ROW ── */
 .content-row {
@@ -6488,12 +6466,6 @@ body {
 }
 
 /* ── QUICK VIEW ── */
-.qv-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 12px;
-}
 .qv-stack {
   display: flex;
   flex-direction: column;
@@ -6507,12 +6479,6 @@ body {
   text-transform: uppercase;
   margin-bottom: 3px;
 }
-.qv-stat-value {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 15px;
-  font-weight: 700;
-}
-.qv-stat-pending { color: var(--text-secondary); }
 .qv-title {
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 11px;
@@ -6557,36 +6523,224 @@ body {
   font-weight: 700;
   color: var(--text-primary);
 }
-.qv-focus-user {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
+.qv-focus-identity {
+  min-width: 0;
 }
-.qv-focus-status {
-  margin-top: 4px;
+.qv-focus-identity .qv-focus-item-name {
+  overflow-wrap: anywhere;
+}
+
+/* Header-right cluster: where the market is sitting + the 5-listing spread. */
+.qv-focus-metrics {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+.qv-position-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
-  color: var(--text-secondary);
+  font-weight: 700;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
-.sparkline-wrap {
-  padding: 10px 0 2px;
+.qv-position-badge.tone-green {
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
 }
-.sparkline-wrap svg {
+.qv-position-badge.tone-blue {
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-blue) 40%, transparent);
+}
+.qv-position-badge.tone-muted {
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+.qv-focus-spread {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* ---------- Quick View: top-5 cheapest sellers ---------- */
+.qv-seller-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qv-seller-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.14s ease,
+    box-shadow 0.18s ease;
+}
+.qv-seller-row:hover {
+  background: var(--bg-elevated);
+  border-color: rgba(74, 158, 255, 0.35);
+}
+.qv-seller-identity {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qv-seller-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qv-seller-meta {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.qv-seller-price {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* The copy affordance sits on every row (not just on hover) so it's obvious the row is
+   clickable at a glance — the old build only hinted at this in a line of small print. */
+.qv-seller-action {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 7px;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.qv-seller-row:hover .qv-seller-action {
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+}
+/* Cheapest listing (and anything tied with it) reads green; anything within a couple of
+   platinum is still competitive, so it reads amber. */
+.qv-seller-row.tier-cheapest {
+  border-left-color: var(--accent-green);
+}
+.qv-seller-row.tier-cheapest .qv-seller-price {
+  color: var(--accent-green);
+}
+.qv-seller-row.tier-near {
+  border-left-color: var(--accent-amber);
+}
+.qv-seller-row.tier-near .qv-seller-price {
+  color: var(--accent-amber);
+}
+.qv-seller-row.copied {
+  border-color: rgba(61, 214, 140, 0.4);
+  background: rgba(61, 214, 140, 0.08);
+  box-shadow: 0 0 0 1px rgba(61, 214, 140, 0.25);
+}
+.qv-seller-row.copied .qv-seller-action {
+  color: var(--accent-green);
+  border-color: color-mix(in srgb, var(--accent-green) 45%, transparent);
+}
+
+/* ---------- Analysis Preview: 24h trend chart ---------- */
+.trend-chart-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.trend-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trend-chart-head .qv-stat-label {
+  margin-bottom: 0;
+}
+.trend-chart-change {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+.trend-chart-change.tone-up { color: var(--accent-green); }
+.trend-chart-change.tone-down { color: var(--accent-red); }
+.trend-chart-change.tone-flat { color: var(--text-secondary); }
+.trend-chart-pending {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.trend-chart-body {
+  position: relative;
+}
+.trend-chart-body svg {
   display: block;
+  width: 100%;
+  overflow: visible;
 }
-/* Quick-view sparkline colors — kept in CSS (SVG presentation attributes can't resolve
-   var()) so the theme palette is the single source of truth. */
-.qv-sparkline-line {
-  stroke: var(--accent-green);
+/* SVG presentation attributes can't resolve var(), so the trend colors live here and follow
+   the tone class on the wrapper — same pattern the old sparkline used. */
+.trend-chart-body.tone-up .trend-chart-line { stroke: var(--accent-green); }
+.trend-chart-body.tone-down .trend-chart-line { stroke: var(--accent-red); }
+.trend-chart-body.tone-flat .trend-chart-line { stroke: var(--text-secondary); }
+.trend-chart-line {
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
 }
-.qv-sparkline-fill {
-  fill: color-mix(in srgb, var(--accent-green) 6%, transparent);
+.trend-chart-body.tone-up .trend-chart-area {
+  fill: color-mix(in srgb, var(--accent-green) 10%, transparent);
 }
-.qv-sparkline-mid {
-  stroke: color-mix(in srgb, var(--text-secondary) 24%, transparent);
+.trend-chart-body.tone-down .trend-chart-area {
+  fill: color-mix(in srgb, var(--accent-red) 10%, transparent);
 }
+.trend-chart-body.tone-flat .trend-chart-area {
+  fill: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+}
+.trend-chart-body.tone-up .trend-chart-dot { fill: var(--accent-green); }
+.trend-chart-body.tone-down .trend-chart-dot { fill: var(--accent-red); }
+.trend-chart-body.tone-flat .trend-chart-dot { fill: var(--text-secondary); }
+.trend-chart-bound {
+  position: absolute;
+  right: 0;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  padding: 0 3px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+.trend-chart-bound-max { top: -2px; }
+.trend-chart-bound-min { bottom: -2px; }
+
 .qv-hero {
   display: grid;
   grid-template-columns: 1.5fr 1fr auto;
@@ -6656,61 +6810,6 @@ body {
   background: rgba(61,214,140,0.28);
   border-color: rgba(61,214,140,0.35);
 }
-.qv-order-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-.qv-order-hint {
-  margin-top: -2px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-.qv-order-button {
-  width: 100%;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  background: var(--bg-base);
-  color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  cursor: pointer;
-}
-.qv-order-button:hover {
-  background: var(--bg-elevated);
-  border-color: rgba(74,158,255,0.35);
-}
-.qv-order-button.copied {
-  border-color: rgba(61,214,140,0.4);
-  color: var(--accent-green);
-}
-.qv-order-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  text-align: left;
-}
-.qv-order-primary {
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.qv-order-secondary {
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.qv-order-price {
-  flex: 0 0 auto;
-  padding-top: 1px;
-  font-weight: 700;
-}
 .qv-copy-feedback {
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
@@ -6778,72 +6877,11 @@ body {
   overflow-y: auto;
   padding: 8px 12px 14px;
 }
-
-.qv-viewall-row {
-  display: grid;
-  grid-template-columns: 72px 44px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 8px;
-  border-radius: 8px;
+/* The popup reuses the Quick View row styling; only the scroll container differs. */
+.qv-viewall-list.qv-seller-list {
+  gap: 6px;
 }
 
-.qv-viewall-row:nth-child(even) {
-  background: var(--bg-base);
-}
-
-.qv-viewall-row-head {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  background: transparent;
-  position: sticky;
-  top: 0;
-}
-
-.qv-viewall-price {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-weight: 700;
-  color: var(--accent-green);
-}
-
-.qv-viewall-qty {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  color: var(--text-secondary);
-}
-
-.qv-viewall-user {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  color: var(--text-primary);
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.qv-viewall-status {
-  font-size: 10px;
-  color: var(--text-muted);
-  text-transform: capitalize;
-}
-
-.qv-viewall-copy.copied {
-  color: var(--accent-green);
-  border-color: rgba(61, 214, 140, 0.4);
-}
-
-.qv-spread-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-subtle);
-}
 .qv-spread-label {
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
@@ -6977,6 +7015,38 @@ body {
   text-align: right;
 }
 
+.analysis-preview-confidence {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.analysis-preview-confidence.tone-green {
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
+}
+.analysis-preview-confidence.tone-amber {
+  color: var(--accent-amber);
+  background: color-mix(in srgb, var(--accent-amber) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-amber) 40%, transparent);
+}
+.analysis-preview-confidence.tone-red {
+  color: var(--accent-red);
+  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
+}
+.analysis-preview-confidence.tone-neutral {
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
 .analysis-preview-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -7005,15 +7075,6 @@ body {
   font-weight: 700;
   line-height: 1.1;
   color: var(--text-primary);
-}
-
-.analysis-preview-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 /* ── EVENTS ── */
@@ -7826,6 +7887,34 @@ body {
   font-size: 11px;
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   color: var(--accent-amber);
+}
+.vault-trader-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+.vault-trader-name {
+  flex: 1;
+  min-width: 0;
+}
+.vault-trader-family-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.vault-trader-family-group .vault-trader-grid {
+  margin-top: 8px;
+}
+.vault-trader-family-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 .steel-path-current {
   display: flex;
@@ -10122,7 +10211,6 @@ body {
 @media (max-width: 1024px) {
   .priority-row,
   .content-row,
-  .metrics-row,
   .chart-grid,
   .plat-grid,
   .alloc-grid,
@@ -10184,13 +10272,18 @@ body {
     width: 100%;
   }
 
-  .qv-hero-price-block {
-    justify-self: start;
+  /* Stacked layout: the header metrics read left-aligned under the item, not floated right. */
+  .qv-focus-metrics {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
     text-align: left;
   }
 
-  .qv-order-list {
-    grid-template-columns: 1fr;
+  .qv-hero-price-block {
+    justify-self: start;
+    text-align: left;
   }
 
   .flash-sales-grid {
@@ -13381,16 +13474,6 @@ img[data-asset-failed='true'] {
 .dashboard > *:nth-child(3) { animation-delay: 0.10s; }
 .dashboard > *:nth-child(4) { animation-delay: 0.15s; }
 
-/* ── Metric cards (market signals row) ── */
-.metric-card { transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.2s ease; }
-.metric-card:hover { transform: translateY(-2px); }
-.metric-value { font-variant-numeric: tabular-nums; }
-.metric-bar { height: 4px; border-radius: 2px; }
-.metric-bar-fill {
-  border-radius: 2px;
-  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
 /* ── Buttons: tactile hover/press ── */
 .btn-primary,
 .btn-secondary,
@@ -13422,20 +13505,11 @@ img[data-asset-failed='true'] {
 }
 
 /* ── Home page interactive rows ── */
-.qv-order-button {
-  border-radius: 8px;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.14s ease,
-    box-shadow 0.18s ease;
-}
-.qv-order-button:hover {
+.qv-seller-row:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.3);
 }
-.qv-order-button:active { transform: translateY(0) scale(0.99); }
-.qv-order-button.copied {
-  background: rgba(61, 214, 140, 0.08);
-  box-shadow: 0 0 0 1px rgba(61, 214, 140, 0.25);
-}
+.qv-seller-row:active { transform: translateY(0) scale(0.99); }
 
 .wl-table td { transition: background 0.12s ease; }
 .wl-table tbody tr:hover td { background: rgba(74, 158, 255, 0.05); }

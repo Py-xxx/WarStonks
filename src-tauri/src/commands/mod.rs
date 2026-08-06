@@ -526,10 +526,150 @@ pub fn get_worldstate_nightwave() -> Result<serde_json::Value, String> {
     fetch_wfstat_object("/pc/nightwave", "nightwave")
 }
 
+/// Strips WFM's set-root naming convention down to how players actually refer to the item — WFM
+/// names every set root "X Prime Set" even for a single warframe or weapon (confirmed live:
+/// `titania_prime_set`'s own display name is "Titania Prime Set", not "Titania Prime"), but the
+/// common name everyone actually uses drops that suffix.
+fn strip_trailing_set_suffix(name: &str) -> String {
+    name.strip_suffix(" Set").unwrap_or(name).trim().to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultTraderTradeableItem {
+    pub name: String,
+    /// "warframe" or "weapon" — derived from which uniqueName path she carries the item under,
+    /// not the catalog's own `item_family` (which classifies every set root as `"set"` for both,
+    /// not useful for grouping the panel by kind).
+    pub family: String,
+    /// `None` when the catalog lookup failed (e.g. offline first run) — the raw WFStat name is
+    /// still shown, there's just nothing to link/group/pull an icon from.
+    pub slug: Option<String>,
+    pub image_path: Option<String>,
+    pub regal_aya_cost: Option<i64>,
+    /// This item's own slug plus every one of its set components' slugs — every slug whose price
+    /// is affected by Varzia currently selling this item's relics (she sells relics that drop
+    /// the warframe/weapon in question, which puts every one of its components in extra supply,
+    /// not just the set-bundle listing itself).
+    pub affected_slugs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultTraderInfo {
+    pub active: bool,
+    pub location: Option<String>,
+    pub activation: Option<String>,
+    pub expiry: Option<String>,
+    /// Warframes + weapons only, resolved and grouped — see `VaultTraderTradeableItem`. Relics,
+    /// cosmetics, and bundle packages in her real inventory are excluded entirely: the point of
+    /// showing her warframes/weapons at all is that they indicate which relics she's carrying.
+    pub tradeable_items: Vec<VaultTraderTradeableItem>,
+}
+
+/// Mirrors the frontend's `isWorldStateWindowActive` (see `src/lib/worldState.ts`) — WFStat's
+/// `/pc/vaultTrader` payload has no `active` field at all (confirmed live), so this has to be
+/// derived from the activation/expiry window instead, same as Void Trader.
+fn worldstate_window_active(activation: Option<&str>, expiry: Option<&str>) -> bool {
+    let now = time::OffsetDateTime::now_utc();
+    let Some(expiry_time) = expiry.and_then(|value| {
+        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+    }) else {
+        return false;
+    };
+    if expiry_time <= now {
+        return false;
+    }
+    match activation.and_then(|value| {
+        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+    }) {
+        Some(activation_time) => activation_time <= now,
+        None => true,
+    }
+}
+
 /// Varzia / Prime Resurgence — the vaulted-relic vendor in Maroo's Bazaar.
+///
+/// WFStat's own `item` field for her inventory is inconsistent junk copied from internal naming
+/// (`"Astilla Prime Weapon"`, `"Prime Pangolin Sword"` instead of the real `"Astilla Prime"` /
+/// `"Pangolin Prime"`). Each entry's `uniqueName` is resolved against the same item catalog
+/// everything else in this app uses: her uniqueNames carry an extra `/StoreItems` path segment
+/// WFM's own `gameRef` doesn't (confirmed live — `/Lotus/StoreItems/Weapons/.../PrimePangolinSword`
+/// vs. WFM's own `/Lotus/Weapons/.../PrimePangolinSword`), but the leaf segment past the last `/`
+/// still matches exactly via the catalog's `GameRefLeaf` lookup tier — which only matches when
+/// the query is already a bare leaf, so the leaf has to be extracted here before querying, not
+/// passed through as the full path. Only entries whose uniqueName is under a warframe or weapon
+/// path are kept — she also sells cosmetics, bundles, and the relics themselves, none of which
+/// the UI needs.
 #[tauri::command]
-pub fn get_worldstate_vault_trader() -> Result<serde_json::Value, String> {
-    fetch_wfstat_object("/pc/vaultTrader", "vault trader")
+pub fn get_worldstate_vault_trader(app: tauri::AppHandle) -> Result<VaultTraderInfo, String> {
+    let payload = fetch_wfstat_object("/pc/vaultTrader", "vault trader")?;
+    let catalog = crate::item_catalog_v2::open_catalog_v2_readonly(&app).ok();
+
+    let location = payload.get("location").and_then(|value| value.as_str()).map(str::to_string);
+    let activation = payload.get("activation").and_then(|value| value.as_str()).map(str::to_string);
+    let expiry = payload.get("expiry").and_then(|value| value.as_str()).map(str::to_string);
+    let active = worldstate_window_active(activation.as_deref(), expiry.as_deref());
+
+    let mut tradeable_items = Vec::new();
+    if let Some(inventory) = payload.get("inventory").and_then(|value| value.as_array()) {
+        for entry in inventory {
+            let Some(unique_name) = entry.get("uniqueName").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let family = if unique_name.starts_with("/Lotus/StoreItems/Powersuits/") {
+                "warframe"
+            } else if unique_name.starts_with("/Lotus/StoreItems/Weapons/") {
+                "weapon"
+            } else {
+                continue;
+            };
+
+            let leaf = unique_name.rsplit_once('/').map(|(_, leaf)| leaf).unwrap_or(unique_name);
+            let resolved = catalog.as_ref().and_then(|connection| {
+                crate::item_catalog_v2::lookup_item_v2_inner(connection, leaf)
+                    .ok()
+                    .flatten()
+            });
+
+            let (name, slug, image_path, affected_slugs) = match &resolved {
+                Some(item) => {
+                    let mut affected = vec![item.slug.clone()];
+                    affected.extend(item.set_parts.iter().map(|part| part.slug.clone()));
+                    (
+                        strip_trailing_set_suffix(&item.name_en),
+                        Some(item.slug.clone()),
+                        item.thumb.clone().or_else(|| item.icon.clone()),
+                        affected,
+                    )
+                }
+                // Catalog lookup failed (e.g. offline first run) — fall back to WFStat's own
+                // name rather than silently dropping the entry; nothing to link/group by though.
+                None => (
+                    entry
+                        .get("item")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("Unknown Item")
+                        .to_string(),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            };
+            let regal_aya_cost = entry.get("ducats").and_then(|value| value.as_i64());
+
+            tradeable_items.push(VaultTraderTradeableItem {
+                name,
+                family: family.to_string(),
+                slug,
+                image_path,
+                regal_aya_cost,
+                affected_slugs,
+            });
+        }
+    }
+
+    Ok(VaultTraderInfo { active, location, activation, expiry, tradeable_items })
 }
 
 fn normalize_catalog_lookup_value(value: &str) -> Option<String> {
@@ -1108,6 +1248,90 @@ pub async fn get_wfm_top_sell_orders(
 
 #[cfg(test)]
 mod tests {
+    use super::{strip_trailing_set_suffix, worldstate_window_active};
+
+    #[test]
+    fn strips_trailing_set_suffix() {
+        // Real WFM display names — confirmed live that every set root, warframe or weapon
+        // alike, is named "X Prime Set" even when the set contains one item.
+        assert_eq!(strip_trailing_set_suffix("Titania Prime Set"), "Titania Prime");
+        assert_eq!(strip_trailing_set_suffix("Pangolin Prime Set"), "Pangolin Prime");
+        assert_eq!(strip_trailing_set_suffix("Astilla Prime Set"), "Astilla Prime");
+        // No suffix to strip — left untouched, not mangled.
+        assert_eq!(strip_trailing_set_suffix("Gara Prime"), "Gara Prime");
+    }
+
+    /// Reproduces the real Varzia-panel bug end to end: her `uniqueName` carries an extra
+    /// `/StoreItems` path segment WFM's own `gameRef` doesn't, so `lookup_item_v2_inner` (which
+    /// only matches `GameRefLeaf` when the query is ALREADY a bare leaf, not a full path) needs
+    /// the leaf extracted from her uniqueName before it's queried — passing the full path
+    /// through, as an earlier version of this code did, silently never resolves.
+    #[test]
+    fn resolves_a_varzia_style_unique_name_via_its_extracted_leaf() {
+        use crate::item_catalog_v2::{build_item_lookup, initialize_schema, lookup_item_v2_inner, write_items, write_lookup, ItemRow};
+        use std::collections::HashMap;
+
+        let items = vec![ItemRow {
+            item_key: "titania".into(),
+            slug: "titania_prime_set".into(),
+            game_ref: Some("/Lotus/Powersuits/Fairy/TitaniaPrime".into()),
+            name_en: "Titania Prime Set".into(),
+            item_family: "set".into(),
+            max_rank: None,
+            ducats: None,
+            bulk_tradable: false,
+            set_root: true,
+            icon: None,
+            thumb: None,
+            subtypes: Vec::new(),
+            relic_tier: None,
+            preferred_image: None,
+        }];
+        let (lookup, rejected) = build_item_lookup(&items, &HashMap::new());
+        assert!(rejected.is_empty());
+
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        initialize_schema(&connection).unwrap();
+        write_items(&connection, &items).unwrap();
+        write_lookup(&connection, &lookup, &rejected).unwrap();
+
+        // The full path (as Varzia's API sends it) must NOT resolve directly — this is the
+        // exact shape of the original bug, kept as a guard against regressing back to it.
+        let full_path_query = "/Lotus/StoreItems/Powersuits/Fairy/TitaniaPrime";
+        assert!(lookup_item_v2_inner(&connection, full_path_query).unwrap().is_none());
+
+        // The extracted leaf resolves correctly, matching what `get_worldstate_vault_trader`
+        // now does before calling this function.
+        let leaf = full_path_query.rsplit_once('/').map(|(_, leaf)| leaf).unwrap();
+        let resolved = lookup_item_v2_inner(&connection, leaf).unwrap().expect("leaf resolves");
+        assert_eq!(strip_trailing_set_suffix(&resolved.name_en), "Titania Prime");
+    }
+
+    #[test]
+    fn worldstate_window_active_matches_activation_expiry_bounds() {
+        // No `active` field exists on WFStat's real payload — this is the sole source of truth
+        // for whether Varzia is currently in the bazaar.
+        assert!(!worldstate_window_active(
+            Some("2026-07-09T18:00:00.000Z"),
+            None,
+        ));
+        assert!(!worldstate_window_active(None, None));
+        // Expired window: not active even with a real activation time.
+        assert!(!worldstate_window_active(
+            Some("2020-01-01T00:00:00.000Z"),
+            Some("2020-01-02T00:00:00.000Z"),
+        ));
+        // Far-future window: not active yet.
+        assert!(!worldstate_window_active(
+            Some("2999-01-01T00:00:00.000Z"),
+            Some("2999-02-01T00:00:00.000Z"),
+        ));
+        // Currently within a wide-open window: active.
+        assert!(worldstate_window_active(
+            Some("2020-01-01T00:00:00.000Z"),
+            Some("2999-01-01T00:00:00.000Z"),
+        ));
+    }
 
     /// Real strings from Warframe.Market's API. WFM ships these separators in its own localized
     /// names — English has zero across all 3,837 items — so stripping them is data cleanup, not

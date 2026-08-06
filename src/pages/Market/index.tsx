@@ -19,7 +19,8 @@ import { tActive, useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { resolveLocalizedName } from '../../lib/itemNames';
 import { parseWarframeMarkupLines, splitWarframeMarkupLines } from '../../lib/warframeMarkup';
-import { tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
+import { parseVaultTraderPayload } from '../../lib/worldState';
+import { confidenceTone, tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
 import type { TranslationKey } from '../../i18n/en';
 import { translate } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
@@ -356,16 +357,7 @@ function getTrendTone(direction: string | null | undefined): PanelTone {
 }
 
 function getConfidenceTone(confidence: MarketConfidenceSummary | null | undefined): PanelTone {
-  switch (confidence?.level) {
-    case 'high':
-      return 'green';
-    case 'medium':
-      return 'amber';
-    case 'low':
-      return 'red';
-    default:
-      return 'neutral';
-  }
+  return confidenceTone(confidence);
 }
 
 function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null, t: TranslateFn) {
@@ -1620,6 +1612,7 @@ function buildEventContextEntries(
     syndicateMissions: ReturnType<typeof useAppStore.getState>['worldStateSyndicateMissions'];
     voidTrader: ReturnType<typeof useAppStore.getState>['worldStateVoidTrader'];
     flashSales: ReturnType<typeof useAppStore.getState>['worldStateFlashSales'];
+    vaultTraderPayload: unknown;
   },
 ): EventContextEntry[] {
   if (!analysis) {
@@ -1695,6 +1688,25 @@ function buildEventContextEntries(
     entries.push({
       label: t('mkt.event.flashSale'),
       impact: t('mkev.flashImpact'),
+    });
+  }
+
+  // Varzia doesn't sell the relics themselves as a searchable item — she sells the warframe/
+  // weapon whose relics she's carrying that cycle (see `parseVaultTraderPayload`). This is
+  // matched by SLUG, not fuzzy name matching like the other event sources above: her item's own
+  // slug is the affected set bundle, but every one of that set's COMPONENT slugs is affected too
+  // (e.g. selling "Titania Prime" puts titania_prime_set, titania_prime_blueprint,
+  // titania_prime_neuroptics_blueprint, titania_prime_chassis_blueprint, and
+  // titania_prime_systems_blueprint all in extra relic supply) — `affectedSlugs` already carries
+  // that full expansion from the backend, which has the catalog's set_parts data to build it.
+  const vaultTrader = parseVaultTraderPayload(eventData.vaultTraderPayload);
+  if (
+    vaultTrader?.active &&
+    vaultTrader.tradeableItems.some((entry) => entry.affectedSlugs.includes(analysis.itemDetails.slug))
+  ) {
+    entries.push({
+      label: t('mkt.event.vaultTrader'),
+      impact: t('mkev.varziaImpact'),
     });
   }
 
@@ -2313,6 +2325,7 @@ function AnalysisTab() {
   const worldStateSyndicateMissions = useAppStore((state) => state.worldStateSyndicateMissions);
   const worldStateVoidTrader = useAppStore((state) => state.worldStateVoidTrader);
   const worldStateFlashSales = useAppStore((state) => state.worldStateFlashSales);
+  const worldStateVaultTrader = useAppStore((state) => state.worldStateExtra['vault-trader'].payload);
   const [itemDetails, setItemDetails] = useState<ItemDetailSummary | null>(null);
   const [itemDetailsLoading, setItemDetailsLoading] = useState(false);
   const [itemDetailsError, setItemDetailsError] = useState<string | null>(null);
@@ -2453,6 +2466,7 @@ function AnalysisTab() {
     syndicateMissions: worldStateSyndicateMissions,
     voidTrader: worldStateVoidTrader,
     flashSales: worldStateFlashSales,
+    vaultTraderPayload: worldStateVaultTrader,
   });
   const eventContextConfidence = buildEventContextConfidence(eventContextEntries, t);
 

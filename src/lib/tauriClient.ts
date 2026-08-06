@@ -377,8 +377,30 @@ export async function getWorldStateNightwave(): Promise<Record<string, unknown>>
   return invoke<Record<string, unknown>>('get_worldstate_nightwave');
 }
 
-export async function getWorldStateVaultTrader(): Promise<Record<string, unknown>> {
-  return invoke<Record<string, unknown>>('get_worldstate_vault_trader');
+export interface VaultTraderTradeableItem {
+  name: string;
+  /** "warframe" or "weapon" — which kind of item this is, for grouping the panel by family. */
+  family: string;
+  /** `null` when the catalog lookup failed (e.g. offline first run) — the item still displays,
+   * there's just nothing to link/group/pull an icon from. */
+  slug: string | null;
+  imagePath: string | null;
+  regalAyaCost: number | null;
+  /** This item's own slug plus every one of its set components' slugs — every slug whose price
+   * is affected by Varzia currently selling this item's relics. */
+  affectedSlugs: string[];
+}
+
+export interface VaultTraderInfo {
+  active: boolean;
+  location: string | null;
+  activation: string | null;
+  expiry: string | null;
+  tradeableItems: VaultTraderTradeableItem[];
+}
+
+export async function getWorldStateVaultTrader(): Promise<VaultTraderInfo> {
+  return invoke<VaultTraderInfo>('get_worldstate_vault_trader');
 }
 
 export async function getWorldStateCache(): Promise<

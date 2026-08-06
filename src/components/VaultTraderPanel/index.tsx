@@ -1,52 +1,56 @@
 import { useAppStore } from '../../stores/useAppStore';
 import { useTranslation } from '../../i18n';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
+import { parseVaultTraderPayload } from '../../lib/worldState';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import type { VaultTraderTradeableItem } from '../../lib/tauriClient';
 
-type VaultItem = { name: string; ducats: number | null; credits: number | null };
+const FAMILY_ORDER = ['warframe', 'weapon'] as const;
 
-function asString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value : null;
-}
-
-function asNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function parseInventory(value: unknown): VaultItem[] {
-  if (!Array.isArray(value)) {
-    return [];
+function groupByFamily(
+  items: VaultTraderTradeableItem[],
+): Array<{ family: string; items: VaultTraderTradeableItem[] }> {
+  const groups = new Map<string, VaultTraderTradeableItem[]>();
+  for (const item of items) {
+    const bucket = groups.get(item.family);
+    if (bucket) {
+      bucket.push(item);
+    } else {
+      groups.set(item.family, [item]);
+    }
   }
-  return value
-    .map((raw) => {
-      const record = (raw ?? {}) as Record<string, unknown>;
-      const name = asString(record.item) ?? asString(record.name);
-      if (!name) {
-        return null;
-      }
-      return { name, ducats: asNumber(record.ducats), credits: asNumber(record.credits) };
-    })
-    .filter((item): item is VaultItem => item !== null);
+  const ordered: Array<{ family: string; items: VaultTraderTradeableItem[] }> = FAMILY_ORDER.filter(
+    (family) => groups.has(family),
+  ).map((family) => ({
+    family,
+    items: groups.get(family)!,
+  }));
+  // Any family the fixed order doesn't know about (shouldn't happen — the backend only ever
+  // emits "warframe"/"weapon" — still shown rather than silently dropped).
+  for (const [family, familyItems] of groups) {
+    if (!FAMILY_ORDER.includes(family as (typeof FAMILY_ORDER)[number])) {
+      ordered.push({ family, items: familyItems });
+    }
+  }
+  return ordered;
 }
 
 export function VaultTraderPanel() {
   const { t } = useTranslation();
   const entry = useAppStore((state) => state.worldStateExtra['vault-trader']);
-  const payload = (entry.payload ?? null) as Record<string, unknown> | null;
+  const parsed = parseVaultTraderPayload(entry.payload);
 
-  if (!payload && entry.loading) {
+  if (!parsed && entry.loading) {
     return <div className="opportunities-placeholder">{t('evt.loadingVaultTrader')}</div>;
   }
-  if (!payload) {
+  if (!parsed) {
     return (
       <div className="opportunities-placeholder">{t('evt.vaultTraderUnavailable')}</div>
     );
   }
 
-  const active = payload.active === true;
-  const location = asString(payload.location);
-  const expiry = asString(payload.expiry);
-  const activation = asString(payload.activation);
-  const inventory = parseInventory(payload.inventory);
+  const { active, location, expiry, activation, tradeableItems } = parsed;
+  const familyGroups = groupByFamily(tradeableItems);
 
   return (
     <div className="market-panel">
@@ -69,16 +73,34 @@ export function VaultTraderPanel() {
         </p>
       </div>
 
-      {active && inventory.length > 0 ? (
-        <div className="vault-trader-grid">
-          {inventory.map((item, index) => (
-            <div key={index} className="vault-trader-card">
-              <span className="vault-trader-name">{item.name}</span>
-              <div className="vault-trader-cost">
-                {item.ducats !== null ? <span>{t('evt.ducatsSuffix', { n: item.ducats })}</span> : null}
-                {item.credits !== null ? (
-                  <span className="text-dim">{item.credits.toLocaleString()} cr</span>
-                ) : null}
+      {active && tradeableItems.length > 0 ? (
+        <div className="vault-trader-family-list">
+          {familyGroups.map((group) => (
+            <div key={group.family} className="vault-trader-family-group">
+              <span className="vault-trader-family-label">
+                {group.family === 'warframe'
+                  ? t('evt.vaultTraderFamilyWarframes')
+                  : group.family === 'weapon'
+                    ? t('evt.vaultTraderFamilyWeapons')
+                    : group.family}
+              </span>
+              <div className="vault-trader-grid">
+                {group.items.map((item, index) => {
+                  const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                  return (
+                    <div key={`${item.slug ?? item.name}-${index}`} className="vault-trader-card">
+                      {imageUrl ? (
+                        <img src={imageUrl} alt="" className="vault-trader-icon" />
+                      ) : null}
+                      <span className="vault-trader-name">{item.name}</span>
+                      <div className="vault-trader-cost">
+                        {item.regalAyaCost !== null ? (
+                          <span>{t('evt.regalAyaSuffix', { n: item.regalAyaCost })}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}
