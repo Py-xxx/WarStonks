@@ -395,6 +395,19 @@ export async function setWorldstateLanguage(language: string): Promise<void> {
   await invoke('set_worldstate_language', { language });
 }
 
+/**
+ * Sets the app's own UI language on the Rust side (the raw `src/i18n/*.ts` code, e.g.
+ * "zh-hans" — NOT wfstat's own code). Lets Discord notifications fired from a purely
+ * backend-triggered flow (trade detection, Smart Manage) localize their text even though there's
+ * no frontend round-trip to pre-resolve `tActive()` strings through for those two.
+ */
+export async function setAppLanguage(language: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    return;
+  }
+  await invoke('set_app_language', { language });
+}
+
 export async function saveWorldStateCacheEntry(
   endpoint: string,
   entry: PersistedWorldStateCacheEntry,

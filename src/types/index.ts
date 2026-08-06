@@ -729,20 +729,44 @@ export interface DiscordListingHealthItem {
   status: string;
 }
 
+export interface DiscordListingHealthLabels {
+  title: string;
+  intro: string;
+  empty: string;
+  footer: string;
+}
+
 export interface DiscordListingHealthNotificationInput {
   count: number;
   examples: DiscordListingHealthItem[];
+  labels: DiscordListingHealthLabels;
+}
+
+export interface DiscordScannerStaleLabels {
+  titleSuffix: string;
+  ageKnown: string;
+  ageUnknown: string;
+  outro: string;
+  footer: string;
 }
 
 export interface DiscordScannerStaleNotificationInput {
   scannerName: string;
   minutesStale: number | null;
+  labels: DiscordScannerStaleLabels;
+}
+
+export interface DiscordAppUpdateLabels {
+  titleSuffix: string;
+  description: string;
+  footer: string;
 }
 
 export interface DiscordAppUpdateNotificationInput {
   version: string;
   currentVersion: string | null;
   notes: string | null;
+  labels: DiscordAppUpdateLabels;
 }
 
 /** Opportunities-engine tunables, edited on the Strategy tab. */
@@ -855,6 +879,18 @@ export interface DiscordWebhookSettingsInput {
   notifications: DiscordWebhookNotificationSettings;
 }
 
+export interface DiscordWatchlistNotificationLabels {
+  titleSuffix: string;
+  description: string;
+  listedLabel: string;
+  targetLabel: string;
+  savingsLabel: string;
+  sellerLabel: string;
+  qtyLabel: string;
+  rankLabel: string;
+  footer: string;
+}
+
 export interface DiscordWatchlistNotificationInput {
   itemName: string;
   itemSlug: string;
@@ -866,6 +902,18 @@ export interface DiscordWatchlistNotificationInput {
   rank: number | null;
   orderId: string;
   createdAt: string;
+  labels: DiscordWatchlistNotificationLabels;
+}
+
+export interface DiscordUnderpricedNotificationLabels {
+  titleSuffix: string;
+  description: string;
+  listedLabel: string;
+  recommendedLabel: string;
+  upsideLabel: string;
+  sellerLabel: string;
+  rankLabel: string;
+  footer: string;
 }
 
 export interface DiscordUnderpricedNotificationInput {
@@ -877,6 +925,7 @@ export interface DiscordUnderpricedNotificationInput {
   username: string;
   rank: number | null;
   orderId: string;
+  labels: DiscordUnderpricedNotificationLabels;
 }
 
 export interface AlecaframeValidationResult {

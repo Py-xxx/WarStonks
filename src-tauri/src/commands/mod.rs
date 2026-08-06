@@ -43,6 +43,30 @@ pub fn set_worldstate_language(language: String) {
     }
 }
 
+/// The app's own UI language (the raw `src/i18n/*.ts` file code — `zh-hans`, not WFStat's `zh`),
+/// set at runtime from the frontend (`set_app_language`) so Discord notifications fired from a
+/// purely backend-triggered flow (trade detection, Smart Manage) can still localize their text —
+/// those two have no frontend round-trip to pre-resolve `tActive()` strings through the way every
+/// other Discord notification does. Empty = default to English. See `settings::discord_i18n` for
+/// the small translation table this feeds.
+static APP_LANGUAGE: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+pub(crate) fn app_language() -> String {
+    APP_LANGUAGE
+        .read()
+        .ok()
+        .map(|value| value.clone())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "en".to_string())
+}
+
+#[tauri::command]
+pub fn set_app_language(language: String) {
+    if let Ok(mut guard) = APP_LANGUAGE.write() {
+        *guard = language.trim().to_string();
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WfmAutocompleteItem {

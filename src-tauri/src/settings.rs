@@ -197,6 +197,25 @@ pub struct DiscordWatchlistNotificationInput {
     pub rank: Option<i64>,
     pub order_id: String,
     pub created_at: String,
+    pub labels: DiscordWatchlistNotificationLabels,
+}
+
+/// Pre-localized UI text for [`DiscordWatchlistNotificationInput`], resolved on the frontend
+/// via `tActive()` so the Rust builder never bakes in hardcoded English.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordWatchlistNotificationLabels {
+    /// e.g. "hit your target" — appended after the item name in the title.
+    pub title_suffix: String,
+    /// Fully resolved description sentence (item price / savings / target already interpolated).
+    pub description: String,
+    pub listed_label: String,
+    pub target_label: String,
+    pub savings_label: String,
+    pub seller_label: String,
+    pub qty_label: String,
+    pub rank_label: String,
+    pub footer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,6 +229,22 @@ pub struct DiscordUnderpricedNotificationInput {
     pub username: String,
     pub rank: Option<i64>,
     pub order_id: String,
+    pub labels: DiscordUnderpricedNotificationLabels,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordUnderpricedNotificationLabels {
+    /// e.g. "is underpriced" — appended after the item name in the title.
+    pub title_suffix: String,
+    /// Fully resolved description sentence.
+    pub description: String,
+    pub listed_label: String,
+    pub recommended_label: String,
+    pub upside_label: String,
+    pub seller_label: String,
+    pub rank_label: String,
+    pub footer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +274,18 @@ pub struct DiscordListingHealthNotificationInput {
     pub count: i64,
     /// A few of the worst offenders, worst first, for the embed body.
     pub examples: Vec<DiscordListingHealthItem>,
+    pub labels: DiscordListingHealthLabels,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordListingHealthLabels {
+    /// e.g. "listing needs attention" / "listings need attention" (already pluralized by the FE).
+    pub title: String,
+    pub intro: String,
+    /// Shown when there are no example listings.
+    pub empty: String,
+    pub footer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +304,20 @@ pub struct DiscordScannerStaleNotificationInput {
     pub scanner_name: String,
     /// Minutes since the last successful scan, if known.
     pub minutes_stale: Option<i64>,
+    pub labels: DiscordScannerStaleLabels,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordScannerStaleLabels {
+    /// e.g. "has gone stale" — appended after the scanner name in the title.
+    pub title_suffix: String,
+    /// e.g. "Last successful scan was **{mins} min** ago." (mins already interpolated).
+    pub age_known: String,
+    /// Shown when the last-scan time isn't known.
+    pub age_unknown: String,
+    pub outro: String,
+    pub footer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +326,17 @@ pub struct DiscordAppUpdateNotificationInput {
     pub version: String,
     pub current_version: Option<String>,
     pub notes: Option<String>,
+    pub labels: DiscordAppUpdateLabels,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordAppUpdateLabels {
+    /// e.g. "is available" — appended after the version in the title.
+    pub title_suffix: String,
+    /// e.g. "A new version is ready to install: **{fromTo}**." (fromTo already interpolated).
+    pub description: String,
+    pub footer: String,
 }
 
 #[derive(Debug, Clone)]
@@ -502,9 +574,17 @@ fn build_wfm_asset_url(asset_path: Option<&str>) -> Option<String> {
 // to the alert category, a divider before the stat fields, and a footer that names the section.
 // The builders below assemble that envelope so the alerts read as one coherent product.
 
-/// WarStonks brand icon, hosted on the public marketing site so Discord can fetch it.
-const DISCORD_BRAND_ICON: &str = "https://warstonks.app/icon.png";
-const WARSTONKS_SITE: &str = "https://warstonks.app";
+/// WarStonks brand icon. `warstonks.app` (the previous host) does not resolve at all — confirmed
+/// live (`curl`: "Could not resolve host") — which is why every embed's author/footer icon showed
+/// Discord's broken-image placeholder. Points at the app's own icon file in the GitHub repo via
+/// `raw.githubusercontent.com`, which actually serves it (confirmed live, `content-type:
+/// image/png`) and tracks whatever's committed at `src-tauri/icons/icon.png` on `main`.
+const DISCORD_BRAND_ICON: &str =
+    "https://raw.githubusercontent.com/Py-xxx/WarStonks/main/src-tauri/icons/icon.png";
+/// Same dead-domain problem as `DISCORD_BRAND_ICON` — this is the clickable link on the embed's
+/// author line and the app-update notification's title link, so it silently 404'd too. Points at
+/// the repo itself, the only confirmed-live web presence for the project.
+const WARSTONKS_SITE: &str = "https://github.com/Py-xxx/WarStonks";
 
 // Category accent colors, mirroring the in-app palette.
 const COLOR_GREEN: u32 = 0x3D_D6_8C;
@@ -527,6 +607,177 @@ fn brand_footer(section: &str) -> serde_json::Value {
 /// sit in their own visual band.
 fn divider_field() -> serde_json::Value {
     json!({ "name": "\u{200b}", "value": "\u{200b}", "inline": false })
+}
+
+/// Label text for the two Discord notifications that fire from a purely backend-triggered flow
+/// (trade detection off the WS listener, Smart Manage's auto-pricing loop) with no frontend round
+/// trip to pre-resolve `tActive()` strings the way every other Discord notification does — see
+/// `crate::commands::app_language`, set once at boot (and on language change) from the frontend's
+/// own `src/i18n/*.ts` language code. Every other string in this file's builders is genuine DATA
+/// (an item name, a price) or a brand/product name deliberately left untranslated (`Warframe
+/// Market`, `Alecaframe`, `Smart Manage` — matches the existing convention already used
+/// throughout `src/i18n/*.ts`, where feature/product names stay in English in every locale).
+mod discord_i18n {
+    pub(super) struct Labels {
+        pub buy: &'static str,
+        pub sell: &'static str,
+        pub received_label: &'static str,
+        pub given_label: &'static str,
+        pub platinum_label: &'static str,
+        pub items_label: &'static str,
+        pub source_label: &'static str,
+        pub trade_detection_footer: &'static str,
+        pub raised: &'static str,
+        pub trimmed: &'static str,
+        pub verb_would_be: &'static str,
+        pub verb_was: &'static str,
+        pub verb_couldnt_be: &'static str,
+        pub preview_only_note: &'static str,
+        pub was_label: &'static str,
+        pub now_label: &'static str,
+        pub reason_label: &'static str,
+        pub smart_manage_footer: &'static str,
+    }
+
+    const EN: Labels = Labels {
+        buy: "Buy",
+        sell: "Sell",
+        received_label: "📥 Received",
+        given_label: "📤 Given",
+        platinum_label: "💠 Platinum",
+        items_label: "📦 Items",
+        source_label: "🔗 Source",
+        trade_detection_footer: "Trade detection",
+        raised: "Raised",
+        trimmed: "Trimmed",
+        verb_would_be: "would be",
+        verb_was: "was",
+        verb_couldnt_be: "couldn't be",
+        preview_only_note: "\n> _Preview only — no change applied._",
+        was_label: "Was",
+        now_label: "Now",
+        reason_label: "Reason",
+        smart_manage_footer: "Smart Manage",
+    };
+
+    const DE: Labels = Labels {
+        buy: "Kauf",
+        sell: "Verkauf",
+        received_label: "📥 Erhalten",
+        given_label: "📤 Gegeben",
+        platinum_label: "💠 Platin",
+        items_label: "📦 Artikel",
+        source_label: "🔗 Quelle",
+        trade_detection_footer: "Handelserkennung",
+        raised: "Erhöht",
+        trimmed: "Gesenkt",
+        verb_would_be: "würde",
+        verb_was: "wurde",
+        verb_couldnt_be: "konnte nicht",
+        preview_only_note: "\n> _Nur Vorschau — keine Änderung angewendet._",
+        was_label: "Vorher",
+        now_label: "Jetzt",
+        reason_label: "Grund",
+        smart_manage_footer: "Smart Manage",
+    };
+
+    const ES: Labels = Labels {
+        buy: "Compra",
+        sell: "Venta",
+        received_label: "📥 Recibido",
+        given_label: "📤 Entregado",
+        platinum_label: "💠 Platino",
+        items_label: "📦 Artículos",
+        source_label: "🔗 Origen",
+        trade_detection_footer: "Detección de intercambios",
+        raised: "Subido",
+        trimmed: "Recortado",
+        verb_would_be: "se moveria",
+        verb_was: "se movió",
+        verb_couldnt_be: "no se pudo mover",
+        preview_only_note: "\n> _Solo vista previa — no se aplicó ningún cambio._",
+        was_label: "Antes",
+        now_label: "Ahora",
+        reason_label: "Motivo",
+        smart_manage_footer: "Smart Manage",
+    };
+
+    const FR: Labels = Labels {
+        buy: "Achat",
+        sell: "Vente",
+        received_label: "📥 Reçu",
+        given_label: "📤 Donné",
+        platinum_label: "💠 Platine",
+        items_label: "📦 Objets",
+        source_label: "🔗 Source",
+        trade_detection_footer: "Détection d'échanges",
+        raised: "Augmenté",
+        trimmed: "Réduit",
+        verb_would_be: "serait",
+        verb_was: "a été",
+        verb_couldnt_be: "n'a pas pu être",
+        preview_only_note: "\n> _Aperçu uniquement — aucun changement appliqué._",
+        was_label: "Avant",
+        now_label: "Maintenant",
+        reason_label: "Raison",
+        smart_manage_footer: "Smart Manage",
+    };
+
+    const PT: Labels = Labels {
+        buy: "Compra",
+        sell: "Venda",
+        received_label: "📥 Recebido",
+        given_label: "📤 Enviado",
+        platinum_label: "💠 Platina",
+        items_label: "📦 Itens",
+        source_label: "🔗 Origem",
+        trade_detection_footer: "Detecção de negociações",
+        raised: "Aumentado",
+        trimmed: "Reduzido",
+        verb_would_be: "seria",
+        verb_was: "foi",
+        verb_couldnt_be: "não pôde ser",
+        preview_only_note: "\n> _Apenas pré-visualização — nenhuma alteração aplicada._",
+        was_label: "Antes",
+        now_label: "Agora",
+        reason_label: "Motivo",
+        smart_manage_footer: "Smart Manage",
+    };
+
+    const ZH_HANS: Labels = Labels {
+        buy: "购买",
+        sell: "出售",
+        received_label: "📥 已收到",
+        given_label: "📤 已给出",
+        platinum_label: "💠 白金",
+        items_label: "📦 物品",
+        source_label: "🔗 来源",
+        trade_detection_footer: "交易检测",
+        raised: "已上调",
+        trimmed: "已下调",
+        verb_would_be: "将会",
+        verb_was: "已",
+        verb_couldnt_be: "未能",
+        preview_only_note: "\n> _仅预览 — 未应用任何更改。_",
+        was_label: "原价",
+        now_label: "现价",
+        reason_label: "原因",
+        smart_manage_footer: "Smart Manage",
+    };
+
+    /// `language` is the raw `src/i18n/*.ts` file code (`zh-hans`, `en`, ...) — falls back to
+    /// English for anything unrecognized, same tolerance `translate.ts`'s locale chain gives an
+    /// unsupported language on the frontend.
+    pub(super) fn resolve(language: &str) -> &'static Labels {
+        match language.trim().to_ascii_lowercase().as_str() {
+            "de" => &DE,
+            "es" => &ES,
+            "fr" => &FR,
+            "pt" => &PT,
+            "zh-hans" | "zh" => &ZH_HANS,
+            _ => &EN,
+        }
+    }
 }
 
 fn build_discord_test_payload() -> serde_json::Value {
@@ -568,23 +819,20 @@ fn build_watchlist_found_payload(input: &DiscordWatchlistNotificationInput) -> s
       "username": "WarStonks",
       "embeds": [{
         "author": brand_author(),
-        "title": format!("🎯 {} hit your target", input.item_name),
+        "title": format!("🎯 {} {}", input.item_name, input.labels.title_suffix),
         "url": market_url,
-        "description": format!(
-            "Now listed at **{}p** — that's **{}p** under your **{}p** target.",
-            input.current_price, savings, input.target_price
-        ),
+        "description": input.labels.description,
         "color": COLOR_GREEN,
         "thumbnail": image_url.as_ref().map(|url| json!({ "url": url })),
         "fields": [
-          { "name": "💰 Listed", "value": format!("**{}p**", input.current_price), "inline": true },
-          { "name": "🎯 Target", "value": format!("{}p", input.target_price), "inline": true },
-          { "name": "📉 You save", "value": format!("{}p", savings), "inline": true },
-          { "name": "👤 Seller", "value": input.username, "inline": true },
-          { "name": "📦 Qty", "value": input.quantity.to_string(), "inline": true },
-          { "name": "🏅 Rank", "value": rank_value, "inline": true }
+          { "name": format!("💰 {}", input.labels.listed_label), "value": format!("**{}p**", input.current_price), "inline": true },
+          { "name": format!("🎯 {}", input.labels.target_label), "value": format!("{}p", input.target_price), "inline": true },
+          { "name": format!("📉 {}", input.labels.savings_label), "value": format!("{}p", savings), "inline": true },
+          { "name": format!("👤 {}", input.labels.seller_label), "value": input.username, "inline": true },
+          { "name": format!("📦 {}", input.labels.qty_label), "value": input.quantity.to_string(), "inline": true },
+          { "name": format!("🏅 {}", input.labels.rank_label), "value": rank_value, "inline": true }
         ],
-        "footer": brand_footer("Watchlist alert"),
+        "footer": brand_footer(&input.labels.footer),
         "timestamp": input.created_at
       }]
     })
@@ -605,21 +853,18 @@ fn build_underpriced_listing_payload(
       "username": "WarStonks",
       "embeds": [{
         "author": brand_author(),
-        "title": format!("💸 {} is underpriced", input.item_name),
-        "description": format!(
-            "Listed at **{}p**, **{}%** below the **{}p** recommended price. Flip potential: **~{}p**.",
-            input.listed_price, input.pct_below, input.recommended_price, profit
-        ),
+        "title": format!("💸 {} {}", input.item_name, input.labels.title_suffix),
+        "description": input.labels.description,
         "url": market_url,
         "color": COLOR_AMBER,
         "fields": [
-          { "name": "🏷️ Listed", "value": format!("**{}p**", input.listed_price), "inline": true },
-          { "name": "📊 Recommended", "value": format!("{}p", input.recommended_price), "inline": true },
-          { "name": "📈 Upside", "value": format!("~{}p ({}%)", profit, input.pct_below), "inline": true },
-          { "name": "👤 Seller", "value": input.username, "inline": true },
-          { "name": "🏅 Rank", "value": rank_value, "inline": true }
+          { "name": format!("🏷️ {}", input.labels.listed_label), "value": format!("**{}p**", input.listed_price), "inline": true },
+          { "name": format!("📊 {}", input.labels.recommended_label), "value": format!("{}p", input.recommended_price), "inline": true },
+          { "name": format!("📈 {}", input.labels.upside_label), "value": format!("~{}p ({}%)", profit, input.pct_below), "inline": true },
+          { "name": format!("👤 {}", input.labels.seller_label), "value": input.username, "inline": true },
+          { "name": format!("🏅 {}", input.labels.rank_label), "value": rank_value, "inline": true }
         ],
-        "footer": brand_footer("Underpriced radar"),
+        "footer": brand_footer(&input.labels.footer),
         "timestamp": now_iso8601()
       }]
     })
@@ -628,16 +873,19 @@ fn build_underpriced_listing_payload(
 fn build_trade_detected_payload(
     input: &DiscordTradeDetectedNotificationInput,
 ) -> serde_json::Value {
+    let labels = discord_i18n::resolve(&crate::commands::app_language());
     let order_type_label = if input.order_type.eq_ignore_ascii_case("buy") {
-        "Buy"
+        labels.buy
     } else {
-        "Sell"
+        labels.sell
     };
     let title_icon = if input.order_type.eq_ignore_ascii_case("buy") {
         "🛒"
     } else {
         "💸"
     };
+    // "Warframe Market"/"Alecaframe" are product/brand names — deliberately left untranslated,
+    // matching the existing convention in `src/i18n/*.ts` (see `discord_i18n`'s doc comment).
     let source_label = if input.source.eq_ignore_ascii_case("wfm") {
         "Warframe Market"
     } else {
@@ -666,7 +914,7 @@ fn build_trade_detected_payload(
         .join("\n");
 
     let is_buy = input.order_type.eq_ignore_ascii_case("buy");
-    let items_label = if is_buy { "📥 Received" } else { "📤 Given" };
+    let items_label = if is_buy { labels.received_label } else { labels.given_label };
     let item_count: i64 = input.items.iter().map(|item| item.quantity.max(1)).sum();
 
     json!({
@@ -678,13 +926,13 @@ fn build_trade_detected_payload(
         "color": if is_buy { COLOR_BLUE } else { COLOR_GREEN },
         "thumbnail": image_url.as_ref().map(|url| json!({ "url": url })),
         "fields": [
-          { "name": "💠 Platinum", "value": format!("**{}p**", input.total_platinum), "inline": true },
-          { "name": "📦 Items", "value": item_count.to_string(), "inline": true },
-          { "name": "🔗 Source", "value": source_label, "inline": true },
+          { "name": labels.platinum_label, "value": format!("**{}p**", input.total_platinum), "inline": true },
+          { "name": labels.items_label, "value": item_count.to_string(), "inline": true },
+          { "name": labels.source_label, "value": source_label, "inline": true },
           divider_field(),
           { "name": items_label, "value": item_lines, "inline": false }
         ],
-        "footer": brand_footer("Trade detection"),
+        "footer": brand_footer(labels.trade_detection_footer),
         "timestamp": input.closed_at
       }]
     })
@@ -1380,18 +1628,19 @@ fn build_smart_manage_payload(
     applied: bool,
     preview: bool,
 ) -> serde_json::Value {
+    let labels = discord_i18n::resolve(&crate::commands::app_language());
     let market_url = format!("https://warframe.market/items/{item_slug}");
     let raised = new_price > old_price;
     let arrow = if raised { "📈" } else { "📉" };
-    let direction = if raised { "Raised" } else { "Trimmed" };
+    let direction = if raised { labels.raised } else { labels.trimmed };
     let pretty_name = prettify_slug(item_slug);
     let delta = (new_price - old_price).abs();
     let verb = if preview {
-        "would be"
+        labels.verb_would_be
     } else if applied {
-        "was"
+        labels.verb_was
     } else {
-        "couldn't be"
+        labels.verb_couldnt_be
     };
     let color = if !applied && !preview {
         COLOR_RED
@@ -1408,16 +1657,16 @@ fn build_smart_manage_payload(
         "description": format!(
             "Price {verb} moved **{old_price}p → {new_price}p** ({}{delta}p).{}",
             if raised { "+" } else { "−" },
-            if preview { "\n> _Preview only — no change applied._" } else { "" }
+            if preview { labels.preview_only_note } else { "" }
         ),
         "url": market_url,
         "color": color,
         "fields": [
-          { "name": "Was", "value": format!("{old_price}p"), "inline": true },
-          { "name": "Now", "value": format!("**{new_price}p**"), "inline": true },
-          { "name": "Reason", "value": action, "inline": true }
+          { "name": labels.was_label, "value": format!("{old_price}p"), "inline": true },
+          { "name": labels.now_label, "value": format!("**{new_price}p**"), "inline": true },
+          { "name": labels.reason_label, "value": action, "inline": true }
         ],
-        "footer": brand_footer("Smart Manage"),
+        "footer": brand_footer(labels.smart_manage_footer),
         "timestamp": now_iso8601()
       }]
     })
@@ -1442,7 +1691,7 @@ fn build_listing_health_payload(
     input: &DiscordListingHealthNotificationInput,
 ) -> serde_json::Value {
     let lines = if input.examples.is_empty() {
-        "_Open the Trades tab to review._".to_string()
+        input.labels.empty.clone()
     } else {
         input
             .examples
@@ -1462,12 +1711,10 @@ fn build_listing_health_payload(
       "username": "WarStonks",
       "embeds": [{
         "author": brand_author(),
-        "title": format!("🩺 {} listing{} need attention", input.count, if input.count == 1 { "" } else { "s" }),
-        "description": format!(
-            "Some of your sell orders have slipped out of a competitive spot.\n\n{lines}"
-        ),
+        "title": format!("🩺 {} {}", input.count, input.labels.title),
+        "description": format!("{}\n\n{lines}", input.labels.intro),
         "color": COLOR_AMBER,
-        "footer": brand_footer("Listing health"),
+        "footer": brand_footer(&input.labels.footer),
         "timestamp": now_iso8601()
       }]
     })
@@ -1478,17 +1725,17 @@ fn build_scanner_stale_payload(
 ) -> serde_json::Value {
     let age = input
         .minutes_stale
-        .map(|mins| format!("Last successful scan was **{mins} min** ago."))
-        .unwrap_or_else(|| "It hasn't refreshed in a while.".to_string());
+        .map(|mins| input.labels.age_known.replace("{mins}", &mins.to_string()))
+        .unwrap_or_else(|| input.labels.age_unknown.clone());
 
     json!({
       "username": "WarStonks",
       "embeds": [{
         "author": brand_author(),
-        "title": format!("⚠️ {} has gone stale", input.scanner_name),
-        "description": format!("{age}\nOpportunities may be out of date until it refreshes."),
+        "title": format!("⚠️ {} {}", input.scanner_name, input.labels.title_suffix),
+        "description": format!("{age}\n{}", input.labels.outro),
         "color": COLOR_RED,
-        "footer": brand_footer("Scanner status"),
+        "footer": brand_footer(&input.labels.footer),
         "timestamp": now_iso8601()
       }]
     })
@@ -1506,16 +1753,20 @@ fn build_app_update_payload(input: &DiscordAppUpdateNotificationInput) -> serde_
         .filter(|notes| !notes.trim().is_empty())
         .map(|notes| format!("\n\n{notes}"))
         .unwrap_or_default();
+    let description = input
+        .labels
+        .description
+        .replace("{fromTo}", &format!("{from}{}", input.version));
 
     json!({
       "username": "WarStonks",
       "embeds": [{
         "author": brand_author(),
-        "title": format!("🚀 WarStonks {} is available", input.version),
-        "description": format!("A new version is ready to install: **{from}{}**.{notes}", input.version),
+        "title": format!("🚀 WarStonks {} {}", input.version, input.labels.title_suffix),
+        "description": format!("{description}{notes}"),
         "url": WARSTONKS_SITE,
         "color": COLOR_PURPLE,
-        "footer": brand_footer("App update"),
+        "footer": brand_footer(&input.labels.footer),
         "timestamp": now_iso8601()
       }]
     })

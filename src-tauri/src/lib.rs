@@ -104,6 +104,7 @@ pub fn run() {
             commands::export_language_pack,
             commands::import_language_pack,
             commands::set_worldstate_language,
+            commands::set_app_language,
             commands::get_relic_tier_icons,
             commands::get_wfm_top_sell_orders,
             market_observatory::get_wfm_item_orders,

@@ -46,6 +46,14 @@ export function maybeFireHealthAlert(orders: TradeSellOrder[]): void {
         marketLow: order.marketLow ?? null,
         status: order.health?.label ?? '',
       })),
+      labels: {
+        title: tActive(
+          needing.length === 1 ? 'discord.listingHealth.titleOne' : 'discord.listingHealth.titleMany',
+        ),
+        intro: tActive('discord.listingHealth.intro'),
+        empty: tActive('discord.listingHealth.empty'),
+        footer: tActive('discord.listingHealth.footer'),
+      },
     }).catch(() => undefined);
   }
 }

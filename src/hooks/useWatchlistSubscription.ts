@@ -6,6 +6,7 @@ import {
   type WatchlistTargetSync,
 } from '../lib/tauriClient';
 import { useAppStore } from '../stores/useAppStore';
+import { tActive } from '../i18n';
 
 /** Variant keys are `rank:N` or `base`; matching needs the numeric rank (or null). */
 function rankFromVariantKey(variantKey: string): number | null {
@@ -61,8 +62,12 @@ export function useWatchlistSubscription() {
         fireAlertNotification(
           state.notificationSettings,
           'watchlistAlert',
-          'Watchlist target hit',
-          `${itemLabel} — ${order.platinum} pt from ${order.username}`,
+          tActive('sys.watchlistTargetHitTitle'),
+          tActive('sys.watchlistTargetHitOrderBody', {
+            itemName: itemLabel,
+            platinum: String(order.platinum),
+            username: order.username,
+          }),
         );
       }
     })

@@ -5,6 +5,7 @@ import {
   initializeAppCatalogOnce,
   isTauriRuntime,
   listenToStartupProgress,
+  setAppLanguage,
   setWorldstateLanguage,
   tryAutoSignInWfmTradeAccount,
   type StartupProgress,
@@ -116,6 +117,9 @@ export function useStartupInitialization(): StartupState {
       void setWorldstateLanguage(wfstatLangCode(useAppStore.getState().language)).catch(
         () => undefined,
       );
+      // Same idea for the app's own UI language — lets backend-triggered Discord notifications
+      // (trade detection, Smart Manage) localize their text from launch.
+      void setAppLanguage(useAppStore.getState().language).catch(() => undefined);
 
       try {
         setProgress({

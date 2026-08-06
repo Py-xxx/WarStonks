@@ -43,6 +43,7 @@ import {
   getWorldStateSteelPath,
   getWorldStateNightwave,
   getWorldStateVaultTrader,
+  setAppLanguage,
   setWorldstateLanguage,
   type RealtimeWatchlistOrder,
   type UnderpricedListing,
@@ -464,6 +465,48 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function buildWatchlistDiscordLabels(currentPrice: number, targetPrice: number) {
+  const savings = Math.max(targetPrice - currentPrice, 0);
+  return {
+    titleSuffix: tActive('discord.watchlist.titleSuffix'),
+    description: tActive('discord.watchlist.description', {
+      current: String(currentPrice),
+      savings: String(savings),
+      target: String(targetPrice),
+    }),
+    listedLabel: tActive('discord.watchlist.listedLabel'),
+    targetLabel: tActive('discord.watchlist.targetLabel'),
+    savingsLabel: tActive('discord.watchlist.savingsLabel'),
+    sellerLabel: tActive('discord.watchlist.sellerLabel'),
+    qtyLabel: tActive('discord.watchlist.qtyLabel'),
+    rankLabel: tActive('discord.watchlist.rankLabel'),
+    footer: tActive('discord.watchlist.footer'),
+  };
+}
+
+function buildUnderpricedDiscordLabels(
+  listedPrice: number,
+  recommendedPrice: number,
+  pctBelow: number,
+) {
+  const profit = Math.max(recommendedPrice - listedPrice, 0);
+  return {
+    titleSuffix: tActive('discord.underpriced.titleSuffix'),
+    description: tActive('discord.underpriced.description', {
+      listed: String(listedPrice),
+      pctBelow: String(pctBelow),
+      recommended: String(recommendedPrice),
+      profit: String(profit),
+    }),
+    listedLabel: tActive('discord.underpriced.listedLabel'),
+    recommendedLabel: tActive('discord.underpriced.recommendedLabel'),
+    upsideLabel: tActive('discord.underpriced.upsideLabel'),
+    sellerLabel: tActive('discord.underpriced.sellerLabel'),
+    rankLabel: tActive('discord.underpriced.rankLabel'),
+    footer: tActive('discord.underpriced.footer'),
+  };
+}
+
 function buildWatchlistId(item: WfmAutocompleteItem): string {
   return item.slug;
 }
@@ -876,14 +919,21 @@ function upsertScannerStaleSystemAlert(
     fireAlertNotification(
       useAppStore.getState().notificationSettings,
       'scannerStale',
-      'Scanner data is stale',
-      'The latest scanner run is over 48 hours old. A rescan is recommended.',
+      tActive('sys.scannerStaleTitle'),
+      tActive('sys.scannerStaleMsg'),
     );
     // Discord (gated backend-side on discord.enabled && scanner_stale).
     if (isTauriRuntime()) {
       void sendScannerStaleDiscordNotification({
         scannerName: tActive('sys.scannerStaleTitle'),
         minutesStale: null,
+        labels: {
+          titleSuffix: tActive('discord.scannerStale.titleSuffix'),
+          ageKnown: tActive('discord.scannerStale.ageKnown'),
+          ageUnknown: tActive('discord.scannerStale.ageUnknown'),
+          outro: tActive('discord.scannerStale.outro'),
+          footer: tActive('discord.scannerStale.footer'),
+        },
       }).catch(() => undefined);
     }
   }
@@ -1893,6 +1943,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // Point warframestat.us worldstate fetches at the new language, then bump the epoch so the
     // worldstate hooks refetch immediately (rather than waiting for their next poll).
     void setWorldstateLanguage(wfstatLangCode(language)).catch(() => undefined);
+    void setAppLanguage(language).catch(() => undefined);
     set((state) => ({ language, worldstateEpoch: state.worldstateEpoch + 1 }));
     void useAppStore.getState().loadLocalizedNames();
   },
@@ -3795,6 +3846,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           rank: nextAlert.rank,
           orderId: nextAlert.orderId,
           createdAt: nextAlert.createdAt,
+          labels: buildWatchlistDiscordLabels(nextAlert.price, latestItem.targetPrice),
         }).catch((error) => {
           console.error('[discord] failed to send watchlist notification', error);
         });
@@ -3883,8 +3935,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       },
     });
 
-    const title = 'Underpriced listing found';
-    const body = `${listing.itemName} — ${listing.listedPrice}p (${Math.round(listing.pctBelow)}% below ${listing.recommendedPrice}p) from ${listing.username}`;
+    const title = tActive('sys.underpricedListingTitle');
+    const body = tActive('sys.underpricedListingBody', {
+      itemName: listing.itemName,
+      listedPrice: String(listing.listedPrice),
+      pctBelow: String(Math.round(listing.pctBelow)),
+      recommendedPrice: String(listing.recommendedPrice),
+      username: listing.username,
+    });
     fireAlertNotification(notificationSettings, 'underpricedListing', title, body);
     void sendUnderpricedListingDiscordNotification({
       itemName: listing.itemName,
@@ -3895,6 +3953,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       username: listing.username,
       rank: listing.rank,
       orderId: listing.orderId,
+      labels: buildUnderpricedDiscordLabels(
+        listing.listedPrice,
+        listing.recommendedPrice,
+        Math.round(listing.pctBelow),
+      ),
     }).catch((error) => {
       console.error('[discord] failed to send underpriced listing notification', error);
     });
@@ -4347,6 +4410,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         rank: nextAlert.rank,
         orderId: nextAlert.orderId,
         createdAt: nextAlert.createdAt,
+        labels: buildWatchlistDiscordLabels(nextAlert.price, item.targetPrice),
       }).catch((error) => {
         console.error('[discord] failed to send realtime watchlist notification', error);
       });

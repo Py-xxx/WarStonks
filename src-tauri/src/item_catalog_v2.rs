@@ -914,12 +914,26 @@ pub(crate) fn build_wfstat_raw_json_map(
         .collect())
 }
 
-/// The four refinement labels WFStat's own relic `uniqueName`s end in — WFM models one relic as
-/// a single item (refinement is a `subtype` on it), but WFStat carries a fully separate record
-/// per refinement, each with its own `rewards` table (drop odds genuinely differ by refinement).
-/// One relic's four records are siblings only by naming convention: same identifier with one of
-/// these words swapped on the end (e.g. `...LithA1RelicIntact` / `...LithA1RelicExceptional`).
-const RELIC_REFINEMENT_SUFFIXES: &[&str] = &["Intact", "Exceptional", "Flawless", "Radiant"];
+/// The four suffixes WFStat's own relic `uniqueName`s actually end in, paired with the canonical
+/// refinement label to store for each. WFM models one relic as a single item (refinement is a
+/// `subtype` on it), but WFStat carries a fully separate record per refinement, each with its own
+/// `rewards` table (drop odds genuinely differ by refinement) — one relic's four records are
+/// siblings only by naming convention: same identifier with a metal-tier suffix swapped on the
+/// end. Confirmed live against `/items/search/lith%20a1`: WFStat uses the game's internal
+/// metal-tier suffixes (`...T1VoidProjectionGBronze`/`GSilver`/`GGold`/`GPlatinum`), NOT the
+/// literal refinement words — a previous version of this constant searched for the literal words
+/// and never matched anything, which is why every relic's reward table came back empty.
+// Lowercase, matching `market_observatory::load_relic_reward_profiles`'s
+// `refinement.trim().to_ascii_lowercase()` comparison on the read side — the two ends of this
+// contract only need to agree once case-normalized, so plain literals here (rather than
+// depending on market_observatory's private constants) keep this module's build/write side
+// self-contained.
+const RELIC_REFINEMENT_SUFFIXES: &[(&str, &str)] = &[
+    ("Bronze", "intact"),
+    ("Silver", "exceptional"),
+    ("Gold", "flawless"),
+    ("Platinum", "radiant"),
+];
 
 /// Every WFStat relic record, grouped by its identifier with the refinement suffix stripped off
 /// — e.g. `.../LithA1RelicIntact` and `.../LithA1RelicExceptional` both key under
@@ -935,9 +949,9 @@ pub(crate) fn build_wfstat_relic_variant_map(
         let Some(unique_name) = value.get("uniqueName").and_then(|v| v.as_str()) else {
             continue;
         };
-        let Some(suffix) = RELIC_REFINEMENT_SUFFIXES
+        let Some((suffix, refinement_label)) = RELIC_REFINEMENT_SUFFIXES
             .iter()
-            .find(|suffix| unique_name.ends_with(**suffix))
+            .find(|(suffix, _)| unique_name.ends_with(*suffix))
         else {
             continue;
         };
@@ -945,7 +959,7 @@ pub(crate) fn build_wfstat_relic_variant_map(
         grouped
             .entry(prefix.to_string())
             .or_default()
-            .insert(suffix.to_string(), value.to_string());
+            .insert((*refinement_label).to_string(), value.to_string());
     }
     Ok(grouped)
 }
@@ -1613,9 +1627,9 @@ pub(crate) fn write_wfstat_relic_variants(
         if item.item_family != "relic" {
             continue;
         }
-        let Some(suffix) = RELIC_REFINEMENT_SUFFIXES
+        let Some((suffix, _)) = RELIC_REFINEMENT_SUFFIXES
             .iter()
-            .find(|suffix| unique_name.ends_with(**suffix))
+            .find(|(suffix, _)| unique_name.ends_with(*suffix))
         else {
             continue;
         };
@@ -1883,7 +1897,7 @@ const CATALOG_V2_DATABASE_TMP_FILE: &str = "item_catalog_v2.sqlite.building";
 /// `set_parts.quantity_in_set`, `wfstat_relic_variants`, `language_pack_meta`, etc. were added).
 /// Without this, a launch would silently keep reusing an older file missing those columns/tables
 /// forever, since nothing about WFM's data changed to trigger a rebuild.
-const CATALOG_V2_SCHEMA_VERSION: &str = "3";
+const CATALOG_V2_SCHEMA_VERSION: &str = "4";
 
 /// One point in the build the caller might want to report progress at. Internal plumbing only —
 /// no `Serialize`, nothing crosses the IPC boundary here; the startup caller translates each
@@ -3667,6 +3681,66 @@ mod tests {
         assert_eq!(tier, &WfstatMatchTier::MarketInfoId);
         // Deterministic pick, not "whichever the map iterates first".
         assert_eq!(matched_name, "/Lotus/.../AxiA1RelicBronze");
+    }
+
+    #[test]
+    fn relic_variant_grouping_uses_wfstats_real_metal_tier_suffixes() {
+        // Confirmed live against `/items/search/lith%20a1`: WFStat's four refinement records for
+        // one relic share an identifier prefix and differ only by a Bronze/Silver/Gold/Platinum
+        // suffix — never the literal words "Intact"/"Exceptional"/"Flawless"/"Radiant". A
+        // constant that searched for those literal words never matched anything, which is why
+        // every relic's reward table came back empty end to end.
+        let prefix = "/Lotus/Types/Game/Projections/T1VoidProjectionG";
+        let wfstat = wfstat_json(&[
+            serde_json::json!({"uniqueName": format!("{prefix}Bronze"), "name": "Lith A1 Intact"}),
+            serde_json::json!({"uniqueName": format!("{prefix}Silver"), "name": "Lith A1 Exceptional"}),
+            serde_json::json!({"uniqueName": format!("{prefix}Gold"), "name": "Lith A1 Flawless"}),
+            serde_json::json!({"uniqueName": format!("{prefix}Platinum"), "name": "Lith A1 Radiant"}),
+        ]);
+        let variant_map = build_wfstat_relic_variant_map(&wfstat).unwrap();
+        let siblings = variant_map.get(prefix).expect("relic group found by stripped prefix");
+        assert_eq!(siblings.len(), 4);
+        for refinement in ["intact", "exceptional", "flawless", "radiant"] {
+            assert!(
+                siblings.contains_key(refinement),
+                "missing {refinement} in {siblings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_wfstat_relic_variants_persists_all_four_refinements_for_a_matched_relic() {
+        let items = vec![ItemRow {
+            item_key: "wfm-relic".into(), slug: "lith_a1_relic".into(), game_ref: None,
+            name_en: "Lith A1 Relic".into(), item_family: "relic".into(),
+            max_rank: None, ducats: None, bulk_tradable: false, set_root: false,
+            icon: None, thumb: None, subtypes: Vec::new(), relic_tier: Some("Lith".into()),
+            preferred_image: None,
+        }];
+        let prefix = "/Lotus/Types/Game/Projections/T1VoidProjectionG";
+        let wfstat = wfstat_json(&[
+            serde_json::json!({"uniqueName": format!("{prefix}Bronze"), "marketInfo": {"id": "wfm-relic"}, "rewards": []}),
+            serde_json::json!({"uniqueName": format!("{prefix}Silver"), "name": "sibling", "rewards": []}),
+            serde_json::json!({"uniqueName": format!("{prefix}Gold"), "name": "sibling", "rewards": []}),
+            serde_json::json!({"uniqueName": format!("{prefix}Platinum"), "name": "sibling", "rewards": []}),
+        ]);
+        let report = build_wfstat_matches(&items, &wfstat, &[]).unwrap();
+        let variant_map = build_wfstat_relic_variant_map(&wfstat).unwrap();
+        let items_by_key: HashMap<String, &ItemRow> =
+            items.iter().map(|item| (item.item_key.clone(), item)).collect();
+
+        let connection = Connection::open_in_memory().unwrap();
+        initialize_schema(&connection).unwrap();
+        write_items(&connection, &items).unwrap();
+        write_wfstat_relic_variants(&connection, &report, &items_by_key, &variant_map).unwrap();
+
+        let stored = load_relic_variant_raw_json(&connection, "wfm-relic").unwrap();
+        assert_eq!(stored.len(), 4, "all four refinements must be persisted, got {stored:?}");
+        let refinements: HashSet<&str> = stored.iter().map(|(refinement, _)| refinement.as_str()).collect();
+        assert_eq!(
+            refinements,
+            HashSet::from(["intact", "exceptional", "flawless", "radiant"])
+        );
     }
 
     #[test]

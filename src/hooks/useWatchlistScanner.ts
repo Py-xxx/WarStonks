@@ -6,6 +6,7 @@ import {
   selectNextWatchlistItemToScan,
 } from '../lib/watchlist';
 import { useAppStore } from '../stores/useAppStore';
+import { tActive } from '../i18n';
 
 export function useWatchlistScanner() {
   const watchlistScheduleVersion = useAppStore((state) => {
@@ -80,8 +81,10 @@ export function useWatchlistScanner() {
             fireAlertNotification(
               useAppStore.getState().notificationSettings,
               'watchlistAlert',
-              'Watchlist target hit',
-              `${nextItem.displayName || nextItem.name} reached your target price.`,
+              tActive('sys.watchlistTargetHitTitle'),
+              tActive('sys.watchlistTargetHitBody', {
+                itemName: nextItem.displayName || nextItem.name,
+              }),
             );
           }
         })

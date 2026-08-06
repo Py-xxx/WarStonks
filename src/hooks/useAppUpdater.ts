@@ -3,6 +3,7 @@ import { checkForAppUpdate, isAppUpdaterSupported } from '../lib/appUpdater';
 import { fireAlertNotification } from '../lib/notifications';
 import { sendAppUpdateDiscordNotification, isTauriRuntime } from '../lib/tauriClient';
 import { useAppStore } from '../stores/useAppStore';
+import { tActive } from '../i18n';
 
 export function useAppUpdater() {
   const showAppUpdateAvailable = useAppStore((state) => state.showAppUpdateAvailable);
@@ -27,8 +28,8 @@ export function useAppUpdater() {
         fireAlertNotification(
           useAppStore.getState().notificationSettings,
           'appUpdate',
-          'WarStonks update available',
-          `Version ${update.version ?? ''} is ready to install.`.trim(),
+          tActive('sys.appUpdateAvailableTitle'),
+          tActive('sys.appUpdateAvailableBody', { version: update.version ?? '' }),
         );
         // Discord (gated backend-side on discord.enabled && app_update).
         if (isTauriRuntime()) {
@@ -36,6 +37,11 @@ export function useAppUpdater() {
             version: update.version ?? '',
             currentVersion: update.currentVersion ?? null,
             notes: update.notes ?? null,
+            labels: {
+              titleSuffix: tActive('discord.appUpdate.titleSuffix'),
+              description: tActive('discord.appUpdate.description'),
+              footer: tActive('discord.appUpdate.footer'),
+            },
           }).catch(() => undefined);
         }
       } catch (error) {
