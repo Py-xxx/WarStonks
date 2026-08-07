@@ -6213,7 +6213,16 @@ body {
 .wl-row-price.tone-neutral { color: var(--text-primary); }
 
 /* ── WATCHLIST: compact list (dashboard card) ── */
-.wl-compact-list { display: flex; flex-direction: column; gap: 4px; padding: 4px 10px 10px; }
+/* The card lists the whole watchlist and scrolls, rather than hiding rows behind a cap —
+   sorted target-hit-first, so whatever needs acting on is already at the top. */
+.wl-compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 10px 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
 .wl-row {
   display: flex;
   align-items: center;
@@ -6237,12 +6246,6 @@ body {
   font-size: 12px;
 }
 .wl-row-target { font-size: 10px; color: var(--text-muted); }
-.wl-compact-foot {
-  padding: 8px 12px;
-  border-top: 1px solid var(--border-subtle);
-  font-size: 10px;
-  color: var(--text-muted);
-}
 
 /* ── WATCHLIST: filter chips (full tab) ── */
 .wl-table-card { padding: 0; }

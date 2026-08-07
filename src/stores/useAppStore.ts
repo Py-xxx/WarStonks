@@ -3157,6 +3157,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       writePersistedWatchlistState(nextState.watchlist, nextState.selectedWatchlistId);
       return nextState;
     });
+    // Adding is otherwise silent — the row just appears somewhere in the list, which is easy to
+    // miss. Says "updated" when the item was already there, so re-adding isn't mistaken for a
+    // second entry.
+    get().pushToast(
+      tActive(existingItem ? 'wl.toastUpdated' : 'wl.toastAdded', { name: selectedItem.name }),
+      'success',
+    );
 
     if (selectedItem.wfmId) {
       void ensureMarketTracking(
@@ -3204,6 +3211,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
     const desiredQuantity = Math.max(1, Math.round(quantity));
+    const alreadyWatched = get().watchlist.some(
+      (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
+    );
 
     void getWfmTopSellOrdersForVariant(item.slug, variantKey, get().sellerMode)
       .then((response) => {
@@ -3227,6 +3237,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const latestState = get();
         const existingItem = latestState.watchlist.find(
           (entry) => entry.slug === item.slug && entry.variantKey === variantKey,
+        );
+        latestState.pushToast(
+          tActive(alreadyWatched ? 'wl.toastUpdated' : 'wl.toastAdded', { name: item.name }),
+          'success',
         );
 
         const trackingPromise = item.wfmId

@@ -19,9 +19,6 @@ const SUCCESS_DISMISS_DELAY_MS = 4000;
 
 type WatchlistTableVariant = 'compact' | 'full';
 
-/** How many rows the dashboard card shows before deferring to the full tab. */
-const COMPACT_ROW_LIMIT = 3;
-
 /** Urgency order for the compact card: target hit first, then closest to target. */
 const TONE_RANK: Record<WatchlistTone, number> = { green: 0, amber: 1, neutral: 2 };
 
@@ -181,7 +178,8 @@ export function WatchlistTable({
         const filtered = toneFilter
           ? ordered.filter((item) => getWatchlistVisualState(item).tone === toneFilter)
           : ordered;
-        const rows = variant === 'compact' ? filtered.slice(0, COMPACT_ROW_LIMIT) : filtered;
+        // The dashboard card shows everything too — it just scrolls (see `.wl-compact-list`).
+        const rows = filtered;
 
         if (watchlist.length === 0) {
           return (
