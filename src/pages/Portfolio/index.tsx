@@ -450,6 +450,7 @@ const TRADE_STATUS_LABEL_KEYS: Record<string, TranslationKey> = {
   'Sold As Set': 'pf.soldAsSet',
   Kept: 'pf.kept',
   Open: 'pf.open',
+  Partial: 'pf.partial',
 };
 
 function renderTradeStatus(status: string | null): string {
@@ -458,6 +459,15 @@ function renderTradeStatus(status: string | null): string {
   }
   const labelKey = TRADE_STATUS_LABEL_KEYS[status];
   return labelKey ? tActive(labelKey) : status;
+}
+
+/** On a partly-sold buy the badge alone doesn't say how far along it is, so it carries the
+ *  sold-of-total count. `matchedQuantity` is the sold-so-far figure for buy rows. */
+function renderTradeStatusDetail(entry: PortfolioTradeLogEntry): string | null {
+  if (entry.status !== 'Partial' || entry.matchedQuantity == null) {
+    return null;
+  }
+  return `${entry.matchedQuantity}/${entry.quantity}`;
 }
 
 function buildTradeTypeClassName(orderType: PortfolioTradeLogEntry['orderType']): string {
@@ -474,6 +484,8 @@ function buildTradeStatusClassName(status: string | null): string {
       return 'badge-amber';
     case 'Open':
       return 'badge-blue';
+    case 'Partial':
+      return 'badge-partial';
     default:
       return 'badge';
   }
@@ -672,6 +684,7 @@ function TradeLogEntryRow({
 }) {
   const { t } = useTranslation();
   const profitTone = entry.profit == null ? '' : entry.profit < 0 ? ' neg' : ' pos';
+  const statusDetail = renderTradeStatusDetail(entry);
   const metaParts = [
     entry.source === 'wfm' ? 'WFM' : t('pf.alecaframe'),
     entry.rank !== null && entry.rank !== undefined ? `${t('pf.rank')} ${entry.rank}` : null,
@@ -710,8 +723,13 @@ function TradeLogEntryRow({
       </div>
       <span className="portfolio-log-status-cell">
         {entry.status ? (
-          <span className={`badge ${buildTradeStatusClassName(entry.status)}`}>
-            {renderTradeStatus(entry.status)}
+          <span className="portfolio-log-status-stack">
+            <span className={`badge ${buildTradeStatusClassName(entry.status)}`}>
+              {renderTradeStatus(entry.status)}
+            </span>
+            {statusDetail ? (
+              <span className="portfolio-log-status-detail">{statusDetail}</span>
+            ) : null}
           </span>
         ) : (
           <span className="portfolio-log-value">—</span>
@@ -764,7 +782,7 @@ function TradeLogTab({ username }: { username: string | null }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [orderTypeFilter, setOrderTypeFilter] = useState<'all' | 'buy' | 'sell'>('all');
   const [statusFilter, setStatusFilter] =
-    useState<'all' | 'Flip' | 'Sold As Set' | 'Open' | 'Kept' | 'none'>('all');
+    useState<'all' | 'Flip' | 'Sold As Set' | 'Partial' | 'Open' | 'Kept' | 'none'>('all');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'wfm' | 'alecaframe'>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -1174,12 +1192,13 @@ function TradeLogTab({ username }: { username: string | null }) {
                   className="settings-text-input"
                   value={statusFilter}
                   onChange={(event) =>
-                    setStatusFilter(event.target.value as 'all' | 'Flip' | 'Sold As Set' | 'Open' | 'Kept' | 'none')
+                    setStatusFilter(event.target.value as 'all' | 'Flip' | 'Sold As Set' | 'Partial' | 'Open' | 'Kept' | 'none')
                   }
                 >
                   <option value="all">{t('oppf.all')}</option>
                   <option value="Flip">{t('pf.flip')}</option>
                   <option value="Sold As Set">{t('pf.soldAsSet')}</option>
+                  <option value="Partial">{t('pf.partial')}</option>
                   <option value="Open">{t('pf.open')}</option>
                   <option value="Kept">{t('pf.kept')}</option>
                   <option value="none">{t('pf.noStatus')}</option>

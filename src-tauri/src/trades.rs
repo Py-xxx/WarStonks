@@ -6229,31 +6229,50 @@ fn record_consumed_platinum(record: &StoredTradeLogRecord, quantity: i64) -> i64
     record.platinum.saturating_mul(normalized_quantity)
 }
 
-fn consume_matching_buy_lots(
+/// The two trade sources spell "this item has no meaningful rank" differently: WFM omits the
+/// field entirely (`None`) for items that aren't rankable, while AlecaFrame always sends a rank
+/// and reports those same items as `0`. Comparing the raw `Option`s therefore never matches a
+/// WFM buy against an AlecaFrame sell of the same Prime part, leaving the buy permanently open
+/// and the sell with no cost basis. Both spellings describe the same variant, so lot matching
+/// compares this normalized form — the rule `trade_health_variant_matches` already applies on
+/// the listing-health side.
+fn normalized_lot_rank(rank: Option<i64>) -> i64 {
+    rank.unwrap_or(0)
+}
+
+/// Consumes buy lots for one sell. `required_rank` is the normalized rank a lot must have, or
+/// `None` to accept any rank. `records` arrives ordered by `closed_at ASC`, so lots are consumed
+/// oldest-first (FIFO).
+#[allow(clippy::too_many_arguments)]
+fn consume_buy_lots_matching(
     records: &[StoredTradeLogRecord],
     consumption: &mut HashMap<String, BuyConsumptionState>,
     slug: &str,
-    rank: Option<i64>,
     required_quantity: i64,
     sell_closed_at: &str,
     as_set: bool,
-) -> (i64, i64, Vec<ConsumedBuyMatch>) {
-    let mut matched_quantity = 0_i64;
-    let mut matched_cost = 0_i64;
-    let mut matches = Vec::new();
+    required_rank: Option<i64>,
+    matched_quantity: &mut i64,
+    matched_cost: &mut i64,
+    matches: &mut Vec<ConsumedBuyMatch>,
+) {
     let normalized_slug = slug.trim();
 
     for record in records {
-        if matched_quantity >= required_quantity {
+        if *matched_quantity >= required_quantity {
             break;
         }
         if record.order_type != "buy"
             || record.keep_item
             || record.slug != normalized_slug
-            || record.rank != rank
             || record.closed_at.as_str() > sell_closed_at
         {
             continue;
+        }
+        if let Some(required) = required_rank {
+            if normalized_lot_rank(record.rank) != required {
+                continue;
+            }
         }
 
         let entry = consumption.entry(record.id.clone()).or_default();
@@ -6263,14 +6282,14 @@ fn consume_matching_buy_lots(
             continue;
         }
 
-        let quantity_to_consume = (required_quantity - matched_quantity).min(available_quantity);
+        let quantity_to_consume = (required_quantity - *matched_quantity).min(available_quantity);
         if quantity_to_consume <= 0 {
             continue;
         }
 
-        matched_quantity += quantity_to_consume;
+        *matched_quantity += quantity_to_consume;
         let consumed_cost = record_consumed_platinum(record, quantity_to_consume);
-        matched_cost += consumed_cost;
+        *matched_cost += consumed_cost;
 
         if as_set {
             entry.sold_as_set_quantity += quantity_to_consume;
@@ -6291,6 +6310,54 @@ fn consume_matching_buy_lots(
                 "flip".to_string()
             },
         });
+    }
+}
+
+fn consume_matching_buy_lots(
+    records: &[StoredTradeLogRecord],
+    consumption: &mut HashMap<String, BuyConsumptionState>,
+    slug: &str,
+    rank: Option<i64>,
+    required_quantity: i64,
+    sell_closed_at: &str,
+    as_set: bool,
+) -> (i64, i64, Vec<ConsumedBuyMatch>) {
+    let mut matched_quantity = 0_i64;
+    let mut matched_cost = 0_i64;
+    let mut matches = Vec::new();
+
+    // Same-rank lots first. A rank-5 arcane and a rank-0 one are genuinely different goods, so
+    // an exact variant match is always the most honest cost basis available.
+    consume_buy_lots_matching(
+        records,
+        consumption,
+        slug,
+        required_quantity,
+        sell_closed_at,
+        as_set,
+        Some(normalized_lot_rank(rank)),
+        &mut matched_quantity,
+        &mut matched_cost,
+        &mut matches,
+    );
+
+    // Then cover whatever is left from any rank. Buying arcanes unranked, levelling them, and
+    // selling at rank 5 is ordinary play; without this fallback that buy lot could never be
+    // closed by its own sale and would sit open forever. Cost basis stays truthful either way —
+    // it is still what was actually paid, with the ranking-up gain landing in profit.
+    if matched_quantity < required_quantity {
+        consume_buy_lots_matching(
+            records,
+            consumption,
+            slug,
+            required_quantity,
+            sell_closed_at,
+            as_set,
+            None,
+            &mut matched_quantity,
+            &mut matched_cost,
+            &mut matches,
+        );
     }
 
     (matched_quantity, matched_cost, matches)
@@ -6508,12 +6575,20 @@ where
         }
 
         let buy_state = consumption.get(&record.id).cloned().unwrap_or_default();
+        // A multi-quantity lot (6 arcanes bought in one trade) is normally sold off a few at a
+        // time. Summing both consumption counters matters: selling some loose and some into a
+        // set still fully closes the lot.
+        let sold_quantity = buy_state.flipped_quantity + buy_state.sold_as_set_quantity;
         let status = if record.keep_item {
             Some("Kept".to_string())
         } else if buy_state.sold_as_set_quantity >= record.quantity {
             Some("Sold As Set".to_string())
-        } else if buy_state.flipped_quantity >= record.quantity {
+        } else if sold_quantity >= record.quantity {
             Some("Flip".to_string())
+        } else if sold_quantity > 0 {
+            // Part of the lot is gone. Without this the row is indistinguishable from one where
+            // nothing has sold yet, so a half-flipped stack reads as untouched.
+            Some("Partial".to_string())
         } else {
             Some("Open".to_string())
         };
@@ -6544,7 +6619,9 @@ where
             cost_basis_confidence: None,
             cost_basis_label: None,
             matched_cost: None,
-            matched_quantity: None,
+            // On a buy row this is how much of the lot has since been sold, so the UI can show
+            // "3/6" next to a Partial badge rather than just the badge.
+            matched_quantity: Some(sold_quantity),
             matched_buy_count: 0,
             matched_buy_rows: Vec::new(),
             set_component_rows: Vec::new(),
@@ -7585,13 +7662,27 @@ fn build_portfolio_pnl_summary_inner(
         let total_platinum = record_total_platinum(record);
 
         if record.order_type == "buy" {
-            if matches!(derived_entry.status.as_deref(), Some("Open" | "Kept")) {
-                let is_open = derived_entry.status.as_deref() == Some("Open");
+            if matches!(
+                derived_entry.status.as_deref(),
+                Some("Open" | "Partial" | "Kept")
+            ) {
+                let is_open = matches!(
+                    derived_entry.status.as_deref(),
+                    Some("Open" | "Partial")
+                );
+                // Only the part of the lot still on hand represents live exposure. A x6 buy with
+                // 5 already sold ties up one unit of capital, not six, so every figure below is
+                // measured against the unsold remainder rather than the original trade. For a
+                // fully unsold lot the remainder is the whole lot, leaving those rows unchanged.
+                let sold_quantity = derived_entry.matched_quantity.unwrap_or(0).max(0);
+                let remaining_quantity = (record.quantity - sold_quantity).max(0);
+                let remaining_cost = record_consumed_platinum(record, remaining_quantity);
+
                 // "Open Buys" is capital tied up in buys still awaiting sale. Items the
                 // user has marked "Kept" are deliberately pulled out of trading, so they
                 // must NOT count toward open exposure (or its coverage ratio).
                 if is_open {
-                    open_exposure += total_platinum;
+                    open_exposure += remaining_cost;
                     open_buys += 1;
                 }
                 if derived_entry.status.as_deref() == Some("Kept") {
@@ -7620,16 +7711,16 @@ fn build_portfolio_pnl_summary_inner(
                     });
 
                 let estimated_total = maybe_estimate
-                    .map(|unit_price| unit_price.saturating_mul(record.quantity))
-                    .unwrap_or(total_platinum);
+                    .map(|unit_price| unit_price.saturating_mul(remaining_quantity))
+                    .unwrap_or(remaining_cost);
                 unrealized_value += estimated_total;
-                unrealized_pnl += estimated_total - total_platinum;
+                unrealized_pnl += estimated_total - remaining_cost;
                 if derived_entry.status.as_deref() == Some("Kept") {
                     kept_inventory_value += estimated_total;
                 }
 
                 if maybe_estimate.is_some() && is_open {
-                    current_value_covered_cost += total_platinum;
+                    current_value_covered_cost += remaining_cost;
                 }
 
                 inventory_rows.push(PortfolioInventoryRow {
@@ -7637,16 +7728,16 @@ fn build_portfolio_pnl_summary_inner(
                     item_name: record.item_name.clone(),
                     slug: record.slug.clone(),
                     image_path: record.image_path.clone(),
-                    quantity: record.quantity,
+                    quantity: remaining_quantity,
                     rank: record.rank,
                     status: if derived_entry.status.as_deref() == Some("Kept") {
                         "kept".to_string()
                     } else {
                         "open".to_string()
                     },
-                    cost_basis: total_platinum,
+                    cost_basis: remaining_cost,
                     estimated_value: estimated_total,
-                    unrealized_pnl: estimated_total - total_platinum,
+                    unrealized_pnl: estimated_total - remaining_cost,
                     last_updated_at: record.updated_at.clone(),
                 });
             }
@@ -11155,7 +11246,8 @@ mod tests {
         build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
         build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
         compute_current_value_coverage, decide_trade_health, estimate_sell_hours,
-        derive_trade_log_entries_with_components, find_duplicate_trade_record,
+        derive_trade_ledger_with_components, derive_trade_log_entries_with_components,
+        find_duplicate_trade_record, DerivedTradeLedger,
         initialize_trades_cache_schema, insert_smart_manage_log, parse_timestamp,
         smart_change_rate_state, smart_failure_streak,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
@@ -12093,6 +12185,218 @@ mod tests {
         let (collapsed, _changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
         let set_rows = collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count();
         assert_eq!(set_rows, 2, "same-source set sales must not be merged");
+    }
+
+    fn rank_lot(
+        id: &str,
+        order_type: &str,
+        quantity: i64,
+        platinum: i64,
+        rank: Option<i64>,
+        closed_at: &str,
+        source: &str,
+    ) -> StoredTradeLogRecord {
+        StoredTradeLogRecord {
+            id: id.to_string(),
+            item_name: "Arcane Energize".to_string(),
+            slug: "arcane_energize".to_string(),
+            image_path: None,
+            order_type: order_type.to_string(),
+            source: source.to_string(),
+            platinum,
+            quantity,
+            rank,
+            closed_at: closed_at.to_string(),
+            updated_at: closed_at.to_string(),
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+        }
+    }
+
+    fn buy_status_for(records: &[StoredTradeLogRecord], buy_id: &str) -> Option<String> {
+        derive_trade_ledger_with_components(records, |_| Vec::new())
+            .entries
+            .iter()
+            .find(|entry| entry.id == buy_id && entry.order_type == "buy")
+            .and_then(|entry| entry.status.clone())
+    }
+
+    #[test]
+    fn an_unranked_buy_matches_a_rank_zero_sell_across_trade_sources() {
+        // WFM omits `rank` for non-rankable items while AlecaFrame sends 0 for the same item.
+        // Treating those as different variants left every cross-source flip permanently open.
+        let wfm_buy_af_sell = vec![
+            rank_lot("b", "buy", 1, 100, None, "2026-03-10T08:00:00.000+00:00", "wfm"),
+            rank_lot("s", "sell", 1, 130, Some(0), "2026-03-10T09:00:00.000+00:00", "alecaframe"),
+        ];
+        assert_eq!(buy_status_for(&wfm_buy_af_sell, "b").as_deref(), Some("Flip"));
+
+        let af_buy_wfm_sell = vec![
+            rank_lot("b", "buy", 1, 100, Some(0), "2026-03-10T08:00:00.000+00:00", "alecaframe"),
+            rank_lot("s", "sell", 1, 130, None, "2026-03-10T09:00:00.000+00:00", "wfm"),
+        ];
+        assert_eq!(buy_status_for(&af_buy_wfm_sell, "b").as_deref(), Some("Flip"));
+    }
+
+    #[test]
+    fn a_ranked_up_arcane_still_closes_the_lot_it_was_bought_as() {
+        // Bought unranked, levelled to 5, sold. Exact-rank matching alone would never close it.
+        let records = vec![
+            rank_lot("b", "buy", 1, 100, Some(0), "2026-03-10T08:00:00.000+00:00", "wfm"),
+            rank_lot("s", "sell", 1, 400, Some(5), "2026-03-10T09:00:00.000+00:00", "wfm"),
+        ];
+        assert_eq!(buy_status_for(&records, "b").as_deref(), Some("Flip"));
+
+        let ledger = derive_trade_ledger_with_components(&records, |_| Vec::new());
+        let sell = ledger.entries.iter().find(|entry| entry.id == "s").unwrap();
+        // Cost basis stays what was actually paid, so the levelling gain lands in profit.
+        assert_eq!(sell.matched_cost, Some(100));
+        assert_eq!(sell.profit, Some(300));
+    }
+
+    #[test]
+    fn an_exact_rank_lot_is_consumed_before_falling_back_to_another_rank() {
+        // Both lots can cover the rank-5 sale; the matching variant must win regardless of the
+        // FIFO ordering that would otherwise take the older rank-0 lot first.
+        let records = vec![
+            rank_lot("b-rank0", "buy", 1, 40, Some(0), "2026-03-10T08:00:00.000+00:00", "wfm"),
+            rank_lot("b-rank5", "buy", 1, 300, Some(5), "2026-03-10T08:30:00.000+00:00", "wfm"),
+            rank_lot("s", "sell", 1, 400, Some(5), "2026-03-10T09:00:00.000+00:00", "wfm"),
+        ];
+        assert_eq!(buy_status_for(&records, "b-rank5").as_deref(), Some("Flip"));
+        assert_eq!(buy_status_for(&records, "b-rank0").as_deref(), Some("Open"));
+
+        let ledger = derive_trade_ledger_with_components(&records, |_| Vec::new());
+        let sell = ledger.entries.iter().find(|entry| entry.id == "s").unwrap();
+        assert_eq!(sell.matched_cost, Some(300), "must use the rank-5 cost basis");
+    }
+
+    #[test]
+    fn the_cross_rank_fallback_only_covers_what_exact_rank_lots_could_not() {
+        // One rank-5 lot and one rank-0 lot against a x2 rank-5 sale: the exact lot is consumed
+        // first, and the fallback covers only the single remaining unit.
+        let records = vec![
+            rank_lot("b-rank0", "buy", 1, 40, Some(0), "2026-03-10T08:00:00.000+00:00", "wfm"),
+            rank_lot("b-rank5", "buy", 1, 300, Some(5), "2026-03-10T08:30:00.000+00:00", "wfm"),
+            rank_lot("s", "sell", 2, 800, Some(5), "2026-03-10T09:00:00.000+00:00", "wfm"),
+        ];
+        assert_eq!(buy_status_for(&records, "b-rank5").as_deref(), Some("Flip"));
+        assert_eq!(buy_status_for(&records, "b-rank0").as_deref(), Some("Flip"));
+
+        let ledger = derive_trade_ledger_with_components(&records, |_| Vec::new());
+        let sell = ledger.entries.iter().find(|entry| entry.id == "s").unwrap();
+        assert_eq!(sell.matched_quantity, Some(2));
+        assert_eq!(sell.matched_cost, Some(340));
+    }
+
+    fn buy_entry_for<'a>(
+        ledger: &'a DerivedTradeLedger,
+        buy_id: &str,
+    ) -> &'a PortfolioTradeLogEntry {
+        ledger
+            .entries
+            .iter()
+            .find(|entry| entry.id == buy_id && entry.order_type == "buy")
+            .expect("buy row missing from ledger")
+    }
+
+    #[test]
+    fn a_partly_sold_stack_reads_partial_rather_than_open() {
+        // Six arcanes bought in one trade, three sold. Before this the row was identical to one
+        // where nothing had sold, so a half-flipped stack looked untouched.
+        let mut records = vec![rank_lot(
+            "buy",
+            "buy",
+            6,
+            100,
+            Some(0),
+            "2026-03-10T08:00:00.000+00:00",
+            "wfm",
+        )];
+        for index in 0..3 {
+            records.push(rank_lot(
+                &format!("sell{index}"),
+                "sell",
+                1,
+                130,
+                Some(0),
+                &format!("2026-03-10T09:0{index}:00.000+00:00"),
+                "wfm",
+            ));
+        }
+
+        let ledger = derive_trade_ledger_with_components(&records, |_| Vec::new());
+        let buy = buy_entry_for(&ledger, "buy");
+        assert_eq!(buy.status.as_deref(), Some("Partial"));
+        // Drives the "3/6" readout beside the badge.
+        assert_eq!(buy.matched_quantity, Some(3));
+    }
+
+    #[test]
+    fn selling_the_whole_stack_one_at_a_time_still_closes_it() {
+        let mut records = vec![rank_lot(
+            "buy",
+            "buy",
+            6,
+            100,
+            Some(0),
+            "2026-03-10T08:00:00.000+00:00",
+            "wfm",
+        )];
+        for index in 0..6 {
+            records.push(rank_lot(
+                &format!("sell{index}"),
+                "sell",
+                1,
+                130,
+                Some(0),
+                &format!("2026-03-10T09:0{index}:00.000+00:00"),
+                "wfm",
+            ));
+        }
+
+        let ledger = derive_trade_ledger_with_components(&records, |_| Vec::new());
+        let buy = buy_entry_for(&ledger, "buy");
+        assert_eq!(buy.status.as_deref(), Some("Flip"));
+        assert_eq!(buy.matched_quantity, Some(6));
+    }
+
+    #[test]
+    fn an_untouched_stack_stays_open_with_nothing_sold() {
+        let records = vec![rank_lot(
+            "buy",
+            "buy",
+            6,
+            100,
+            Some(0),
+            "2026-03-10T08:00:00.000+00:00",
+            "wfm",
+        )];
+
+        let ledger = derive_trade_ledger_with_components(&records, |_| Vec::new());
+        let buy = buy_entry_for(&ledger, "buy");
+        assert_eq!(buy.status.as_deref(), Some("Open"));
+        assert_eq!(buy.matched_quantity, Some(0));
+    }
+
+    #[test]
+    fn a_single_quantity_buy_never_reports_partial() {
+        // Guards the overwhelmingly common case: quantity 1 can only ever be Open or Flip.
+        let unsold = vec![rank_lot("buy", "buy", 1, 100, Some(0), "2026-03-10T08:00:00.000+00:00", "wfm")];
+        let ledger = derive_trade_ledger_with_components(&unsold, |_| Vec::new());
+        assert_eq!(buy_entry_for(&ledger, "buy").status.as_deref(), Some("Open"));
+
+        let sold = vec![
+            rank_lot("buy", "buy", 1, 100, Some(0), "2026-03-10T08:00:00.000+00:00", "wfm"),
+            rank_lot("sell", "sell", 1, 130, Some(0), "2026-03-10T09:00:00.000+00:00", "wfm"),
+        ];
+        let ledger = derive_trade_ledger_with_components(&sold, |_| Vec::new());
+        assert_eq!(buy_entry_for(&ledger, "buy").status.as_deref(), Some("Flip"));
     }
 
     #[test]

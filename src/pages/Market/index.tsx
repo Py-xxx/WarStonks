@@ -20,7 +20,16 @@ import type { TranslateFn } from '../../i18n';
 import { resolveLocalizedName } from '../../lib/itemNames';
 import { parseWarframeMarkupLines, splitWarframeMarkupLines } from '../../lib/warframeMarkup';
 import { parseVaultTraderPayload } from '../../lib/worldState';
-import { confidenceTone, tConfidence, tHealth, tTrendSummary } from '../../lib/healthLabels';
+import {
+  confidenceTone,
+  tActionRationale,
+  tConfidence,
+  tEntryRationale,
+  tExitRationale,
+  tHealth,
+  tSignalDetail,
+  tTrendSummary,
+} from '../../lib/healthLabels';
 import type { TranslationKey } from '../../i18n/en';
 import { translate } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
@@ -989,7 +998,7 @@ function StaticAnalyticsChart({
 
           <div className="market-chart-legend market-chart-footer">
             <span>Median {formatPrice(points[points.length - 1]?.median ?? null)}</span>
-            <span>Lowest {formatPrice(points[points.length - 1]?.lowest ?? null)}</span>
+            <span>{t('mkt.lowestPrefix', { price: formatPrice(points[points.length - 1]?.lowest ?? null) })}</span>
             <span>Volume {formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
           </div>
         </div>
@@ -2081,7 +2090,7 @@ function AnalyticsTab() {
                 </div>
                 <div className="market-metric-card">
                   <span className="market-metric-label">{t('mkt.zoneQuality')}</span>
-                  <span className="market-metric-value">{analytics?.entryExitZoneOverview.zoneQuality ?? '—'}</span>
+                  <span className="market-metric-value">{tHealth(t, analytics?.entryExitZoneOverview.zoneQuality) || '—'}</span>
                 </div>
               </div>
               <div className="market-copy-block">
@@ -2089,14 +2098,14 @@ function AnalyticsTab() {
                 <span>
                   {formatPrice(analytics?.entryExitZoneOverview.entryZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.entryZoneHigh)}
                 </span>
-                <p>{analytics?.entryExitZoneOverview.entryRationale ?? '—'}</p>
+                <p>{tEntryRationale(t, analytics?.entryExitZoneOverview.entryRationale, analytics?.entryExitZoneOverview.confidenceSummary) || '—'}</p>
               </div>
               <div className="market-copy-block">
                 <span className="market-copy-title">{t('mkt.exitZone')}</span>
                 <span>
                   {formatPrice(analytics?.entryExitZoneOverview.exitZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.exitZoneHigh)}
                 </span>
-                <p>{analytics?.entryExitZoneOverview.exitRationale ?? '—'}</p>
+                <p>{tExitRationale(t, analytics?.entryExitZoneOverview.exitRationale, analytics?.entryExitZoneOverview.confidenceSummary) || '—'}</p>
               </div>
               <ConfidenceNote confidence={analytics?.entryExitZoneOverview.confidenceSummary} />
             </AnalyticsPanel>
@@ -2134,11 +2143,11 @@ function AnalyticsTab() {
               <div className="market-pressure-row">
                 <div>
                   <span className="market-copy-title">{t('mkt.entryDepth')}</span>
-                  <span>{formatNumber(analytics?.orderbookPressure.entryDepth, 0)} visible quantity</span>
+                  <span>{t('mkt.visibleQuantity', { n: formatNumber(analytics?.orderbookPressure.entryDepth, 0) })}</span>
                 </div>
                 <div>
                   <span className="market-copy-title">{t('mkt.exitDepth')}</span>
-                  <span>{formatNumber(analytics?.orderbookPressure.exitDepth, 0)} visible quantity</span>
+                  <span>{t('mkt.visibleQuantity', { n: formatNumber(analytics?.orderbookPressure.exitDepth, 0) })}</span>
                 </div>
                 <div>
                   <span className="market-copy-title">{t('mkt.pressureRatio')}</span>
@@ -2171,15 +2180,15 @@ function AnalyticsTab() {
               </div>
               <div className="market-metric-grid">
                 <div className="market-metric-card">
-                  <span className="market-metric-label">1H Slope</span>
+                  <span className="market-metric-label">{t('mkt.slope1h')}</span>
                   <span className="market-metric-value">{formatPercent(trendMetrics?.slope1h)}</span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">3H Slope</span>
+                  <span className="market-metric-label">{t('mkt.slope3h')}</span>
                   <span className="market-metric-value">{formatPercent(trendMetrics?.slope3h)}</span>
                 </div>
                 <div className="market-metric-card">
-                  <span className="market-metric-label">6H Slope</span>
+                  <span className="market-metric-label">{t('mkt.slope6h')}</span>
                   <span className="market-metric-value">{formatPercent(trendMetrics?.slope6h)}</span>
                 </div>
                 <div className="market-metric-card">
@@ -2189,15 +2198,15 @@ function AnalyticsTab() {
               </div>
               <div className="market-copy-block">
                 <span className="market-copy-title">{t('mkt.crossSignal')}</span>
-                <p>{trendMetrics?.crossSignal ?? '—'}</p>
+                <p>{tHealth(t, trendMetrics?.crossSignal) || '—'}</p>
               </div>
               <div className="market-copy-block">
                 <span className="market-copy-title">{t('mkt.reversal')}</span>
-                <p>{trendMetrics?.reversal ?? '—'}</p>
+                <p>{tHealth(t, trendMetrics?.reversal) || '—'}</p>
               </div>
               <div className="market-signal-list">
                 {(trendMetrics?.confirmingSignals ?? []).map((signal) => (
-                  <span key={signal} className="market-signal-pill">{signal}</span>
+                  <span key={signal} className="market-signal-pill">{tHealth(t, signal)}</span>
                 ))}
               </div>
               <div className="market-pressure-row">
@@ -2229,12 +2238,12 @@ function AnalyticsTab() {
               <div className={`market-action-card tone-${analytics?.actionCard.tone ?? 'neutral'}`}>
                 <div className="market-action-header">
                   <span className="market-action-label">{t('mkt.suggestedAction')}</span>
-                  <span className="market-action-value">{analytics?.actionCard.suggestedAction ?? '—'}</span>
+                  <span className="market-action-value">{tHealth(t, analytics?.actionCard.suggestedAction) || '—'}</span>
                 </div>
                 <div className="market-metric-grid">
                   <div className="market-metric-card">
                     <span className="market-metric-label">{t('mkt.zoneQuality')}</span>
-                    <span className="market-metric-value">{analytics?.actionCard.zoneQuality ?? '—'}</span>
+                    <span className="market-metric-value">{tHealth(t, analytics?.actionCard.zoneQuality) || '—'}</span>
                   </div>
                   <div className="market-metric-card">
                     <span className="market-metric-label">{t('mkt.zoneAdjustedEdge')}</span>
@@ -2251,10 +2260,10 @@ function AnalyticsTab() {
                     <span className="market-metric-value">{tHealth(t, analytics?.actionCard.pressureLabel) || '—'}</span>
                   </div>
                 </div>
-                <p className="market-action-rationale">{analytics?.actionCard.rationale ?? '—'}</p>
+                <p className="market-action-rationale">{tActionRationale(t, analytics?.actionCard.rationale, analytics?.actionCard.confidenceSummary) || '—'}</p>
                 <div className="market-signal-list">
                   {(analytics?.actionCard.alignedSignals ?? []).map((signal) => (
-                    <span key={signal} className="market-signal-pill">{signal}</span>
+                    <span key={signal} className="market-signal-pill">{tHealth(t, signal)}</span>
                   ))}
                 </div>
                 <ConfidenceNote confidence={analytics?.actionCard.confidenceSummary} />
@@ -2640,7 +2649,7 @@ function AnalysisTab() {
                 <span className="market-summary-value">{formatPrice(analysis?.headline.entryPrice)}</span>
               </div>
               <div className="market-summary-card">
-                <span className="market-summary-label">Exit Price ({analysis?.headline.exitPercentileLabel ?? 'P60'})</span>
+                <span className="market-summary-label">{t('mkt.exitPriceLabel', { label: analysis?.headline.exitPercentileLabel === 'Adaptive' ? t('mkt.adaptive') : (analysis?.headline.exitPercentileLabel ?? 'P60') })}</span>
                 <span className="market-summary-value">{formatPrice(analysis?.headline.exitPrice)}</span>
               </div>
               <div className="market-summary-card">
@@ -2807,15 +2816,15 @@ function AnalysisTab() {
                 <span className="market-metric-value">{formatPercent(analysis?.trend.confidence)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">1H Slope</span>
+                <span className="market-metric-label">{t('mkt.slope1h')}</span>
                 <span className="market-metric-value">{formatPercent(analysis?.trend.slope1h)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">3H Slope</span>
+                <span className="market-metric-label">{t('mkt.slope3h')}</span>
                 <span className="market-metric-value">{formatPercent(analysis?.trend.slope3h)}</span>
               </div>
               <div className="market-metric-card">
-                <span className="market-metric-label">6H Slope</span>
+                <span className="market-metric-label">{t('mkt.slope6h')}</span>
                 <span className="market-metric-value">{formatPercent(analysis?.trend.slope6h)}</span>
               </div>
             </div>
@@ -2908,9 +2917,9 @@ function AnalysisTab() {
                         )}
                         <div className="market-component-copy">
                           <span className="market-copy-title">{resolveLocalizedName(itemNameMap, component)}</span>
-                          <span>Needed for set: {component.quantityInSet}x</span>
-                          <span>Current lowest: {formatPrice(component.currentLowestPrice)}</span>
-                          <span>Recommended entry: {formatPrice(component.recommendedEntryPrice)}</span>
+                          <span>{t('mkt.neededForSetQty', { n: component.quantityInSet })}</span>
+                          <span>{t('mkt.currentLowestPrefix', { price: formatPrice(component.currentLowestPrice) })}</span>
+                          <span>{t('mkt.recommendedEntryPrefix', { price: formatPrice(component.recommendedEntryPrice) })}</span>
                         </div>
                       </div>
                       <div className="market-component-actions">
@@ -2978,10 +2987,10 @@ function AnalysisTab() {
                         ) : null}
                         <span className="market-drop-title">{source.location}</span>
                       </div>
-                      {source.isRelic ? <span>Rarity: {source.rarity ?? '—'}</span> : null}
-                      {!source.isRelic ? <span>Chance: {formatDropChancePercent(source.chance)}</span> : null}
-                      {!source.isRelic ? <span>Rarity: {source.rarity ?? '—'}</span> : null}
-                      {!source.isRelic ? <span>Type: {source.sourceType ?? '—'}</span> : null}
+                      {source.isRelic ? <span>{t('mkt.rarityPrefix', { value: source.rarity ?? '—' })}</span> : null}
+                      {!source.isRelic ? <span>{t('mkt.chancePrefix', { value: formatDropChancePercent(source.chance) })}</span> : null}
+                      {!source.isRelic ? <span>{t('mkt.rarityPrefix', { value: source.rarity ?? '—' })}</span> : null}
+                      {!source.isRelic ? <span>{t('mkt.typePrefix', { value: source.sourceType ?? '—' })}</span> : null}
                     </div>
                   );
                 })}
@@ -3180,11 +3189,11 @@ function AnalysisTab() {
                   key={signal.key}
                   className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
                 >
-                  <span className="market-copy-title">{signal.label}</span>
+                  <span className="market-copy-title">{tHealth(t, signal.label)}</span>
                   <span className="market-analysis-signal-state">
                     {signal.active ? t('mkt.signal.active') : t('mkt.signal.clear')}
                   </span>
-                  <p>{signal.detail}</p>
+                  <p>{tSignalDetail(t, signal.detail)}</p>
                 </div>
               ))}
             </div>

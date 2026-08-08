@@ -7,7 +7,7 @@ import {
   getSetCompletionOwnedItems,
   isTauriRuntime,
 } from '../../lib/tauriClient';
-import { formatShortLocalDateTime } from '../../lib/dateTime';
+import { formatElapsedTime, formatShortLocalDateTime } from '../../lib/dateTime';
 import { ItemName } from '../../components/ItemName';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { useItemQueryMatcher } from '../../hooks/useItemSearch';
@@ -173,49 +173,6 @@ function getRelicRefinementSummary(
   );
 }
 
-function buildScannerProgressDetails(
-  progress: ArbitrageScannerProgress | null,
-  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
-): string[] {
-  if (!progress) {
-    return [];
-  }
-
-  const details: string[] = [];
-
-  if (progress.currentSetName) {
-    details.push(t('scan.progress.currentSet', { name: progress.currentSetName }));
-  }
-
-  if (progress.currentComponentName) {
-    details.push(t('scan.progress.currentComponent', { name: progress.currentComponentName }));
-  }
-
-  if (progress.totalComponentCount > 0) {
-    details.push(
-      t('scan.progress.componentsProgress', {
-        done: progress.completedComponentCount,
-        total: progress.totalComponentCount,
-      }),
-    );
-  }
-
-  if (progress.totalSetCount > 0) {
-    details.push(
-      t('scan.progress.setsProgress', { done: progress.completedSetCount, total: progress.totalSetCount }),
-    );
-  }
-
-  details.push(t('scan.progress.skipped', { n: progress.skippedEntryCount }));
-
-  if (progress.retryingItemName && progress.retryAttempt) {
-    details.push(
-      t('scan.progress.retry', { attempt: progress.retryAttempt, name: progress.retryingItemName }),
-    );
-  }
-
-  return details;
-}
 
 function ArbitrageComponentRow({
   component,
@@ -894,8 +851,16 @@ export function ScannersPage() {
     markWatchlistAddFeedback(component.slug, setWatchlistAddFeedback, watchlistAddFeedbackTimeoutsRef);
   };
 
-  const scanSummaryCounts = arbitrage
-    ? `${arbitrage.scannedSetCount} sets · ${arbitrage.scannedComponentCount} components · ${arbitrage.scannedRelicCount} relics`
+  // While a scan runs the stamp shows live progress; otherwise it's the elapsed time since the
+  // last finished scan, with the full timestamp on hover.
+  const lastScanAt = arbitrage?.scanFinishedAt ?? progress?.lastCompletedAt ?? null;
+  const lastScanLabel = isRunning
+    ? `${Math.round(progress?.progressValue ?? 0)}%`
+    : lastScanAt
+      ? formatElapsedTime(lastScanAt)
+      : t('scan.noSavedScan');
+  const lastScanTitle = lastScanAt
+    ? t('common.updatedAt', { time: formatShortLocalDateTime(lastScanAt) })
     : null;
   const showInlineScannerNotice = Boolean(scannerError && hasSavedScan);
   const showBlockingScannerEmptyState = Boolean(scannerError && !hasSavedScan && !isRunning);
@@ -945,7 +910,21 @@ export function ScannersPage() {
           </span>
         </div>
         {(activeTab === 'arbitrage' || activeTab === 'relic-roi') ? (
-          <div className="subnav-right">
+          <div className="subnav-right scanner-subnav-right">
+            <label className="scanner-topbar-toggle" title={t('scan.autoScanHelp')}>
+              <span>{t('scan.autoScan')}</span>
+              <button
+                type="button"
+                className={`toggle${autoScanEnabled ? ' on' : ''}`}
+                role="switch"
+                aria-checked={autoScanEnabled}
+                aria-label={t('scan.autoScan')}
+                onClick={() => setAutoScanEnabled(!autoScanEnabled)}
+              />
+            </label>
+            <span className="scanner-topbar-stamp" title={lastScanTitle ?? undefined}>
+              {lastScanLabel}
+            </span>
             <button
               className="scanner-action-button"
               type="button"
@@ -965,89 +944,53 @@ export function ScannersPage() {
 
       <div className="page-content scanners-page-content">
         <div className="scanners-shell">
-            <div className="market-panel scanners-intro-panel">
-              <div className="market-panel-header">
-                <div className="market-panel-header-copy">
-                  {activeTab === 'arbitrage' ? (
-                    <p>{t('scan.arbitrageIntro')}</p>
-                  ) : (
-                    <p>{t('scan.relicRoiIntro')}</p>
-                  )}
-                  <label className="scanner-auto-scan-toggle" title={t('scan.autoScanHelp')}>
-                    <span className="scanner-auto-scan-copy">
-                      <span className="scanner-auto-scan-label">{t('scan.autoScan')}</span>
-                      <span className="scanner-auto-scan-help">{t('scan.autoScanHelp')}</span>
-                    </span>
-                    <button
-                      type="button"
-                      className={`toggle${autoScanEnabled ? ' on' : ''}`}
-                      role="switch"
-                      aria-checked={autoScanEnabled}
-                      aria-label={t('scan.autoScan')}
-                      onClick={() => setAutoScanEnabled(!autoScanEnabled)}
-                    />
-                  </label>
-                  {progress ? (
-                    <div className="scanner-header-status-line">
-                      <span className="market-panel-badge tone-neutral">
-                        {progress.status === 'running'
-                          ? `${progress.stageLabel} · ${Math.round(progress.progressValue)}%`
-                          : progress.lastCompletedAt
-                            ? t('common.updatedAt', { time: formatShortLocalDateTime(progress.lastCompletedAt) })
-                            : t('scan.noSavedScan')}
-                      </span>
-                    </div>
-                  ) : null}
+            <div className="scanner-statusbar">
+              <div className="scanner-statusbar-progress">
+                <div className="scanner-progress-track">
+                  <div
+                    className={`scanner-progress-fill${isRunning ? ' running' : ''}`}
+                    style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
+                  />
                 </div>
+                <span className="scanner-statusbar-pct">
+                  {Math.round(progress?.progressValue ?? 0)}%
+                </span>
               </div>
-              <div className="scanner-progress-layout">
-                <div className="scanner-progress-block">
-                  <div className="scanner-progress-meta">
-                    <span>{progress?.stageLabel ?? t('scan.ready')}</span>
-                    <span>{Math.round(progress?.progressValue ?? 0)}%</span>
-                  </div>
-                  <div className="scanner-progress-track">
-                    <div
-                      className="scanner-progress-fill"
-                      style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
-                    />
-                  </div>
-                  {buildScannerProgressDetails(progress, t).length > 0 ? (
-                    <div className="scanner-progress-meta">
-                      <span>{buildScannerProgressDetails(progress, t).join(' · ')}</span>
-                    </div>
-                  ) : null}
-                  {arbitrage?.skippedSummaryText ? (
-                    <div className="scanner-progress-meta">
-                      <span>{arbitrage.skippedSummaryText}</span>
-                    </div>
-                  ) : null}
-                  {showInlineScannerNotice && scannerError ? (
-                    <div className="activity-inline-state scanner-inline-state" role="alert">
-                      <span
-                        className={
-                          scannerError.tone === 'warning'
-                            ? 'settings-inline-warning'
-                            : 'settings-inline-error'
-                        }
-                      >
-                        {scannerError.message}
-                      </span>
-                      {scannerErrorAction ? (
-                        <button className="text-btn" type="button" onClick={scannerErrorAction.onClick}>
-                          {scannerErrorAction.label}
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="scanner-summary-card--compact">
-                  <span className="scanner-summary-stat">
-                    {scanSummaryCounts ?? t('scan.noSavedScan')}
+              {arbitrage ? (
+                <div className="scanner-count-pills">
+                  <span className="scanner-count-pill">
+                    <b>{arbitrage.scannedSetCount}</b> {t('scan.sets')}
+                  </span>
+                  <span className="scanner-count-pill">
+                    <b>{arbitrage.scannedComponentCount}</b> {t('scan.components')}
+                  </span>
+                  <span className="scanner-count-pill">
+                    <b>{arbitrage.scannedRelicCount}</b> {t('scan.relics')}
                   </span>
                 </div>
-              </div>
+              ) : (
+                <span className="scanner-count-empty">{t('scan.noSavedScan')}</span>
+              )}
             </div>
+
+            {showInlineScannerNotice && scannerError ? (
+              <div className="activity-inline-state scanner-inline-state" role="alert">
+                <span
+                  className={
+                    scannerError.tone === 'warning'
+                      ? 'settings-inline-warning'
+                      : 'settings-inline-error'
+                  }
+                >
+                  {scannerError.message}
+                </span>
+                {scannerErrorAction ? (
+                  <button className="text-btn" type="button" onClick={scannerErrorAction.onClick}>
+                    {scannerErrorAction.label}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             {activeTab === 'arbitrage' && arbitrage ? (
               <div className="scanner-results-list">

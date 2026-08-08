@@ -63,6 +63,35 @@ const HEALTH_LABEL_KEYS: Record<string, TranslationKey> = {
   Exceptional: 'refine.exceptional',
   Flawless: 'refine.flawless',
   Radiant: 'refine.radiant',
+  // Entry/exit zone quality, action-card suggested action, manipulation-signal labels, trend
+  // cross-signal / reversal / confirming-signal pills — all closed sets from the analytics
+  // pipeline in market_observatory.rs.
+  Excellent: 'mkt.zoneExcellent',
+  Good: 'mkt.zoneGood',
+  Extended: 'mkt.zoneExtended',
+  'Thin data': 'mkt.zoneThinData',
+  Buy: 'mkt.actionBuy',
+  Wait: 'mkt.actionWait',
+  Caution: 'mkt.actionCaution',
+  'Price Wall': 'mkt.signal.priceWall',
+  'Liquidity Withdrawal': 'mkt.signal.liquidityWithdrawal',
+  'Volatile Undercut Cycling': 'mkt.signal.volatileUndercut',
+  'Unstable Buy Pressure': 'mkt.signal.unstableBuyPressure',
+  'Thin Market': 'mkt.signal.thinMarket',
+  'Below fair value': 'mkt.crossBelowFair',
+  'Above fair value': 'mkt.crossAboveFair',
+  'Near fair value': 'mkt.crossNearFair',
+  'Bullish reversal': 'mkt.reversalBullish',
+  'Bearish reversal': 'mkt.reversalBearish',
+  'No active reversal': 'mkt.reversalNone',
+  '1h slope positive': 'mkt.confirm1hSlope',
+  '3h slope positive': 'mkt.confirm3hSlope',
+  '6h slope positive': 'mkt.confirm6hSlope',
+  'Trading below fair midpoint': 'mkt.confirmBelowFairMidpoint',
+  'Entry zone is favorable': 'mkt.alignedEntryZoneFavorable',
+  'Buy-side depth is stronger than sell-side depth': 'mkt.alignedBuySideDepth',
+  '3h price slope is positive': 'mkt.aligned3hSlopePositive',
+  'Spread is still tradable': 'mkt.alignedSpreadTradable',
 };
 
 /** Translate a backend health-value string, falling back to the raw English if unmapped. */
@@ -160,4 +189,117 @@ export function tTrendSummary(t: TranslateFn, trend: TrendSummaryLike): string {
   }
 
   return base;
+}
+
+interface ConfidenceLike {
+  level: string;
+  reasons: string[];
+}
+
+/** Appends the same " Confidence is reduced because …" suffix `confidence_suffix()` appends in
+ *  Rust, reusing the key `tTrendSummary` already established for it. */
+function withConfidenceSuffix(t: TranslateFn, base: string, confidence: ConfidenceLike): string {
+  if (confidence.level !== 'high' && confidence.reasons.length > 0) {
+    return base + t('mkt.trendConfidenceReduced', {
+      reasons: confidence.reasons.join(', ').toLowerCase(),
+    });
+  }
+  return base;
+}
+
+const ENTRY_RATIONALE_KEYS: Record<string, TranslationKey> = {
+  'Current floor is inside the calculated entry band, which supports buying into the market without chasing extremes.':
+    'mkt.entryRationaleInBand',
+  'Current floor is approaching the calculated entry band and is close to a favorable reversion level.':
+    'mkt.entryRationaleApproaching',
+  'Current floor is still above the calculated entry band, so patience is likely better than forcing an entry.':
+    'mkt.entryRationaleAbove',
+};
+
+const EXIT_RATIONALE_KEYS: Record<string, TranslationKey> = {
+  'Recent median market price is inside the calculated exit band, which supports taking profit into strength.':
+    'mkt.exitRationaleInBand',
+  'Recent median market price is approaching the calculated exit band, which supports preparing exits rather than chasing more upside.':
+    'mkt.exitRationaleApproaching',
+  'Recent median market price is still below the calculated exit band, so there is more room before a preferred take-profit area.':
+    'mkt.exitRationaleBelow',
+};
+
+const ACTION_RATIONALE_KEYS: Record<string, TranslationKey> = {
+  'Current floor is inside a favorable entry zone and the live book is not leaning against the trade.':
+    'mkt.actionRationaleBuy',
+  'History and live depth are broadly supportive, but the edge is narrower than a clean entry setup.':
+    'mkt.actionRationaleHold',
+  'Live book pressure is leaning toward exits or the spread is too hostile for a clean entry.':
+    'mkt.actionRationaleCaution',
+  'The item needs either a deeper discount, stronger buy support, or a cleaner spread before acting.':
+    'mkt.actionRationaleWait',
+};
+
+/** The backend appends a confidence-reduced suffix to the base sentence before sending it, so we
+ *  match by prefix (not exact-equals) against the closed set of base sentences, then translate
+ *  the base and re-append the suffix ourselves from the struct's own confidenceSummary — instead
+ *  of trying to translate the concatenated English sentence as one opaque string. */
+function tRationale(
+  t: TranslateFn,
+  rationale: string | null | undefined,
+  confidence: ConfidenceLike | null | undefined,
+  table: Record<string, TranslationKey>,
+): string {
+  if (!rationale) {
+    return '';
+  }
+  const base = Object.keys(table).find((candidate) => rationale.startsWith(candidate));
+  if (!base || !confidence) {
+    return rationale;
+  }
+  return withConfidenceSuffix(t, t(table[base]), confidence);
+}
+
+export function tEntryRationale(t: TranslateFn, rationale: string | null | undefined, confidence: ConfidenceLike | null | undefined): string {
+  return tRationale(t, rationale, confidence, ENTRY_RATIONALE_KEYS);
+}
+
+export function tExitRationale(t: TranslateFn, rationale: string | null | undefined, confidence: ConfidenceLike | null | undefined): string {
+  return tRationale(t, rationale, confidence, EXIT_RATIONALE_KEYS);
+}
+
+export function tActionRationale(t: TranslateFn, rationale: string | null | undefined, confidence: ConfidenceLike | null | undefined): string {
+  return tRationale(t, rationale, confidence, ACTION_RATIONALE_KEYS);
+}
+
+const SIGNAL_DETAIL_KEYS: Record<string, TranslationKey> = {
+  'A single sell level is carrying an outsized share of visible supply.': 'mkt.signalDetail.priceWallActive',
+  'Visible sell supply is not concentrated at one price wall.': 'mkt.signalDetail.priceWallInactive',
+  'Buy-side quantity has fallen materially without the floor repricing down.': 'mkt.signalDetail.liquidityWithdrawalActive',
+  'Buy-side liquidity is not showing a sharp withdrawal pattern.': 'mkt.signalDetail.liquidityWithdrawalInactive',
+  'Recent floor changes are cycling fast enough to suggest unstable queue behavior.': 'mkt.signalDetail.volatileUndercutActive',
+  'Recent floor changes are not cycling aggressively.': 'mkt.signalDetail.volatileUndercutInactive',
+  'Pressure ratio is moving around too aggressively across recent snapshots.': 'mkt.signalDetail.unstableBuyPressureActive',
+  'Buy pressure has been comparatively stable across recent snapshots.': 'mkt.signalDetail.unstableBuyPressureInactive',
+  'Visible supply and demand are both too light for stable execution.': 'mkt.signalDetail.thinMarketActive',
+  'The live book is deep enough to avoid the thinnest-market warning.': 'mkt.signalDetail.thinMarketInactive',
+};
+
+const STAYED_ACTIVE_SUFFIX = / This has stayed active across the latest (\d+) snapshots\.$/;
+const PERSISTED_SUFFIX = / This has persisted across the latest (\d+) snapshots\.$/;
+
+/** `append_persistence_detail()` in Rust bakes a streak count into free English text after the
+ *  base sentence. We strip and re-extract it instead of trying to match the whole string, so the
+ *  count itself still renders (as a `{n}` param) rather than being lost. */
+export function tSignalDetail(t: TranslateFn, detail: string | null | undefined): string {
+  if (!detail) {
+    return '';
+  }
+  const stayedMatch = detail.match(STAYED_ACTIVE_SUFFIX);
+  const persistedMatch = detail.match(PERSISTED_SUFFIX);
+  const suffixMatch = stayedMatch ?? persistedMatch;
+  const base = suffixMatch ? detail.slice(0, suffixMatch.index) : detail;
+  const key = SIGNAL_DETAIL_KEYS[base];
+  const translatedBase = key ? t(key) : base;
+  if (!suffixMatch) {
+    return translatedBase;
+  }
+  const n = suffixMatch[1];
+  return translatedBase + t(stayedMatch ? 'mkt.signalPersistedStayed' : 'mkt.signalPersisted', { n });
 }
