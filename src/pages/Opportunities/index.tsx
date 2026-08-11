@@ -7,6 +7,7 @@ import {
   getSetCompletionOwnedItems,
   getSetCompletionOwnedItemPrices,
   setSetCompletionOwnedItemQuantity,
+  probeLocalSources,
 } from '../../lib/tauriClient';
 import {
   analyzeSetCompletionInventoryScreenshot,
@@ -29,6 +30,7 @@ import {
   markWatchlistAddFeedback,
 } from '../../lib/watchlistAddFeedback';
 import { useAppStore } from '../../stores/useAppStore';
+import { AlecaframeInventoryPanel } from '../../components/AlecaframeInventory';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { useItemQueryMatcher } from '../../hooks/useItemSearch';
@@ -56,7 +58,15 @@ import type {
   WfmAutocompleteItem,
 } from '../../types';
 
-type OppTab = 'opportunities' | 'farm-now' | 'set-planner' | 'owned-relics' | 'inventory';
+type OppTab =
+  | 'opportunities'
+  | 'farm-now'
+  | 'set-planner'
+  | 'owned-relics'
+  | 'inventory'
+  | 'prime-parts'
+  | 'mods'
+  | 'arcanes';
 type FarmNowTab = 'part-profit' | 'set-completion';
 
 const RELIC_REFINEMENT_COLUMNS = [
@@ -1279,12 +1289,32 @@ export function OpportunitiesPage({
     startFarmingSession({ cycle, activeIndex, targetDropSlug: null, targetDropName: null });
   };
 
+  // AlecaFrame replaces the manual inventory rather than supplementing it: when it's the
+  // source, hand-edits would be silently overwritten at the next session boundary, so the
+  // manual tab is swapped out entirely instead of left there to mislead.
+  const [alecaframeInventoryAvailable, setAlecaframeInventoryAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void probeLocalSources()
+      .then((availability) => {
+        if (!cancelled) {
+          setAlecaframeInventoryAvailable(
+            availability.alecaframeInventory.status === 'available',
+          );
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [farmNowSearch, setFarmNowSearch] = useState('');
   useEffect(() => {
     const validTabs: OppTab[] =
       mode === 'inventory'
-        ? ['set-planner', 'inventory']
-        : ['opportunities', 'farm-now', 'owned-relics'];
+        ? ['set-planner', 'inventory', 'prime-parts', 'mods', 'arcanes', 'owned-relics']
+        : ['opportunities', 'farm-now'];
     if (requestedOpportunitiesTab && validTabs.includes(requestedOpportunitiesTab as OppTab)) {
       setActiveTab(requestedOpportunitiesTab as OppTab);
       if (requestedFarmNowSearch !== null) {
@@ -1360,12 +1390,18 @@ export function OpportunitiesPage({
     mode === 'inventory'
       ? [
           { id: 'set-planner', label: t('opp.tabSetCompletionPlanner') },
-          { id: 'inventory', label: t('opp.tabInventory') },
+          ...(alecaframeInventoryAvailable
+            ? ([
+                { id: 'prime-parts', label: t('inv.tabPrimeParts') },
+                { id: 'mods', label: t('inv.tabMods') },
+                { id: 'arcanes', label: t('inv.tabArcanes') },
+              ] as { id: OppTab; label: string }[])
+            : ([{ id: 'inventory', label: t('opp.tabInventory') }] as { id: OppTab; label: string }[])),
+          { id: 'owned-relics', label: t('opp.tabOwnedRelics') },
         ]
       : [
           { id: 'opportunities', label: t('opp.tabOpportunities') },
           { id: 'farm-now', label: t('opp.tabWhatToFarmNow') },
-          { id: 'owned-relics', label: t('opp.tabOwnedRelics') },
         ];
 
   useEffect(() => {
@@ -2980,6 +3016,8 @@ export function OpportunitiesPage({
               <span className="scanner-run-pill scanner-run-pill-warning inventory-import-fab-pill">{t('opp.beta')}</span>
             </button>
           </div>
+        ) : activeTab === 'prime-parts' || activeTab === 'mods' || activeTab === 'arcanes' ? (
+          <AlecaframeInventoryPanel tab={activeTab} />
         ) : activeTab === 'owned-relics' ? (
           <div className="owned-relics-layout">
             <section className="market-panel owned-relics-panel">

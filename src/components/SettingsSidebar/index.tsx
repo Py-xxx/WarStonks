@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
+import { probeLocalSources } from '../../lib/tauriClient';
 import { useAppStore } from '../../stores/useAppStore';
 import type { SettingsSection } from '../../types';
 
@@ -160,25 +161,29 @@ export function SettingsSidebar() {
     return () => document.removeEventListener('keydown', onKey);
   }, [sidebarOpen, anySubModalOpen, closeSidebar]);
 
+  // No link to validate any more — the source is a local file, so the only states are
+  // off, on-and-present, and on-but-not-found.
+  const [alecaframeDetected, setAlecaframeDetected] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void probeLocalSources()
+      .then((availability) => {
+        if (!cancelled) {
+          setAlecaframeDetected(availability.alecaframeInventory.status === 'available');
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [sidebarOpen]);
+
   const alecaframeStatus = useMemo<TranslationKey>(() => {
     if (!appSettings.alecaframe.enabled) {
       return 'status.disabled';
     }
-
-    if (!appSettings.alecaframe.publicLink) {
-      return 'status.missingLink';
-    }
-
-    if (walletSnapshot.errorMessage) {
-      return 'status.syncError';
-    }
-
-    return 'status.enabled';
-  }, [
-    appSettings.alecaframe.enabled,
-    appSettings.alecaframe.publicLink,
-    walletSnapshot.errorMessage,
-  ]);
+    return alecaframeDetected ? 'status.enabled' : 'status.notFound';
+  }, [appSettings.alecaframe.enabled, alecaframeDetected]);
 
   if (!sidebarOpen) {
     return null;

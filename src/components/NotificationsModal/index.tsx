@@ -36,7 +36,8 @@ type DiscordEventKey =
   | 'priceChange'
   | 'listingHealth'
   | 'scannerStale'
-  | 'appUpdate';
+  | 'appUpdate'
+  | 'privateMessage';
 
 /**
  * The unified notification matrix. Every event has a Desktop and a Discord toggle side by side,
@@ -46,7 +47,9 @@ interface MatrixRow {
   labelKey: TranslationKey;
   helpKey: TranslationKey;
   desktopKey: keyof NotificationSettings['events'];
-  discordKey: DiscordEventKey;
+  /** Omitted for events with no Discord webhook — the cell renders as unavailable
+   *  rather than a toggle that silently does nothing. */
+  discordKey?: DiscordEventKey;
 }
 
 const MATRIX_ROWS: MatrixRow[] = [
@@ -61,6 +64,12 @@ const MATRIX_ROWS: MatrixRow[] = [
     helpKey: 'notif.event.tradeDetected.help',
     desktopKey: 'tradeDetected',
     discordKey: 'tradeDetected',
+  },
+  {
+    labelKey: 'notif.event.privateMessage.label',
+    helpKey: 'notif.event.privateMessage.help',
+    desktopKey: 'privateMessage',
+    discordKey: 'privateMessage',
   },
   {
     labelKey: 'notif.event.underpricedListing.label',
@@ -139,6 +148,7 @@ export function NotificationsModal() {
     listingHealth: true,
     scannerStale: true,
     appUpdate: true,
+    privateMessage: true,
   });
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -340,7 +350,7 @@ export function NotificationsModal() {
               </div>
 
               {MATRIX_ROWS.map((row) => (
-                <div key={row.discordKey} className="notif-matrix-row" title={t(row.helpKey)}>
+                <div key={row.desktopKey} className="notif-matrix-row" title={t(row.helpKey)}>
                   <span className="settings-field-label">{t(row.labelKey)}</span>
                   <Toggle
                     on={settings.events[row.desktopKey]}
@@ -349,16 +359,21 @@ export function NotificationsModal() {
                     }
                     label={settings.events[row.desktopKey] ? t('common.on') : t('common.off')}
                   />
-                  <Toggle
-                    on={discordEvents[row.discordKey]}
-                    onClick={() =>
-                      setDiscordEvents((current) => ({
-                        ...current,
-                        [row.discordKey]: !current[row.discordKey],
-                      }))
-                    }
-                    label={discordEvents[row.discordKey] ? t('common.on') : t('common.off')}
-                  />
+                  {row.discordKey ? (
+                    <Toggle
+                      on={discordEvents[row.discordKey]}
+                      onClick={() => {
+                        const key = row.discordKey;
+                        if (!key) {
+                          return;
+                        }
+                        setDiscordEvents((current) => ({ ...current, [key]: !current[key] }));
+                      }}
+                      label={discordEvents[row.discordKey] ? t('common.on') : t('common.off')}
+                    />
+                  ) : (
+                    <span className="notif-matrix-unavailable">{t('common.dash')}</span>
+                  )}
                 </div>
               ))}
             </div>

@@ -61,6 +61,10 @@ import type {
   RelicTierIcon,
   WalletSnapshot,
   WfstatVoidTrader,
+  AlecaframeInventory,
+  DiscordPrivateMessageNotificationInput,
+  EeLogEvent,
+  LocalSourceAvailability,
   WfmAutocompleteItem,
   WfmTopSellOrder,
   BacktestSummary,
@@ -305,6 +309,12 @@ export async function sendScannerStaleDiscordNotification(
   return invoke<boolean>('send_scanner_stale_discord_notification', { input });
 }
 
+export async function sendPrivateMessageDiscordNotification(
+  input: DiscordPrivateMessageNotificationInput,
+): Promise<boolean> {
+  return invoke<boolean>('send_private_message_discord_notification', { input });
+}
+
 export async function sendAppUpdateDiscordNotification(
   input: DiscordAppUpdateNotificationInput,
 ): Promise<boolean> {
@@ -455,6 +465,56 @@ export async function getRelicTierIcons(): Promise<RelicTierIcon[]> {
  * English-only catalog. Accepting `AppLanguage` makes that mistake a compile error instead of
  * a silent fallback.
  */
+/**
+ * Probes for Warframe's `EE.log` and AlecaFrame's inventory snapshot. Cheap enough to call on
+ * every settings render — a user can launch the game or install AlecaFrame while we're open, and
+ * a cached answer would go stale silently. Outside Tauri there is no filesystem to probe, so it
+ * reports the same shape rather than throwing.
+ */
+/**
+ * Drains events appended to Warframe's `EE.log` since the last call. Returns an empty
+ * array when the game isn't running or the log is absent — both ordinary states, not
+ * errors. The first call attaches at the end of the file so starting the app mid-session
+ * doesn't replay messages the user already read.
+ */
+export async function pollEeLogEvents(): Promise<EeLogEvent[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+
+  return invoke<EeLogEvent[]>('poll_ee_log_events');
+}
+
+/**
+ * Decrypts and parses AlecaFrame's cached inventory snapshot.
+ *
+ * Returns `null` when AlecaFrame isn't installed — an ordinary state, not an error. A
+ * thrown error means decryption itself failed, which most likely means AlecaFrame changed
+ * its static key; the message says so.
+ *
+ * This is a snapshot taken at the last session boundary, not a live feed. Always show
+ * `lastInventorySync` alongside it.
+ */
+export async function readAlecaframeInventory(): Promise<AlecaframeInventory | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return invoke<AlecaframeInventory | null>('read_alecaframe_inventory');
+}
+
+export async function probeLocalSources(): Promise<LocalSourceAvailability> {
+  if (!isTauriRuntime()) {
+    return {
+      warframeLog: { status: 'unavailable', reason: 'unsupportedPlatform' },
+      alecaframeInventory: { status: 'unavailable', reason: 'unsupportedPlatform' },
+      usingOverride: false,
+    };
+  }
+
+  return invoke<LocalSourceAvailability>('probe_local_sources');
+}
+
 export async function getWfmAutocompleteItems(
   language?: AppLanguage,
 ): Promise<WfmAutocompleteItem[]> {

@@ -242,6 +242,7 @@ const defaultAppSettings: AppSettings = {
       listingHealth: true,
       scannerStale: true,
       appUpdate: true,
+      privateMessage: true,
     },
     lastValidatedAt: null,
   },

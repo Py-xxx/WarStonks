@@ -40,6 +40,7 @@ import { useTradeDetection } from './hooks/useTradeDetection';
 import { useTradeHealthBackground } from './hooks/useTradeHealthBackground';
 import { useSmartManageAlerts } from './hooks/useSmartManageAlerts';
 import { useTradeDetectedAlerts } from './hooks/useTradeDetectedAlerts';
+import { usePrivateMessageAlerts } from './hooks/usePrivateMessageAlerts';
 import { useTradePresence } from './hooks/useTradePresence';
 import { useAppUpdater } from './hooks/useAppUpdater';
 
@@ -117,6 +118,7 @@ function AppShell() {
   useTradeHealthBackground();
   useSmartManageAlerts();
   useTradeDetectedAlerts();
+  usePrivateMessageAlerts();
   // Build the relic-drop index once so item context menus can offer "View drop details".
   const loadRelicDropIndex = useAppStore((state) => state.loadRelicDropIndex);
   useEffect(() => {

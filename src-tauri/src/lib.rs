@@ -1,10 +1,13 @@
+mod alecaframe;
 mod commands;
 mod data_transfer;
+mod ee_log;
 mod error_log;
 // The item catalog. Identity is the WFM item id (`item_key`), never a positional rowid, which
 // was the root cause of a class of "price shown under the wrong item" bugs in the predecessor
 // of this module. See the module doc comment for the full design rationale.
 mod item_catalog_v2;
+mod local_sources;
 mod maintenance;
 mod market_observatory;
 // Migration logic for Market Observatory's item_id -> item_key rename, wired into
@@ -189,6 +192,9 @@ pub fn run() {
             worldstate_cache::get_worldstate_cache,
             worldstate_cache::save_worldstate_cache_entry,
             settings::get_app_settings,
+            local_sources::probe_local_sources,
+            ee_log::poll_ee_log_events,
+            alecaframe::read_alecaframe_inventory,
             settings::test_alecaframe_public_link,
             settings::save_alecaframe_settings,
             settings::save_discord_webhook_settings,
@@ -197,6 +203,7 @@ pub fn run() {
             settings::send_underpriced_listing_discord_notification,
             settings::send_listing_health_discord_notification,
             settings::send_scanner_stale_discord_notification,
+            settings::send_private_message_discord_notification,
             settings::send_app_update_discord_notification,
             settings::get_currency_balances,
             settings::refresh_alecaframe_wallet_snapshot,

@@ -39,6 +39,9 @@ tauri-plugin-notification = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 flate2 = "1"
+# AlecaFrame obfuscates its local inventory cache with a static AES-128-CBC key.
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 
 # Opt the process out of Windows 11 Efficiency Mode (EcoQoS) so the WFM scheduler,
 # websocket, and scanner threads aren't speed-throttled while the window is backgrounded.

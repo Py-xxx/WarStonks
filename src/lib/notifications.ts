@@ -23,6 +23,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     underpricedListing: true,
     listingHealth: false,
     priceChange: true,
+    privateMessage: true,
   },
 };
 
@@ -152,7 +153,8 @@ export type NotificationEventKind =
   | 'appUpdate'
   | 'underpricedListing'
   | 'listingHealth'
-  | 'priceChange';
+  | 'priceChange'
+  | 'privateMessage';
 
 /**
  * Fires an alert through the channels enabled in settings: an in-app tone and/or a

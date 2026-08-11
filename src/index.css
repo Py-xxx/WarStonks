@@ -984,6 +984,15 @@ textarea:focus-visible,
 /* The event matrix: label + a Desktop and a Discord toggle per row. */
 .notif-matrix { display: flex; flex-direction: column; gap: 2px; }
 .notif-matrix-head,
+/* Events with no Discord channel show a dash rather than a toggle that would
+   silently do nothing. */
+.notif-matrix-unavailable {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
 .notif-matrix-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 84px 84px;
@@ -15290,4 +15299,122 @@ img[data-asset-failed='true'] {
 .smart-stuck-reason {
   font-family: 'JetBrains Mono','Noto Sans SC',monospace;
   font-size: 10px; color: var(--text-muted);
+}
+
+/* ── ALECAFRAME INVENTORY ── */
+.af-inv { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.af-inv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.af-inv-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.af-inv-select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.af-inv-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.af-inv-meta {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.af-inv-table { width: 100%; border-collapse: collapse; }
+.af-inv-table th {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.af-inv-table th:not(:first-child),
+.af-inv-num { text-align: right; }
+.af-inv-table td {
+  font-size: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+.af-inv-num {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+}
+.af-inv-muted { color: var(--text-muted); }
+.af-inv-table tr:hover td { background: var(--bg-elevated); }
+/* An item newer than AlecaFrame's cached codex shows its raw path — dimmed and badged so
+   it reads as a known gap rather than a corrupted name. */
+.af-inv-name.unresolved {
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+}
+.af-inv-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.af-inv-state {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.af-inv-error { color: var(--accent-red); display: flex; flex-direction: column; gap: 6px; }
+.af-inv-error-detail { font-size: 10px; color: var(--text-muted); }
+
+/* AlecaFrame detection read-out. A dot rather than a badge: this is ambient status, not
+   something the user acts on. */
+.aleca-detect-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+.aleca-detect-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.aleca-detect-dot.on { background: var(--accent-green); }
+.aleca-detect-copy { font-size: 11px; color: var(--text-secondary); }
+.aleca-scope-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
 }

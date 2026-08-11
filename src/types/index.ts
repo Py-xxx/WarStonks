@@ -720,6 +720,21 @@ export interface DiscordWebhookNotificationSettings {
   listingHealth: boolean;
   scannerStale: boolean;
   appUpdate: boolean;
+  privateMessage: boolean;
+}
+
+export interface DiscordPrivateMessageLabels {
+  title: string;
+  /** `{user}` already interpolated by the caller. */
+  body: string;
+  /** Makes clear the game never logs message text. */
+  note: string;
+  footer: string;
+}
+
+export interface DiscordPrivateMessageNotificationInput {
+  user: string;
+  labels: DiscordPrivateMessageLabels;
 }
 
 export interface DiscordListingHealthItem {
@@ -865,6 +880,8 @@ export interface NotificationSettings {
     listingHealth: boolean;
     /** Smart Manage auto price changes. */
     priceChange: boolean;
+    /** Someone opened a DM with you in-game (detected from EE.log). */
+    privateMessage: boolean;
   };
 }
 
@@ -1625,4 +1642,69 @@ export interface BacktestSummary {
   rolling30dHitRate: number | null;
   rolling30dTradeCount: number;
   generatedAt: string;
+}
+
+/** Why an on-disk source (Warframe's EE.log, AlecaFrame's inventory) can't be read.
+ *  Kept distinct so the UI never tells a user to install something they already have. */
+export type SourceUnavailableReason = 'unsupportedPlatform' | 'notInstalled' | 'fileMissing';
+
+export type SourceStatus =
+  | { status: 'available'; path: string }
+  | { status: 'unavailable'; reason: SourceUnavailableReason };
+
+export interface LocalSourceAvailability {
+  warframeLog: SourceStatus;
+  alecaframeInventory: SourceStatus;
+  /** True when an env override points at a copy rather than the live install. */
+  usingOverride: boolean;
+}
+
+/** A private-message tab opening in-game, parsed from Warframe's EE.log.
+ *  The log never carries message text — only that a conversation opened. */
+export interface EeLogDirectMessageEvent {
+  kind: 'directMessage';
+  user: string;
+  /** Seconds since the game launched — the log's own clock. */
+  elapsedS: number;
+  /** Wall clock, when a session anchor was seen; null if we attached mid-session. */
+  occurredAt: string | null;
+  /** Stable per session+timestamp, so replays don't duplicate. */
+  key: string;
+}
+
+export type EeLogEvent = EeLogDirectMessageEvent;
+
+export type AlecaframeItemCategory =
+  | 'relic' | 'arcane' | 'mod' | 'blueprint'
+  | 'gem' | 'fish' | 'resource' | 'equipment' | 'other';
+
+export interface AlecaframeAccount {
+  platinum: number;
+  credits: number;
+  /** Endo. */
+  fusionPoints: number;
+  /** Regal Aya. */
+  primeTokens: number;
+  masteryRank: number;
+  /** Counts down from the daily cap of 20; also cross-checks trade detection. */
+  tradesRemaining: number;
+}
+
+export interface AlecaframeItem {
+  uniqueName: string;
+  name: string;
+  count: number;
+  /** Source list. Arcanes appear in both RawUpgrades (unranked) and Upgrades (ranked). */
+  bucket: string;
+  category: AlecaframeItemCategory;
+  /** False when the name fell back to its raw /Lotus/... path. */
+  nameResolved: boolean;
+}
+
+export interface AlecaframeInventory {
+  account: AlecaframeAccount;
+  /** Authoritative "as of", unix seconds, decoded from LastInventorySync. Not file mtime. */
+  lastInventorySync: number | null;
+  items: AlecaframeItem[];
+  unresolvedNameCount: number;
 }

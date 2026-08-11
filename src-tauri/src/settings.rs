@@ -85,6 +85,9 @@ pub struct DiscordWebhookNotificationSettings {
     /// A new app version is available.
     #[serde(default = "default_true")]
     pub app_update: bool,
+    /// Someone opened a DM with the user in-game (read from Warframe's EE.log).
+    #[serde(default = "default_true")]
+    pub private_message: bool,
 }
 
 fn default_true() -> bool {
@@ -101,6 +104,7 @@ impl Default for DiscordWebhookNotificationSettings {
             listing_health: true,
             scanner_stale: true,
             app_update: true,
+            private_message: true,
         }
     }
 }
@@ -305,6 +309,27 @@ pub struct DiscordScannerStaleNotificationInput {
     /// Minutes since the last successful scan, if known.
     pub minutes_stale: Option<i64>,
     pub labels: DiscordScannerStaleLabels,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordPrivateMessageNotificationInput {
+    /// Sender, already stripped of the game's private-use glyph by the log parser.
+    pub user: String,
+    /// Localized on the frontend, like every other Discord payload here.
+    pub labels: DiscordPrivateMessageLabels,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordPrivateMessageLabels {
+    pub title: String,
+    /// e.g. "New private message from {user}" — `{user}` already interpolated.
+    pub body: String,
+    /// States that the game never logs message text, so the embed can't be mistaken
+    /// for showing the message itself.
+    pub note: String,
+    pub footer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1802,6 +1827,46 @@ pub fn send_listing_health_discord_notification(
     input: DiscordListingHealthNotificationInput,
 ) -> Result<bool, String> {
     send_listing_health_discord_notification_inner(&app, &input).map_err(|error| error.to_string())
+}
+
+fn build_private_message_payload(
+    input: &DiscordPrivateMessageNotificationInput,
+) -> serde_json::Value {
+    json!({
+      "username": "WarStonks",
+      "embeds": [{
+        "author": brand_author(),
+        "title": input.labels.title.clone(),
+        "description": format!("{}\n\n_{}_", input.labels.body, input.labels.note),
+        "color": COLOR_BLUE,
+        "footer": brand_footer(&input.labels.footer),
+        "timestamp": now_iso8601()
+      }]
+    })
+}
+
+pub(crate) fn send_private_message_discord_notification_inner(
+    app: &tauri::AppHandle,
+    input: &DiscordPrivateMessageNotificationInput,
+) -> Result<bool> {
+    let discord = load_settings_inner(app)?.discord_webhook;
+    if !discord.enabled || !discord.notifications.private_message {
+        return Ok(false);
+    }
+    let Some(webhook_url) = discord.webhook_url else {
+        return Ok(false);
+    };
+    post_discord_webhook_payload(&webhook_url, build_private_message_payload(input))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn send_private_message_discord_notification(
+    app: tauri::AppHandle,
+    input: DiscordPrivateMessageNotificationInput,
+) -> Result<bool, String> {
+    send_private_message_discord_notification_inner(&app, &input)
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn send_scanner_stale_discord_notification_inner(
