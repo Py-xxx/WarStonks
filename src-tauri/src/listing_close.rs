@@ -348,6 +348,58 @@ pub fn settle_listing_for_trade(
     }
 }
 
+/// Settles the listing behind a **manually** confirmed trade — the watchlist's "mark as
+/// bought", and its sell-side equivalent.
+///
+/// Shares `plan_listing_close` with automatic detection on purpose. The manual path used to
+/// edit the real order's price down to what was paid and then close part of it, which left
+/// every unit the user still held repriced to a number they never chose. One engine, one set
+/// of rules, one place to get it right.
+#[tauri::command]
+pub async fn settle_listing_for_manual_trade(
+    app: tauri::AppHandle,
+    slug: String,
+    order_type: String,
+    rank: Option<i64>,
+    quantity: i64,
+    unit_price: i64,
+    seller_mode: String,
+) -> Result<crate::trades::TradeOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let overview = crate::trades::build_trade_overview_inner(&app, &seller_mode)?;
+        let listings: Vec<TradeSellOrder> = overview
+            .sell_orders
+            .iter()
+            .chain(overview.buy_orders.iter())
+            .cloned()
+            .collect();
+
+        let trade = DetectedTrade {
+            slug: &slug,
+            order_type: &order_type,
+            rank,
+            quantity,
+            unit_price,
+        };
+
+        match plan_listing_close(&trade, &listings) {
+            Ok(plan) => {
+                execute(&app, &plan, &seller_mode)?;
+                crate::trades::build_trade_overview_inner(&app, &seller_mode)
+            }
+            // Nothing to settle is a normal outcome, not a failure: the caller still recorded
+            // the purchase. Hand back the overview unchanged.
+            Err(NoCloseReason::NoMatchingListing) => Ok(overview),
+            Err(reason) => Err(anyhow::anyhow!(
+                "left the {slug} listing open rather than risk closing the wrong one: {reason:?}"
+            )),
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { type AppUpdateSummary, clearPendingAppUpdate, installPendingAppUpdate } from '../lib/appUpdater';
 import {
   closeWfmBuyOrder,
+  settleListingForManualTrade,
   createWfmBuyOrder,
   deleteWfmBuyOrder,
   ensureMarketTracking,
@@ -225,9 +226,6 @@ let autocompleteCatalogPromise: Promise<WfmAutocompleteItem[]> | null = null;
 let autocompleteCatalogLang: AppLanguage | null = null;
 
 const defaultAppSettings: AppSettings = {
-  // Off until the user explicitly opts in: this is the one setting that lets trade detection
-  // write to Warframe.Market.
-  autoCloseListings: false,
   alecaframe: {
     enabled: false,
     publicLink: null,
@@ -3407,36 +3405,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const activeBuyOrder = findActiveWatchlistBuyOrder(item, activeOverview.buyOrders);
 
         if (activeBuyOrder) {
-          let latestOverview = activeOverview;
-          if (
-            !isBuyOrderConfirmedForPurchase({
-              order: activeBuyOrder,
-              expectedPrice: normalizedPrice,
-              expectedRank,
-            })
-          ) {
-            latestOverview = await updateWfmBuyOrder(
-              {
-                orderId: activeBuyOrder.orderId,
-                price: normalizedPrice,
-                // Preserve the order's real quantity: forcing 1 here used to shrink a multi-unit
-                // order so closing it removed everything, not just the units actually bought.
-                quantity: Math.max(activeBuyOrder.quantity, boughtQuantity),
-                rank: expectedRank,
-                visible: true,
-              },
-              state.sellerMode,
-            );
-            latestOverview = await confirmWatchlistBuyOrderReadyForClose({
-              overview: latestOverview,
-              orderId: activeBuyOrder.orderId,
-              expectedPrice: normalizedPrice,
-              expectedRank,
-              sellerMode: state.sellerMode,
-            });
-          }
-
-          await closeWfmBuyOrder(activeBuyOrder.orderId, boughtQuantity, state.sellerMode);
+          // One engine for manual and automatic settlement alike. It decides between closing
+          // outright, repricing first, closing part, or mirroring onto a throwaway invisible
+          // order — the last of which is what stops a partial buy at a different price from
+          // rewriting the asking price of the units still on order.
+          await settleListingForManualTrade({
+            slug: item.slug,
+            orderType: 'buy',
+            rank: expectedRank,
+            quantity: boughtQuantity,
+            unitPrice: normalizedPrice,
+            sellerMode: state.sellerMode,
+          });
           await addToInventory();
           if (remaining <= 0) {
             clearLinkedBuyOrder();

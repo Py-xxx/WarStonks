@@ -846,8 +846,6 @@ export interface AppSettings {
   alecaframe: AlecaframeSettings;
   discordWebhook: DiscordWebhookSettings;
   smartManage: SmartManageSettings;
-  /** Lets trade detection close the matching WFM listing. Default false. */
-  autoCloseListings: boolean;
 }
 
 export type RingtoneId = 'chime' | 'ping' | 'coin' | 'arpeggio' | 'alert' | 'bell';

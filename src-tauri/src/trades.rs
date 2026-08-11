@@ -4297,69 +4297,139 @@ fn find_duplicate_trade_record(
     })
 }
 
-fn match_grouped_trade_to_exact_set(
+/// A set found *inside* a group, plus how much of each row it consumed.
+struct ContainedSetMatch {
+    set: MatchedTradeSet,
+    /// Units of each slug the set used up. Whatever is left stays an ordinary trade row.
+    consumed: HashMap<String, i64>,
+}
+
+/// Finds a complete set among a group's rows, ignoring anything extra.
+///
+/// The exact matcher requires the group to be *precisely* one set, so trading a set together
+/// with two unrelated items recorded five loose parts and no set — losing the "sold as set"
+/// status and its cost basis. This one matches a set that is merely *contained* in the group
+/// and reports what it consumed, so the remainder can carry on as ordinary rows.
+///
+/// Larger sets are tried first: a 4-part set that contains a 2-part one should collapse as the
+/// 4-part set, not leave two of its own parts loose.
+fn match_grouped_trade_to_contained_set(
     group: &[StoredTradeLogRecord],
     set_definitions: &[(TradeSetRootRecord, Vec<TradeSetComponentRecord>)],
-) -> Option<MatchedTradeSet> {
+) -> Option<ContainedSetMatch> {
     if group.len() < 2 {
         return None;
     }
 
-    let mut grouped_quantities = HashMap::<String, i64>::new();
+    let mut available = HashMap::<String, i64>::new();
     for record in group {
         if record.slug.trim().is_empty() || record.quantity <= 0 {
             return None;
         }
-
-        *grouped_quantities.entry(record.slug.clone()).or_insert(0) += record.quantity.max(0);
+        *available.entry(record.slug.clone()).or_insert(0) += record.quantity;
     }
 
-    for (set_root, components) in set_definitions {
-        if components.is_empty() || components.len() != grouped_quantities.len() {
+    let mut ordered: Vec<&(TradeSetRootRecord, Vec<TradeSetComponentRecord>)> =
+        set_definitions.iter().collect();
+    ordered.sort_by(|left, right| right.1.len().cmp(&left.1.len()));
+
+    for (set_root, components) in ordered {
+        if components.is_empty() {
             continue;
         }
 
-        let mut matched_set_quantity: Option<i64> = None;
-        let mut is_exact_match = true;
-
+        // How many whole sets the group can supply — the scarcest component decides.
+        let mut set_quantity: Option<i64> = None;
         for component in components {
-            let Some(actual_quantity) = grouped_quantities.get(&component.component_slug) else {
-                is_exact_match = false;
+            let quantity_in_set = component.quantity_in_set.max(1);
+            let Some(actual) = available.get(&component.component_slug) else {
+                set_quantity = None;
                 break;
             };
-
-            if *actual_quantity <= 0 || actual_quantity % component.quantity_in_set != 0 {
-                is_exact_match = false;
+            let possible = actual / quantity_in_set;
+            if possible <= 0 {
+                set_quantity = None;
                 break;
             }
-
-            let candidate_set_quantity = actual_quantity / component.quantity_in_set;
-            if candidate_set_quantity <= 0 {
-                is_exact_match = false;
-                break;
-            }
-
-            matched_set_quantity = match matched_set_quantity {
-                Some(existing) if existing != candidate_set_quantity => {
-                    is_exact_match = false;
-                    break;
-                }
-                Some(existing) => Some(existing),
-                None => Some(candidate_set_quantity),
-            };
+            set_quantity = Some(match set_quantity {
+                Some(existing) => existing.min(possible),
+                None => possible,
+            });
         }
 
-        if is_exact_match {
-            return matched_set_quantity.map(|quantity| MatchedTradeSet {
+        let Some(set_quantity) = set_quantity.filter(|value| *value > 0) else {
+            continue;
+        };
+
+        let consumed = components
+            .iter()
+            .map(|component| {
+                (
+                    component.component_slug.clone(),
+                    component.quantity_in_set.max(1) * set_quantity,
+                )
+            })
+            .collect();
+
+        return Some(ContainedSetMatch {
+            set: MatchedTradeSet {
                 slug: set_root.slug.clone(),
                 name: set_root.name.clone(),
                 image_path: set_root.image_path.clone(),
-                quantity,
-            });
-        }
+                quantity: set_quantity,
+            },
+            consumed,
+        });
     }
 
     None
+}
+
+/// Splits a group's platinum between the set it contains and the rows left over.
+///
+/// Leftovers keep their own share, worked out from the allocation the rows already carry, and
+/// the set takes the rest. Deriving the set's share by subtraction rather than by its own sum
+/// is what guarantees the parts still add up to exactly what was paid — the trade-log editor
+/// rejects a group that does not reconcile.
+fn split_platinum_between_set_and_leftovers(
+    group: &[StoredTradeLogRecord],
+    consumed: &HashMap<String, i64>,
+    total_platinum: i64,
+) -> (i64, Vec<(StoredTradeLogRecord, i64, i64)>) {
+    let mut remaining_consumption = consumed.clone();
+    let mut leftovers = Vec::new();
+
+    for record in group {
+        let taken = remaining_consumption
+            .get_mut(&record.slug)
+            .map(|left| {
+                let take = (*left).min(record.quantity);
+                *left -= take;
+                take
+            })
+            .unwrap_or(0);
+
+        let left_over = record.quantity - taken;
+        if left_over <= 0 {
+            continue;
+        }
+
+        let row_total = record
+            .allocation_total_platinum
+            .unwrap_or_else(|| record_total_platinum(record));
+        // Pro-rata on the row's own share; a row split in half carries half its platinum.
+        let share = if record.quantity > 0 {
+            row_total * left_over / record.quantity
+        } else {
+            0
+        };
+        leftovers.push((record.clone(), left_over, share.max(0)));
+    }
+
+    let leftover_total: i64 = leftovers.iter().map(|(_, _, share)| *share).sum();
+    let set_platinum = (total_platinum - leftover_total).max(0);
+
+    (set_platinum, leftovers)
 }
 
 fn collapse_grouped_trade_sets(
@@ -4416,19 +4486,26 @@ fn collapse_grouped_trade_sets(
             continue;
         };
 
-        let Some(matched_set) = match_grouped_trade_to_exact_set(group, set_definitions) else {
+        let Some(contained) = match_grouped_trade_to_contained_set(group, set_definitions) else {
             collapsed.extend(group.iter().cloned());
             continue;
         };
+        let matched_set = contained.set;
 
         let total_platinum = group
             .first()
             .and_then(|entry| entry.group_total_platinum)
             .unwrap_or_else(|| group.iter().map(record_total_platinum).sum::<i64>());
+
+        // A group can contain a set *plus* unrelated items. The set takes its share and the
+        // extras stay as ordinary rows rather than being swallowed into it.
+        let (set_platinum, leftovers) =
+            split_platinum_between_set_and_leftovers(group, &contained.consumed, total_platinum);
+
         let average_unit_platinum = if matched_set.quantity > 0 {
-            (total_platinum + (matched_set.quantity / 2)) / matched_set.quantity
+            (set_platinum + (matched_set.quantity / 2)) / matched_set.quantity
         } else {
-            total_platinum
+            set_platinum
         };
 
         // Skip adding this collapsed set if the SAME sale was already logged by another source
@@ -4464,6 +4541,17 @@ fn collapse_grouped_trade_sets(
             continue;
         }
 
+        // Emitted whether or not the set row survives dedup — they are separate goods that were
+        // in the same trade, not part of the set.
+        for (record, quantity, share) in leftovers {
+            collapsed.push(StoredTradeLogRecord {
+                quantity,
+                allocation_total_platinum: Some(share),
+                platinum: if quantity > 0 { share / quantity } else { share },
+                ..record
+            });
+        }
+
         let keep_item = group.iter().any(|entry| entry.keep_item);
         collapsed.push(StoredTradeLogRecord {
             id: format!("af-set-{group_id}"),
@@ -4482,7 +4570,7 @@ fn collapse_grouped_trade_sets(
             group_label: None,
             group_total_platinum: None,
             group_item_count: None,
-            allocation_total_platinum: Some(total_platinum),
+            allocation_total_platinum: Some(set_platinum),
             group_sort_order: None,
         });
     }
@@ -6524,13 +6612,11 @@ pub(crate) fn rebuild_owned_set_components_from_trade_log(app: &tauri::AppHandle
 /// would otherwise stall the one-second EE.log poll, and the trade is *already recorded* by the
 /// time this runs — an unclosed listing is a nuisance, a blocked detector is data loss.
 ///
-/// Gated on `auto_close_listings`, default off. Reads the user's live listings once for the
-/// whole batch rather than per row.
+/// Always on. Matching is strict enough that the failure mode is "nothing happened", and the
+/// user then closes the listing by hand exactly as before — so there is nothing to opt out of.
+/// Reads the user's live listings once for the whole batch rather than per row.
 fn settle_listings_for_detected_trades(app: &tauri::AppHandle, entries: &[PortfolioTradeLogEntry]) {
-    let enabled = crate::settings::load_settings_inner(app)
-        .map(|settings| settings.auto_close_listings)
-        .unwrap_or(false);
-    if !enabled || entries.is_empty() {
+    if entries.is_empty() {
         return;
     }
 
@@ -11199,6 +11285,87 @@ mod tests {
             allocation_total_platinum: Some(4),
             group_sort_order: group_id.map(|_| 0),
         }
+    }
+
+    /// A set traded *together with* other items. The exact matcher required the group to be
+    /// precisely one set, so this recorded three loose parts and no set at all — losing the
+    /// "sold as set" status and its cost basis.
+    #[test]
+    fn a_set_traded_alongside_extras_is_still_detected() {
+        let mut barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut blueprint = stored_record("r2", "bronco_prime_blueprint", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut extra = stored_record("r3", "forma", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        // 70p for the trade: the set's two parts plus one unrelated item.
+        for record in [&mut barrel, &mut blueprint, &mut extra] {
+            record.group_total_platinum = Some(70);
+            record.group_item_count = Some(3);
+            record.allocation_total_platinum = Some(30);
+            record.platinum = 30;
+        }
+        extra.allocation_total_platinum = Some(10);
+        extra.platinum = 10;
+
+        let records = vec![barrel, blueprint, extra];
+        let (collapsed, changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+
+        assert!(changed);
+        let set_row = collapsed
+            .iter()
+            .find(|record| record.slug == "bronco_prime_set")
+            .expect("the set inside the group must be detected");
+        let leftover = collapsed
+            .iter()
+            .find(|record| record.slug == "forma")
+            .expect("the unrelated item must survive as its own row");
+
+        assert_eq!(set_row.quantity, 1);
+        assert_eq!(leftover.quantity, 1);
+        // The parts must still add back up to what was actually paid.
+        assert_eq!(
+            set_row.allocation_total_platinum.unwrap_or_default()
+                + leftover.allocation_total_platinum.unwrap_or_default(),
+            70,
+        );
+        assert_eq!(leftover.allocation_total_platinum, Some(10), "the extra keeps its own share");
+        assert_eq!(set_row.allocation_total_platinum, Some(60), "the set takes the rest");
+    }
+
+    /// Only whole sets collapse. Two of three parts is not a set, and pretending otherwise
+    /// would invent a sale that never happened.
+    #[test]
+    fn an_incomplete_set_is_left_as_loose_parts() {
+        let barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let unrelated = stored_record("r2", "forma", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+
+        let records = vec![barrel, unrelated];
+        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+
+        assert!(
+            !collapsed.iter().any(|record| record.slug == "bronco_prime_set"),
+            "a missing component means there is no set",
+        );
+        assert_eq!(collapsed.len(), 2);
+    }
+
+    /// Two full sets' worth of parts in one trade collapse to a quantity of two, not one.
+    #[test]
+    fn multiple_whole_sets_in_one_group_collapse_together() {
+        let mut barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut blueprint = stored_record("r2", "bronco_prime_blueprint", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        barrel.quantity = 2;
+        blueprint.quantity = 2;
+        barrel.group_total_platinum = Some(120);
+        blueprint.group_total_platinum = Some(120);
+
+        let records = vec![barrel, blueprint];
+        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+
+        let set_row = collapsed
+            .iter()
+            .find(|record| record.slug == "bronco_prime_set")
+            .expect("a set row");
+        assert_eq!(set_row.quantity, 2);
+        assert_eq!(set_row.allocation_total_platinum, Some(120));
     }
 
     #[test]

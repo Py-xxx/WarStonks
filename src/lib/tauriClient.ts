@@ -180,14 +180,6 @@ export async function saveDiscordWebhookSettings(
   return invoke<AppSettings>('save_discord_webhook_settings', { input });
 }
 
-/**
- * Grants (or revokes) trade detection's permission to close listings on Warframe.Market.
- * Default off — this is the only path where detection writes to WFM.
- */
-export async function setAutoCloseListings(enabled: boolean): Promise<AppSettings> {
-  return invoke<AppSettings>('set_auto_close_listings', { enabled });
-}
-
 export async function saveSmartManageSettings(
   input: SmartManageSettings,
 ): Promise<AppSettings> {
@@ -856,6 +848,31 @@ export async function closeWfmSellOrder(
     orderId,
     quantity,
     sellerMode,
+  });
+}
+
+/**
+ * Settles the WFM listing behind a manually confirmed purchase or sale.
+ *
+ * Shares the backend engine with automatic trade detection, which is the point: closing part
+ * of a listing at a price the listing doesn't carry must not rewrite the price of the units the
+ * user still holds. Returns the refreshed overview; a no-op when nothing matched.
+ */
+export async function settleListingForManualTrade(input: {
+  slug: string;
+  orderType: 'buy' | 'sell';
+  rank: number | null;
+  quantity: number;
+  unitPrice: number;
+  sellerMode: SellerMode;
+}): Promise<TradeOverview> {
+  return invoke<TradeOverview>('settle_listing_for_manual_trade', {
+    slug: input.slug,
+    orderType: input.orderType,
+    rank: input.rank,
+    quantity: input.quantity,
+    unitPrice: input.unitPrice,
+    sellerMode: input.sellerMode,
   });
 }
 
