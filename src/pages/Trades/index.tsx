@@ -24,9 +24,7 @@ import {
   getItemAnalytics,
   getTradeSellOrderHealth,
   getTradeBuyOrderHealth,
-  getHealthPredictionAccuracy,
   subscribeToTradeHealthStale,
-  isTauriRuntime,
   getWfmAutocompleteItems,
   getWfmItemSubtypes,
   getWfmTradeOverview,
@@ -56,7 +54,6 @@ import type {
   SmartListingOverrides,
   WfmAutocompleteItem,
   SellerMode,
-  HealthPredictionAccuracy,
 } from '../../types';
 
 type ListingModalMode = 'create' | 'edit';
@@ -1660,25 +1657,6 @@ function HealthTab() {
 
   const [healthActionPending, setHealthActionPending] = useState<readonly string[]>([]);
   const [fixAllRunning, setFixAllRunning] = useState(false);
-  const [accuracy, setAccuracy] = useState<HealthPredictionAccuracy | null>(null);
-
-  // #14 Self-calibration: load how the engine's past predictions actually held up.
-  useEffect(() => {
-    if (!tradeAccount || !isTauriRuntime()) {
-      return;
-    }
-    let cancelled = false;
-    void getHealthPredictionAccuracy()
-      .then((result) => {
-        if (!cancelled) {
-          setAccuracy(result);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [tradeAccount]);
   const isHealthActionPending = (orderId: string) => healthActionPending.includes(orderId);
 
   const applyHealthPrice = async (order: TradeSellOrder): Promise<boolean> => {
@@ -1758,12 +1736,6 @@ function HealthTab() {
           <div className="info-card-label">{t('trades.health.likelySoon')}</div>
           <div className="info-card-val neutral">{likelySoonCount}</div>
         </div>
-        {accuracy && accuracy.sampleCount >= 3 ? (
-          <div className="info-card trade-health-summary-card" title={t('trades.health.accuracyHint', { count: String(accuracy.sampleCount) })}>
-            <div className="info-card-label">{t('trades.health.etaAccuracy')}</div>
-            <div className="info-card-val neutral">{Math.round(accuracy.withinEtaPct)}%</div>
-          </div>
-        ) : null}
       </div>
 
       {error ? <div className="trade-inline-error">{error}</div> : null}

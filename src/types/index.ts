@@ -189,12 +189,6 @@ export interface TradeListingHealth {
   isDegraded: boolean;
 }
 
-export interface HealthPredictionAccuracy {
-  sampleCount: number;
-  withinEtaPct: number;
-  medianAbsErrorHours: number | null;
-}
-
 export interface TradeOverview {
   account: TradeAccountSummary;
   lastUpdatedAt: string;
@@ -716,11 +710,8 @@ export interface DiscordWebhookNotificationSettings {
 }
 
 export interface DiscordPrivateMessageLabels {
-  title: string;
-  /** `{user}` already interpolated by the caller. */
+  /** The whole embed — `{user}` already interpolated by the caller. */
   body: string;
-  /** Makes clear the game never logs message text. */
-  note: string;
   footer: string;
 }
 
@@ -1605,7 +1596,7 @@ export interface ItemQuickViewTarget {
 export interface NavigationSnapshot {
   activePage: PageId;
   homeSubTab: HomeSubTab;
-  marketSubTab: 'analysis' | 'analytics' | 'calibration';
+  marketSubTab: 'analysis' | 'analytics';
 }
 
 export type AppToastTone = 'success' | 'error' | 'info';

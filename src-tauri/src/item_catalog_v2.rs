@@ -3041,6 +3041,29 @@ pub(crate) fn item_image_or(
         .or(fallback)
 }
 
+/// Slugs of every mod and arcane.
+///
+/// The frontend replaces a *component's* icon with its own part art, because Warframe.Market
+/// gives every part of a set the parent item's picture. It decides from the slug — and a slug
+/// alone cannot tell "Conductive Blade" (a mod) from "Boltor Barrel" (a component); both end in
+/// a part word. The catalog can: WFM tags them, and `classify_item_family` ranks `mod` above
+/// `component` precisely so a part classifies as a part.
+///
+/// So this hands over the items that must **never** be overridden. Mods and arcanes already
+/// have their own distinct art; there was never anything to fix for them.
+#[tauri::command]
+pub fn get_never_override_icon_slugs(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let connection = open_catalog_v2_readonly(&app).map_err(|error| error.to_string())?;
+    let mut statement = connection
+        .prepare("SELECT slug FROM items WHERE item_family IN ('mod', 'arcane')")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())
+}
+
 /// Opens the v2 catalog read-only. Shared by every read-side caller outside this module
 /// (`commands/mod.rs`, `market_observatory.rs`, `trades.rs`) instead of each hand-rolling the
 /// same `OpenFlags` — mirrors the old catalog's single `open_catalog_database` helper.

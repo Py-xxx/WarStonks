@@ -95,7 +95,6 @@ export function AlecaframeModal() {
       >
         <div className="settings-modal-header">
           <div className="settings-modal-title">
-            <span className="card-label">{t('settings.section.alecaframe.label')}</span>
             <h3>{t('aleca.subtitle')}</h3>
           </div>
           <div className="settings-modal-actions">
@@ -125,7 +124,14 @@ export function AlecaframeModal() {
                 aria-label={t('aleca.enable.label')}
                 disabled={settingsLoading}
                 onClick={() => void save(!enabled)}
-              />
+              >
+                <span className="settings-toggle-track">
+                  <span className="settings-toggle-thumb" />
+                </span>
+                <span className="settings-toggle-label">
+                  {enabled ? t('common.on') : t('common.off')}
+                </span>
+              </button>
             </label>
 
             <div className="aleca-detect-row">
@@ -157,8 +163,6 @@ export function AlecaframeModal() {
                 <li>{t('aleca.unlocks.wallet')}</li>
               </ul>
             </div>
-
-            <p className="settings-field-help aleca-scope-note">{t('aleca.scopeNote')}</p>
 
             {settingsError ? (
               <p className="settings-inline-error" role="alert">

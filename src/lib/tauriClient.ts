@@ -29,7 +29,6 @@ import type {
   MarketVariant,
   TradeCreateListingInput,
   TradeListingHealth,
-  HealthPredictionAccuracy,
   PortfolioPnlSummary,
   SetCompletionInventoryValue,
   SetCompletionOwnedItemValue,
@@ -162,6 +161,19 @@ export async function getAppVersion(): Promise<string> {
 
 export async function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });
+}
+
+/**
+ * Mods and arcanes, which must keep Warframe.Market's own art.
+ *
+ * The component-icon override keys on the slug, and a slug cannot tell a mod called
+ * "Conductive Blade" from a component called "Boltor Barrel". The catalog can.
+ */
+export async function getNeverOverrideIconSlugs(): Promise<string[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+  return invoke<string[]>('get_never_override_icon_slugs');
 }
 
 export async function getAppSettings(): Promise<AppSettings> {
@@ -932,10 +944,6 @@ export async function getTradeSellOrderHealth(
     visible,
     bulkTradable,
   });
-}
-
-export async function getHealthPredictionAccuracy(): Promise<HealthPredictionAccuracy> {
-  return invoke<HealthPredictionAccuracy>('get_health_prediction_accuracy');
 }
 
 export async function getTradeBuyOrderHealth(

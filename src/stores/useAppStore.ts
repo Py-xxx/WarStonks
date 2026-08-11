@@ -1527,6 +1527,9 @@ interface AppStore {
   notificationSettings: NotificationSettings;
   appSettings: AppSettings;
   walletSnapshot: WalletSnapshot;
+  /** Platinum the first time we read it this session — the baseline the top bar's delta
+   *  measures against. Null until a real balance arrives, so "no data" never reads as zero. */
+  walletSessionPlatinum: number | null;
   settingsLoading: boolean;
   walletLoading: boolean;
   settingsError: string | null;
@@ -1790,8 +1793,8 @@ interface AppStore {
   tradePeriod: TradePeriod;
   setTradePeriod: (p: TradePeriod) => void;
 
-  marketSubTab: 'analysis' | 'analytics' | 'calibration';
-  setMarketSubTab: (tab: 'analysis' | 'analytics' | 'calibration') => void;
+  marketSubTab: 'analysis' | 'analytics';
+  setMarketSubTab: (tab: 'analysis' | 'analytics') => void;
 
   eventsSubTab: EventsSubTab;
   setEventsSubTab: (tab: EventsSubTab) => void;
@@ -2003,6 +2006,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   notificationSettings: loadNotificationSettings(),
   appSettings: defaultAppSettings,
   walletSnapshot: defaultWalletSnapshot,
+  walletSessionPlatinum: null,
   settingsLoading: false,
   walletLoading: false,
   settingsError: null,
@@ -2213,6 +2217,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const snapshot = await refreshWalletFromAppdata();
       set({
         walletSnapshot: snapshot,
+        walletSessionPlatinum: get().walletSessionPlatinum ?? snapshot.balances.platinum,
         walletLoading: false,
       });
     } catch (error) {
@@ -2236,7 +2241,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     backgroundWalletRefreshPromise = (async () => {
       try {
         const snapshot = await refreshWalletFromAppdata();
-        set({ walletSnapshot: snapshot });
+        set({
+          walletSnapshot: snapshot,
+          walletSessionPlatinum: get().walletSessionPlatinum ?? snapshot.balances.platinum,
+        });
       } catch (error) {
         console.warn('[alecaframe] background wallet refresh failed', error);
         const previousSnapshot = get().walletSnapshot;

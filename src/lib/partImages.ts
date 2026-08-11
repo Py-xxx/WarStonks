@@ -60,6 +60,35 @@ const PART_LOOKUP = new Map<string, boolean>(PARTS.map(([part, hasPrime]) => [pa
 export const KNOWN_PARTS = PARTS;
 
 /**
+ * Slugs that must keep Warframe.Market's own art, whatever their name ends in.
+ *
+ * A slug cannot distinguish "Conductive Blade" — a mod — from "Boltor Barrel", a component:
+ * both end in a part word, so the rule below happily replaced the mod's card art with a sword
+ * blade. Only the catalog knows the difference, and it does: WFM tags them, and mods and
+ * arcanes already have distinct art of their own.
+ *
+ * Held as a module-level set rather than threaded through every call site, because
+ * `resolveWfmAssetUrl` is synchronous and called from three dozen render paths.
+ */
+const neverOverride = new Set<string>();
+
+/**
+ * Registers the catalog's mods and arcanes. Only the ones that would actually collide are
+ * kept — of ~1,500 mods a handful end in a part word, and there is no reason to hold the rest.
+ *
+ * Until this runs nothing is excluded, so a mod named like a part shows the part icon for the
+ * moment between startup and the catalog answering. That is the pre-existing behaviour, not a
+ * regression, and it self-corrects on the next render.
+ */
+export function registerNeverOverrideSlugs(slugs: readonly string[]): void {
+  for (const slug of slugs) {
+    if (matchPartKey(slug) !== null) {
+      neverOverride.add(slug.trim().toLowerCase());
+    }
+  }
+}
+
+/**
  * The art key for a component slug, or `null` when the slug is not a component.
  *
  * Matching is anchored to the **end** of the slug, after an optional trailing `_blueprint`.
@@ -69,6 +98,18 @@ export const KNOWN_PARTS = PARTS;
  */
 export function partKeyForSlug(slug: string | null | undefined): string | null {
   const trimmed = slug?.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+  if (neverOverride.has(trimmed)) {
+    return null;
+  }
+  return matchPartKey(trimmed);
+}
+
+/** The naming rule on its own, with no regard for what kind of item the slug belongs to. */
+function matchPartKey(slug: string): string | null {
+  const trimmed = slug.trim().toLowerCase();
   if (!trimmed) {
     return null;
   }

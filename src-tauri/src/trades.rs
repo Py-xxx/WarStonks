@@ -187,18 +187,6 @@ pub struct TradeHealthScoreFactor {
     pub delta: i64,
 }
 
-/// #14 Self-calibration summary: how the health engine's time-to-sell predictions have held up
-/// against the user's actual closed sales.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct HealthPredictionAccuracy {
-    pub sample_count: i64,
-    /// Share (0–100) of resolved predictions that sold within 1.5× the estimated time.
-    pub within_eta_pct: f64,
-    /// Median absolute error between predicted and actual sell hours, when computable.
-    pub median_abs_error_hours: Option<f64>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeOverview {
@@ -3856,54 +3844,6 @@ pub async fn clear_smart_manage_failures(
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn get_health_prediction_accuracy(
-    app: tauri::AppHandle,
-) -> Result<HealthPredictionAccuracy, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let session = ensure_authenticated_session(&app)?;
-        let conn = open_trades_cache_database(&app)?;
-        let (sample_count, within_eta): (i64, i64) = conn
-            .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(within_eta), 0)
-                 FROM health_prediction_outcome WHERE username = ?1",
-                params![session.account.name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap_or((0, 0));
-        let within_eta_pct = if sample_count > 0 {
-            (within_eta as f64 / sample_count as f64) * 100.0
-        } else {
-            0.0
-        };
-        // Median absolute error over resolved rows that carried an estimate.
-        let mut errors: Vec<f64> = conn
-            .prepare(
-                "SELECT ABS(actual_hours - est_sell_hours) FROM health_prediction_outcome
-                 WHERE username = ?1 AND est_sell_hours IS NOT NULL AND est_sell_hours > 0",
-            )
-            .and_then(|mut stmt| {
-                stmt.query_map(params![session.account.name], |row| row.get::<_, f64>(0))
-                    .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
-            })
-            .unwrap_or_default();
-        errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median_abs_error_hours = if errors.is_empty() {
-            None
-        } else {
-            Some(errors[errors.len() / 2])
-        };
-        Ok::<_, anyhow::Error>(HealthPredictionAccuracy {
-            sample_count,
-            within_eta_pct,
-            median_abs_error_hours,
-        })
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
-}
-
 fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSummary> {
     let response = execute_wfm_bytes_request(
         send_wfm_request(
@@ -4150,40 +4090,84 @@ fn build_trade_notification_candidates_for_entries(
 ) -> Result<Vec<TradeNotificationCandidate>> {
     let mut candidates = Vec::with_capacity(entries.len());
 
-    for entry in entries {
-        let items = build_trade_notification_items_for_wfm_entry(app, entry)?;
-        let total_platinum = entry
-            .allocation_total_platinum
-            .unwrap_or(entry.platinum.saturating_mul(entry.quantity.max(1)));
-        let summary_label = format!(
-            "{} {} x{} for {}p",
-            if entry.order_type == "buy" {
-                "Bought"
-            } else {
-                "Sold"
-            },
-            entry.item_name,
-            entry.quantity.max(1),
-            total_platinum
-        );
+    // One candidate per *trade*, not per row.
+    //
+    // Rows sharing a `group_id` are one exchange. Normally a set collapses into a single row
+    // before this runs, but collapse depends on the catalog knowing the set's components — and
+    // when it doesn't, the parts arrive here separately and each fired its own notification.
+    // Grouping here makes "one trade, one notification" true regardless of whether the collapse
+    // found anything, which is the guarantee that actually matters to the user.
+    for group in group_entries_by_trade(entries) {
+        let lead = &group[0];
+        let mut items = Vec::new();
+        for entry in &group {
+            items.extend(build_trade_notification_items_for_wfm_entry(app, entry)?);
+        }
+
+        let total_platinum: i64 = group
+            .iter()
+            .map(|entry| {
+                entry
+                    .allocation_total_platinum
+                    .unwrap_or(entry.platinum.saturating_mul(entry.quantity.max(1)))
+            })
+            .sum();
+
+        let verb = if lead.order_type == "buy" { "Bought" } else { "Sold" };
+        let summary_label = if group.len() == 1 {
+            format!(
+                "{verb} {} x{} for {total_platinum}p",
+                lead.item_name,
+                lead.quantity.max(1)
+            )
+        } else {
+            let unit_count: i64 = group.iter().map(|entry| entry.quantity.max(1)).sum();
+            format!("{verb} {unit_count} items for {total_platinum}p")
+        };
 
         candidates.push(TradeNotificationCandidate {
             fingerprint: build_trade_notification_fingerprint(
-                &entry.order_type,
+                &lead.order_type,
                 total_platinum,
-                &entry.closed_at,
+                &lead.closed_at,
                 &items,
             ),
             source: source.to_string(),
-            order_type: entry.order_type.clone(),
+            order_type: lead.order_type.clone(),
             total_platinum,
-            closed_at: entry.closed_at.clone(),
+            closed_at: lead.closed_at.clone(),
             summary_label,
             items,
         });
     }
 
     Ok(candidates)
+}
+
+/// Groups rows into the trades they came from, preserving order.
+///
+/// Ungrouped rows are their own trade. Rows carrying a `group_id` belong together — that id is
+/// the EE.log trade key, so it identifies one physical exchange.
+fn group_entries_by_trade(
+    entries: &[PortfolioTradeLogEntry],
+) -> Vec<Vec<PortfolioTradeLogEntry>> {
+    let mut groups: Vec<Vec<PortfolioTradeLogEntry>> = Vec::new();
+    let mut index_by_group: HashMap<String, usize> = HashMap::new();
+
+    for entry in entries {
+        match &entry.group_id {
+            Some(group_id) => match index_by_group.get(group_id) {
+                Some(index) => groups[*index].push(entry.clone()),
+                None => {
+                    index_by_group.insert(group_id.clone(), groups.len());
+                    groups.push(vec![entry.clone()]);
+                }
+            },
+            None => groups.push(vec![entry.clone()]),
+        }
+    }
+
+    groups
 }
 
 fn trade_happened_after_session_start(
@@ -5231,6 +5215,27 @@ fn load_observatory_trade_set_components(
     Ok(rows)
 }
 
+/// A set's components, from whichever source can answer.
+///
+/// `load_trade_set_components_for_slug` reads the trades cache and the market observatory, and
+/// returns **empty** for any set the observatory has never scanned. The v2 catalog always knows
+/// — it is rebuilt at every startup — so it is the fallback rather than an alternative.
+///
+/// Getting this wrong is not a cosmetic miss: an empty component list means the set is absent
+/// from `set_definitions`, so a sale of it never collapses, which sends one notification per
+/// part instead of one for the set and leaves settlement hunting for a listing under each part
+/// slug when the listing is for the set.
+fn load_trade_set_components_anywhere(
+    app: &tauri::AppHandle,
+    set_slug: &str,
+) -> Result<Vec<TradeSetComponentRecord>> {
+    let components = load_trade_set_components_for_slug(app, set_slug)?;
+    if !components.is_empty() {
+        return Ok(components);
+    }
+    load_trade_set_components_from_map(app, set_slug)
+}
+
 fn load_trade_set_components_for_slug(
     app: &tauri::AppHandle,
     set_slug: &str,
@@ -5622,7 +5627,7 @@ fn load_trade_set_definitions(
     let set_roots = list_trade_set_roots_from_catalog(&catalog)?;
     let mut set_definitions = Vec::new();
     for set_root in set_roots {
-        let components = load_trade_set_components_for_slug(app, &set_root.slug)?;
+        let components = load_trade_set_components_anywhere(app, &set_root.slug)?;
         if components.is_empty() {
             continue;
         }
@@ -6237,7 +6242,7 @@ fn normalize_grouped_trade_sets_inner(
     let set_roots = list_trade_set_roots_from_catalog(&catalog)?;
     let mut set_definitions = Vec::new();
     for set_root in set_roots {
-        let components = load_trade_set_components_for_slug(app, &set_root.slug)?;
+        let components = load_trade_set_components_anywhere(app, &set_root.slug)?;
         if components.is_empty() {
             continue;
         }
@@ -6627,6 +6632,41 @@ pub struct DetectedTradeOutcome {
 /// De-duplication is `append_unique_trade_entries`', i.e. **cross-source only**: two real
 /// trades of the same item minutes apart both survive, and an imported row that matches a
 /// stored EE.log row is dropped — EE.log always wins because it is already stored.
+/// What a batch of detected rows became once the trade log had its say.
+///
+/// A multi-item trade arrives as one row per item, but reconciliation collapses the parts of a
+/// complete set into a single `af-set-…` row — and that row, not its parts, is the trade. Using
+/// the raw rows downstream is what sent four notifications for a Parallax set and then a fifth
+/// for the set itself, and what looked for a listing under each part slug when the listing was
+/// for the set.
+///
+/// Rows that were *not* collapsed keep their own id and come back unchanged, so a group of a set
+/// plus extras yields the set row and the extras.
+fn entries_representing_batch(
+    reconciled: &[PortfolioTradeLogEntry],
+    new_entries: &[PortfolioTradeLogEntry],
+) -> Vec<PortfolioTradeLogEntry> {
+    let mut wanted: HashSet<String> = new_entries.iter().map(|entry| entry.id.clone()).collect();
+    for entry in new_entries {
+        if let Some(group_id) = &entry.group_id {
+            wanted.insert(format!("af-set-{group_id}"));
+        }
+    }
+
+    let represented: Vec<PortfolioTradeLogEntry> = reconciled
+        .iter()
+        .filter(|entry| wanted.contains(&entry.id))
+        .cloned()
+        .collect();
+
+    // Reconciliation can be a no-op (nothing grouped, or the set map isn't loaded yet). Falling
+    // back to the rows we started with keeps the batch from silently vanishing.
+    if represented.is_empty() {
+        return new_entries.to_vec();
+    }
+    represented
+}
+
 pub(crate) fn apply_detected_trade_entries(
     app: &tauri::AppHandle,
     username: &str,
@@ -6658,12 +6698,16 @@ pub(crate) fn apply_detected_trade_entries(
     }
 
     let updated_at = save_trade_log_rows_inner(&mut connection, trimmed_username, &combined)?;
-    let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
+    let state = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
 
-    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &new_entries)?;
+    // Everything downstream works from what the trade log actually holds, not from the rows we
+    // handed it: one sale of a set is one row, one notification and one listing to close.
+    let recorded = entries_representing_batch(&state.entries, &new_entries);
+
+    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &recorded)?;
     apply_owned_set_component_deltas(app, &owned_part_deltas)?;
 
-    let candidates = build_trade_notification_candidates_for_entries(app, &new_entries, source)?;
+    let candidates = build_trade_notification_candidates_for_entries(app, &recorded, source)?;
     let mut notification_count = send_trade_notification_candidates_inner(
         app,
         &connection,
@@ -6685,7 +6729,7 @@ pub(crate) fn apply_detected_trade_entries(
 
     // Last, and deliberately after everything that persists: the trade is recorded whatever
     // happens to the listing.
-    settle_listings_for_detected_trades(app, &new_entries);
+    settle_listings_for_detected_trades(app, &recorded);
 
     Ok(DetectedTradeOutcome {
         added: new_entries.len() as i64,
@@ -10678,7 +10722,8 @@ mod presence_liveness_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_unique_trade_entries, build_cost_basis_confidence,
+        append_unique_trade_entries, build_cost_basis_confidence, entries_representing_batch,
+        group_entries_by_trade,
         build_portfolio_entry_from_stored_record,
         build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
         build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
@@ -11497,6 +11542,95 @@ mod tests {
             20,
             "the fallback still reconciles to what was paid",
         );
+    }
+
+    /// The universal form of the Parallax bug: a set whose components the catalog could not
+    /// resolve never collapses, so its parts reach the notifier separately — and each fired its
+    /// own notification. Grouping by trade makes "one trade, one notification" hold whether or
+    /// not the collapse found anything.
+    #[test]
+    fn rows_of_one_trade_are_notified_once_even_when_the_set_never_collapsed() {
+        let a = build_portfolio_entry_from_stored_record(&stored_record(
+            "r1", "parallax_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z",
+        ));
+        let b = build_portfolio_entry_from_stored_record(&stored_record(
+            "r2", "parallax_blueprint", "eelog", Some("g1"), "2026-03-10T09:00:00Z",
+        ));
+        let unrelated = build_portfolio_entry_from_stored_record(&stored_record(
+            "r3", "forma", "eelog", None, "2026-03-10T09:05:00Z",
+        ));
+
+        let groups = group_entries_by_trade(&[a, b, unrelated]);
+
+        assert_eq!(groups.len(), 2, "two trades, not three rows");
+        assert_eq!(groups[0].len(), 2, "the grouped parts stay together");
+        assert_eq!(groups[1].len(), 1, "an ungrouped row is its own trade");
+    }
+
+    /// The Parallax report: one sale of a set produced four notifications — one per part — and
+    /// then a fifth for the set, while the listing for the *set* went untouched because
+    /// settlement was looking for a listing under each part's slug.
+    ///
+    /// Reconciliation collapses the parts into one row; everything downstream has to work from
+    /// that row, because that row is the trade.
+    #[test]
+    fn a_collapsed_set_is_represented_by_its_set_row_not_its_parts() {
+        let barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let blueprint = stored_record("r2", "bronco_prime_blueprint", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let new_entries: Vec<PortfolioTradeLogEntry> = [&barrel, &blueprint]
+            .iter()
+            .map(|record| build_portfolio_entry_from_stored_record(record))
+            .collect();
+
+        // What the log holds after collapsing: the set, and none of its parts.
+        let set_row = build_portfolio_entry_from_stored_record(&stored_record(
+            "af-set-g1",
+            "bronco_prime_set",
+            "eelog",
+            None,
+            "2026-03-10T09:00:00Z",
+        ));
+
+        let represented = entries_representing_batch(&[set_row], &new_entries);
+
+        assert_eq!(represented.len(), 1, "one trade, one row — not one per part");
+        assert_eq!(represented[0].slug, "bronco_prime_set");
+    }
+
+    /// A set traded alongside extras: the set row plus the extras, and still no loose parts.
+    #[test]
+    fn a_batch_keeps_rows_that_were_never_collapsed() {
+        let barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let extra = stored_record("r3", "forma", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let new_entries: Vec<PortfolioTradeLogEntry> = [&barrel, &extra]
+            .iter()
+            .map(|record| build_portfolio_entry_from_stored_record(record))
+            .collect();
+
+        let reconciled = vec![
+            build_portfolio_entry_from_stored_record(&stored_record(
+                "af-set-g1", "bronco_prime_set", "eelog", None, "2026-03-10T09:00:00Z",
+            )),
+            build_portfolio_entry_from_stored_record(&extra),
+        ];
+
+        let represented = entries_representing_batch(&reconciled, &new_entries);
+        let slugs: Vec<&str> = represented.iter().map(|e| e.slug.as_str()).collect();
+
+        assert_eq!(slugs, vec!["bronco_prime_set", "forma"]);
+    }
+
+    /// Nothing collapsed — an ordinary single-item trade must pass straight through rather than
+    /// being filtered away to nothing.
+    #[test]
+    fn an_uncollapsed_batch_passes_through_unchanged() {
+        let row = stored_record("r1", "wisp_prime_chassis", "eelog", None, "2026-03-10T09:00:00Z");
+        let new_entries = vec![build_portfolio_entry_from_stored_record(&row)];
+
+        let represented = entries_representing_batch(&new_entries, &new_entries);
+
+        assert_eq!(represented.len(), 1);
+        assert_eq!(represented[0].slug, "wisp_prime_chassis");
     }
 
     /// A set traded *together with* other items. The exact matcher required the group to be

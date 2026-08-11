@@ -267,7 +267,17 @@ export function SettingsSidebar() {
                       <span className={`badge ${statusClassName}`}>{t(statusKey)}</span>
                     ) : null}
                   </span>
-                  <span className="settings-nav-description">{t(section.descKey)}</span>
+                  <span className="settings-nav-description">
+                    {t(section.descKey)}
+                    {/* Called out rather than buried in the sentence: with this off the
+                        inventory, relic and currency views have no data at all. */}
+                    {section.id === 'alecaframe' ? (
+                      <span className="settings-nav-recommend">
+                        {' '}
+                        {t('settings.section.alecaframe.recommended')}
+                      </span>
+                    ) : null}
+                  </span>
                   {section.id === 'alecaframe' ? (
                     <span className="settings-nav-subtext">
                       {t('settings.lastValidation')}{' '}

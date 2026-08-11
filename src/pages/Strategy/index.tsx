@@ -230,18 +230,6 @@ export function StrategyPage() {
                   </div>
                 </div>
                 <p className="smart-impact-note">{t('smart.impactNote')}</p>
-                {impact.sellTimeCalibration != null ? (
-                  <p className="smart-impact-note">
-                    {t('smart.calibrationNote', {
-                      factor: impact.sellTimeCalibration.toFixed(2),
-                      direction: t(
-                        impact.sellTimeCalibration >= 1
-                          ? 'smart.calibrationSlower'
-                          : 'smart.calibrationFaster',
-                      ),
-                    })}
-                  </p>
-                ) : null}
               </div>
             ) : null}
           </div>

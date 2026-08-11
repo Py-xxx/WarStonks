@@ -320,12 +320,8 @@ pub struct DiscordPrivateMessageNotificationInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscordPrivateMessageLabels {
-    pub title: String,
-    /// e.g. "New private message from {user}" — `{user}` already interpolated.
+    /// e.g. "New message from {user}" — `{user}` already interpolated. The whole embed.
     pub body: String,
-    /// States that the game never logs message text, so the embed can't be mistaken
-    /// for showing the message itself.
-    pub note: String,
     pub footer: String,
 }
 
@@ -1654,6 +1650,11 @@ pub fn send_listing_health_discord_notification(
     send_listing_health_discord_notification_inner(&app, &input).map_err(|error| error.to_string())
 }
 
+/// Deliberately one line.
+///
+/// There is nothing else to say: the game logs that a conversation opened and never the text,
+/// so every field beyond "who" was either restating the title or explaining an absence. The
+/// title carries the whole message; the author and footer carry the branding.
 fn build_private_message_payload(
     input: &DiscordPrivateMessageNotificationInput,
 ) -> serde_json::Value {
@@ -1661,8 +1662,7 @@ fn build_private_message_payload(
       "username": "WarStonks",
       "embeds": [{
         "author": brand_author(),
-        "title": input.labels.title.clone(),
-        "description": format!("{}\n\n_{}_", input.labels.body, input.labels.note),
+        "title": input.labels.body.clone(),
         "color": COLOR_BLUE,
         "footer": brand_footer(&input.labels.footer),
         "timestamp": now_iso8601()

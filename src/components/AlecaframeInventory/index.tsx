@@ -1,11 +1,19 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { readAlecaframeInventory } from '../../lib/tauriClient';
+import { getArbitrageScannerState, readAlecaframeInventory } from '../../lib/tauriClient';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { partKeyForSlug } from '../../lib/partImages';
 import { useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
-import type { AlecaframeInventory, AlecaframeItem, AlecaframeItemCategory } from '../../types';
+import type {
+  AlecaframeInventory,
+  AlecaframeItem,
+  AlecaframeItemCategory,
+  RelicRoiDropEntry,
+  RelicRoiEntry,
+} from '../../types';
+import { ModalPortal } from '../ModalPortal';
+import { useModalA11y } from '../../hooks/useModalA11y';
 
 /** The categories worth listing on their own. Everything else (resources, fish, gems) is
  *  high-count noise that belongs in the game, not a trading tool. */
@@ -102,6 +110,27 @@ function splitItemLabel(item: AlecaframeItem): { primary: string; secondary: str
   };
 }
 
+/** Refinement → the field holding that refinement's drop chance. */
+const CHANCE_FIELD = {
+  intact: 'intact',
+  exceptional: 'exceptional',
+  flawless: 'flawless',
+  radiant: 'radiant',
+} as const;
+
+/**
+ * A relic's drops, keyed by slug.
+ *
+ * Sourced from the arbitrage scanner's relic ROI results — the same data "what to farm now"
+ * reads, so a drop's value here is the same number shown there rather than a second estimate
+ * that could disagree with it.
+ */
+type RelicDropIndex = Map<string, RelicRoiEntry>;
+
+function dropValue(drop: RelicRoiDropEntry): number | null {
+  return drop.recommendedExitPrice ?? drop.currentStatsPrice;
+}
+
 function formatRank(item: AlecaframeItem, t: TranslateFn): string {
   if (item.refinement) {
     return t(REFINEMENT_LABEL_KEYS[item.refinement]);
@@ -131,6 +160,34 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
   const [sortKey, setSortKey] = useState<SortKey>('count');
 
   const [refreshedAt, setRefreshedAt] = useState<number>(0);
+  const [relicDrops, setRelicDrops] = useState<RelicDropIndex>(new Map());
+  const [openRelic, setOpenRelic] = useState<AlecaframeItem | null>(null);
+
+  // Relics only: the scanner's ROI results carry each relic's drop table and what those drops
+  // are worth. Fetched once per mount — it is a cached read, and the drop tables change only
+  // when a scan runs.
+  useEffect(() => {
+    if (tab !== 'relics') {
+      return;
+    }
+    let cancelled = false;
+    void getArbitrageScannerState()
+      .then((state) => {
+        if (cancelled) {
+          return;
+        }
+        const index: RelicDropIndex = new Map();
+        for (const relic of state.latestScan?.relicRoiResults ?? []) {
+          index.set(relic.slug, relic);
+        }
+        setRelicDrops(index);
+      })
+      // Not fatal: without it the tab still lists relics, just without drops or values.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,7 +242,22 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
 
     return inventory.items
       .filter((item) => item.category === category)
-      .filter((item) => (query ? item.name.toLowerCase().includes(query) : true))
+      .filter((item) => {
+        if (!query) {
+          return true;
+        }
+        if (item.name.toLowerCase().includes(query)) {
+          return true;
+        }
+        // Searching a relic tab by *drop* — "octavia prime systems" finds every relic that
+        // drops it. This is how the manual relic view worked and it is the main reason to
+        // search relics at all; you almost never want a relic by name.
+        return (
+          relicDrops
+            .get(item.slug)
+            ?.drops.some((drop) => drop.name.toLowerCase().includes(query)) ?? false
+        );
+      })
       .sort((left, right) => {
         if (sortKey === 'rank') {
           return (
@@ -200,7 +272,7 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
           left.name.localeCompare(right.name) || rankFraction(right) - rankFraction(left)
         );
       });
-  }, [inventory, tab, deferredSearch, sortKey]);
+  }, [inventory, tab, deferredSearch, sortKey, relicDrops]);
 
   const totalCount = useMemo(
     () => rows.reduce((sum, item) => sum + item.count, 0),
@@ -279,13 +351,25 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
         <div className="af-inv-grid">
           {rows.map((item) => (
             <InventoryTile
-              key={`${item.bucket}:${item.uniqueName}:${item.refinement ?? item.rank ?? 'na'}`}
+              onOpen={tab === 'relics' ? setOpenRelic : undefined}
+              /* Rank and refinement are separate dimensions — collapsing them into one `??`
+                 made a rankless, refinementless row key-identical to its neighbours, and React
+                 reused their DOM across tab switches. */
+              key={`${item.bucket}:${item.uniqueName}:${item.rank ?? 'na'}:${item.refinement ?? 'na'}`}
               item={item}
               showsRank={showsRank}
             />
           ))}
         </div>
       )}
+
+      {openRelic ? (
+        <RelicDropModal
+          item={openRelic}
+          relic={relicDrops.get(openRelic.slug) ?? null}
+          onClose={() => setOpenRelic(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -297,14 +381,23 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
  * pips where the item ranks, value, and an owned count pinned to the corner. Parts and mods
  * differ by a single row rather than by shape.
  */
-function InventoryTile({ item, showsRank }: { item: AlecaframeItem; showsRank: boolean }) {
+function InventoryTile({
+  item,
+  showsRank,
+  onOpen,
+}: {
+  item: AlecaframeItem;
+  showsRank: boolean;
+  /** Present only where a tile has something to open — relics, which have a drop table. */
+  onOpen?: (item: AlecaframeItem) => void;
+}) {
   const { primary, secondary } = splitItemLabel(item);
   // Components resolve to our own part art; everything else keeps Warframe.Market's, which is
   // already unique per mod and per arcane.
   const iconUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
 
-  return (
-    <article className="af-tile" title={item.name}>
+  const body = (
+    <>
       <span className="af-tile-count">{item.count}</span>
       <span className="af-tile-icon" aria-hidden="true">
         {iconUrl ? (
@@ -321,7 +414,21 @@ function InventoryTile({ item, showsRank }: { item: AlecaframeItem; showsRank: b
       {/* Placeholder until the price book is durable: `recommended_prices` is in-memory and
           only covers items the scanner has touched, so most tiles would read a stale price. */}
       <span className="af-tile-value af-inv-muted">—</span>
-    </article>
+    </>
+  );
+
+  if (!onOpen) {
+    return (
+      <article className="af-tile" title={item.name}>
+        {body}
+      </article>
+    );
+  }
+
+  return (
+    <button className="af-tile af-tile-button" type="button" title={item.name} onClick={() => onOpen(item)}>
+      {body}
+    </button>
   );
 }
 
@@ -351,5 +458,118 @@ function RankPips({ item }: { item: AlecaframeItem }) {
         <span key={index} className={`af-pip${index < (item.rank ?? 0) ? ' is-filled' : ''}`} />
       ))}
     </span>
+  );
+}
+
+/**
+ * A relic's full drop table, with what each drop is worth.
+ *
+ * The values come from the arbitrage scanner's relic ROI results — the same source "what to
+ * farm now" reads — so a drop priced here matches what that tab says rather than being a
+ * second estimate that can disagree with it.
+ *
+ * Chances are shown for the refinement of the stack you clicked, because that is the relic you
+ * actually hold: a radiant's rare chance is several times an intact's, and showing a single
+ * blended number would misstate both.
+ */
+function RelicDropModal({
+  item,
+  relic,
+  onClose,
+}: {
+  item: AlecaframeItem;
+  relic: RelicRoiEntry | null;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const refinement = item.refinement ?? 'intact';
+
+  const drops = useMemo(() => {
+    if (!relic) {
+      return [];
+    }
+    // Most valuable first: the question this table answers is "is this worth cracking".
+    return [...relic.drops].sort((left, right) => (dropValue(right) ?? -1) - (dropValue(left) ?? -1));
+  }, [relic]);
+
+  /** Chance-weighted value of one crack at this refinement — the relic's expected return. */
+  const expectedValue = useMemo(() => {
+    let total = 0;
+    let priced = false;
+    for (const drop of drops) {
+      const chance = drop.chanceProfile[CHANCE_FIELD[refinement]];
+      const value = dropValue(drop);
+      if (chance === null || value === null) {
+        continue;
+      }
+      priced = true;
+      total += (chance / 100) * value;
+    }
+    return priced ? Math.round(total) : null;
+  }, [drops, refinement]);
+
+  // Focus trap, Escape and restore-focus, same as every other modal here.
+  const modalRef = useModalA11y<HTMLDivElement>({ onClose, active: true });
+
+  return (
+    <ModalPortal>
+      <div className="modal-backdrop" onClick={onClose}>
+        <div
+          ref={modalRef}
+          className="af-relic-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={item.name}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="af-relic-modal-head">
+            <div>
+              <span className="panel-title-eyebrow">
+                {item.refinement ? t(REFINEMENT_LABEL_KEYS[item.refinement]) : t('opp.unknown')}
+                {' · '}
+                {t('inv.ownedCount', { n: String(item.count) })}
+              </span>
+              <h3>{item.name}</h3>
+            </div>
+            <button type="button" className="act-btn" onClick={onClose}>
+              {t('common.close')}
+            </button>
+          </div>
+
+          {expectedValue !== null ? (
+            <div className="af-relic-expected">
+              {t('inv.expectedValue')}
+              <strong>{expectedValue}p</strong>
+            </div>
+          ) : null}
+
+          {drops.length === 0 ? (
+            <div className="af-inv-state">{t('opp.noDropData')}</div>
+          ) : (
+            <ul className="af-relic-drops">
+              {drops.map((drop) => {
+                const chance = drop.chanceProfile[CHANCE_FIELD[refinement]];
+                const value = dropValue(drop);
+                const icon = resolveWfmAssetUrl(drop.imagePath, drop.slug);
+                return (
+                  <li key={drop.slug} className="af-relic-drop">
+                    <span className="af-relic-drop-thumb">
+                      {icon ? <img src={icon} alt="" loading="lazy" /> : <span>{drop.name.charAt(0)}</span>}
+                    </span>
+                    <span className="af-relic-drop-name">{drop.name}</span>
+                    <span className="af-relic-drop-chance">
+                      {chance === null ? '—' : `${chance}%`}
+                    </span>
+                    <span className={`af-relic-drop-value${value === null ? ' af-inv-muted' : ''}`}>
+                      {value === null ? '—' : `${value}p`}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </ModalPortal>
   );
 }

@@ -416,6 +416,27 @@ pub fn parse_inventory(
         }
     }
 
+    // Merge rows that are indistinguishable once rank has been resolved.
+    //
+    // `Upgrades` groups instances by their *fingerprint* rank, but an item the catalog gives no
+    // rank ladder for — riven mods, notably — has that rank discarded as meaningless. Three
+    // veiled rivens at fingerprint ranks 0, 5 and 8 therefore became three rows identical in
+    // every displayed field, which collided on the same React key: they rendered duplicated and
+    // survived tab switches because React reused the DOM nodes. One item, one row.
+    let mut merged: Vec<AlecaframeItem> = Vec::with_capacity(items.len());
+    for item in items {
+        match merged.iter_mut().find(|existing| {
+            existing.unique_name == item.unique_name
+                && existing.bucket == item.bucket
+                && existing.rank == item.rank
+                && existing.refinement == item.refinement
+        }) {
+            Some(existing) => existing.count += item.count,
+            None => merged.push(item),
+        }
+    }
+    let mut items = merged;
+
     items.sort_by(|left, right| {
         right
             .count
@@ -758,6 +779,45 @@ mod tests {
         assert!(
             arcanes.iter().any(|item| item.bucket == "Upgrades"),
             "ranked arcanes live in Upgrades and must not be dropped"
+        );
+    }
+
+    /// Two symptoms, one cause: veiled rivens rendering duplicated, and surviving onto tabs
+    /// they do not belong to. `Upgrades` groups instances by fingerprint rank, but an item the
+    /// catalog gives no rank ladder for has that rank discarded — so several instances became
+    /// rows identical in every field, colliding on the same React key.
+    #[test]
+    fn instances_that_differ_only_by_a_discarded_rank_become_one_row() {
+        let json = r#"{
+          "Upgrades": [
+            {"ItemType": "/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare",
+             "UpgradeFingerprint": "{\"lvl\":0}"},
+            {"ItemType": "/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare",
+             "UpgradeFingerprint": "{\"lvl\":5}"},
+            {"ItemType": "/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare",
+             "UpgradeFingerprint": "{\"lvl\":8}"}
+          ]
+        }"#;
+
+        // No rank ladder, exactly as WFM lists a veiled riven.
+        let resolve = |_unique_name: &str| {
+            Some(CatalogEntry {
+                item_key: "key-riven".to_string(),
+                slug: "rifle_riven_mod_veiled".to_string(),
+                name: "Rifle Riven Mod (Veiled)".to_string(),
+                max_rank: None,
+                image_path: None,
+            })
+        };
+        let _ = &resolve;
+        let inventory = parse_inventory(json, &NameLookup::default(), &resolve).expect("parses");
+
+        assert_eq!(inventory.items.len(), 1, "three instances, one indistinguishable row");
+        assert_eq!(inventory.items[0].count, 3, "and their counts add up");
+        assert_eq!(
+            inventory.items[0].category,
+            ItemCategory::Mod,
+            "a riven is a mod and must never appear under arcanes",
         );
     }
 

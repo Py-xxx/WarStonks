@@ -86,12 +86,7 @@ export function usePrivateMessageAlerts(): void {
           );
           void sendPrivateMessageDiscordNotification({
             user: event.user,
-            labels: {
-              title: tActive('notif.event.privateMessage.label'),
-              body,
-              note: tActive('discord.privateMessage.note'),
-              footer: tActive('discord.privateMessage.footer'),
-            },
+            labels: { body, footer: tActive('discord.privateMessage.footer') },
           }).catch(() => undefined);
         }
       } catch {

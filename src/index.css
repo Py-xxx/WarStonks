@@ -4719,84 +4719,97 @@ body {
 }
 
 /* ── CURRENCY STRIP ── */
+/* Platinum leads; the rest support it. The old strip gave all five currencies equal weight
+   and an 8px uppercase label each — below readable size, and redundant once the icon is there.
+   Names now live on hover, which buys back the room the two cramped lines were using. */
 .currency-strip {
   display: flex;
   align-items: center;
-  gap: 1px;
-  background: var(--bg-base);
+  gap: 10px;
+  background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 0 1px;
-  height: 32px;
+  border-radius: 7px;
+  padding: 0 12px;
+  height: 36px;
   flex-shrink: 0;
 }
 
-.currency-item {
+.currency-primary {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 7px;
-  height: 26px;
-  border-radius: 3px;
+  gap: 7px;
   cursor: default;
-  transition: background 0.12s;
-  position: relative;
 }
-.currency-item:hover { background: var(--bg-elevated); }
-.currency-item + .currency-item::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 4px;
-  bottom: 4px;
+.currency-primary-val {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+/* Only appears once platinum has actually moved, so it reads as an event rather than chrome. */
+.currency-delta {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: var(--accent-green);
+  background: rgba(61, 214, 140, 0.12);
+}
+.currency-delta.is-down {
+  color: var(--accent-red);
+  background: rgba(240, 79, 88, 0.12);
+}
+/* Holds its space while flat so the strip's width — and everything right of it in the top
+   bar — doesn't jump the moment a trade changes the balance. */
+.currency-delta {
+  min-width: 34px;
+  text-align: center;
+}
+.currency-delta.is-flat { visibility: hidden; }
+
+.currency-divider {
   width: 1px;
+  height: 18px;
   background: var(--border);
+  flex-shrink: 0;
+}
+
+.currency-secondary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+}
+.currency-secondary-val {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1;
 }
 
 .currency-icon {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  border-radius: 5px;
   flex-shrink: 0;
-  font-weight: 700;
-  line-height: 1;
   overflow: hidden;
 }
+.currency-icon img { width: 100%; height: 100%; object-fit: contain; }
+.currency-primary .currency-icon { width: 19px; height: 19px; }
+.currency-secondary .currency-icon { width: 15px; height: 15px; }
 
-.currency-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
+/* The tint only remains behind platinum. On the secondary icons it was five competing
+   coloured chips fighting the one number that matters. */
+.currency-primary .ci-platinum { background: rgba(160, 180, 255, 0.16); }
 
-.ci-platinum .currency-icon { background: rgba(160,180,255,0.15); color: #A0B4FF; border: 1px solid rgba(160,180,255,0.25); }
-.ci-credits  .currency-icon { background: rgba(240,160,48,0.15);  color: #F0A030; border: 1px solid rgba(240,160,48,0.25); }
-.ci-endo     .currency-icon { background: rgba(139,111,255,0.15); color: #8B6FFF; border: 1px solid rgba(139,111,255,0.25); }
-.ci-ducats   .currency-icon { background: rgba(255,210,80,0.15);  color: #FFD250; border: 1px solid rgba(255,210,80,0.25); }
-.ci-aya      .currency-icon { background: rgba(61,214,140,0.15);  color: #3DD68C; border: 1px solid rgba(61,214,140,0.25); }
-
-.currency-info { display: flex; flex-direction: column; gap: 0px; }
-.currency-name {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  line-height: 1;
-}
-.currency-val {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: 1.2;
-}
-.currency-val.no-data { color: var(--text-muted); }
+.currency-primary-val.no-data,
+.currency-secondary-val.no-data { color: var(--text-muted); }
 
 .settings-btn {
   width: 36px; height: 36px;
@@ -4826,6 +4839,9 @@ body {
 .settings-backdrop {
   z-index: 300;
 }
+
+/* Above the app, below the relic panel it dims. */
+.modal-backdrop:has(> .af-relic-modal) { z-index: 355; }
 
 .modal-backdrop {
   z-index: 340;
@@ -4996,6 +5012,10 @@ body {
   color: var(--text-secondary);
   line-height: 1.5;
 }
+
+/* The one setting whose "off" state silently empties the inventory, relic and currency views
+   — worth reading as a warning rather than as more description. */
+.settings-nav-recommend { color: var(--accent-red); }
 
 .settings-form-card,
 .settings-preview-card {
@@ -13232,6 +13252,18 @@ img[data-asset-failed='true'] {
   width: 100%;
 }
 
+/* Temporary — remove when the guide is rewritten for the local-source pivot. */
+.guide-stale-banner {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(240, 160, 48, 0.32);
+  border-radius: 8px;
+  background: rgba(240, 160, 48, 0.1);
+  color: var(--accent-amber);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .guide-intro {
   color: var(--text-secondary);
   font-family: 'Inter', 'Noto Sans SC', sans-serif;
@@ -13495,11 +13527,12 @@ img[data-asset-failed='true'] {
 .topbar-search-refresh:active:not(:disabled) { transform: translateY(0) scale(0.96); }
 
 .currency-strip {
-  border-radius: 8px;
+  border-radius: 7px;
   background: linear-gradient(180deg, #0E1118, #0C0F15);
 }
 .currency-icon { transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1); }
-.currency-item:hover .currency-icon { transform: scale(1.14); }
+.currency-primary:hover .currency-icon,
+.currency-secondary:hover .currency-icon { transform: scale(1.14); }
 
 /* ── Sidebar ── */
 .sidebar {
@@ -15481,6 +15514,97 @@ img[data-asset-failed='true'] {
   font-size: 10px;
   color: var(--accent-green);
 }
+/* Relic drop table. Values come from the same scanner results "what to farm now" reads, so
+   the two tabs can never quote different prices for the same drop. */
+/* Carries its own surface. There is no generic `.modal` class in this codebase — the only
+   modal surface is `.settings-modal`, which is fixed at 760px and wrong for a drop table. */
+.af-relic-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, 92vw);
+  max-height: min(640px, calc(100vh - 96px));
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid rgba(74, 158, 255, 0.18);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.34);
+  z-index: 360;
+  cursor: default;
+}
+.af-relic-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.af-relic-modal-head h3 { margin: 2px 0 0; font-size: 15px; }
+.af-relic-expected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.af-relic-expected strong {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 14px;
+  color: var(--accent-green);
+}
+.af-relic-drops { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.af-relic-drop {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 48px 52px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.af-relic-drop:hover { background: var(--bg-elevated); }
+.af-relic-drop-thumb {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.af-relic-drop-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.af-relic-drop-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.af-relic-drop-chance,
+.af-relic-drop-value {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  text-align: right;
+}
+.af-relic-drop-chance { color: var(--text-secondary); }
+.af-relic-drop-value { color: var(--accent-green); }
+
+/* A relic tile opens its drop table, so it is a button — but must not look like one. */
+.af-tile-button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+.af-tile-button:hover { border-color: var(--accent-blue); }
+
 .af-inv-table { width: 100%; border-collapse: collapse; }
 .af-inv-table th {
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;

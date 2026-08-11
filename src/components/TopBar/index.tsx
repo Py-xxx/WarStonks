@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useRef, useState, useMemo } from 'react';
 import type { KeyboardEvent } from 'react';
 import { AlertsPanel } from '../AlertsPanel';
 import { walletIcons } from '../../assets/wallet';
@@ -51,6 +51,46 @@ const ChevronDownIcon = () => (
   </svg>
 );
 
+/**
+ * Compact figures for the secondary currencies.
+ *
+ * Credits run into the millions and endo into the tens of thousands; at full precision they
+ * dominate a strip whose point is platinum. Platinum itself is never abbreviated — it is the
+ * working number and the exact value matters.
+ */
+/**
+ * The four currencies that ride behind platinum, in the order they appear.
+ *
+ * Held as data rather than five copy-pasted blocks: they render identically, and the previous
+ * markup repeated the same eight lines per currency.
+ */
+const SECONDARY_CURRENCIES = [
+  { key: 'credits', icon: walletIcons.credits, labelKey: 'bal.credits' },
+  { key: 'endo', icon: walletIcons.endo, labelKey: 'bal.endo' },
+  { key: 'ducats', icon: walletIcons.ducats, labelKey: 'bal.ducats' },
+  { key: 'aya', icon: walletIcons.aya, labelKey: 'bal.aya' },
+] as const satisfies ReadonlyArray<{
+  key: 'credits' | 'endo' | 'ducats' | 'aya';
+  icon: string;
+  labelKey: TranslationKey;
+}>;
+
+function formatCompactCurrencyValue(value: number | null, loading: boolean): string {
+  if (loading) {
+    return '…';
+  }
+  if (value === null) {
+    return '-';
+  }
+  if (Math.abs(value) >= 1000) {
+    return new Intl.NumberFormat(undefined, {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    }).format(value);
+  }
+  return new Intl.NumberFormat().format(value);
+}
+
 function formatCurrencyValue(value: number | null, loading: boolean): string {
   if (loading) {
     return '…';
@@ -92,7 +132,18 @@ export function TopBar() {
   const setSelectedMarketVariantKey = useAppStore((s) => s.setSelectedMarketVariantKey);
   const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
   const walletSnapshot = useAppStore((s) => s.walletSnapshot);
+  const walletSessionPlatinum = useAppStore((s) => s.walletSessionPlatinum);
   const walletLoading = useAppStore((s) => s.walletLoading);
+  /** Platinum moved since the app opened. Hidden at zero — a "+0" chip is noise, and this is
+   *  meant to catch the eye only when a trade has actually changed the balance. */
+  const platinumDelta = useMemo(() => {
+    const current = walletSnapshot.balances.platinum;
+    if (current === null || walletSessionPlatinum === null) {
+      return null;
+    }
+    const delta = current - walletSessionPlatinum;
+    return delta === 0 ? null : delta;
+  }, [walletSnapshot.balances.platinum, walletSessionPlatinum]);
   const openSettingsSidebar = useAppStore((s) => s.openSettingsSidebar);
   const openItemInQuickView = useAppStore((s) => s.openItemInQuickView);
   const navigationBack = useAppStore((s) => s.navigationBack);
@@ -489,61 +540,43 @@ export function TopBar() {
       {/* role="group" (not "status"): balances update on every poll, and a live region would
           re-announce all of them on each refresh. */}
       <div className="currency-strip" role="group" aria-label={t('a11y.currencyBalances')}>
-        <div className="currency-item ci-platinum">
-          <div className="currency-icon">
+        <div className="currency-primary" title={t('bal.platinum')}>
+          <span className="currency-icon ci-platinum">
             <img src={walletIcons.platinum} alt="" />
-          </div>
-          <div className="currency-info">
-            <span className="currency-name">{t('bal.platinum')}</span>
-            <span className={`currency-val${walletSnapshot.balances.platinum === null ? ' no-data' : ''}`}>
-              {formatCurrencyValue(walletSnapshot.balances.platinum, walletLoading)}
+          </span>
+          <span
+            className={`currency-primary-val${walletSnapshot.balances.platinum === null ? ' no-data' : ''}`}
+          >
+            {formatCurrencyValue(walletSnapshot.balances.platinum, walletLoading)}
+          </span>
+          {/* Always rendered, hidden when flat: showing it only on a change made the strip
+              grow by ~35px the instant a trade landed, shunting everything right of it. */}
+          <span
+            className={`currency-delta${platinumDelta === null ? ' is-flat' : ''}${
+              (platinumDelta ?? 0) < 0 ? ' is-down' : ''
+            }`}
+            aria-hidden={platinumDelta === null}
+          >
+            {platinumDelta === null
+              ? ''
+              : `${platinumDelta > 0 ? '+' : ''}${new Intl.NumberFormat().format(platinumDelta)}`}
+          </span>
+        </div>
+
+        <span className="currency-divider" aria-hidden="true" />
+
+        {SECONDARY_CURRENCIES.map(({ key, icon, labelKey }) => (
+          <div key={key} className="currency-secondary" title={t(labelKey)}>
+            <span className={`currency-icon ci-${key}`}>
+              <img src={icon} alt="" />
+            </span>
+            <span
+              className={`currency-secondary-val${walletSnapshot.balances[key] === null ? ' no-data' : ''}`}
+            >
+              {formatCompactCurrencyValue(walletSnapshot.balances[key], walletLoading)}
             </span>
           </div>
-        </div>
-        <div className="currency-item ci-credits">
-          <div className="currency-icon">
-            <img src={walletIcons.credits} alt="" />
-          </div>
-          <div className="currency-info">
-            <span className="currency-name">{t('bal.credits')}</span>
-            <span className={`currency-val${walletSnapshot.balances.credits === null ? ' no-data' : ''}`}>
-              {formatCurrencyValue(walletSnapshot.balances.credits, walletLoading)}
-            </span>
-          </div>
-        </div>
-        <div className="currency-item ci-endo">
-          <div className="currency-icon">
-            <img src={walletIcons.endo} alt="" />
-          </div>
-          <div className="currency-info">
-            <span className="currency-name">{t('bal.endo')}</span>
-            <span className={`currency-val${walletSnapshot.balances.endo === null ? ' no-data' : ''}`}>
-              {formatCurrencyValue(walletSnapshot.balances.endo, walletLoading)}
-            </span>
-          </div>
-        </div>
-        <div className="currency-item ci-ducats">
-          <div className="currency-icon">
-            <img src={walletIcons.ducats} alt="" />
-          </div>
-          <div className="currency-info">
-            <span className="currency-name">{t('bal.ducats')}</span>
-            <span className={`currency-val${walletSnapshot.balances.ducats === null ? ' no-data' : ''}`}>
-              {formatCurrencyValue(walletSnapshot.balances.ducats, walletLoading)}
-            </span>
-          </div>
-        </div>
-        <div className="currency-item ci-aya">
-          <div className="currency-icon">
-            <img src={walletIcons.aya} alt="" />
-          </div>
-          <div className="currency-info">
-            <span className="currency-name">{t('bal.aya')}</span>
-            <span className={`currency-val${walletSnapshot.balances.aya === null ? ' no-data' : ''}`}>
-              {formatCurrencyValue(walletSnapshot.balances.aya, walletLoading)}
-            </span>
-          </div>
-        </div>
+        ))}
       </div>
 
       <div className="topbar-right">

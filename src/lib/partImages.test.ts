@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
-import { KNOWN_PARTS, partKeyForSlug } from './partImages.ts';
+import { KNOWN_PARTS, partKeyForSlug, registerNeverOverrideSlugs } from './partImages.ts';
 
 const ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), '../assets/partImages');
 
@@ -64,4 +64,27 @@ test('sets and whole items are not components', () => {
   assert.equal(partKeyForSlug('stock'), null);
   assert.equal(partKeyForSlug(null), null);
   assert.equal(partKeyForSlug(''), null);
+});
+
+/**
+ * "Conductive Blade" and "Tempered Blade" are mods, not components — but their slugs end in a
+ * part word, so the naming rule replaced their card art with a sword blade. Nothing in the slug
+ * distinguishes them from `boltor_blade`; only the catalog's item family does.
+ */
+test('mods and arcanes named like parts keep their own art', () => {
+  // Before the catalog answers, the rule cannot know — this is the bug's original behaviour.
+  assert.equal(partKeyForSlug('conductive_blade'), 'blade');
+
+  registerNeverOverrideSlugs([
+    'conductive_blade',
+    'tempered_blade',
+    // A mod that could never collide is not worth remembering.
+    'serration',
+  ]);
+
+  assert.equal(partKeyForSlug('conductive_blade'), null);
+  assert.equal(partKeyForSlug('tempered_blade'), null);
+  // Real components are untouched by the exclusion.
+  assert.equal(partKeyForSlug('boltor_prime_barrel'), 'barrel_prime');
+  assert.equal(partKeyForSlug('dakra_prime_blade'), 'blade_prime');
 });

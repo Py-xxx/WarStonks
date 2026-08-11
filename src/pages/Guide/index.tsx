@@ -163,6 +163,12 @@ export function GuidePage() {
       </div>
 
       <div className="page-content guide-page-content">
+        {/* Temporary. The guide predates the local-source pivot, so parts of it describe an
+            app that no longer exists — say so rather than let it quietly mislead. */}
+        <div className="guide-stale-banner" role="status">
+          {t('guide.staleNotice')}
+        </div>
+
         <div className="guide-intro">{t('guide.intro')}</div>
 
         {visibleSections.length === 0 ? (
