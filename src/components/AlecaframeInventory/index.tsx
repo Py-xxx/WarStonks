@@ -14,7 +14,26 @@ const TAB_CATEGORY: Record<AlecaframeInventoryTab, AlecaframeItemCategory> = {
   arcanes: 'arcane',
 };
 
-type SortKey = 'name' | 'count';
+type SortKey = 'name' | 'count' | 'rank';
+
+/** Rank as a proportion of this item's own maximum.
+ *
+ *  Sorting on the raw level would be wrong across items with different caps — a 5/5 arcane
+ *  is fully ranked while a 7/10 mod is not, yet 7 > 5. Unrankable items sort last rather
+ *  than pretending to be rank 0. */
+function rankFraction(item: AlecaframeItem): number {
+  if (item.rank === null || item.maxRank === null || item.maxRank <= 0) {
+    return -1;
+  }
+  return item.rank / item.maxRank;
+}
+
+function formatRank(item: AlecaframeItem): string {
+  if (item.rank === null || item.maxRank === null) {
+    return '—';
+  }
+  return `${item.rank}/${item.maxRank}`;
+}
 
 /**
  * AlecaFrame-sourced inventory for one category.
@@ -33,7 +52,6 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const [sortKey, setSortKey] = useState<SortKey>('count');
-  const [hideUnresolved, setHideUnresolved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,19 +91,30 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
 
     return inventory.items
       .filter((item) => item.category === category)
-      .filter((item) => (hideUnresolved ? item.nameResolved : true))
       .filter((item) => (query ? item.name.toLowerCase().includes(query) : true))
-      .sort((left, right) =>
-        sortKey === 'count'
-          ? right.count - left.count || left.name.localeCompare(right.name)
-          : left.name.localeCompare(right.name),
-      );
-  }, [inventory, tab, deferredSearch, sortKey, hideUnresolved]);
+      .sort((left, right) => {
+        if (sortKey === 'rank') {
+          return (
+            rankFraction(right) - rankFraction(left) ||
+            left.name.localeCompare(right.name)
+          );
+        }
+        if (sortKey === 'count') {
+          return right.count - left.count || left.name.localeCompare(right.name);
+        }
+        return (
+          left.name.localeCompare(right.name) || rankFraction(right) - rankFraction(left)
+        );
+      });
+  }, [inventory, tab, deferredSearch, sortKey]);
 
   const totalCount = useMemo(
     () => rows.reduce((sum, item) => sum + item.count, 0),
     [rows],
   );
+
+  // Prime parts never rank, so the column would be a wall of dashes.
+  const showsRank = tab !== 'prime-parts';
 
   if (loading) {
     return <div className="af-inv-state">{t('inv.loading')}</div>;
@@ -127,20 +156,8 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
         >
           <option value="count">{t('inv.sortCount')}</option>
           <option value="name">{t('inv.sortName')}</option>
+          {showsRank ? <option value="rank">{t('inv.sortRank')}</option> : null}
         </select>
-        {/* ~7% of a real inventory is newer than AlecaFrame's cached codex and shows its
-            raw /Lotus/... path. Hiding them is a convenience, never the default — the
-            gap should be visible. */}
-        {inventory.unresolvedNameCount > 0 ? (
-          <label className="af-inv-check">
-            <input
-              type="checkbox"
-              checked={hideUnresolved}
-              onChange={(event) => setHideUnresolved(event.target.checked)}
-            />
-            {t('inv.hideUnnamed')}
-          </label>
-        ) : null}
         <span className="af-inv-meta">
           {t('inv.stackSummary', { stacks: String(rows.length), total: String(totalCount) })}
           {syncedAt ? ` · ${t('inv.syncedAgo', { time: formatElapsedTime(syncedAt) })}` : ''}
@@ -154,13 +171,18 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
           <thead>
             <tr>
               <th>{t('inv.colItem')}</th>
+              {showsRank ? <th>{t('inv.colRank')}</th> : null}
               <th>{t('inv.colOwned')}</th>
               <th>{t('inv.colValue')}</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((item) => (
-              <InventoryRow key={`${item.bucket}:${item.uniqueName}`} item={item} />
+              <InventoryRow
+                key={`${item.bucket}:${item.uniqueName}:${item.rank ?? 'na'}`}
+                item={item}
+                showsRank={showsRank}
+              />
             ))}
           </tbody>
         </table>
@@ -169,22 +191,17 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
   );
 }
 
-function InventoryRow({ item }: { item: AlecaframeItem }) {
-  const { t } = useTranslation();
+function InventoryRow({ item, showsRank }: { item: AlecaframeItem; showsRank: boolean }) {
   return (
     <tr>
       <td>
-        <span className={`af-inv-name${item.nameResolved ? '' : ' unresolved'}`}>{item.name}</span>
-        {!item.nameResolved ? (
-          <span className="af-inv-badge" title={t('inv.unnamedHelp')}>
-            {t('inv.unnamed')}
-          </span>
-        ) : null}
+        <span className="af-inv-name">{item.name}</span>
       </td>
+      {showsRank ? <td className="af-inv-num af-inv-rank">{formatRank(item)}</td> : null}
       <td className="af-inv-num">{item.count}</td>
-      {/* Placeholder: per-item valuation needs uniqueName -> WFM slug resolution (the
-          catalog step) and a price book that survives restart. Rendered as an explicit
-          dash so the column exists and stays visible rather than being retrofitted. */}
+      {/* Placeholder. The slug bridge now exists (item.slug / item.itemKey are populated),
+          so what remains is a price book that survives restart — `recommended_prices` is
+          in-memory and only covers items the scanner has touched. */}
       <td className="af-inv-num af-inv-muted">—</td>
     </tr>
   );

@@ -15369,24 +15369,8 @@ img[data-asset-failed='true'] {
   font-variant-numeric: tabular-nums;
 }
 .af-inv-muted { color: var(--text-muted); }
+.af-inv-rank { color: var(--text-secondary); white-space: nowrap; }
 .af-inv-table tr:hover td { background: var(--bg-elevated); }
-/* An item newer than AlecaFrame's cached codex shows its raw path — dimmed and badged so
-   it reads as a known gap rather than a corrupted name. */
-.af-inv-name.unresolved {
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-}
-.af-inv-badge {
-  margin-left: 6px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 .af-inv-state {
   padding: 24px 12px;
   text-align: center;

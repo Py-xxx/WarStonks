@@ -178,13 +178,24 @@ pub struct AlecaframeAccount {
 pub struct AlecaframeItem {
     pub unique_name: String,
     pub name: String,
+    /// WFM slug. Present for every item that survives the tradability filter, and the hook
+    /// a future price lookup hangs off.
+    pub slug: String,
+    /// WFM item id, for the same reason.
+    pub item_key: String,
+    /// How many of this item **at this rank**. Ranks are never merged: five Arcane Hot Shot
+    /// at rank 0 and one at rank 5 are different goods with different prices, so they are
+    /// separate rows.
     pub count: i64,
+    /// Current rank. `None` for items where rank is meaningless (prime parts).
+    pub rank: Option<i64>,
+    /// Max rank for this item, from the catalog. Needed because mods cap at different
+    /// levels — a 5/5 is fully ranked while a 7/10 is not.
+    pub max_rank: Option<i64>,
     /// Which inventory list it came from. Kept because the same item type can live in two
     /// buckets — arcanes split across `RawUpgrades` (unranked) and `Upgrades` (ranked).
     pub bucket: String,
     pub category: ItemCategory,
-    /// Whether the display name resolved, so the UI can show the gap honestly.
-    pub name_resolved: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,8 +205,10 @@ pub struct AlecaframeInventory {
     /// Authoritative "as of", decoded from `LastInventorySync`. Unix seconds.
     pub last_inventory_sync: Option<i64>,
     pub items: Vec<AlecaframeItem>,
-    /// How many items fell back to their raw `/Lotus/...` path.
-    pub unresolved_name_count: usize,
+    /// Items dropped because the WFM catalog has no entry for them — Roller Balls, ability
+    /// overrides, non-prime frame parts. Surfaced as a count so the filter is visible rather
+    /// than silently swallowing things.
+    pub untradable_count: usize,
 }
 
 /// Stacked buckets: `{ItemType, ItemCount}` per entry.
@@ -205,7 +218,52 @@ fn account_i64(root: &Value, key: &str) -> i64 {
     root.get(key).and_then(Value::as_i64).unwrap_or(0)
 }
 
-pub fn parse_inventory(json: &str, names: &NameLookup) -> Result<AlecaframeInventory> {
+/// Resolves a `uniqueName` to its WFM catalog entry.
+///
+/// This is both the naming fix and the tradability filter, because they are the same
+/// question. WFM's `gameRef` *is* the game's `/Lotus/...` path, so the catalog's existing
+/// lookup tiers resolve these directly — measured at 99.3% of prime parts, 96.5% of mods
+/// and 95.8% of arcanes against a real inventory.
+///
+/// Failing to resolve is meaningful, not an error: **not being in WFM's catalog is what
+/// "not tradable" means.** Roller Balls, ability overrides and non-prime frame parts drop
+/// out here, while genuinely tradable non-prime items (Perigale, Athodai, Parallax parts)
+/// survive — which no "is it Prime?" name heuristic could get right.
+///
+/// It also fixes names AlecaFrame's own codex can't: `AvatarSlideBoostMod` is **Maglev**,
+/// `StatusChanceOnUltimateHit` is **Zid-an Asheir**, and `...HelmetBlueprint` is
+/// **Neuroptics**, never "Helmet".
+#[derive(Debug, Clone)]
+pub struct CatalogEntry {
+    pub item_key: String,
+    pub slug: String,
+    pub name: String,
+    /// `None` for items that do not rank at all.
+    pub max_rank: Option<i64>,
+}
+
+type CatalogResolver<'a> = dyn Fn(&str) -> Option<CatalogEntry> + 'a;
+
+/// Reads the rank out of an instanced upgrade's fingerprint.
+///
+/// The fingerprint is JSON embedded in a JSON string, so it needs parsing twice. `lvl` is
+/// 0-indexed and **absent rather than zero** on an unranked instance, so a missing key
+/// means rank 0, not "unknown". Rivens carry a much larger fingerprint (`compat`, `buffs`,
+/// `curses`); they still expose `lvl` when ranked and are handled by the same path.
+fn fingerprint_rank(entry: &Value) -> i64 {
+    entry
+        .get("UpgradeFingerprint")
+        .and_then(Value::as_str)
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|parsed| parsed.get("lvl").and_then(Value::as_i64))
+        .unwrap_or(0)
+}
+
+pub fn parse_inventory(
+    json: &str,
+    names: &NameLookup,
+    resolve: &CatalogResolver<'_>,
+) -> Result<AlecaframeInventory> {
     let root: Value =
         serde_json::from_str(json).context("decrypted AlecaFrame payload is not valid JSON")?;
 
@@ -224,7 +282,39 @@ pub fn parse_inventory(json: &str, names: &NameLookup) -> Result<AlecaframeInven
         .and_then(object_id_timestamp);
 
     let mut items = Vec::new();
-    let mut unresolved_name_count = 0;
+    let mut untradable_count = 0;
+
+    let push = |unique_name: &str,
+                count: i64,
+                bucket: &str,
+                rank: Option<i64>,
+                items: &mut Vec<AlecaframeItem>| {
+        match resolve(unique_name) {
+            Some(entry) => {
+                items.push(AlecaframeItem {
+                    unique_name: unique_name.to_string(),
+                    // WFM's name, not AlecaFrame's — keeps the inventory consistent with the
+                    // Market, watchlist and trade log, which all name items this way.
+                    name: if entry.name.is_empty() {
+                        names.resolve(unique_name)
+                    } else {
+                        entry.name
+                    },
+                    slug: entry.slug,
+                    item_key: entry.item_key,
+                    count,
+                    // Rank only means something for items that rank; a prime part reporting
+                    // "rank 0" would be noise.
+                    rank: entry.max_rank.and(rank),
+                    max_rank: entry.max_rank,
+                    bucket: bucket.to_string(),
+                    category: categorize(unique_name),
+                });
+                true
+            }
+            None => false,
+        }
+    };
 
     for bucket in STACK_BUCKETS {
         let Some(entries) = root.get(bucket).and_then(Value::as_array) else {
@@ -235,46 +325,34 @@ pub fn parse_inventory(json: &str, names: &NameLookup) -> Result<AlecaframeInven
                 continue;
             };
             let count = entry.get("ItemCount").and_then(Value::as_i64).unwrap_or(0);
-            let name = names.resolve(unique_name);
-            let name_resolved = name != unique_name;
-            if !name_resolved {
-                unresolved_name_count += 1;
+            // `RawUpgrades` is by definition the unranked stack, so anything rankable here
+            // is rank 0.
+            let rank = (bucket == "RawUpgrades").then_some(0);
+            if !push(unique_name, count, bucket, rank, &mut items) {
+                untradable_count += 1;
             }
-            items.push(AlecaframeItem {
-                unique_name: unique_name.to_string(),
-                name,
-                count,
-                bucket: bucket.to_string(),
-                category: categorize(unique_name),
-                name_resolved,
-            });
         }
     }
 
     // `Upgrades` holds ranked/instanced mods, arcanes and rivens — one object per instance
-    // rather than a stack, so identical types are collapsed into a count here. Skipping
-    // this bucket entirely would report zero ranked arcanes, which is the classic mistake.
+    // rather than a stack. Skipping this bucket entirely would report zero ranked arcanes,
+    // which is the classic mistake. Instances are collapsed by **(item, rank)** rather than
+    // by item alone: a rank-5 arcane and a rank-0 one are separately priced goods, so
+    // merging them into "6x Arcane Hot Shot" would hide the only thing that matters.
     if let Some(entries) = root.get("Upgrades").and_then(Value::as_array) {
-        let mut instanced: HashMap<&str, i64> = HashMap::new();
+        let mut instanced: HashMap<(&str, i64), i64> = HashMap::new();
         for entry in entries {
             if let Some(unique_name) = entry.get("ItemType").and_then(Value::as_str) {
-                *instanced.entry(unique_name).or_insert(0) += 1;
+                *instanced.entry((unique_name, fingerprint_rank(entry))).or_insert(0) += 1;
             }
         }
-        for (unique_name, count) in instanced {
-            let name = names.resolve(unique_name);
-            let name_resolved = name != unique_name;
-            if !name_resolved {
-                unresolved_name_count += 1;
+        // HashMap order is arbitrary; sort so equal-count rows don't shuffle between reads.
+        let mut instanced: Vec<_> = instanced.into_iter().collect();
+        instanced.sort_by(|left, right| left.0.cmp(&right.0));
+        for ((unique_name, rank), count) in instanced {
+            if !push(unique_name, count, "Upgrades", Some(rank), &mut items) {
+                untradable_count += 1;
             }
-            items.push(AlecaframeItem {
-                unique_name: unique_name.to_string(),
-                name,
-                count,
-                bucket: "Upgrades".to_string(),
-                category: categorize(unique_name),
-                name_resolved,
-            });
         }
     }
 
@@ -283,13 +361,14 @@ pub fn parse_inventory(json: &str, names: &NameLookup) -> Result<AlecaframeInven
             .count
             .cmp(&left.count)
             .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.rank.cmp(&right.rank))
     });
 
     Ok(AlecaframeInventory {
         account,
         last_inventory_sync,
         items,
-        unresolved_name_count,
+        untradable_count,
     })
 }
 
@@ -316,7 +395,25 @@ pub fn read_alecaframe_inventory() -> Result<Option<AlecaframeInventory>, String
     let json = decrypt_last_data(&blob).map_err(|error| error.to_string())?;
     let directory = path.parent().unwrap_or(Path::new("."));
     let names = load_name_lookup(directory);
-    parse_inventory(&json, &names)
+
+    // Without the catalog every item would read as untradable and the inventory would come
+    // back empty — which looks identical to "you own nothing". Say so instead.
+    let catalog = crate::item_catalog_v2::open_catalog_v2_from_remembered_path()
+        .ok_or_else(|| "Item catalog is not ready yet — try again once startup finishes.".to_string())?;
+
+    let resolve = |unique_name: &str| {
+        crate::item_catalog_v2::lookup_item_v2_inner(&catalog, unique_name)
+            .ok()
+            .flatten()
+            .map(|item| CatalogEntry {
+                item_key: item.item_key,
+                slug: item.slug,
+                name: item.name_en,
+                max_rank: item.max_rank,
+            })
+    };
+
+    parse_inventory(&json, &names, &resolve)
         .map(Some)
         .map_err(|error| error.to_string())
 }
@@ -333,11 +430,37 @@ mod tests {
             .join("Resources/WFAndAlecaAppData/AlecaFrame App Data Reference")
     }
 
+    /// Stands in for the WFM catalog, which isn't built in unit tests. Accepts anything the
+    /// game marks as a prime part, mod or arcane and rejects the rest — enough to exercise
+    /// the tradability filter without a database.
+    fn stub_resolver(unique_name: &str) -> Option<CatalogEntry> {
+        let tradable = unique_name.contains("Prime")
+            || unique_name.starts_with("/Lotus/Upgrades/Mods/")
+            || unique_name.starts_with("/Lotus/Upgrades/CosmeticEnhancers/");
+        if !tradable {
+            return None;
+        }
+        let leaf = unique_name.rsplit('/').next().unwrap_or(unique_name);
+        Some(CatalogEntry {
+            item_key: format!("key-{leaf}"),
+            slug: leaf.to_lowercase(),
+            name: format!("WFM {leaf}"),
+            // Arcanes cap at 5, mods at 10 here — enough to exercise "different maxima".
+            max_rank: if unique_name.starts_with("/Lotus/Upgrades/CosmeticEnhancers/") {
+                Some(5)
+            } else if unique_name.starts_with("/Lotus/Upgrades/Mods/") {
+                Some(10)
+            } else {
+                None
+            },
+        })
+    }
+
     fn reference_inventory() -> AlecaframeInventory {
         let blob = std::fs::read(reference_dir().join("lastData.dat")).expect("lastData.dat");
         let json = decrypt_last_data(&blob).expect("decrypt");
         let names = load_name_lookup(&reference_dir());
-        parse_inventory(&json, &names).expect("parse")
+        parse_inventory(&json, &names, &stub_resolver).expect("parse")
     }
 
     #[test]
@@ -429,12 +552,97 @@ mod tests {
     }
 
     #[test]
-    fn the_unresolved_name_rate_stays_near_the_documented_seven_percent() {
-        // A sudden jump here means basic.json went stale or the lookup broke — worth
-        // failing on, since the symptom is otherwise just "some items look like paths".
+    fn reads_the_rank_out_of_an_instanced_upgrade() {
+        let ranked = serde_json::json!({ "UpgradeFingerprint": "{\"lvl\":5}" });
+        assert_eq!(fingerprint_rank(&ranked), 5);
+
+        // Absent `lvl` means rank 0, not "unknown" — the game omits it when unranked.
+        let unranked = serde_json::json!({ "UpgradeFingerprint": "{}" });
+        assert_eq!(fingerprint_rank(&unranked), 0);
+        assert_eq!(fingerprint_rank(&serde_json::json!({})), 0);
+
+        // A riven's fingerprint is far larger but exposes `lvl` the same way.
+        let riven = serde_json::json!({
+            "UpgradeFingerprint": "{\"compat\":\"/Lotus/Weapons/X\",\"lvl\":3,\"rerolls\":2}"
+        });
+        assert_eq!(fingerprint_rank(&riven), 3);
+    }
+
+    #[test]
+    fn the_same_item_at_different_ranks_stays_on_separate_rows() {
+        // The whole point: 5x rank-0 and 1x rank-5 Arcane Hot Shot are differently priced
+        // goods. Collapsing them into "6x" would hide the only thing that matters.
+        let payload = serde_json::json!({
+            "Upgrades": [
+                { "ItemType": "/Lotus/Upgrades/CosmeticEnhancers/HotShot", "UpgradeFingerprint": "{\"lvl\":5}" },
+                { "ItemType": "/Lotus/Upgrades/CosmeticEnhancers/HotShot", "UpgradeFingerprint": "{\"lvl\":0}" },
+                { "ItemType": "/Lotus/Upgrades/CosmeticEnhancers/HotShot", "UpgradeFingerprint": "{\"lvl\":0}" },
+            ]
+        })
+        .to_string();
+
+        let inventory =
+            parse_inventory(&payload, &NameLookup::default(), &stub_resolver).expect("parse");
+        assert_eq!(inventory.items.len(), 2, "one row per rank, got {:?}", inventory.items);
+
+        let rank5 = inventory.items.iter().find(|i| i.rank == Some(5)).expect("rank 5 row");
+        let rank0 = inventory.items.iter().find(|i| i.rank == Some(0)).expect("rank 0 row");
+        assert_eq!(rank5.count, 1);
+        assert_eq!(rank0.count, 2);
+        assert_eq!(rank5.max_rank, Some(5));
+    }
+
+    #[test]
+    fn unranked_stacks_are_rank_zero_and_prime_parts_have_no_rank_at_all() {
+        let payload = serde_json::json!({
+            // RawUpgrades is by definition the unranked stack.
+            "RawUpgrades": [
+                { "ItemType": "/Lotus/Upgrades/Mods/Warframe/SomeMod", "ItemCount": 4 }
+            ],
+            // A prime part reporting "rank 0" would be meaningless noise.
+            "MiscItems": [
+                { "ItemType": "/Lotus/Types/Recipes/WarframeRecipes/AshPrimeHelmetBlueprint", "ItemCount": 2 }
+            ]
+        })
+        .to_string();
+
+        let inventory =
+            parse_inventory(&payload, &NameLookup::default(), &stub_resolver).expect("parse");
+        let mod_row = inventory.items.iter().find(|i| i.category == ItemCategory::Mod).unwrap();
+        assert_eq!(mod_row.rank, Some(0));
+        assert_eq!(mod_row.max_rank, Some(10));
+
+        let part = inventory.items.iter().find(|i| i.category == ItemCategory::Blueprint).unwrap();
+        assert_eq!(part.rank, None, "prime parts do not rank");
+        assert_eq!(part.max_rank, None);
+    }
+
+    #[test]
+    fn items_absent_from_the_catalog_are_dropped_as_untradable() {
+        // Not being in WFM's catalog IS what "not tradable" means, so Roller Balls, ability
+        // overrides and non-prime frame parts must not reach the inventory at all.
         let inventory = reference_inventory();
-        assert!(!inventory.items.is_empty());
-        let rate = inventory.unresolved_name_count as f64 / inventory.items.len() as f64;
-        assert!(rate < 0.20, "unresolved name rate {rate:.3} is far above the expected ~0.07");
+        assert!(!inventory.items.is_empty(), "tradable items should survive");
+        assert!(inventory.untradable_count > 0, "reference account holds untradable items");
+        for item in &inventory.items {
+            assert!(!item.slug.is_empty(), "a surviving item must carry its WFM slug");
+            assert!(!item.item_key.is_empty(), "and its WFM item id, for pricing later");
+        }
+    }
+
+    #[test]
+    fn names_come_from_the_catalog_not_alecaframe() {
+        // AlecaFrame's codex cannot name several real items (AvatarSlideBoostMod is Maglev,
+        // ...HelmetBlueprint is Neuroptics). WFM can, and using it keeps the inventory
+        // consistent with the Market, watchlist and trade log.
+        let inventory = reference_inventory();
+        assert!(
+            inventory.items.iter().all(|item| item.name.starts_with("WFM ")),
+            "every name should come from the resolver"
+        );
+        assert!(
+            !inventory.items.iter().any(|item| item.name.starts_with("/Lotus/")),
+            "no raw path should survive into the inventory"
+        );
     }
 }

@@ -1692,13 +1692,21 @@ export interface AlecaframeAccount {
 
 export interface AlecaframeItem {
   uniqueName: string;
+  /** WFM's display name — same naming as Market, watchlist and the trade log. */
   name: string;
+  /** WFM slug; the hook a future price lookup hangs off. */
+  slug: string;
+  /** WFM item id, for the same reason. */
+  itemKey: string;
+  /** How many at THIS rank — ranks are never merged into one row. */
   count: number;
+  /** Current rank; null where rank is meaningless (prime parts). */
+  rank: number | null;
+  /** Max rank for this item. Mods cap at different levels, so 5/5 outranks 7/10. */
+  maxRank: number | null;
   /** Source list. Arcanes appear in both RawUpgrades (unranked) and Upgrades (ranked). */
   bucket: string;
   category: AlecaframeItemCategory;
-  /** False when the name fell back to its raw /Lotus/... path. */
-  nameResolved: boolean;
 }
 
 export interface AlecaframeInventory {
@@ -1706,5 +1714,6 @@ export interface AlecaframeInventory {
   /** Authoritative "as of", unix seconds, decoded from LastInventorySync. Not file mtime. */
   lastInventorySync: number | null;
   items: AlecaframeItem[];
-  unresolvedNameCount: number;
+  /** Dropped because WFM has no entry for them — i.e. not tradable. */
+  untradableCount: number;
 }
