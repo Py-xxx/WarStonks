@@ -15374,6 +15374,113 @@ img[data-asset-failed='true'] {
   color: var(--text-muted);
   white-space: nowrap;
 }
+/* One tile per stack, used on every inventory tab. Roughly four times the density of the
+   table it replaced, and the icon does the identifying so the name can shrink. */
+.af-inv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(102px, 1fr));
+  gap: 7px;
+}
+.af-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  text-align: center;
+}
+.af-tile:hover { border-color: var(--border-strong); background: var(--bg-elevated); }
+.af-tile-count {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+.af-tile-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+}
+.af-tile-icon img { width: 100%; height: 100%; object-fit: contain; }
+.af-tile-icon-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 15px;
+}
+/* Fixed at two lines whether or not the item has a part name. Without this the grid goes
+   ragged — a one-line mod sits shorter than a two-line part, and rows stop aligning. */
+.af-tile-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.3;
+  min-height: 2.6em;
+  justify-content: center;
+}
+.af-tile-name-primary {
+  font-size: 11px;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* With a part name below it, the item name gets one line so the pair still totals two. */
+.af-tile-name:has(.af-tile-name-secondary) .af-tile-name-primary { -webkit-line-clamp: 1; }
+.af-tile-name-secondary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Never wraps. A primed mod has ten pips and a mod card three; letting them wrap made those
+   tiles taller than their neighbours and the whole grid went ragged. They shrink instead. */
+.af-tile-pips {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 3px;
+}
+.af-tile-pips-empty { visibility: hidden; }
+.af-pip {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 9px;
+  height: 3px;
+  border-radius: 2px;
+  /* Must read as an *empty slot*, not as absent. Against the tile, --bg-elevated was so close
+     to the surface that a rank 0/5 item looked like an item with no rank at all. */
+  background: rgba(139, 111, 255, 0.22);
+}
+.af-pip.is-filled { background: var(--accent-purple); }
+.af-tile-refinement { font-size: 10px; color: var(--text-secondary); }
+.af-tile-value {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--accent-green);
+}
 .af-inv-table { width: 100%; border-collapse: collapse; }
 .af-inv-table th {
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;

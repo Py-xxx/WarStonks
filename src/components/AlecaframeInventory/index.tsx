@@ -1,6 +1,8 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { readAlecaframeInventory } from '../../lib/tauriClient';
 import { formatElapsedTime } from '../../lib/dateTime';
+import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { partKeyForSlug } from '../../lib/partImages';
 import { useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import type { AlecaframeInventory, AlecaframeItem, AlecaframeItemCategory } from '../../types';
@@ -65,6 +67,39 @@ function rankFraction(item: AlecaframeItem): number {
     return -1;
   }
   return item.rank / item.maxRank;
+}
+
+/**
+ * Splits an item's name across the tile's two lines: what it is on top, which part of it below.
+ *
+ * "Baruuk Prime Neuroptics Blueprint" reads faster as "Baruuk Prime" over "Neuroptics" than as
+ * one truncated line, and it puts the varying word on its own row so a column of one warframe's
+ * parts scans vertically. The split is driven by the **slug**, which is language-independent and
+ * already tells us whether the item is a component and how many words its part name has.
+ *
+ * Anything that isn't a component keeps its whole name on the first line.
+ */
+function splitItemLabel(item: AlecaframeItem): { primary: string; secondary: string | null } {
+  const partKey = partKeyForSlug(item.slug);
+  if (!partKey) {
+    return { primary: item.name, secondary: null };
+  }
+
+  // `lower_limb` is two words, `barrel` is one; the key tells us which without re-parsing.
+  const partWordCount = partKey.replace(/_prime$/, '').split('_').length;
+  const words = item.name.split(/\s+/).filter(Boolean);
+  // Drop a trailing "Blueprint" so the part word is the last one, matching the slug rule.
+  const last = words[words.length - 1];
+  const trimmed = last?.toLowerCase() === 'blueprint' ? words.slice(0, -1) : words;
+
+  if (trimmed.length <= partWordCount) {
+    return { primary: item.name, secondary: null };
+  }
+
+  return {
+    primary: trimmed.slice(0, -partWordCount).join(' '),
+    secondary: trimmed.slice(-partWordCount).join(' '),
+  };
 }
 
 function formatRank(item: AlecaframeItem, t: TranslateFn): string {
@@ -241,43 +276,80 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
       {rows.length === 0 ? (
         <div className="af-inv-state">{t('inv.noneMatch')}</div>
       ) : (
-        <table className="af-inv-table">
-          <thead>
-            <tr>
-              <th>{t('inv.colItem')}</th>
-              {showsRank ? <th>{t('inv.colRank')}</th> : null}
-              <th>{t('inv.colOwned')}</th>
-              <th>{t('inv.colValue')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((item) => (
-              <InventoryRow
-                key={`${item.bucket}:${item.uniqueName}:${item.refinement ?? item.rank ?? 'na'}`}
-                item={item}
-                showsRank={showsRank}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div className="af-inv-grid">
+          {rows.map((item) => (
+            <InventoryTile
+              key={`${item.bucket}:${item.uniqueName}:${item.refinement ?? item.rank ?? 'na'}`}
+              item={item}
+              showsRank={showsRank}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function InventoryRow({ item, showsRank }: { item: AlecaframeItem; showsRank: boolean }) {
-  const { t } = useTranslation();
+/**
+ * One inventory item.
+ *
+ * The same tile is used on every tab, so the eye learns one layout: icon, name over part, rank
+ * pips where the item ranks, value, and an owned count pinned to the corner. Parts and mods
+ * differ by a single row rather than by shape.
+ */
+function InventoryTile({ item, showsRank }: { item: AlecaframeItem; showsRank: boolean }) {
+  const { primary, secondary } = splitItemLabel(item);
+  // Components resolve to our own part art; everything else keeps Warframe.Market's, which is
+  // already unique per mod and per arcane.
+  const iconUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
+
   return (
-    <tr>
-      <td>
-        <span className="af-inv-name">{item.name}</span>
-      </td>
-      {showsRank ? <td className="af-inv-num af-inv-rank">{formatRank(item, t)}</td> : null}
-      <td className="af-inv-num">{item.count}</td>
-      {/* Placeholder. The slug bridge now exists (item.slug / item.itemKey are populated),
-          so what remains is a price book that survives restart — `recommended_prices` is
-          in-memory and only covers items the scanner has touched. */}
-      <td className="af-inv-num af-inv-muted">—</td>
-    </tr>
+    <article className="af-tile" title={item.name}>
+      <span className="af-tile-count">{item.count}</span>
+      <span className="af-tile-icon" aria-hidden="true">
+        {iconUrl ? (
+          <img src={iconUrl} alt="" loading="lazy" />
+        ) : (
+          <span className="af-tile-icon-fallback">{item.name.charAt(0)}</span>
+        )}
+      </span>
+      <span className="af-tile-name">
+        <span className="af-tile-name-primary">{primary}</span>
+        {secondary ? <span className="af-tile-name-secondary">{secondary}</span> : null}
+      </span>
+      {showsRank ? <RankPips item={item} /> : null}
+      {/* Placeholder until the price book is durable: `recommended_prices` is in-memory and
+          only covers items the scanner has touched, so most tiles would read a stale price. */}
+      <span className="af-tile-value af-inv-muted">—</span>
+    </article>
+  );
+}
+
+/**
+ * Rank drawn the way the game draws it — one pip per level, filled up to the current rank.
+ *
+ * A fraction makes you read and compare; pips are scannable, and they make two stacks of the
+ * same arcane at different ranks obviously different goods rather than a repeated row.
+ * Relics have no levels, so their refinement stays a word.
+ */
+function RankPips({ item }: { item: AlecaframeItem }) {
+  const { t } = useTranslation();
+  if (item.refinement) {
+    return <span className="af-tile-refinement">{formatRank(item, t)}</span>;
+  }
+  if (item.rank === null || item.maxRank === null || item.maxRank <= 0) {
+    return <span className="af-tile-pips af-tile-pips-empty" />;
+  }
+
+  return (
+    <span
+      className="af-tile-pips"
+      role="img"
+      aria-label={t('inv.rankOf', { rank: String(item.rank), max: String(item.maxRank) })}
+    >
+      {Array.from({ length: item.maxRank }, (_, index) => (
+        <span key={index} className={`af-pip${index < (item.rank ?? 0) ? ' is-filled' : ''}`} />
+      ))}
+    </span>
   );
 }

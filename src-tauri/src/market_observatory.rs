@@ -12673,6 +12673,7 @@ mod tests {
             rank: None,
             max_rank: None,
             refinement: None,
+            image_path: None,
             bucket: "MiscItems".to_string(),
             category,
         }

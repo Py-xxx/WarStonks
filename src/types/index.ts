@@ -1743,6 +1743,8 @@ export interface AlecaframeItem {
   maxRank: number | null;
   /** Relic refinement; null for everything that isn't a relic. */
   refinement: 'intact' | 'exceptional' | 'flawless' | 'radiant' | null;
+  /** Warframe.Market art. Components resolve to our own part icon via the slug instead. */
+  imagePath: string | null;
   /** Source list. Arcanes appear in both RawUpgrades (unranked) and Upgrades (ranked). */
   bucket: string;
   category: AlecaframeItemCategory;

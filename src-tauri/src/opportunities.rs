@@ -171,6 +171,14 @@ pub struct CachedSellOrder {
     pub rank: Option<i64>,
     pub your_price: i64,
     pub visible: bool,
+    /// `"sell"` or `"buy"`. Defaulted so payloads cached before buy orders were included still
+    /// deserialize — they only ever held sell orders.
+    #[serde(default = "default_cached_order_type")]
+    pub order_type: String,
+}
+
+fn default_cached_order_type() -> String {
+    "sell".to_string()
 }
 
 /// Flags an active sell listing priced well above where the item actually sells — it's just
@@ -1058,6 +1066,11 @@ pub fn compute_opportunities(app: &tauri::AppHandle) -> anyhow::Result<Vec<Oppor
             .flatten()
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default();
+    // Buy orders now share this cache; everything here is about what the user is *selling*.
+    let cached_orders: Vec<CachedSellOrder> = cached_orders
+        .into_iter()
+        .filter(|order| order.order_type == "sell")
+        .collect();
     let listed_slugs: HashSet<String> = cached_orders
         .iter()
         .filter(|order| order.visible)
@@ -1592,6 +1605,7 @@ mod tests {
 
     fn order(your_price: i64, visible: bool) -> CachedSellOrder {
         CachedSellOrder {
+            order_type: "sell".to_string(),
             order_id: "o1".into(),
             slug: "thing".into(),
             name: "Thing".into(),

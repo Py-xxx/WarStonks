@@ -194,6 +194,9 @@ pub struct AlecaframeItem {
     pub max_rank: Option<i64>,
     /// Relic refinement. `None` for everything that isn't a relic.
     pub refinement: Option<RelicRefinement>,
+    /// Icon for the item. Every inventory tile shows one, so this is not optional in practice
+    /// — an item with no art is one the catalog could not resolve, and those are dropped.
+    pub image_path: Option<String>,
     /// Which inventory list it came from. Kept because the same item type can live in two
     /// buckets — arcanes split across `RawUpgrades` (unranked) and `Upgrades` (ranked).
     pub bucket: String,
@@ -285,6 +288,9 @@ pub struct CatalogEntry {
     pub name: String,
     /// `None` for items that do not rank at all.
     pub max_rank: Option<i64>,
+    /// Warframe.Market art. The frontend swaps in its own component icon when the slug names
+    /// a part, so this is the fallback for everything that isn't one.
+    pub image_path: Option<String>,
 }
 
 type CatalogResolver<'a> = dyn Fn(&str) -> Option<CatalogEntry> + 'a;
@@ -360,6 +366,7 @@ pub fn parse_inventory(
                     rank: entry.max_rank.and(rank),
                     max_rank: entry.max_rank,
                     refinement,
+                    image_path: entry.image_path,
                     bucket: bucket.to_string(),
                     category: categorize(unique_name),
                 });
@@ -474,6 +481,7 @@ pub fn read_alecaframe_inventory(
                 slug: item.slug,
                 name: item.name_en,
                 max_rank: item.max_rank,
+                image_path: item.preferred_image,
             })
     };
 
@@ -625,6 +633,7 @@ pub fn load_inventory_for_internal_use(
                 slug: item.slug,
                 name: item.name_en,
                 max_rank: item.max_rank,
+                image_path: item.preferred_image,
             })
     };
     parse_inventory(&json, &names, &resolve).map(Some)
@@ -663,6 +672,7 @@ mod tests {
             item_key: format!("key-{leaf}"),
             slug: leaf.to_lowercase(),
             name: format!("WFM {leaf}"),
+            image_path: Some(format!("items/images/en/thumbs/{leaf}.png")),
             // Arcanes cap at 5, mods at 10 here — enough to exercise "different maxima".
             max_rank: if unique_name.starts_with("/Lotus/Upgrades/CosmeticEnhancers/") {
                 Some(5)

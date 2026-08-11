@@ -4297,6 +4297,37 @@ fn find_duplicate_trade_record(
     })
 }
 
+/// The user's own listed unit prices, from the cache the trade overview writes.
+///
+/// Read from disk rather than fetched: this runs inside trade-log reconciliation, which has no
+/// business making a network call. An empty map is normal (never signed in, or no listings) and
+/// simply means the split falls back to dividing evenly.
+fn load_listed_unit_prices(app: &tauri::AppHandle) -> HashMap<(String, Option<i64>), i64> {
+    let Ok(Some(json)) = crate::market_observatory::load_trade_sell_orders_json(app) else {
+        return HashMap::new();
+    };
+    let Ok(orders) = serde_json::from_str::<Vec<crate::opportunities::CachedSellOrder>>(&json) else {
+        return HashMap::new();
+    };
+
+    let mut prices = HashMap::new();
+    let mut ambiguous = HashSet::new();
+    for order in orders {
+        let key = (order.slug.clone(), order.rank);
+        // Two listings for one item at different prices state no single price, so they state
+        // nothing usable — better to fall back than to pick one arbitrarily.
+        if let Some(existing) = prices.insert(key.clone(), order.your_price) {
+            if existing != order.your_price {
+                ambiguous.insert(key);
+            }
+        }
+    }
+    for key in ambiguous {
+        prices.remove(&key);
+    }
+    prices
+}
+
 /// A set found *inside* a group, plus how much of each row it consumed.
 struct ContainedSetMatch {
     set: MatchedTradeSet,
@@ -4385,16 +4416,31 @@ fn match_grouped_trade_to_contained_set(
     None
 }
 
+/// A unit price the user themselves put on an item — their own active listing.
+pub(crate) type ListingPriceLookup<'a> = dyn Fn(&str, Option<i64>) -> Option<i64> + 'a;
+
 /// Splits a group's platinum between the set it contains and the rows left over.
 ///
-/// Leftovers keep their own share, worked out from the allocation the rows already carry, and
-/// the set takes the rest. Deriving the set's share by subtraction rather than by its own sum
-/// is what guarantees the parts still add up to exactly what was paid — the trade-log editor
-/// rejects a group that does not reconcile.
+/// **A listing is a stated price, so it is used as one.** If the user has the set listed at 60p
+/// and the trade came to 70p, the set takes 60 and the extras share the remaining 10 — which is
+/// far closer to the truth than dividing 70 evenly across parts of wildly different value. The
+/// same applies to any leftover row the user happens to have listed.
+///
+/// Rows with no listing split whatever is left, weighted by quantity. Two guards keep this
+/// honest rather than merely clever:
+///
+/// * If the listed prices already come to **more** than was actually paid, they are not what
+///   this trade was, so the whole thing falls back to an even split. Trusting them would hand
+///   the unlisted rows a negative value.
+/// * The set's share is always derived by **subtraction**, so the parts reconcile to the total
+///   exactly — the allocation editor rejects a group that does not add up.
 fn split_platinum_between_set_and_leftovers(
     group: &[StoredTradeLogRecord],
     consumed: &HashMap<String, i64>,
     total_platinum: i64,
+    set_slug: &str,
+    set_quantity: i64,
+    listing_price: &ListingPriceLookup<'_>,
 ) -> (i64, Vec<(StoredTradeLogRecord, i64, i64)>) {
     let mut remaining_consumption = consumed.clone();
     let mut leftovers = Vec::new();
@@ -4413,28 +4459,80 @@ fn split_platinum_between_set_and_leftovers(
         if left_over <= 0 {
             continue;
         }
-
-        let row_total = record
-            .allocation_total_platinum
-            .unwrap_or_else(|| record_total_platinum(record));
-        // Pro-rata on the row's own share; a row split in half carries half its platinum.
-        let share = if record.quantity > 0 {
-            row_total * left_over / record.quantity
-        } else {
-            0
-        };
-        leftovers.push((record.clone(), left_over, share.max(0)));
+        leftovers.push((record.clone(), left_over));
     }
 
-    let leftover_total: i64 = leftovers.iter().map(|(_, _, share)| *share).sum();
-    let set_platinum = (total_platinum - leftover_total).max(0);
+    // What the user says each side is worth, where they have said anything at all.
+    let set_listed = listing_price(set_slug, None).map(|unit| unit * set_quantity.max(1));
+    let leftover_listed: Vec<Option<i64>> = leftovers
+        .iter()
+        .map(|(record, quantity)| listing_price(&record.slug, record.rank).map(|unit| unit * quantity))
+        .collect();
 
-    (set_platinum, leftovers)
+    let claimed: i64 = set_listed.unwrap_or(0) + leftover_listed.iter().flatten().sum::<i64>();
+    let all_priced = set_listed.is_some() && leftover_listed.iter().all(Option::is_some);
+    let use_listings = claimed > 0 && (claimed <= total_platinum || all_priced);
+
+    if !use_listings {
+        // No usable listing information: fall back to each row's existing pro-rata share.
+        let priced = leftovers
+            .into_iter()
+            .map(|(record, quantity)| {
+                let row_total = record
+                    .allocation_total_platinum
+                    .unwrap_or_else(|| record_total_platinum(&record));
+                let share = if record.quantity > 0 {
+                    (row_total * quantity / record.quantity).max(0)
+                } else {
+                    0
+                };
+                (record, quantity, share)
+            })
+            .collect::<Vec<_>>();
+        let leftover_total: i64 = priced.iter().map(|(_, _, share)| *share).sum();
+        return ((total_platinum - leftover_total).max(0), priced);
+    }
+
+    // Anything the trade was worth beyond the listed prices belongs to the rows with no stated
+    // price — that is precisely the "and divide the rest between the unlisted items" case.
+    let unlisted_units: i64 = leftovers
+        .iter()
+        .zip(&leftover_listed)
+        .filter(|(_, listed)| listed.is_none())
+        .map(|((_, quantity), _)| *quantity)
+        .sum();
+    let surplus = (total_platinum - claimed).max(0);
+
+    let mut distributed = 0_i64;
+    let mut unlisted_seen = 0_i64;
+    let priced: Vec<(StoredTradeLogRecord, i64, i64)> = leftovers
+        .into_iter()
+        .zip(leftover_listed)
+        .map(|((record, quantity), listed)| {
+            let share = match listed {
+                Some(value) => value,
+                None if unlisted_units > 0 => {
+                    unlisted_seen += quantity;
+                    // Last unlisted row mops up the rounding, so nothing is lost to division.
+                    let running = surplus * unlisted_seen / unlisted_units;
+                    let mine = running - distributed;
+                    distributed = running;
+                    mine
+                }
+                None => 0,
+            };
+            (record, quantity, share)
+        })
+        .collect();
+
+    let leftover_total: i64 = priced.iter().map(|(_, _, share)| *share).sum();
+    ((total_platinum - leftover_total).max(0), priced)
 }
 
 fn collapse_grouped_trade_sets(
     records: &[StoredTradeLogRecord],
     set_definitions: &[(TradeSetRootRecord, Vec<TradeSetComponentRecord>)],
+    listing_price: &ListingPriceLookup<'_>,
 ) -> (Vec<StoredTradeLogRecord>, bool) {
     let mut grouped_records = HashMap::<String, Vec<StoredTradeLogRecord>>::new();
     for record in records {
@@ -4499,8 +4597,14 @@ fn collapse_grouped_trade_sets(
 
         // A group can contain a set *plus* unrelated items. The set takes its share and the
         // extras stay as ordinary rows rather than being swallowed into it.
-        let (set_platinum, leftovers) =
-            split_platinum_between_set_and_leftovers(group, &contained.consumed, total_platinum);
+        let (set_platinum, leftovers) = split_platinum_between_set_and_leftovers(
+            group,
+            &contained.consumed,
+            total_platinum,
+            &matched_set.slug,
+            matched_set.quantity,
+            listing_price,
+        );
 
         let average_unit_platinum = if matched_set.quantity > 0 {
             (set_platinum + (matched_set.quantity / 2)) / matched_set.quantity
@@ -5542,7 +5646,11 @@ fn normalize_trade_entries_for_owned_component_sync(
     }
 
     let set_definitions = load_trade_set_definitions(app)?;
-    Ok(collapse_grouped_trade_sets(&records, &set_definitions).0)
+    let listed = load_listed_unit_prices(app);
+    let listing_price = |slug: &str, rank: Option<i64>| {
+        listed.get(&(slug.to_string(), rank)).copied()
+    };
+    Ok(collapse_grouped_trade_sets(&records, &set_definitions, &listing_price).0)
 }
 
 fn build_owned_set_component_deltas_for_entries(
@@ -6137,7 +6245,11 @@ fn normalize_grouped_trade_sets_inner(
         set_definitions.push((set_root, components));
     }
 
-    let (collapsed_records, changed) = collapse_grouped_trade_sets(&records, &set_definitions);
+    let listed = load_listed_unit_prices(app);
+    let listing_price =
+        |slug: &str, rank: Option<i64>| listed.get(&(slug.to_string(), rank)).copied();
+    let (collapsed_records, changed) =
+        collapse_grouped_trade_sets(&records, &set_definitions, &listing_price);
     if !changed {
         return Ok(false);
     }
@@ -9460,9 +9572,13 @@ pub(crate) fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &
 
     // Cache a slim snapshot of the active sell orders so the opportunities engine can flag
     // overpriced listings without a live WFM fetch (best-effort; never fails the overview).
+    // Buy orders are cached alongside: pricing a detected purchase from the user's own buy
+    // listing needs them, and reconcile has no way to make a network call.
     let cached_orders: Vec<crate::opportunities::CachedSellOrder> = sell_orders
         .iter()
+        .chain(buy_orders.iter())
         .map(|order| crate::opportunities::CachedSellOrder {
+            order_type: order.order_type.clone(),
             order_id: order.order_id.clone(),
             slug: order.slug.clone(),
             name: order.name.clone(),
@@ -11223,6 +11339,7 @@ mod tests {
                     },
                 ],
             )],
+            &no_listings,
         );
 
         assert!(changed);
@@ -11236,6 +11353,11 @@ mod tests {
     }
 
     // Shared fixtures for the cross-source dedup tests below.
+    /// No listings at all — the split then falls back to dividing what was paid.
+    fn no_listings(_slug: &str, _rank: Option<i64>) -> Option<i64> {
+        None
+    }
+
     fn duo_set_definition() -> Vec<(TradeSetRootRecord, Vec<TradeSetComponentRecord>)> {
         vec![(
             TradeSetRootRecord {
@@ -11287,6 +11409,96 @@ mod tests {
         }
     }
 
+    /// The scenario this exists for: a set the user has listed at 60p, traded alongside two
+    /// unrelated items for 70p total. An even split would price the set at ~23p and hand the
+    /// two extras ~23p each — all three wrong. The listing is a stated price, so it is used.
+    #[test]
+    fn a_listed_set_takes_its_listed_price_and_the_extras_share_the_rest() {
+        let mut barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut blueprint = stored_record("r2", "bronco_prime_blueprint", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut extra_a = stored_record("r3", "forma", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut extra_b = stored_record("r4", "orokin_cell", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        for record in [&mut barrel, &mut blueprint, &mut extra_a, &mut extra_b] {
+            record.group_total_platinum = Some(70);
+            record.group_item_count = Some(4);
+        }
+
+        let listed = |slug: &str, _rank: Option<i64>| {
+            (slug == "bronco_prime_set").then_some(60)
+        };
+        let records = vec![barrel, blueprint, extra_a, extra_b];
+        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &listed);
+
+        let set_row = collapsed.iter().find(|r| r.slug == "bronco_prime_set").expect("set row");
+        let a = collapsed.iter().find(|r| r.slug == "forma").expect("forma row");
+        let b = collapsed.iter().find(|r| r.slug == "orokin_cell").expect("orokin cell row");
+
+        assert_eq!(set_row.allocation_total_platinum, Some(60), "the set is worth what it was listed at");
+        assert_eq!(a.allocation_total_platinum, Some(5), "the remaining 10p splits between the two extras");
+        assert_eq!(b.allocation_total_platinum, Some(5));
+        // Still reconciles exactly, or the allocation editor refuses the group.
+        assert_eq!(
+            set_row.allocation_total_platinum.unwrap()
+                + a.allocation_total_platinum.unwrap()
+                + b.allocation_total_platinum.unwrap(),
+            70,
+        );
+    }
+
+    /// A leftover the user has listed is priced from that listing too, not just the set.
+    #[test]
+    fn a_listed_leftover_item_uses_its_own_listing_price() {
+        let mut barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut blueprint = stored_record("r2", "bronco_prime_blueprint", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut extra = stored_record("r3", "forma", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        for record in [&mut barrel, &mut blueprint, &mut extra] {
+            record.group_total_platinum = Some(70);
+            record.group_item_count = Some(3);
+        }
+
+        let listed = |slug: &str, _rank: Option<i64>| match slug {
+            "forma" => Some(25),
+            _ => None,
+        };
+        let records = vec![barrel, blueprint, extra];
+        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &listed);
+
+        let set_row = collapsed.iter().find(|r| r.slug == "bronco_prime_set").expect("set row");
+        let extra_row = collapsed.iter().find(|r| r.slug == "forma").expect("forma row");
+
+        assert_eq!(extra_row.allocation_total_platinum, Some(25));
+        assert_eq!(set_row.allocation_total_platinum, Some(45), "the set takes what is left");
+    }
+
+    /// If the listed prices come to more than was actually paid, they do not describe this
+    /// trade. Using them anyway would hand the unlisted rows a negative value.
+    #[test]
+    fn listings_that_exceed_what_was_paid_are_ignored() {
+        let mut barrel = stored_record("r1", "bronco_prime_barrel", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut blueprint = stored_record("r2", "bronco_prime_blueprint", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        let mut extra = stored_record("r3", "forma", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
+        for record in [&mut barrel, &mut blueprint, &mut extra] {
+            record.group_total_platinum = Some(20);
+            record.group_item_count = Some(3);
+            record.allocation_total_platinum = Some(7);
+        }
+
+        // Listed at 60 but the whole trade was 20 — a heavy discount, not a 60p set.
+        let listed = |slug: &str, _rank: Option<i64>| (slug == "bronco_prime_set").then_some(60);
+        let records = vec![barrel, blueprint, extra];
+        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &listed);
+
+        let set_row = collapsed.iter().find(|r| r.slug == "bronco_prime_set").expect("set row");
+        let extra_row = collapsed.iter().find(|r| r.slug == "forma").expect("forma row");
+
+        assert!(set_row.allocation_total_platinum.unwrap() >= 0);
+        assert_eq!(
+            set_row.allocation_total_platinum.unwrap() + extra_row.allocation_total_platinum.unwrap(),
+            20,
+            "the fallback still reconciles to what was paid",
+        );
+    }
+
     /// A set traded *together with* other items. The exact matcher required the group to be
     /// precisely one set, so this recorded three loose parts and no set at all — losing the
     /// "sold as set" status and its cost basis.
@@ -11306,7 +11518,7 @@ mod tests {
         extra.platinum = 10;
 
         let records = vec![barrel, blueprint, extra];
-        let (collapsed, changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        let (collapsed, changed) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &no_listings);
 
         assert!(changed);
         let set_row = collapsed
@@ -11338,7 +11550,7 @@ mod tests {
         let unrelated = stored_record("r2", "forma", "eelog", Some("g1"), "2026-03-10T09:00:00Z");
 
         let records = vec![barrel, unrelated];
-        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &no_listings);
 
         assert!(
             !collapsed.iter().any(|record| record.slug == "bronco_prime_set"),
@@ -11358,7 +11570,7 @@ mod tests {
         blueprint.group_total_platinum = Some(120);
 
         let records = vec![barrel, blueprint];
-        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        let (collapsed, _) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &no_listings);
 
         let set_row = collapsed
             .iter()
@@ -11389,7 +11601,7 @@ mod tests {
             stored_record("af-2", "bronco_prime_blueprint", "alecaframe", Some("g1"), "2026-03-10T09:05:00.000+00:00"),
         ];
 
-        let (collapsed, _changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        let (collapsed, _changed) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &no_listings);
         assert_eq!(
             collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count(),
             1,
@@ -11410,7 +11622,7 @@ mod tests {
             stored_record("af-1", "bronco_prime_barrel", "alecaframe", Some("g1"), "2026-03-10T09:05:00.000+00:00"),
             stored_record("af-2", "bronco_prime_blueprint", "alecaframe", Some("g1"), "2026-03-10T09:05:00.000+00:00"),
         ];
-        let (collapsed, changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        let (collapsed, changed) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &no_listings);
         assert!(changed);
         // Only the pre-existing WFM set row survives — the AlecaFrame collapse is deduped away.
         let set_rows = collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count();
@@ -11532,7 +11744,7 @@ mod tests {
             stored_record("af-1", "bronco_prime_barrel", "alecaframe", Some("g1"), "2026-03-10T09:03:00.000+00:00"),
             stored_record("af-2", "bronco_prime_blueprint", "alecaframe", Some("g1"), "2026-03-10T09:03:00.000+00:00"),
         ];
-        let (collapsed, _changed) = collapse_grouped_trade_sets(&records, &duo_set_definition());
+        let (collapsed, _changed) = collapse_grouped_trade_sets(&records, &duo_set_definition(), &no_listings);
         let set_rows = collapsed.iter().filter(|r| r.slug == "bronco_prime_set").count();
         assert_eq!(set_rows, 2, "same-source set sales must not be merged");
     }
