@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import {
   isTauriRuntime,
   pollEeLogEvents,
+  recordEeLogTrades,
   sendPrivateMessageDiscordNotification,
 } from '../lib/tauriClient';
 import { fireAlertNotification, loadNotificationSettings } from '../lib/notifications';
@@ -50,6 +51,13 @@ export function usePrivateMessageAlerts(): void {
         }
         // Read settings per batch rather than per mount, so toggling the setting takes
         // effect immediately instead of on the next reload.
+        // Shadow mode: parsed trades are persisted to a separate store for comparison
+        // against WFM detection. They do not reach the trade log.
+        const trades = events.filter((event) => event.kind === 'trade');
+        if (trades.length > 0) {
+          void recordEeLogTrades(trades).catch(() => undefined);
+        }
+
         const settings = loadNotificationSettings();
         for (const event of events) {
           if (event.kind !== 'directMessage') {

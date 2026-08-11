@@ -12,7 +12,7 @@ import {
   getAppSettings,
   getItemAnalytics,
   getItemAnalysis,
-  refreshAlecaframeWalletSnapshot,
+  refreshWalletFromAppdata,
   getItemVariantsForMarket,
   getWfmTradeOverview,
   getWfmItemOrders,
@@ -2209,7 +2209,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ walletLoading: true });
 
     try {
-      const snapshot = await refreshAlecaframeWalletSnapshot();
+      const snapshot = await refreshWalletFromAppdata();
       set({
         walletSnapshot: snapshot,
         walletLoading: false,
@@ -2234,7 +2234,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     backgroundWalletRefreshPromise = (async () => {
       try {
-        const snapshot = await refreshAlecaframeWalletSnapshot();
+        const snapshot = await refreshWalletFromAppdata();
         set({ walletSnapshot: snapshot });
       } catch (error) {
         console.warn('[alecaframe] background wallet refresh failed', error);
@@ -2270,7 +2270,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
 
       try {
-        const snapshot = await refreshAlecaframeWalletSnapshot();
+        const snapshot = await refreshWalletFromAppdata();
         set({
           walletSnapshot: snapshot,
           walletLoading: false,

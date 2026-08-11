@@ -7,8 +7,6 @@ import { wfmLangCode, type AppLanguage } from './language';
 import type {
   ArbitrageScannerProgress,
   ArbitrageScannerState,
-  AlecaframeSettingsInput,
-  AlecaframeValidationResult,
   DiscordWebhookSettingsInput,
   DiscordWatchlistNotificationInput,
   DiscordUnderpricedNotificationInput,
@@ -23,7 +21,6 @@ import type {
   SmartManageLogEntry,
   SmartListingOverrides,
   SmartManageImpact,
-  AlecaframeTradeMigrationInput,
   ItemAnalysisResponse,
   ItemAnalyticsResponse,
   ItemDetailSummary,
@@ -59,11 +56,15 @@ import type {
   WfstatSortie,
   WfstatSyndicateMission,
   RelicTierIcon,
+  AlecaframeSettingsInput,
   WalletSnapshot,
   WfstatVoidTrader,
   AlecaframeInventory,
   DiscordPrivateMessageNotificationInput,
   EeLogEvent,
+  EeLogTradeEvent,
+  ShadowTradeRow,
+  TradeComparison,
   LocalSourceAvailability,
   WfmAutocompleteItem,
   WfmTopSellOrder,
@@ -166,14 +167,6 @@ export async function openExternalUrl(url: string): Promise<void> {
 
 export async function getAppSettings(): Promise<AppSettings> {
   return invoke<AppSettings>('get_app_settings');
-}
-
-export async function testAlecaframePublicLink(
-  publicLink: string,
-): Promise<AlecaframeValidationResult> {
-  return invoke<AlecaframeValidationResult>('test_alecaframe_public_link', {
-    publicLink,
-  });
 }
 
 export async function saveAlecaframeSettings(
@@ -321,8 +314,8 @@ export async function sendAppUpdateDiscordNotification(
   return invoke<boolean>('send_app_update_discord_notification', { input });
 }
 
-export async function refreshAlecaframeWalletSnapshot(): Promise<WalletSnapshot> {
-  return invoke<WalletSnapshot>('refresh_alecaframe_wallet_snapshot');
+export async function refreshWalletFromAppdata(): Promise<WalletSnapshot> {
+  return invoke<WalletSnapshot>('refresh_wallet_from_appdata');
 }
 
 export async function getWorldStateEvents(): Promise<Record<string, unknown>[]> {
@@ -503,6 +496,47 @@ export async function readAlecaframeInventory(): Promise<AlecaframeInventory | n
   return invoke<AlecaframeInventory | null>('read_alecaframe_inventory');
 }
 
+/**
+ * Records trades parsed from `EE.log` into the shadow store.
+ *
+ * Shadow mode: these are kept **separate from the real trade log** so the new parser can be
+ * compared against WFM detection over real trading before the cutover. Nothing here affects
+ * the ledger, P&L, or listings.
+ */
+export async function recordEeLogTrades(trades: EeLogTradeEvent[]): Promise<number> {
+  if (!isTauriRuntime() || trades.length === 0) {
+    return 0;
+  }
+
+  return invoke<number>('record_ee_log_trades', { trades });
+}
+
+export async function getEeLogShadowTrades(): Promise<ShadowTradeRow[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+
+  return invoke<ShadowTradeRow[]>('get_ee_log_shadow_trades');
+}
+
+/**
+ * Compares EE.log trade detection against WFM's, for shadow mode. Read-only diagnostic —
+ * it reads both stores and pairs them, changing nothing.
+ */
+export async function getTradeDetectionComparison(username: string): Promise<TradeComparison> {
+  if (!isTauriRuntime()) {
+    return {
+      rows: [],
+      matchedCount: 0,
+      shadowOnlyCount: 0,
+      wfmOnlyCount: 0,
+      unresolvedItemCount: 0,
+    };
+  }
+
+  return invoke<TradeComparison>('get_trade_detection_comparison', { username });
+}
+
 export async function probeLocalSources(): Promise<LocalSourceAvailability> {
   if (!isTauriRuntime()) {
     return {
@@ -665,13 +699,6 @@ export async function refreshWfmTradeDetection(
   return invoke<TradeDetectionRefreshResult>('refresh_wfm_trade_detection', { username, input });
 }
 
-export async function refreshAlecaframeTradeDetection(
-  username: string,
-  input: TradeDetectionRefreshInput,
-): Promise<TradeDetectionRefreshResult> {
-  return invoke<TradeDetectionRefreshResult>('refresh_alecaframe_trade_detection', { username, input });
-}
-
 export async function getCachedWfmProfileTradeLog(
   username: string,
 ): Promise<PortfolioTradeLogState> {
@@ -702,16 +729,6 @@ export async function setWfmTradeLogKeepItem(
     username,
     orderId,
     keepItem,
-  });
-}
-
-export async function migrateAlecaframeTradeLog(
-  username: string,
-  input: AlecaframeTradeMigrationInput,
-): Promise<PortfolioTradeLogState> {
-  return invoke<PortfolioTradeLogState>('migrate_alecaframe_trade_log', {
-    username,
-    input,
   });
 }
 

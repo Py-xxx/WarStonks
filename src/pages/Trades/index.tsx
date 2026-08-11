@@ -41,6 +41,7 @@ import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
 import { ModalPortal } from '../../components/ModalPortal';
 import { useAppStore } from '../../stores/useAppStore';
+import { TradeDetectionComparison } from '../../components/TradeDetectionComparison';
 import { useTranslation } from '../../i18n';
 import { maybeFireHealthAlert } from '../../lib/tradeHealthAlerts';
 import { tHealth, tSubtype, tTrendSummary } from '../../lib/healthLabels';
@@ -2995,6 +2996,17 @@ export function TradesPage() {
             >
               {t('trades.tab.health')}
             </button>
+            {/* Shadow-mode diagnostic. Temporary — remove once EE.log becomes the only
+                trade source and WFM polling is deleted. */}
+            <button
+              type="button"
+              className={`subtab${tradesSubTab === 'detection' ? ' active' : ''}`}
+              onClick={() => setTradesSubTab('detection')}
+              role="tab"
+              aria-selected={tradesSubTab === 'detection'}
+            >
+              {t('det.tab')}
+            </button>
           </div>
         </div>
         {tradeAccount && tradesSubTab === 'orders' ? (
@@ -3010,6 +3022,7 @@ export function TradesPage() {
           <>
             {tradesSubTab === 'orders' && <ListingsTab />}
             {tradesSubTab === 'health' && <HealthTab />}
+            {tradesSubTab === 'detection' && <TradeDetectionComparison />}
           </>
         )}
       </div>

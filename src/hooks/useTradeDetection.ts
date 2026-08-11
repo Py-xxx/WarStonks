@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import {
-  refreshAlecaframeTradeDetection,
   refreshWfmTradeDetection,
 } from '../lib/tauriClient';
 import { getTradeDetectionRequestPriority } from '../lib/tradeDetectionPriority';
@@ -20,44 +19,11 @@ const WFM_TRADE_IDLE_STREAK_CAP = 3; // 5s → 10s → 20s → 30s
 // Idle backoff is deliberately mild (10s → 20s) rather than absent: it still trims requests when
 // the app sits open untouched for a long time. Error backoff is separate and stays aggressive —
 // hammering an unhealthy server is what causes 503s in the first place.
-const ALECAFRAME_POLL_MIN_MS = 10_000;
-const ALECAFRAME_POLL_MAX_MS = 20_000;
-const ALECAFRAME_IDLE_STREAK_CAP = 1; // 10s → 20s
 // Failure backoff: 30s → 60s → 120s → 180s, independent of the idle cadence.
-const ALECAFRAME_ERROR_BACKOFF_BASE_MS = 30_000;
-const ALECAFRAME_ERROR_BACKOFF_MAX_MS = 180_000;
-const ALECAFRAME_ERROR_STREAK_CAP = 3;
 const WFM_INITIAL_DELAY_MS = 1_000;
-const ALECAFRAME_INITIAL_DELAY_MS = 2_500;
-const MIN_TRADE_REFRESH_GAP_MS = 3_000;
 
 function wfmPollIntervalForStreak(idleStreak: number): number {
   return Math.min(WFM_TRADE_POLL_MIN_MS * 2 ** idleStreak, WFM_TRADE_POLL_MAX_MS);
-}
-
-function alecaframePollIntervalForStreak(idleStreak: number): number {
-  return Math.min(ALECAFRAME_POLL_MIN_MS * 2 ** idleStreak, ALECAFRAME_POLL_MAX_MS);
-}
-
-function alecaframeErrorBackoffMs(errorStreak: number): number {
-  return Math.min(
-    ALECAFRAME_ERROR_BACKOFF_BASE_MS * 2 ** (errorStreak - 1),
-    ALECAFRAME_ERROR_BACKOFF_MAX_MS,
-  );
-}
-
-function computeNextRefreshDelay(
-  preferredAt: number,
-  otherLastStartedAt: number,
-  now: number,
-): number {
-  const preferredDelay = Math.max(0, preferredAt - now);
-  if (!otherLastStartedAt) {
-    return preferredDelay;
-  }
-
-  const safeStartAt = otherLastStartedAt + MIN_TRADE_REFRESH_GAP_MS;
-  return Math.max(preferredDelay, Math.max(0, safeStartAt - now));
 }
 
 export function useTradeDetection() {
@@ -80,14 +46,9 @@ export function useTradeDetection() {
 
     let cancelled = false;
     let wfmInFlight = false;
-    let alecaframeInFlight = false;
     let wfmTimer: ReturnType<typeof setTimeout> | null = null;
-    let alecaframeTimer: ReturnType<typeof setTimeout> | null = null;
     let lastWfmStartedAt = 0;
-    let lastAlecaframeStartedAt = 0;
     let wfmIdleStreak = 0;
-    let alecaframeIdleStreak = 0;
-    let alecaframeErrorStreak = 0;
 
     const scheduleWfm = (preferredAt: number) => {
       if (cancelled) {
@@ -98,24 +59,9 @@ export function useTradeDetection() {
         clearTimeout(wfmTimer);
       }
 
-      const delay = computeNextRefreshDelay(preferredAt, lastAlecaframeStartedAt, Date.now());
+      const delay = Math.max(0, preferredAt - Date.now());
       wfmTimer = setTimeout(() => {
         void runWfm();
-      }, delay);
-    };
-
-    const scheduleAlecaframe = (preferredAt: number) => {
-      if (cancelled) {
-        return;
-      }
-
-      if (alecaframeTimer) {
-        clearTimeout(alecaframeTimer);
-      }
-
-      const delay = computeNextRefreshDelay(preferredAt, lastWfmStartedAt, Date.now());
-      alecaframeTimer = setTimeout(() => {
-        void runAlecaframe();
       }, delay);
     };
 
@@ -147,55 +93,13 @@ export function useTradeDetection() {
       }
     };
 
-    const runAlecaframe = async () => {
-      if (cancelled || alecaframeInFlight) {
-        return;
-      }
-
-      const startedAt = Date.now();
-      lastAlecaframeStartedAt = startedAt;
-      alecaframeInFlight = true;
-      try {
-        const result = await refreshAlecaframeTradeDetection(tradeAccountName, {
-          sessionStartedAt,
-        });
-        if (result.detectedBuys && result.detectedBuys.length > 0) {
-          await handleDetectedBuys(result.detectedBuys);
-        }
-        // A successful call clears any error backoff. Reset to the fast cadence on activity;
-        // otherwise drift to the mild idle cadence.
-        alecaframeErrorStreak = 0;
-        if (result.newTradeCount > 0) {
-          alecaframeIdleStreak = 0;
-        } else {
-          alecaframeIdleStreak = Math.min(alecaframeIdleStreak + 1, ALECAFRAME_IDLE_STREAK_CAP);
-        }
-      } catch (error) {
-        // Errors back off on their own, much steeper curve — retrying fast against an unhealthy
-        // or rate-limited server is what causes 503s. Kept separate from the idle streak so the
-        // idle cadence can stay fast without weakening failure handling.
-        alecaframeErrorStreak = Math.min(alecaframeErrorStreak + 1, ALECAFRAME_ERROR_STREAK_CAP);
-        console.error('[trades] failed to refresh Alecaframe trade detection', error);
-      } finally {
-        alecaframeInFlight = false;
-        const nextDelay =
-          alecaframeErrorStreak > 0
-            ? alecaframeErrorBackoffMs(alecaframeErrorStreak)
-            : alecaframePollIntervalForStreak(alecaframeIdleStreak);
-        scheduleAlecaframe(startedAt + nextDelay);
-      }
-    };
 
     scheduleWfm(Date.now() + WFM_INITIAL_DELAY_MS);
-    scheduleAlecaframe(Date.now() + ALECAFRAME_INITIAL_DELAY_MS);
 
     return () => {
       cancelled = true;
       if (wfmTimer) {
         clearTimeout(wfmTimer);
-      }
-      if (alecaframeTimer) {
-        clearTimeout(alecaframeTimer);
       }
     };
   }, [tradeAccountName, handleDetectedBuys, maintenance]);

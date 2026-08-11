@@ -146,6 +146,18 @@ export function AlecaframeModal() {
               <p className="settings-inline-warning">{t('aleca.detect.enabledButMissing')}</p>
             ) : null}
 
+            {/* What the switch actually turns on, stated plainly. The old API integration
+                controlled trade detection too, so it is worth being explicit that this no
+                longer does. */}
+            <div className="aleca-unlocks">
+              <span className="aleca-unlocks-title">{t('aleca.unlocks.title')}</span>
+              <ul className="aleca-unlocks-list">
+                <li>{t('aleca.unlocks.inventory')}</li>
+                <li>{t('aleca.unlocks.relics')}</li>
+                <li>{t('aleca.unlocks.wallet')}</li>
+              </ul>
+            </div>
+
             <p className="settings-field-help aleca-scope-note">{t('aleca.scopeNote')}</p>
 
             {settingsError ? (

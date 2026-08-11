@@ -477,12 +477,6 @@ struct DerivedTradeLedger {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AlecaframeTradeMigrationInput {
-    pub baseline_date: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TradeGroupAllocationInput {
     pub order_id: String,
     pub total_platinum: i64,
@@ -693,25 +687,25 @@ struct WfmProfileClosedOrderItemName {
 }
 
 #[derive(Debug, Clone)]
-struct StoredTradeLogRecord {
-    id: String,
-    item_name: String,
-    slug: String,
-    image_path: Option<String>,
-    order_type: String,
-    source: String,
-    platinum: i64,
-    quantity: i64,
-    rank: Option<i64>,
-    closed_at: String,
-    updated_at: String,
-    keep_item: bool,
-    group_id: Option<String>,
-    group_label: Option<String>,
-    group_total_platinum: Option<i64>,
-    group_item_count: Option<i64>,
-    allocation_total_platinum: Option<i64>,
-    group_sort_order: Option<i64>,
+pub(crate) struct StoredTradeLogRecord {
+    pub(crate) id: String,
+    pub(crate) item_name: String,
+    pub(crate) slug: String,
+    pub(crate) image_path: Option<String>,
+    pub(crate) order_type: String,
+    pub(crate) source: String,
+    pub(crate) platinum: i64,
+    pub(crate) quantity: i64,
+    pub(crate) rank: Option<i64>,
+    pub(crate) closed_at: String,
+    pub(crate) updated_at: String,
+    pub(crate) keep_item: bool,
+    pub(crate) group_id: Option<String>,
+    pub(crate) group_label: Option<String>,
+    pub(crate) group_total_platinum: Option<i64>,
+    pub(crate) group_item_count: Option<i64>,
+    pub(crate) allocation_total_platinum: Option<i64>,
+    pub(crate) group_sort_order: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -772,57 +766,6 @@ struct CatalogTradeItemMeta {
     image_path: Option<String>,
     max_rank: Option<i64>,
     bulk_tradable: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AlecaframeTradeResponse {
-    #[serde(default)]
-    buy_trades: Vec<AlecaframeTradeRecord>,
-    #[serde(default)]
-    sell_trades: Vec<AlecaframeTradeRecord>,
-    #[serde(default)]
-    trades: Vec<AlecaframeRawTradeRecord>,
-    /// AlecaFrame's server-side upload timestamp — unchanged means the payload is identical
-    /// to the previous poll, letting trade detection skip re-diffing entirely.
-    last_update: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AlecaframeTradeRecord {
-    timestamp: String,
-    direction: String,
-    total_plat: Option<i64>,
-    #[serde(default)]
-    items_sent: Vec<AlecaframeTradeItemRecord>,
-    #[serde(default)]
-    items_received: Vec<AlecaframeTradeItemRecord>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AlecaframeTradeItemRecord {
-    name: String,
-    #[serde(default)]
-    display_name: Option<String>,
-    cnt: i64,
-    rank: i64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AlecaframeRawTradeRecord {
-    #[serde(rename = "ts")]
-    timestamp: String,
-    #[serde(rename = "type")]
-    trade_type: i64,
-    #[serde(default)]
-    total_plat: Option<i64>,
-    #[serde(default, rename = "tx")]
-    items_sent: Vec<AlecaframeTradeItemRecord>,
-    #[serde(default, rename = "rx")]
-    items_received: Vec<AlecaframeTradeItemRecord>,
 }
 
 fn now_utc() -> OffsetDateTime {
@@ -1612,7 +1555,7 @@ fn get_or_create_device_id() -> String {
         .clone()
 }
 
-fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
+pub(crate) fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
 }
 
@@ -1620,17 +1563,6 @@ fn trade_record_is_before_cutoff(record: &StoredTradeLogRecord, cutoff: OffsetDa
     parse_timestamp(&record.closed_at)
         .map(|closed_at| closed_at < cutoff)
         .unwrap_or(false)
-}
-
-fn parse_date_start_utc(value: &str) -> Result<OffsetDateTime> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow!("Select a baseline date for migration."));
-    }
-
-    let midnight = format!("{trimmed}T00:00:00Z");
-    OffsetDateTime::parse(&midnight, &Rfc3339)
-        .with_context(|| format!("failed to parse migration baseline date '{trimmed}'"))
 }
 
 fn extract_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -1658,25 +1590,6 @@ fn extract_i64(value: &Value, keys: &[&str]) -> Option<i64> {
 
 fn normalize_alias_lookup_value(value: &str) -> String {
     value.trim().to_lowercase()
-}
-
-fn build_fallback_slug(value: &str) -> String {
-    value
-        .trim()
-        .rsplit('/')
-        .next()
-        .unwrap_or(value)
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string()
 }
 
 fn normalize_avatar_url(value: Option<String>) -> Option<String> {
@@ -4046,27 +3959,6 @@ fn fetch_me_with_token(client: &Client, token: &str) -> Result<TradeAccountSumma
     )
 }
 
-/// v2 replacement for the old catalog's alias-table lookup. `lookup_item_v2_inner` folds and
-/// normalizes the query the same way at both build and query time, and — unlike the old alias
-/// table — refuses ambiguous keys outright rather than falling back to an ORDER BY tie-break to
-/// pick one arbitrary winner among a thousand candidates. Not a downgrade: a deterministic,
-/// ambiguity-rejecting lookup is exactly the property this whole catalog rewrite exists for.
-fn resolve_catalog_trade_item_by_alias(
-    connection: &Connection,
-    alias_value: &str,
-) -> Result<Option<CatalogTradeItemMeta>> {
-    let trimmed = alias_value.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    let preferred_name = prettify_alecaframe_name(trimmed);
-    let lookup = item_catalog_v2::lookup_item_v2_inner(connection, trimmed)
-        .context("failed to resolve catalog item by alias")?
-        .or(item_catalog_v2::lookup_item_v2_inner(connection, &preferred_name)
-            .context("failed to resolve catalog item by alias")?);
-    Ok(lookup.map(catalog_trade_item_meta_from_v2))
-}
-
 fn resolve_catalog_trade_item_by_slug(
     connection: &Connection,
     slug: &str,
@@ -4109,115 +4001,6 @@ fn observatory_contains_set_component_slug(connection: &Connection, slug: &str) 
         .optional()
         .map(|value| value.is_some())
         .context("failed to check observatory set component membership")
-}
-
-fn fetch_alecaframe_trade_payload(app: &tauri::AppHandle) -> Result<AlecaframeTradeResponse> {
-    let settings = load_settings_for_internal_use(app)?;
-    let alecaframe = settings.alecaframe;
-    if !alecaframe.enabled {
-        return Err(anyhow!("Enable Alecaframe API in Settings first."));
-    }
-
-    let Some(public_link) = alecaframe.public_link else {
-        return Err(anyhow!("No Alecaframe public link is saved."));
-    };
-
-    let public_token = crate::settings::extract_public_token(&public_link)
-        .ok_or_else(|| anyhow!("Could not extract a public token from the Alecaframe link."))?;
-
-    // Shared, rate-limited fetch: coalesces with the wallet poll and backs off on errors. A
-    // ≤20s-old body is as good as fresh here — AlecaFrame's data only changes when the
-    // companion app uploads, which happens on a minutes cadence.
-    let body = crate::settings::fetch_public_stats_body_cached(
-        &public_token,
-        crate::settings::PUBLIC_STATS_MAX_AGE,
-    )?;
-    serde_json::from_str::<AlecaframeTradeResponse>(&body)
-        .context("failed to parse Alecaframe trade history response")
-}
-
-fn is_platinum_trade_item(item: &AlecaframeTradeItemRecord) -> bool {
-    item.name == "/AF_Special/Platinum"
-}
-
-fn normalize_alecaframe_rank(rank: i64) -> Option<i64> {
-    (rank >= 0).then_some(rank)
-}
-
-fn normalize_alecaframe_trade_payload(
-    payload: AlecaframeTradeResponse,
-) -> Vec<AlecaframeTradeRecord> {
-    let mut trades = payload
-        .buy_trades
-        .into_iter()
-        .chain(payload.sell_trades)
-        .collect::<Vec<_>>();
-
-    if trades.is_empty() {
-        trades.extend(payload.trades.into_iter().filter_map(|trade| {
-            let direction = match trade.trade_type {
-                0 => "sell",
-                1 => "buy",
-                _ => return None,
-            };
-
-            Some(AlecaframeTradeRecord {
-                timestamp: trade.timestamp,
-                direction: direction.to_string(),
-                total_plat: trade.total_plat,
-                items_sent: trade.items_sent,
-                items_received: trade.items_received,
-            })
-        }));
-    }
-
-    trades.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
-    trades
-}
-
-fn allocated_row_totals(total_platinum: i64, unit_counts: &[i64]) -> Vec<i64> {
-    let total_units = unit_counts
-        .iter()
-        .copied()
-        .map(|value| value.max(0))
-        .sum::<i64>();
-    if total_units <= 0 {
-        return vec![0; unit_counts.len()];
-    }
-
-    let base = total_platinum.div_euclid(total_units);
-    let mut remainder = total_platinum.rem_euclid(total_units);
-    let mut allocations = Vec::with_capacity(unit_counts.len());
-
-    for units in unit_counts {
-        let normalized_units = (*units).max(0);
-        let extra = remainder.min(normalized_units);
-        allocations.push(base * normalized_units + extra);
-        remainder -= extra;
-    }
-
-    allocations
-}
-
-fn stable_trade_group_id(
-    username: &str,
-    direction: &str,
-    timestamp: &str,
-    total_platinum: i64,
-    item_keys: &[String],
-) -> String {
-    let seed = format!(
-        "{username}|{direction}|{timestamp}|{total_platinum}|{}",
-        item_keys.join("|")
-    );
-    let digest = sha2::Sha256::digest(seed.as_bytes());
-    format!("af-group-{}", hex::encode(&digest[..12]))
-}
-
-fn stable_trade_row_id(group_id: &str, sort_order: usize, item_key: &str) -> String {
-    let seed = format!("{group_id}|{sort_order}|{item_key}");
-    let digest = sha2::Sha256::digest(seed.as_bytes());
-    format!("af-trade-{}", hex::encode(&digest[..12]))
 }
 
 fn build_trade_log_entries_from_statistics(
@@ -4425,116 +4208,6 @@ fn build_trade_notification_candidates_for_wfm(
     Ok(candidates)
 }
 
-fn build_trade_notification_candidates_for_alecaframe(
-    entries: &[PortfolioTradeLogEntry],
-) -> Vec<TradeNotificationCandidate> {
-    let mut grouped = HashMap::<String, Vec<PortfolioTradeLogEntry>>::new();
-    let mut singles = Vec::<PortfolioTradeLogEntry>::new();
-
-    for entry in entries {
-        if let Some(group_id) = &entry.group_id {
-            grouped
-                .entry(group_id.clone())
-                .or_default()
-                .push(entry.clone());
-        } else {
-            singles.push(entry.clone());
-        }
-    }
-
-    let mut candidates = Vec::new();
-
-    for entry in singles {
-        let items = build_trade_notification_items_from_entry(&entry);
-        let total_platinum = entry
-            .allocation_total_platinum
-            .unwrap_or(entry.platinum.saturating_mul(entry.quantity.max(1)));
-        let summary_label = format!(
-            "{} {} x{} for {}p",
-            if entry.order_type == "buy" {
-                "Bought"
-            } else {
-                "Sold"
-            },
-            entry.item_name,
-            entry.quantity.max(1),
-            total_platinum
-        );
-
-        candidates.push(TradeNotificationCandidate {
-            fingerprint: build_trade_notification_fingerprint(
-                &entry.order_type,
-                total_platinum,
-                &entry.closed_at,
-                &items,
-            ),
-            source: "alecaframe".to_string(),
-            order_type: entry.order_type.clone(),
-            total_platinum,
-            closed_at: entry.closed_at.clone(),
-            summary_label,
-            items,
-        });
-    }
-
-    for mut group_entries in grouped.into_values() {
-        group_entries.sort_by(|left, right| {
-            left.group_sort_order
-                .unwrap_or(0)
-                .cmp(&right.group_sort_order.unwrap_or(0))
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        let Some(first) = group_entries.first() else {
-            continue;
-        };
-
-        let total_platinum = first.group_total_platinum.unwrap_or_else(|| {
-            group_entries
-                .iter()
-                .map(|entry| entry.allocation_total_platinum.unwrap_or(entry.platinum))
-                .sum::<i64>()
-        });
-        let items = group_entries
-            .iter()
-            .map(|entry| DiscordTradeNotificationItem {
-                item_name: entry.item_name.clone(),
-                quantity: entry.quantity.max(1),
-                rank: entry.rank,
-                image_path: entry.image_path.clone(),
-            })
-            .collect::<Vec<_>>();
-        let summary_label = format!(
-            "{} {} item{} for {}p",
-            if first.order_type == "buy" {
-                "Bought"
-            } else {
-                "Sold"
-            },
-            items.len(),
-            if items.len() == 1 { "" } else { "s" },
-            total_platinum
-        );
-
-        candidates.push(TradeNotificationCandidate {
-            fingerprint: build_trade_notification_fingerprint(
-                &first.order_type,
-                total_platinum,
-                &first.closed_at,
-                &items,
-            ),
-            source: "alecaframe".to_string(),
-            order_type: first.order_type.clone(),
-            total_platinum,
-            closed_at: first.closed_at.clone(),
-            summary_label,
-            items,
-        });
-    }
-
-    candidates.sort_by(|left, right| left.closed_at.cmp(&right.closed_at));
-    candidates
-}
-
 fn trade_happened_after_session_start(
     candidate: &TradeNotificationCandidate,
     session_started_at: Option<&OffsetDateTime>,
@@ -4610,15 +4283,6 @@ fn send_trade_notification_candidates_inner(
     }
 
     Ok(sent_count)
-}
-
-fn prettify_alecaframe_name(value: &str) -> String {
-    value
-        .trim()
-        .rsplit('/')
-        .next()
-        .unwrap_or(value)
-        .replace('_', " ")
 }
 
 fn find_duplicate_trade_record(
@@ -4848,223 +4512,6 @@ fn collapse_grouped_trade_sets(
     (collapsed, changed)
 }
 
-fn build_alecaframe_trade_entries(
-    app: &tauri::AppHandle,
-    username: &str,
-    baseline_date: &str,
-    existing: &[StoredTradeLogRecord],
-) -> Result<Vec<PortfolioTradeLogEntry>> {
-    let payload = fetch_alecaframe_trade_payload(app)?;
-    build_alecaframe_trade_entries_from_payload(app, username, baseline_date, existing, payload)
-}
-
-fn build_alecaframe_trade_entries_from_payload(
-    app: &tauri::AppHandle,
-    username: &str,
-    baseline_date: &str,
-    existing: &[StoredTradeLogRecord],
-    payload: AlecaframeTradeResponse,
-) -> Result<Vec<PortfolioTradeLogEntry>> {
-    let baseline = parse_date_start_utc(baseline_date)?;
-    let trades = normalize_alecaframe_trade_payload(payload);
-    let catalog = item_catalog_v2::open_catalog_v2_readonly(app)?;
-    let mut imported = Vec::new();
-
-    for trade in trades {
-        let order_type = match trade.direction.as_str() {
-            "buy" => "buy",
-            "sell" => "sell",
-            _ => continue,
-        };
-
-        let Some(closed_at) = parse_timestamp(&trade.timestamp) else {
-            continue;
-        };
-        if closed_at < baseline {
-            continue;
-        }
-
-        let items_sent = trade.items_sent;
-        let items_received = trade.items_received;
-        let total_platinum = trade.total_plat.unwrap_or_else(|| {
-            let platinum_items = if order_type == "buy" {
-                &items_sent
-            } else {
-                &items_received
-            };
-            platinum_items
-                .iter()
-                .filter(|item| is_platinum_trade_item(item))
-                .map(|item| item.cnt.max(0))
-                .sum::<i64>()
-        });
-
-        let trade_items = if order_type == "buy" {
-            items_received
-        } else {
-            items_sent
-        }
-        .into_iter()
-        .filter(|item| !is_platinum_trade_item(item))
-        .filter(|item| item.cnt > 0)
-        .collect::<Vec<_>>();
-
-        if trade_items.is_empty() {
-            continue;
-        }
-
-        if total_platinum <= 0 {
-            continue;
-        }
-
-        let preview_rows = trade_items
-            .iter()
-            .map(|item| {
-                let meta = resolve_catalog_trade_item_by_alias(&catalog, &item.name)
-                    .ok()
-                    .flatten();
-                let item_name = meta
-                    .as_ref()
-                    .map(|entry| entry.name.clone())
-                    .or_else(|| item.display_name.clone())
-                    .unwrap_or_else(|| prettify_alecaframe_name(&item.name));
-                (item_name, item.cnt.max(1))
-            })
-            .collect::<Vec<_>>();
-
-        let group_is_duplicate = if preview_rows.len() > 1 {
-            preview_rows.iter().all(|(item_name, quantity)| {
-                find_duplicate_trade_record(existing, order_type, item_name, *quantity, &closed_at, "alecaframe")
-            })
-        } else {
-            preview_rows
-                .first()
-                .map(|(item_name, quantity)| {
-                    find_duplicate_trade_record(
-                        existing, order_type, item_name, *quantity, &closed_at, "alecaframe",
-                    )
-                })
-                .unwrap_or(false)
-        };
-
-        if group_is_duplicate {
-            continue;
-        }
-
-        let unit_counts = trade_items
-            .iter()
-            .map(|item| item.cnt.max(1))
-            .collect::<Vec<_>>();
-        let allocations = allocated_row_totals(total_platinum, &unit_counts);
-        let group_id = if trade_items.len() > 1 {
-            Some(stable_trade_group_id(
-                username,
-                order_type,
-                &trade.timestamp,
-                total_platinum,
-                &trade_items
-                    .iter()
-                    .map(|item| item.name.clone())
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            None
-        };
-
-        for (index, item) in trade_items.into_iter().enumerate() {
-            // A failed catalog lookup must not abort the whole resync — the metadata is optional
-            // (we fall back to AlecaFrame's display name below), so log and continue instead.
-            let meta = match resolve_catalog_trade_item_by_alias(&catalog, &item.name) {
-                Ok(meta) => meta,
-                Err(error) => {
-                    log_feature_error_best_effort(
-                        app,
-                        "trade-log",
-                        "resync-alias-lookup",
-                        &format!(
-                            "Catalog lookup failed for '{}' during trade-log resync — falling back to the raw item name.",
-                            item.name
-                        ),
-                        &error,
-                    );
-                    None
-                }
-            };
-            let item_name = meta
-                .as_ref()
-                .map(|entry| entry.name.clone())
-                .or(item.display_name.clone())
-                .unwrap_or_else(|| prettify_alecaframe_name(&item.name));
-            let quantity = item.cnt.max(1);
-            if group_id.is_none()
-                && find_duplicate_trade_record(
-                    existing, order_type, &item_name, quantity, &closed_at, "alecaframe",
-                )
-            {
-                continue;
-            }
-
-            let slug = meta
-                .as_ref()
-                .map(|entry| entry.slug.clone())
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| build_fallback_slug(&item_name));
-            let sort_order = index as i64;
-            let effective_group_id = group_id.clone();
-            let row_id = effective_group_id
-                .as_ref()
-                .map(|value| stable_trade_row_id(value, index, &item.name))
-                .unwrap_or_else(|| {
-                    stable_trade_row_id(
-                        &format!("af-single-{order_type}-{}", trade.timestamp),
-                        0,
-                        &item.name,
-                    )
-                });
-
-            imported.push(PortfolioTradeLogEntry {
-                id: row_id,
-                item_name,
-                slug,
-                image_path: meta.as_ref().and_then(|entry| entry.image_path.clone()),
-                order_type: order_type.to_string(),
-                source: "alecaframe".to_string(),
-                platinum: allocations[index],
-                quantity,
-                rank: normalize_alecaframe_rank(item.rank),
-                closed_at: trade.timestamp.clone(),
-                updated_at: trade.timestamp.clone(),
-                profit: None,
-                margin: None,
-                status: None,
-                keep_item: false,
-                group_id: effective_group_id.clone(),
-                group_label: effective_group_id
-                    .as_ref()
-                    .map(|_| "Multiple Item Trade".to_string()),
-                group_total_platinum: effective_group_id.as_ref().map(|_| total_platinum),
-                group_item_count: effective_group_id
-                    .as_ref()
-                    .map(|_| preview_rows.len() as i64),
-                allocation_total_platinum: Some(allocations[index]),
-                group_sort_order: effective_group_id.as_ref().map(|_| sort_order),
-                allocation_mode: effective_group_id.as_ref().map(|_| "auto".to_string()),
-                cost_basis_confidence: None,
-                cost_basis_label: None,
-                matched_cost: None,
-                matched_quantity: None,
-                matched_buy_count: 0,
-                matched_buy_rows: Vec::new(),
-                set_component_rows: Vec::new(),
-                profit_formula: None,
-                duplicate_risk: false,
-            });
-        }
-    }
-
-    Ok(imported)
-}
-
 fn fetch_profile_trade_log_inner_with_priority(
     username: &str,
     priority: RequestPriority,
@@ -5117,7 +4564,7 @@ fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLog
     fetch_profile_trade_log_inner_with_priority(username, RequestPriority::High)
 }
 
-fn load_stored_trade_log_records_inner(
+pub(crate) fn load_stored_trade_log_records_inner(
     connection: &Connection,
     username: &str,
 ) -> Result<Vec<StoredTradeLogRecord>> {
@@ -5246,55 +4693,6 @@ fn load_trade_log_last_updated_at(
         )
         .optional()
         .context("failed to read cached trade log metadata")
-}
-
-fn load_alecaframe_trade_baseline_date_inner(
-    connection: &Connection,
-    username: &str,
-) -> Result<Option<String>> {
-    connection
-        .query_row(
-            "
-            SELECT alecaframe_baseline_date
-            FROM portfolio_trade_log_cache_meta
-            WHERE username = ?1
-            ",
-            params![username.trim()],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .context("failed to read Alecaframe trade baseline date")
-        .map(|value| value.flatten())
-}
-
-fn save_alecaframe_trade_baseline_date_inner(
-    connection: &Connection,
-    username: &str,
-    baseline_date: &str,
-) -> Result<()> {
-    let trimmed_username = username.trim();
-    let trimmed_baseline = baseline_date.trim();
-    if trimmed_username.is_empty() || trimmed_baseline.is_empty() {
-        return Ok(());
-    }
-
-    let updated_at = format_timestamp(now_utc())?;
-    connection
-        .execute(
-            "
-            INSERT INTO portfolio_trade_log_cache_meta (
-              username,
-              last_updated_at,
-              entry_count,
-              alecaframe_baseline_date
-            ) VALUES (?1, ?2, 0, ?3)
-            ON CONFLICT(username) DO UPDATE SET
-              alecaframe_baseline_date = excluded.alecaframe_baseline_date
-            ",
-            params![trimmed_username, updated_at, trimmed_baseline],
-        )
-        .context("failed to persist Alecaframe trade baseline date")?;
-    Ok(())
 }
 
 fn trade_notification_fingerprint_exists_inner(
@@ -6800,29 +6198,6 @@ fn set_trade_log_keep_item_inner(
     Ok(next_state)
 }
 
-fn migrate_alecaframe_trade_log_inner(
-    app: &tauri::AppHandle,
-    username: &str,
-    input: &AlecaframeTradeMigrationInput,
-) -> Result<PortfolioTradeLogState> {
-    let trimmed_username = username.trim();
-    if trimmed_username.is_empty() {
-        return Err(anyhow!("Username is required to migrate trade history."));
-    }
-
-    let mut connection = open_trades_cache_database(app)?;
-    save_alecaframe_trade_baseline_date_inner(&connection, trimmed_username, &input.baseline_date)?;
-    let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
-    let imported =
-        build_alecaframe_trade_entries(app, trimmed_username, &input.baseline_date, &existing)?;
-
-    if !imported.is_empty() {
-        save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
-    }
-
-    reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
-}
-
 fn update_trade_group_allocations_inner(
     app: &tauri::AppHandle,
     username: &str,
@@ -6953,26 +6328,6 @@ fn force_trade_log_resync_inner(
     let existing_records = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
     let mut fetched_entries = fetch_profile_trade_log_inner(trimmed_username)?;
 
-    let settings = load_settings_for_internal_use(app)?;
-    if settings.alecaframe.enabled && settings.alecaframe.public_link.is_some() {
-        if let Some(baseline_date) =
-            load_alecaframe_trade_baseline_date_inner(&connection, trimmed_username)?
-        {
-            let existing_records = fetched_entries
-                .iter()
-                .map(build_stored_trade_record_from_entry)
-                .collect::<Vec<_>>();
-            let imported = build_alecaframe_trade_entries(
-                app,
-                trimmed_username,
-                &baseline_date,
-                &existing_records,
-            )?;
-            if !imported.is_empty() {
-                fetched_entries = append_unique_trade_entries(&fetched_entries, &imported);
-            }
-        }
-    }
 
     let cutoff = now_utc() - time::Duration::days(WFM_TRADE_LOG_LOCK_DAYS);
     let locked_entries = existing_records
@@ -7103,10 +6458,9 @@ fn check_pending_trade_notifications_inner(
         .map(build_portfolio_entry_from_stored_record)
         .collect();
 
-    let candidates = match source {
-        "wfm" => build_trade_notification_candidates_for_wfm(app, &entries)?,
-        _ => build_trade_notification_candidates_for_alecaframe(&entries),
-    };
+    // WFM is the only remaining notification source; EE.log-detected trades notify through
+    // their own path.
+    let candidates = build_trade_notification_candidates_for_wfm(app, &entries)?;
 
     send_trade_notification_candidates_inner(
         app,
@@ -7197,139 +6551,6 @@ fn refresh_wfm_trade_detection_inner(
         skipped: false,
         message: None,
         detected_buys: Vec::new(),
-    })
-}
-
-/// Per-username `lastUpdate` values already processed by trade detection. In-memory only — a
-/// restart just re-runs one full diff, which is harmless.
-fn alecaframe_last_processed_update() -> &'static Mutex<HashMap<String, String>> {
-    static SEEN: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    SEEN.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn refresh_alecaframe_trade_detection_inner(
-    app: &tauri::AppHandle,
-    username: &str,
-    input: &TradeDetectionRefreshInput,
-) -> Result<TradeDetectionRefreshResult> {
-    let trimmed_username = username.trim();
-    if trimmed_username.is_empty() {
-        return Err(anyhow!("Username is required to detect Alecaframe trades."));
-    }
-
-    let settings = load_settings_for_internal_use(app)?;
-    if !settings.alecaframe.enabled || settings.alecaframe.public_link.is_none() {
-        return Ok(TradeDetectionRefreshResult {
-            source: "alecaframe".to_string(),
-            new_trade_count: 0,
-            notification_count: 0,
-            last_updated_at: None,
-            skipped: true,
-            message: Some("Alecaframe is not enabled.".to_string()),
-            detected_buys: Vec::new(),
-        });
-    }
-
-    let mut connection = open_trades_cache_database(app)?;
-    let session_started_at = input
-        .session_started_at
-        .as_deref()
-        .and_then(parse_timestamp);
-    let Some(baseline_date) =
-        load_alecaframe_trade_baseline_date_inner(&connection, trimmed_username)?
-    else {
-        return Ok(TradeDetectionRefreshResult {
-            source: "alecaframe".to_string(),
-            new_trade_count: 0,
-            notification_count: 0,
-            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
-            skipped: true,
-            message: Some("No Alecaframe migration baseline has been saved yet.".to_string()),
-            detected_buys: Vec::new(),
-        });
-    };
-
-    // Skip the whole diff when AlecaFrame's upload timestamp hasn't moved since the last poll —
-    // the payload is byte-identical, so there is nothing new to detect.
-    let payload = fetch_alecaframe_trade_payload(app)?;
-    if let Some(last_update) = payload.last_update.clone() {
-        let seen = alecaframe_last_processed_update()
-            .lock()
-            .ok()
-            .and_then(|map| map.get(trimmed_username).cloned());
-        if seen.as_deref() == Some(last_update.as_str()) {
-            return Ok(TradeDetectionRefreshResult {
-                source: "alecaframe".to_string(),
-                new_trade_count: 0,
-                notification_count: 0,
-                last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
-                skipped: true,
-                message: Some("Alecaframe data unchanged since the last check.".to_string()),
-                detected_buys: Vec::new(),
-            });
-        }
-        if let Ok(mut map) = alecaframe_last_processed_update().lock() {
-            map.insert(trimmed_username.to_string(), last_update);
-        }
-    }
-
-    let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
-    let imported = build_alecaframe_trade_entries_from_payload(
-        app,
-        trimmed_username,
-        &baseline_date,
-        &existing,
-        payload,
-    )?;
-
-    let mut notification_count = 0_i64;
-    let mut last_updated_at = None;
-    let mut detected_buys = Vec::new();
-
-    if !imported.is_empty() {
-        let updated_at =
-            save_trade_log_rows_inner(&mut connection, trimmed_username, &imported)?;
-        let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
-        let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &imported)?;
-        apply_owned_set_component_deltas(app, &owned_part_deltas)?;
-        notification_count += send_trade_notification_candidates_inner(
-            app,
-            &connection,
-            trimmed_username,
-            &build_trade_notification_candidates_for_alecaframe(&imported),
-            "alecaframe",
-            session_started_at.as_ref(),
-        )?;
-        last_updated_at = Some(updated_at);
-        detected_buys = imported
-            .iter()
-            .filter(|entry| entry.order_type == "buy")
-            .map(|entry| DetectedTradeBuy {
-                slug: entry.slug.clone(),
-                rank: entry.rank,
-                quantity: entry.quantity.max(1),
-                platinum: entry.platinum,
-            })
-            .collect();
-    }
-
-    notification_count += check_pending_trade_notifications_inner(
-        app,
-        &connection,
-        trimmed_username,
-        "alecaframe",
-        session_started_at.as_ref(),
-    )?;
-
-    Ok(TradeDetectionRefreshResult {
-        source: "alecaframe".to_string(),
-        new_trade_count: imported.len() as i64,
-        notification_count,
-        last_updated_at: last_updated_at
-            .or_else(|| load_trade_log_last_updated_at(&connection, trimmed_username).ok().flatten()),
-        skipped: false,
-        message: None,
-        detected_buys,
     })
 }
 
@@ -10785,20 +10006,6 @@ pub async fn refresh_wfm_trade_detection(
 }
 
 #[tauri::command]
-pub async fn refresh_alecaframe_trade_detection(
-    app: tauri::AppHandle,
-    username: String,
-    input: TradeDetectionRefreshInput,
-) -> Result<TradeDetectionRefreshResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        refresh_alecaframe_trade_detection_inner(&app, username.trim(), &input)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 pub async fn get_portfolio_pnl_summary(
     app: tauri::AppHandle,
     username: String,
@@ -10862,20 +10069,6 @@ pub async fn set_wfm_trade_log_keep_item(
 ) -> Result<PortfolioTradeLogState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         set_trade_log_keep_item_inner(&app, username.trim(), order_id.trim(), keep_item)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn migrate_alecaframe_trade_log(
-    app: tauri::AppHandle,
-    username: String,
-    input: AlecaframeTradeMigrationInput,
-) -> Result<PortfolioTradeLogState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        migrate_alecaframe_trade_log_inner(&app, username.trim(), &input)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -11252,12 +10445,11 @@ mod tests {
         smart_change_rate_state, smart_failure_streak,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
         merge_wfm_trade_log_entries,
-        normalize_alecaframe_trade_payload, normalize_avatar_url, normalize_status_set_request,
+        normalize_avatar_url, normalize_status_set_request,
         parse_status_from_payload, prune_stale_trade_log_overrides_inner, resolve_per_trade,
         replace_trade_log_rows_inner, save_trade_log_rows_inner,
         should_attempt_trade_session_reauth, trade_record_is_before_cutoff,
         is_listing_underpriced, underpriced_trigger_ratio, UNDERPRICED_TRIGGER_BASE_RATIO,
-        AlecaframeRawTradeRecord, AlecaframeTradeItemRecord, AlecaframeTradeResponse,
         PortfolioTradeLogEntry, StoredTradeLogRecord, TradeSetComponentRecord,
         TradeSetRootRecord,
         WfmProfileClosedOrder, WfmProfileClosedOrderItem, WfmProfileClosedOrderItemName,
@@ -11460,56 +10652,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn normalizes_raw_alecaframe_trade_payload() {
-        let trades = normalize_alecaframe_trade_payload(AlecaframeTradeResponse {
-            buy_trades: Vec::new(),
-            sell_trades: Vec::new(),
-            last_update: None,
-            trades: vec![
-                AlecaframeRawTradeRecord {
-                    timestamp: "2026-03-07T12:12:25.5764897Z".to_string(),
-                    trade_type: 0,
-                    total_plat: Some(69),
-                    items_sent: vec![AlecaframeTradeItemRecord {
-                        name: "/Lotus/Types/Recipes/WarframeRecipes/WispPrimeBlueprint".to_string(),
-                        display_name: None,
-                        cnt: 1,
-                        rank: -1,
-                    }],
-                    items_received: vec![AlecaframeTradeItemRecord {
-                        name: "/AF_Special/Platinum".to_string(),
-                        display_name: None,
-                        cnt: 69,
-                        rank: -1,
-                    }],
-                },
-                AlecaframeRawTradeRecord {
-                    timestamp: "2026-03-06T03:54:00.8900411Z".to_string(),
-                    trade_type: 1,
-                    total_plat: None,
-                    items_sent: vec![AlecaframeTradeItemRecord {
-                        name: "/AF_Special/Platinum".to_string(),
-                        display_name: None,
-                        cnt: 34,
-                        rank: -1,
-                    }],
-                    items_received: vec![AlecaframeTradeItemRecord {
-                        name: "/Lotus/Types/Recipes/WarframeRecipes/NovaPrimeChassisComponent"
-                            .to_string(),
-                        display_name: None,
-                        cnt: 1,
-                        rank: -1,
-                    }],
-                },
-            ],
-        });
-
-        assert_eq!(trades.len(), 2);
-        assert_eq!(trades[0].direction, "buy");
-        assert_eq!(trades[1].direction, "sell");
-        assert_eq!(trades[1].total_plat, Some(69));
-    }
 
     #[test]
     fn resolve_per_trade_omits_field_for_non_bulk_items() {

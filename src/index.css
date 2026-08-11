@@ -15370,6 +15370,27 @@ img[data-asset-failed='true'] {
 }
 .af-inv-muted { color: var(--text-muted); }
 .af-inv-rank { color: var(--text-secondary); white-space: nowrap; }
+.af-inv-refresh {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.af-inv-stale {
+  padding: 8px 12px;
+  border: 1px solid rgba(240,160,48,0.3);
+  border-radius: 6px;
+  background: rgba(240,160,48,0.08);
+  color: var(--accent-amber);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.af-inv-refresh:hover { color: var(--text-primary); border-color: var(--accent-blue); }
 .af-inv-table tr:hover td { background: var(--bg-elevated); }
 .af-inv-state {
   padding: 24px 12px;
@@ -15397,8 +15418,117 @@ img[data-asset-failed='true'] {
 }
 .aleca-detect-dot.on { background: var(--accent-green); }
 .aleca-detect-copy { font-size: 11px; color: var(--text-secondary); }
+.aleca-unlocks {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-base);
+}
+.aleca-unlocks-title {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.aleca-unlocks-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 .aleca-scope-note {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
 }
+
+/* ── TRADE DETECTION COMPARISON (shadow mode, temporary) ── */
+.det { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.det-summary { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.det-stat { display: flex; flex-direction: column; gap: 2px; }
+.det-stat-value {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.det-stat-value.tone-green { color: var(--accent-green); }
+.det-stat-value.tone-blue  { color: var(--accent-blue); }
+.det-stat-value.tone-red   { color: var(--accent-red); }
+.det-stat-value.tone-amber { color: var(--accent-amber); }
+.det-stat-label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.det-refresh {
+  margin-left: auto;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+.det-refresh:hover { color: var(--text-primary); border-color: var(--accent-blue); }
+/* The verdict is the point of the panel, so it reads as a statement rather than a footnote. */
+.det-verdict {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(240,160,48,0.3);
+  border-radius: 6px;
+  background: rgba(240,160,48,0.08);
+  color: var(--accent-amber);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.det-verdict.ok {
+  border-color: rgba(61,214,140,0.3);
+  background: rgba(61,214,140,0.08);
+  color: var(--accent-green);
+}
+.det-table { width: 100%; border-collapse: collapse; }
+.det-table th {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.det-table td {
+  font-size: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+.det-table tr:hover td { background: var(--bg-elevated); }
+.det-num {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.det-unresolved {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(240,160,48,0.15);
+  color: var(--accent-amber);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.det-state { padding: 24px 12px; text-align: center; font-size: 12px; color: var(--text-secondary); }
+.det-error { color: var(--accent-red); }

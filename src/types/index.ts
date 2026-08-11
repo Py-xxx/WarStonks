@@ -13,7 +13,7 @@ export type PageId =
 export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | '90d' | 'all';
-export type TradesSubTab = 'orders' | 'health';
+export type TradesSubTab = 'orders' | 'health' | 'detection';
 export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'notifications' | 'import-export' | 'language';
 export type WorldStateEndpointKey =
   | 'events'
@@ -1672,7 +1672,52 @@ export interface EeLogDirectMessageEvent {
   key: string;
 }
 
-export type EeLogEvent = EeLogDirectMessageEvent;
+export interface EeLogTradedItem {
+  name: string;
+  quantity: number;
+  /** Current rank — the number of FILLED rank pips (U+E0CB) on the log line. */
+  rank: number | null;
+  /** Max rank — the TOTAL pip count, filled plus empty (U+E0A6). */
+  maxRank: number | null;
+}
+
+/** A completed trade parsed from EE.log. Only emitted after the game confirms success —
+ *  a cancelled dialog produces nothing. */
+export interface EeLogTradeEvent {
+  kind: 'trade';
+  partner: string;
+  giving: EeLogTradedItem[];
+  getting: EeLogTradedItem[];
+  /** The log gives a platinum total per trade, never per item. */
+  platinumIn: number;
+  platinumOut: number;
+  elapsedS: number;
+  occurredAt: string | null;
+  key: string;
+}
+
+export type EeLogEvent = EeLogDirectMessageEvent | EeLogTradeEvent;
+
+export interface ShadowTradeItem {
+  name: string;
+  quantity: number;
+  rank: number | null;
+  maxRank: number | null;
+  /** WFM slug, or null when the catalog could not identify the item. */
+  slug: string | null;
+}
+
+export interface ShadowTradeRow {
+  tradeKey: string;
+  partner: string;
+  occurredAt: string | null;
+  platinumIn: number;
+  platinumOut: number;
+  platinumNet: number;
+  giving: ShadowTradeItem[];
+  getting: ShadowTradeItem[];
+  recordedAt: string;
+}
 
 export type AlecaframeItemCategory =
   | 'relic' | 'arcane' | 'mod' | 'blueprint'
@@ -1704,6 +1749,8 @@ export interface AlecaframeItem {
   rank: number | null;
   /** Max rank for this item. Mods cap at different levels, so 5/5 outranks 7/10. */
   maxRank: number | null;
+  /** Relic refinement; null for everything that isn't a relic. */
+  refinement: 'intact' | 'exceptional' | 'flawless' | 'radiant' | null;
   /** Source list. Arcanes appear in both RawUpgrades (unranked) and Upgrades (ranked). */
   bucket: string;
   category: AlecaframeItemCategory;
@@ -1716,4 +1763,29 @@ export interface AlecaframeInventory {
   items: AlecaframeItem[];
   /** Dropped because WFM has no entry for them — i.e. not tradable. */
   untradableCount: number;
+}
+
+/** How an EE.log-detected trade lines up against WFM's own detection. */
+export type ComparisonStatus = 'matched' | 'shadowOnly' | 'wfmOnly';
+
+export interface ComparisonRow {
+  status: ComparisonStatus;
+  occurredAt: string | null;
+  itemName: string;
+  /** Null when the catalog could not identify the item. */
+  slug: string | null;
+  /** Only EE.log knows the trade partner; WFM never carries one. */
+  partner: string | null;
+  platinum: number;
+  quantity: number;
+  orderType: string | null;
+}
+
+export interface TradeComparison {
+  rows: ComparisonRow[];
+  matchedCount: number;
+  shadowOnlyCount: number;
+  /** Trades WFM saw that the parser missed — the number that gates the cutover. */
+  wfmOnlyCount: number;
+  unresolvedItemCount: number;
 }

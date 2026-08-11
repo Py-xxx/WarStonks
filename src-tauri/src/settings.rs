@@ -1,6 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -18,7 +16,6 @@ const SETTINGS_DIR_NAME: &str = "settings";
 const SETTINGS_FILE_NAME: &str = "integrations.json";
 const ALECAFRAME_BASE_URL: &str = "https://stats.alecaframe.com";
 const ALECAFRAME_PUBLIC_STATS_PATH: &str = "/api/stats/public";
-const ALECAFRAME_RELIC_INVENTORY_PATH: &str = "/api/stats/public/getRelicInventory";
 const ALECAFRAME_USER_AGENT: &str = concat!("warstonks/", env!("CARGO_PKG_VERSION"));
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
 
@@ -364,13 +361,6 @@ pub struct DiscordAppUpdateLabels {
     pub footer: String,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AlecaframeRelicInventoryEntry {
-    pub tier: String,
-    pub code: String,
-    pub refinement: String,
-    pub count: u32,
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1135,134 +1125,10 @@ fn fetch_public_stats(public_token: &str) -> Result<AlecaframePublicStatsRespons
         .context("failed to parse Alecaframe public stats response")
 }
 
-fn relic_tier_label(value: u8) -> Result<&'static str> {
-    match value {
-        0 => Ok("Lith"),
-        1 => Ok("Meso"),
-        2 => Ok("Neo"),
-        3 => Ok("Axi"),
-        4 => Ok("Requiem"),
-        _ => Err(anyhow!("Unknown relic tier value: {value}")),
-    }
-}
 
-fn relic_refinement_key(value: u8) -> Result<&'static str> {
-    match value {
-        0 => Ok("intact"),
-        1 | 4 => Ok("exceptional"),
-        2 | 5 => Ok("flawless"),
-        3 | 6 => Ok("radiant"),
-        _ => Err(anyhow!("Unknown relic refinement value: {value}")),
-    }
-}
 
-fn parse_alecaframe_relic_inventory(payload: &[u8]) -> Result<Vec<AlecaframeRelicInventoryEntry>> {
-    if payload.len() < 4 {
-        return Err(anyhow!(
-            "Alecaframe relic inventory payload is too short to read the entry count."
-        ));
-    }
 
-    const RELIC_ENTRY_SIZE: usize = 9;
-    let entry_count = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
-    // AlecaFrame's header count can exceed the number of fixed-size entries actually
-    // present (observed: header says 91 but the payload holds exactly 90 complete
-    // 9-byte entries). Parse the entries the buffer truly contains instead of rejecting
-    // the whole payload on a strict length check; each entry is still validated below, so
-    // a genuinely misaligned/garbage payload will surface as an unknown tier/refinement.
-    let available_entries = payload.len().saturating_sub(4) / RELIC_ENTRY_SIZE;
-    let parse_count = entry_count.min(available_entries);
 
-    let mut entries = Vec::with_capacity(parse_count);
-    let mut offset = 4;
-    for _ in 0..parse_count {
-        let relic_type = payload[offset];
-        let refinement = payload[offset + 1];
-        let code_slice = &payload[offset + 2..offset + 5];
-        let count = u32::from_le_bytes([
-            payload[offset + 5],
-            payload[offset + 6],
-            payload[offset + 7],
-            payload[offset + 8],
-        ]);
-        offset += RELIC_ENTRY_SIZE;
-
-        let code = String::from_utf8_lossy(code_slice)
-            .trim_matches('\u{0}')
-            .trim()
-            .to_string();
-        if code.is_empty() {
-            return Err(anyhow!(
-                "Alecaframe relic inventory entry has an empty relic code."
-            ));
-        }
-
-        entries.push(AlecaframeRelicInventoryEntry {
-            tier: relic_tier_label(relic_type)?.to_string(),
-            code,
-            refinement: relic_refinement_key(refinement)?.to_string(),
-            count,
-        });
-    }
-
-    Ok(entries)
-}
-
-fn decode_alecaframe_relic_inventory_payload(payload: &[u8]) -> Result<Vec<u8>> {
-    let trimmed = payload
-        .iter()
-        .skip_while(|byte| byte.is_ascii_whitespace())
-        .copied()
-        .collect::<Vec<u8>>();
-
-    if trimmed.is_empty() {
-        return Err(anyhow!("Alecaframe relic inventory payload was empty."));
-    }
-
-    if trimmed[0] == b'{' || trimmed[0] == b'[' || trimmed[0] == b'"' {
-        let parsed = serde_json::from_slice::<serde_json::Value>(&trimmed)
-            .context("failed to parse Alecaframe relic inventory JSON payload")?;
-        if let Some(raw_string) = parsed.as_str() {
-            let decoded = BASE64_STANDARD
-                .decode(raw_string.trim())
-                .context("failed to decode Alecaframe relic inventory base64 payload")?;
-            return Ok(decoded);
-        }
-        if let Some(raw_string) = parsed.get("rawBase64").and_then(|value| value.as_str()) {
-            let decoded = BASE64_STANDARD
-                .decode(raw_string.trim())
-                .context("failed to decode Alecaframe relic inventory base64 payload")?;
-            return Ok(decoded);
-        }
-        return Err(anyhow!(
-            "Alecaframe relic inventory JSON payload did not contain a base64 inventory string."
-        ));
-    }
-
-    Ok(payload.to_vec())
-}
-
-pub(crate) fn fetch_alecaframe_relic_inventory(
-    public_token: &str,
-) -> Result<Vec<AlecaframeRelicInventoryEntry>> {
-    let client = build_alecaframe_client()?;
-    let response = client
-        .get(format!(
-            "{ALECAFRAME_BASE_URL}{ALECAFRAME_RELIC_INVENTORY_PATH}"
-        ))
-        .query(&[("publicToken", public_token)])
-        .header("User-Agent", ALECAFRAME_USER_AGENT)
-        .header("Accept", "application/octet-stream")
-        .send()
-        .context("failed to request Alecaframe relic inventory")?
-        .error_for_status()
-        .context("Alecaframe relic inventory request failed")?;
-    let payload = response
-        .bytes()
-        .context("failed to read Alecaframe relic inventory payload")?;
-    let decoded = decode_alecaframe_relic_inventory_payload(payload.as_ref())?;
-    parse_alecaframe_relic_inventory(&decoded)
-}
 
 fn validate_public_link_inner(public_link: String) -> Result<AlecaframeValidationResult> {
     let normalized_public_link_input = normalize_optional(Some(public_link))
@@ -1346,23 +1212,6 @@ pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     })
 }
 
-#[tauri::command]
-pub fn test_alecaframe_public_link(
-    app: tauri::AppHandle,
-    public_link: String,
-) -> Result<AlecaframeValidationResult, String> {
-    validate_public_link_inner(public_link).map_err(|error| {
-        log_settings_error_and_build_message(
-            &app,
-            "alecaframe",
-            "validate-link",
-            "Failed to validate the Alecaframe public link or token.",
-            "Couldn’t validate that Alecaframe link right now. Check the link or token and try again.",
-            "ALECAFRAME-VALIDATE-01",
-            &error,
-        )
-    })
-}
 
 #[tauri::command]
 pub fn save_alecaframe_settings(
@@ -1383,38 +1232,14 @@ pub fn save_alecaframe_settings(
             &error,
         )
     })?;
-    let trimmed_public_link = normalize_optional(input.public_link);
-
-    let validation_result = match trimmed_public_link.clone() {
-        Some(public_link) => Some(validate_public_link_inner(public_link).map_err(|error| {
-            log_settings_error_and_build_message(
-                &app,
-                "alecaframe",
-                "save-validate-link",
-                "Failed to validate the Alecaframe link while saving settings.",
-                "Couldn’t save Alecaframe settings. Check the link or token and try again.",
-                "ALECAFRAME-SAVE-01",
-                &error,
-            )
-        })?),
-        None => None,
-    };
-
-    if input.enabled && validation_result.is_none() {
-        return Err("Enter a valid Alecaframe public link before enabling the API.".to_string());
-    }
-
+    // There is nothing left to validate: the integration reads AlecaFrame's local app data,
+    // so enabling it is just a switch. `public_link` survives on the struct only so existing
+    // saved configs keep deserializing, and is always cleared.
     settings.alecaframe = AlecaframeSettings {
         enabled: input.enabled,
-        public_link: validation_result
-            .as_ref()
-            .map(|result| result.normalized_public_link.clone()),
-        username_when_public: validation_result
-            .as_ref()
-            .and_then(|result| result.username_when_public.clone()),
-        last_validated_at: validation_result
-            .as_ref()
-            .and_then(|result| result.last_update.clone()),
+        public_link: None,
+        username_when_public: None,
+        last_validated_at: None,
     };
 
     save_settings_inner(&app, &settings).map_err(|error| {
@@ -1946,54 +1771,15 @@ pub async fn get_currency_balances(app: tauri::AppHandle) -> Result<WalletSnapsh
     })?
 }
 
-#[tauri::command]
-pub async fn refresh_alecaframe_wallet_snapshot(
-    app: tauri::AppHandle,
-) -> Result<WalletSnapshot, String> {
-    let app_for_worker = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let snapshot = get_currency_balances_inner(&app_for_worker).map_err(|error| {
-            log_settings_error_and_build_message(
-                &app_for_worker,
-                "alecaframe",
-                "wallet-refresh",
-                "Failed to refresh the Alecaframe wallet snapshot.",
-                "Couldn’t refresh Alecaframe balances right now.",
-                "ALECAFRAME-WALLET-REFRESH-02",
-                &error,
-            )
-        })?;
-        // NOTE: do NOT refresh the owned-relic cache here. The wallet snapshot polls every 60s, and
-        // bundling relics in would fetch /api/stats/relics every 60s too — bypassing the relic
-        // refresh's 3-minute cooldown and doubling AlecaFrame load. Relics refresh only via the
-        // dedicated, cooldown-gated `refresh_owned_relic_inventory` command.
-        Ok(snapshot)
-    })
-    .await
-    .map_err(|error| {
-        let wrapped = anyhow!(error.to_string());
-        log_settings_error_and_build_message(
-            &app,
-            "alecaframe",
-            "wallet-refresh-worker",
-            "The Alecaframe wallet refresh worker thread failed before completing.",
-            "Couldn’t refresh Alecaframe balances right now.",
-            "ALECAFRAME-WALLET-REFRESH-03",
-            &wrapped,
-        )
-    })?
-}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_alecaframe_relic_inventory_payload, extract_public_token, load_settings_from_path,
-        map_currency_balance, parse_alecaframe_relic_inventory, save_settings_to_path,
-        select_latest_data_point, AlecaframeDataPoint, AlecaframeSettings, AppSettings,
-        DiscordWebhookNotificationSettings, DiscordWebhookSettings,
-        BASE64_STANDARD,
+        extract_public_token, load_settings_from_path, map_currency_balance,
+        save_settings_to_path, select_latest_data_point, AlecaframeDataPoint,
+        AlecaframeSettings, AppSettings, DiscordWebhookNotificationSettings,
+        DiscordWebhookSettings,
     };
-    use base64::Engine;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2091,51 +1877,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_alecaframe_relic_inventory_payload() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&2u32.to_le_bytes());
-        payload.push(0);
-        payload.push(0);
-        payload.extend_from_slice(b"D7 ");
-        payload.extend_from_slice(&3u32.to_le_bytes());
-        payload.push(2);
-        payload.push(4);
-        payload.extend_from_slice(b"G1\0");
-        payload.extend_from_slice(&12u32.to_le_bytes());
 
-        let entries = parse_alecaframe_relic_inventory(&payload).expect("parse relic inventory");
-
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].tier, "Lith");
-        assert_eq!(entries[0].code, "D7");
-        assert_eq!(entries[0].refinement, "intact");
-        assert_eq!(entries[0].count, 3);
-        assert_eq!(entries[1].tier, "Neo");
-        assert_eq!(entries[1].code, "G1");
-        assert_eq!(entries[1].refinement, "exceptional");
-        assert_eq!(entries[1].count, 12);
-    }
-
-    #[test]
-    fn decodes_base64_wrapped_relic_payloads() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u32.to_le_bytes());
-        payload.push(1);
-        payload.push(3);
-        payload.extend_from_slice(b"A1 ");
-        payload.extend_from_slice(&7u32.to_le_bytes());
-        let encoded = BASE64_STANDARD.encode(&payload);
-        let wrapped = format!("\"{}\"", encoded);
-
-        let decoded =
-            decode_alecaframe_relic_inventory_payload(wrapped.as_bytes()).expect("decode payload");
-        let entries = parse_alecaframe_relic_inventory(&decoded).expect("parse inventory");
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].tier, "Meso");
-        assert_eq!(entries[0].code, "A1");
-        assert_eq!(entries[0].refinement, "radiant");
-        assert_eq!(entries[0].count, 7);
-    }
 }

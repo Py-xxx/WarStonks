@@ -3018,6 +3018,10 @@ export function OpportunitiesPage({
           </div>
         ) : activeTab === 'prime-parts' || activeTab === 'mods' || activeTab === 'arcanes' ? (
           <AlecaframeInventoryPanel tab={activeTab} />
+        ) : activeTab === 'owned-relics' && alecaframeInventoryAvailable ? (
+          // AlecaFrame knows the real relic counts per refinement, so it supersedes the
+          // manually-imported view rather than sitting beside it.
+          <AlecaframeInventoryPanel tab="relics" />
         ) : activeTab === 'owned-relics' ? (
           <div className="owned-relics-layout">
             <section className="market-panel owned-relics-panel">

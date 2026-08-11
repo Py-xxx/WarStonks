@@ -192,6 +192,8 @@ pub struct AlecaframeItem {
     /// Max rank for this item, from the catalog. Needed because mods cap at different
     /// levels — a 5/5 is fully ranked while a 7/10 is not.
     pub max_rank: Option<i64>,
+    /// Relic refinement. `None` for everything that isn't a relic.
+    pub refinement: Option<RelicRefinement>,
     /// Which inventory list it came from. Kept because the same item type can live in two
     /// buckets — arcanes split across `RawUpgrades` (unranked) and `Upgrades` (ranked).
     pub bucket: String,
@@ -233,6 +235,49 @@ fn account_i64(root: &Value, key: &str) -> i64 {
 /// It also fixes names AlecaFrame's own codex can't: `AvatarSlideBoostMod` is **Maglev**,
 /// `StatusChanceOnUltimateHit` is **Zid-an Asheir**, and `...HelmetBlueprint` is
 /// **Neuroptics**, never "Helmet".
+/// Relic refinement, in the game's own order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RelicRefinement {
+    Intact,
+    Exceptional,
+    Flawless,
+    Radiant,
+}
+
+/// The suffix the game appends per refinement, paired with what it means.
+const RELIC_REFINEMENT_SUFFIXES: [(&str, RelicRefinement); 4] = [
+    ("Bronze", RelicRefinement::Intact),
+    ("Silver", RelicRefinement::Exceptional),
+    ("Gold", RelicRefinement::Flawless),
+    ("Platinum", RelicRefinement::Radiant),
+];
+
+/// Splits a relic `uniqueName` into the identity WFM knows and its refinement.
+///
+/// **WFM lists one item per relic; AlecaFrame stores one per refinement.** So
+/// `T4VoidProjectionESilver` is WFM's `T4VoidProjectionE` at Exceptional. Without this
+/// split relics resolve at 1.2%; with it, 100% of a real inventory resolves.
+///
+/// Returns `None` for anything that isn't a relic path, and `(name, None)` for the 8
+/// suffix-less entries — those are generic placeholders ("Lith Relic", "Void Relic"), not
+/// ownable items, so they must not be forced into a refinement.
+///
+/// Note what this deliberately does *not* do: derive a label. `T1VoidProjectionGaussPrimeA`
+/// is **Lith C11**, not "Lith G1" — the letter+number is editorial and unrelated to the
+/// path. The display name always comes from the catalog.
+pub fn split_relic_unique_name(unique_name: &str) -> Option<(String, Option<RelicRefinement>)> {
+    if !unique_name.contains("/Projections/") {
+        return None;
+    }
+    for (suffix, refinement) in RELIC_REFINEMENT_SUFFIXES {
+        if let Some(stem) = unique_name.strip_suffix(suffix) {
+            return Some((stem.to_string(), Some(refinement)));
+        }
+    }
+    Some((unique_name.to_string(), None))
+}
+
 #[derive(Debug, Clone)]
 pub struct CatalogEntry {
     pub item_key: String,
@@ -289,7 +334,14 @@ pub fn parse_inventory(
                 bucket: &str,
                 rank: Option<i64>,
                 items: &mut Vec<AlecaframeItem>| {
-        match resolve(unique_name) {
+        // A relic's own uniqueName carries its refinement, which WFM's catalog has no entry
+        // for. Resolving the stripped form is what stops every relic being discarded as
+        // untradable; the refinement is kept alongside rather than thrown away.
+        let (lookup_key, refinement) = match split_relic_unique_name(unique_name) {
+            Some((stem, refinement)) => (stem, refinement),
+            None => (unique_name.to_string(), None),
+        };
+        match resolve(&lookup_key) {
             Some(entry) => {
                 items.push(AlecaframeItem {
                     unique_name: unique_name.to_string(),
@@ -307,6 +359,7 @@ pub fn parse_inventory(
                     // "rank 0" would be noise.
                     rank: entry.max_rank.and(rank),
                     max_rank: entry.max_rank,
+                    refinement,
                     bucket: bucket.to_string(),
                     category: categorize(unique_name),
                 });
@@ -383,7 +436,18 @@ pub fn load_name_lookup(alecaframe_dir: &Path) -> NameLookup {
 }
 
 #[tauri::command]
-pub fn read_alecaframe_inventory() -> Result<Option<AlecaframeInventory>, String> {
+pub fn read_alecaframe_inventory(
+    app: tauri::AppHandle,
+) -> Result<Option<AlecaframeInventory>, String> {
+    // The setting is a real gate, not decoration: a user who turns this off should stop
+    // having their AlecaFrame data read at all, not merely stop seeing a tab.
+    let enabled = crate::settings::load_settings_inner(&app)
+        .map(|settings| settings.alecaframe.enabled)
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(None);
+    }
+
     let availability = crate::local_sources::probe();
     let crate::local_sources::SourceStatus::Available { path } = &availability.alecaframe_inventory
     else {
@@ -418,6 +482,154 @@ pub fn read_alecaframe_inventory() -> Result<Option<AlecaframeInventory>, String
         .map_err(|error| error.to_string())
 }
 
+/// Builds the wallet snapshot from AlecaFrame's local data.
+///
+/// Replaces the old API-backed wallet: the same numbers are already in `lastData.dat`, so
+/// this costs no network request and cannot be rate-limited or return a stale server-side
+/// cache. Ducats are not in the payload — the game does not report a ducat balance — so that
+/// field stays `None` rather than being invented.
+#[tauri::command]
+pub fn refresh_wallet_from_appdata(
+    app: tauri::AppHandle,
+) -> Result<crate::settings::WalletSnapshot, String> {
+    let enabled = crate::settings::load_settings_inner(&app)
+        .map(|settings| settings.alecaframe.enabled)
+        .unwrap_or(false);
+
+    let empty = crate::settings::WalletSnapshot {
+        enabled,
+        configured: enabled,
+        balances: crate::settings::CurrencyBalance {
+            platinum: None,
+            credits: None,
+            endo: None,
+            ducats: None,
+            aya: None,
+        },
+        username_when_public: None,
+        last_update: None,
+        error_message: None,
+    };
+
+    if !enabled {
+        return Ok(empty);
+    }
+
+    let availability = crate::local_sources::probe();
+    let crate::local_sources::SourceStatus::Available { path } = &availability.alecaframe_inventory
+    else {
+        return Ok(crate::settings::WalletSnapshot {
+            error_message: Some("AlecaFrame data was not found on this PC.".to_string()),
+            ..empty
+        });
+    };
+
+    let parsed = std::fs::read(path)
+        .map_err(|error| error.to_string())
+        .and_then(|blob| decrypt_last_data(&blob).map_err(|error| error.to_string()))
+        .and_then(|json| {
+            serde_json::from_str::<Value>(&json).map_err(|error| error.to_string())
+        });
+
+    match parsed {
+        Err(message) => Ok(crate::settings::WalletSnapshot {
+            error_message: Some(message),
+            ..empty
+        }),
+        Ok(root) => {
+            let last_update = root
+                .get("LastInventorySync")
+                .and_then(oid_of)
+                .and_then(object_id_timestamp)
+                .and_then(|seconds| {
+                    time::OffsetDateTime::from_unix_timestamp(seconds)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .format(&time::format_description::well_known::Rfc3339)
+                                .ok()
+                        })
+                });
+
+            Ok(crate::settings::WalletSnapshot {
+                enabled,
+                configured: true,
+                balances: crate::settings::CurrencyBalance {
+                    platinum: root.get("PremiumCredits").and_then(Value::as_i64),
+                    credits: root.get("RegularCredits").and_then(Value::as_i64),
+                    endo: root.get("FusionPoints").and_then(Value::as_i64),
+                    ducats: None,
+                    aya: root.get("PrimeTokens").and_then(Value::as_i64),
+                },
+                username_when_public: None,
+                last_update,
+                error_message: None,
+            })
+        }
+    }
+}
+
+/// Owned relics, grouped the way the relic cache stores them: `(tier, code)` with a count per
+/// refinement.
+///
+/// Replaces the old API-backed relic fetch. Tier and code come from the **catalog's display
+/// name** ("Lith C11 Relic" → `Lith` / `C11`) and never from the path — `T1VoidProjectionGaussPrimeA`
+/// is Lith C11, and the letter+number in the path is unrelated editorial naming.
+pub fn owned_relic_counts(
+    inventory: &AlecaframeInventory,
+) -> Vec<(String, String, RelicRefinement, i64)> {
+    let mut out = Vec::new();
+    for item in &inventory.items {
+        let Some(refinement) = item.refinement else {
+            continue;
+        };
+        // "Lith C11 Relic" -> ("Lith", "C11"). Anything that doesn't split cleanly is skipped
+        // rather than guessed at.
+        let mut parts = item.name.split_whitespace();
+        let (Some(tier), Some(code)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        out.push((tier.to_string(), code.to_string(), refinement, item.count));
+    }
+    out
+}
+
+/// Reads the inventory straight from disk for callers outside the Tauri command layer.
+pub fn load_inventory_for_internal_use(
+    app: &tauri::AppHandle,
+) -> Result<Option<AlecaframeInventory>> {
+    let enabled = crate::settings::load_settings_inner(app)
+        .map(|settings| settings.alecaframe.enabled)
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(None);
+    }
+
+    let availability = crate::local_sources::probe();
+    let crate::local_sources::SourceStatus::Available { path } = &availability.alecaframe_inventory
+    else {
+        return Ok(None);
+    };
+
+    let blob = std::fs::read(path)?;
+    let json = decrypt_last_data(&blob)?;
+    let names = load_name_lookup(path.parent().unwrap_or(Path::new(".")));
+    let catalog = crate::item_catalog_v2::open_catalog_v2_from_remembered_path()
+        .ok_or_else(|| anyhow!("Item catalog is not ready yet."))?;
+    let resolve = |unique_name: &str| {
+        crate::item_catalog_v2::lookup_item_v2_inner(&catalog, unique_name)
+            .ok()
+            .flatten()
+            .map(|item| CatalogEntry {
+                item_key: item.item_key,
+                slug: item.slug,
+                name: item.name_en,
+                max_rank: item.max_rank,
+            })
+    };
+    parse_inventory(&json, &names, &resolve).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,7 +648,13 @@ mod tests {
     fn stub_resolver(unique_name: &str) -> Option<CatalogEntry> {
         let tradable = unique_name.contains("Prime")
             || unique_name.starts_with("/Lotus/Upgrades/Mods/")
-            || unique_name.starts_with("/Lotus/Upgrades/CosmeticEnhancers/");
+            || unique_name.starts_with("/Lotus/Upgrades/CosmeticEnhancers/")
+            // Only the *stripped* form should ever reach here for relics.
+            || (unique_name.contains("/Projections/")
+                && !unique_name.ends_with("Bronze")
+                && !unique_name.ends_with("Silver")
+                && !unique_name.ends_with("Gold")
+                && !unique_name.ends_with("Platinum"));
         if !tradable {
             return None;
         }
@@ -615,6 +833,78 @@ mod tests {
         let part = inventory.items.iter().find(|i| i.category == ItemCategory::Blueprint).unwrap();
         assert_eq!(part.rank, None, "prime parts do not rank");
         assert_eq!(part.max_rank, None);
+    }
+
+    #[test]
+    fn splits_a_relic_into_its_wfm_identity_and_refinement() {
+        let (stem, refinement) =
+            split_relic_unique_name("/Lotus/Types/Game/Projections/T4VoidProjectionESilver")
+                .expect("relic");
+        assert_eq!(stem, "/Lotus/Types/Game/Projections/T4VoidProjectionE");
+        assert_eq!(refinement, Some(RelicRefinement::Exceptional));
+
+        for (suffix, expected) in RELIC_REFINEMENT_SUFFIXES {
+            let path = format!("/Lotus/Types/Game/Projections/T1VoidProjectionA{suffix}");
+            let (stem, refinement) = split_relic_unique_name(&path).unwrap();
+            assert_eq!(stem, "/Lotus/Types/Game/Projections/T1VoidProjectionA");
+            assert_eq!(refinement, Some(expected));
+        }
+
+        // Non-relic paths are left entirely alone.
+        assert_eq!(split_relic_unique_name("/Lotus/Upgrades/Mods/Warframe/X"), None);
+    }
+
+    #[test]
+    fn the_eight_suffixless_relics_are_not_forced_into_a_refinement() {
+        // "Lith Relic", "Void Relic" and friends are generic placeholders, not ownable
+        // items. Assuming the suffix always exists would silently mislabel them Intact.
+        for path in [
+            "/Lotus/Types/Game/Projections/T1VoidProjection",
+            "/Lotus/Types/Game/Projections/T0VoidProjection",
+            // T5 is *mostly* Requiem, but this one is plain "Void Relic" — the tier code is
+            // a hint, never a guarantee.
+            "/Lotus/Types/Game/Projections/T5VoidProjectionImmortalOmni",
+        ] {
+            let (stem, refinement) = split_relic_unique_name(path).expect("relic path");
+            assert_eq!(stem, path, "nothing should be stripped");
+            assert_eq!(refinement, None);
+        }
+    }
+
+    #[test]
+    fn relics_survive_the_tradability_filter_and_keep_their_refinement() {
+        // Before the split every relic failed catalog lookup (1.2% matched) and was thrown
+        // away as untradable. Measured against the real inventory, stripping takes that to
+        // 100%.
+        let payload = serde_json::json!({
+            "MiscItems": [
+                { "ItemType": "/Lotus/Types/Game/Projections/T1VoidProjectionGaussPrimeABronze", "ItemCount": 3 },
+                { "ItemType": "/Lotus/Types/Game/Projections/T1VoidProjectionGaussPrimeAGold", "ItemCount": 1 }
+            ]
+        })
+        .to_string();
+
+        let inventory =
+            parse_inventory(&payload, &NameLookup::default(), &stub_resolver).expect("parse");
+        assert_eq!(inventory.untradable_count, 0, "relics must not be discarded");
+        assert_eq!(inventory.items.len(), 2, "one row per refinement");
+
+        let intact = inventory
+            .items
+            .iter()
+            .find(|item| item.refinement == Some(RelicRefinement::Intact))
+            .expect("intact row");
+        assert_eq!(intact.count, 3);
+        assert_eq!(intact.category, ItemCategory::Relic);
+        // Gold is Flawless, not Radiant — Platinum is Radiant. Both refinements of the same
+        // relic share one WFM identity.
+        let flawless = inventory
+            .items
+            .iter()
+            .find(|item| item.refinement == Some(RelicRefinement::Flawless))
+            .expect("flawless row");
+        assert_eq!(flawless.count, 1);
+        assert_eq!(intact.slug, flawless.slug);
     }
 
     #[test]

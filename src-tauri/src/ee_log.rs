@@ -109,10 +109,43 @@ pub struct DirectMessageEvent {
     pub key: String,
 }
 
+/// One side of a trade. Quantity is `1` for a bare line; `Name x N` carries an explicit count.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradedItem {
+    pub name: String,
+    pub quantity: i64,
+    /// Current rank — the number of **filled** pips. `None` for unrankable items.
+    pub rank: Option<i64>,
+    /// Max rank — the **total** pip count. `None` for unrankable items.
+    pub max_rank: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeEvent {
+    /// Trade partner, private-use glyph stripped.
+    pub partner: String,
+    /// What the user handed over.
+    pub giving: Vec<TradedItem>,
+    /// What the user received.
+    pub getting: Vec<TradedItem>,
+    /// Platinum received and paid. The log gives a **total per trade, never per item**, so a
+    /// multi-item trade cannot be priced automatically — that is a user decision.
+    pub platinum_in: i64,
+    pub platinum_out: i64,
+    pub elapsed_s: f64,
+    pub occurred_at: Option<OffsetDateTime>,
+    pub key: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum EeLogEvent {
     DirectMessage(DirectMessageEvent),
+    /// Only emitted after the game confirms the trade completed. A cancelled dialog produces
+    /// no event at all.
+    Trade(TradeEvent),
 }
 
 /// A DM tab that opened but whose direction isn't decided yet.
@@ -127,11 +160,31 @@ struct PendingTab {
 /// Stateful for two reasons: the session anchor arrives once near the top and stamps
 /// everything after it, and DM direction can only be settled by looking slightly
 /// *forward* — see [`Self::push_line`].
+/// Which half of the trade dialog is currently being read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TradeSide {
+    Giving,
+    Getting,
+}
+
+/// A trade block that has been read but not yet confirmed.
+#[derive(Debug, Clone)]
+struct PendingTrade {
+    partner: String,
+    giving: Vec<TradedItem>,
+    getting: Vec<TradedItem>,
+    elapsed_s: f64,
+}
+
 #[derive(Debug, Default)]
 pub struct EeLogParser {
     session_start: Option<OffsetDateTime>,
     pending_tabs: Vec<PendingTab>,
     latest_elapsed: f64,
+    /// Set while inside a trade dialog, cleared at `, title=`.
+    trade_side: Option<TradeSide>,
+    /// The block being read, then the completed-but-unconfirmed block.
+    trade_in_progress: Option<PendingTrade>,
 }
 
 impl EeLogParser {
@@ -153,8 +206,17 @@ impl EeLogParser {
     /// release it once the window has demonstrably passed. So a DM event is emitted
     /// *slightly after* the line that caused it, by design.
     pub fn push_line(&mut self, line: &str) -> Vec<EeLogEvent> {
+        // The game writes CRLF (6,686 of them and not one bare LF in the reference session),
+        // and neither `read_to_string` nor `split('\n')` strips the `\r`. Left on, it defeats
+        // every suffix match — the trade partner silently parses as an empty string.
+        let line = line.strip_suffix('\r').unwrap_or(line);
+
         if let Some(elapsed) = elapsed_seconds(line) {
             self.latest_elapsed = elapsed;
+        }
+
+        if let Some(event) = self.push_trade_line(line) {
+            return vec![event];
         }
 
         if self.session_start.is_none() && line.contains("Current time:") {
@@ -180,6 +242,84 @@ impl EeLogParser {
         }
 
         self.release_settled_tabs(self.latest_elapsed)
+    }
+
+    /// Feeds the trade state machine.
+    ///
+    /// The dialog spans multiple lines, so a line-at-a-time parser cannot work — the block is
+    /// buffered from `You are offering:` through `, title=`. Crucially the block is then held
+    /// rather than emitted: **`The trade was successful!` is the only proof it completed**,
+    /// and the dialog can be cancelled. A block that is never confirmed is discarded when the
+    /// next one opens.
+    fn push_trade_line(&mut self, line: &str) -> Option<EeLogEvent> {
+        if line.contains(TRADE_OPEN) {
+            // A new dialog supersedes any unconfirmed one — that earlier trade was cancelled.
+            self.trade_in_progress = Some(PendingTrade {
+                partner: String::new(),
+                giving: Vec::new(),
+                getting: Vec::new(),
+                elapsed_s: elapsed_seconds(line).unwrap_or(self.latest_elapsed),
+            });
+            self.trade_side = Some(TradeSide::Giving);
+            return None;
+        }
+
+        if self.trade_in_progress.is_some() && line.contains(TRADE_SUCCESS) {
+            let pending = self.trade_in_progress.take()?;
+            self.trade_side = None;
+            let platinum_in = platinum_total(&pending.getting);
+            let platinum_out = platinum_total(&pending.giving);
+            return Some(EeLogEvent::Trade(TradeEvent {
+                partner: pending.partner,
+                giving: pending.giving,
+                getting: pending.getting,
+                platinum_in,
+                platinum_out,
+                elapsed_s: pending.elapsed_s,
+                occurred_at: self
+                    .session_start
+                    .map(|start| start + time::Duration::seconds_f64(pending.elapsed_s)),
+                key: build_event_key(self.session_start, pending.elapsed_s),
+            }));
+        }
+
+        let Some(side) = self.trade_side else {
+            return None;
+        };
+        let trade = self.trade_in_progress.as_mut()?;
+
+        // The receive header both names the partner and switches sides.
+        if let Some(rest) = line.strip_prefix(TRADE_RECEIVE_PREFIX) {
+            if let Some(partner) = rest.strip_suffix(TRADE_RECEIVE_SUFFIX) {
+                trade.partner = strip_private_use(partner);
+                self.trade_side = Some(TradeSide::Getting);
+                return None;
+            }
+        }
+
+        // The final received item shares its line with the dialog's trailing arguments.
+        let (content, ends_block) = match line.find(TRADE_BLOCK_END) {
+            Some(index) => (&line[..index], true),
+            None => (line, false),
+        };
+
+        if let Some(item) = parse_traded_item(content) {
+            // Every copy gets its own line, and the last one carries the dialog's trailing
+            // arguments. Two identical lines therefore mean two real items — confirmed
+            // against a trade of two Arcane Universal Fallout for 10p. An earlier version
+            // treated the closing line as a repeat of the one before it and silently
+            // under-counted every multi-copy trade by one.
+            match side {
+                TradeSide::Giving => trade.giving.push(item),
+                TradeSide::Getting => trade.getting.push(item),
+            }
+        }
+
+        if ends_block {
+            // Block read; now wait for confirmation.
+            self.trade_side = None;
+        }
+        None
     }
 
     /// Releases tabs whose decision window has closed, using the log's own clock.
@@ -219,6 +359,78 @@ fn build_event_key(session_start: Option<OffsetDateTime>, elapsed_s: f64) -> Str
         .and_then(|start| start.format(&time::format_description::well_known::Rfc3339).ok())
         .unwrap_or_else(|| "?".to_string());
     format!("{stamp}|{elapsed_s:.3}")
+}
+
+/// Rank pips, drawn as private-use glyphs on the item line itself. The bar renders one pip
+/// per rank, filled up to the item's current rank:
+///
+/// | Glyph | Meaning | Observed |
+/// |---|---|---|
+/// | `U+E0A6` | empty pip | a rank 0/5 arcane — five empty |
+/// | `U+E0CB` | filled pip | a rank 5/5 arcane — five filled |
+///
+/// So **total pips = max rank** and **filled pips = current rank**. The two codepoints are
+/// not adjacent (0x25 apart), so there is no arithmetic shortcut — they are a known set.
+///
+/// Caveat: only the all-empty and all-filled extremes have been captured. A partial rank is
+/// expected to mix the two, which is what this counts, but that specific case is inferred
+/// rather than observed.
+const RANK_PIP_EMPTY: char = '\u{e0a6}';
+const RANK_PIP_FILLED: char = '\u{e0cb}';
+
+fn is_rank_pip(value: char) -> bool {
+    value == RANK_PIP_EMPTY || value == RANK_PIP_FILLED
+}
+
+const TRADE_OPEN: &str = "Are you sure you want to accept this trade? You are offering:";
+const TRADE_RECEIVE_PREFIX: &str = "and will receive from ";
+const TRADE_RECEIVE_SUFFIX: &str = " the following:";
+const TRADE_BLOCK_END: &str = ", title=";
+const TRADE_SUCCESS: &str = "Dialog::CreateOk(description=The trade was successful!";
+
+/// Parses one item line: `Platinum x 24` or a bare `Alternox Prime Blueprint`.
+///
+/// Rank pips are stripped before the name is read — they are invisible in a terminal, so
+/// leaving them in produces names that look correct and compare unequal.
+fn parse_traded_item(line: &str) -> Option<TradedItem> {
+    let total_pips = line.chars().filter(|c| is_rank_pip(*c)).count();
+    let filled_pips = line.chars().filter(|c| *c == RANK_PIP_FILLED).count();
+    let cleaned = strip_private_use(line);
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    // `Name x N`, where N may carry thousands separators.
+    let (name, quantity) = match cleaned.rfind(" x ") {
+        Some(index) => {
+            let (head, tail) = cleaned.split_at(index);
+            let digits = tail.trim_start_matches(" x ").replace(',', "");
+            match digits.parse::<i64>() {
+                Ok(value) => (head.trim().to_string(), value),
+                // An item whose own name contains " x " and no trailing count.
+                Err(_) => (cleaned.clone(), 1),
+            }
+        }
+        None => (cleaned.clone(), 1),
+    };
+
+    if name.is_empty() {
+        return None;
+    }
+    Some(TradedItem {
+        name,
+        quantity,
+        rank: (total_pips > 0).then_some(filled_pips as i64),
+        max_rank: (total_pips > 0).then_some(total_pips as i64),
+    })
+}
+
+fn platinum_total(items: &[TradedItem]) -> i64 {
+    items
+        .iter()
+        .filter(|item| item.name.eq_ignore_ascii_case("platinum"))
+        .map(|item| item.quantity)
+        .sum()
 }
 
 const ADD_TAB_MARKER: &str = "ChatRedux::AddTab: Adding tab with channel name: ";
@@ -450,7 +662,7 @@ mod tests {
                     30.0 Sys [Info]: unrelated\n";
         let events = parse_all(text);
         assert_eq!(events.len(), 1);
-        let EeLogEvent::DirectMessage(dm) = &events[0];
+        let EeLogEvent::DirectMessage(dm) = &events[0] else { panic!("expected a DM") };
         assert_eq!(dm.user, "Incoming");
     }
 
@@ -473,7 +685,7 @@ mod tests {
                     60.0 Script [Info]: ChatRedux::AddTab: Adding tab with channel name: \
                     FThem\u{e000} to index 6\n";
         let events = parse_all(text);
-        let EeLogEvent::DirectMessage(dm) = &events[0];
+        let EeLogEvent::DirectMessage(dm) = &events[0] else { panic!("expected a DM") };
         let at = dm.occurred_at.expect("wall clock");
         assert_eq!((at.hour(), at.minute(), at.second()), (21, 39, 18));
         assert!(dm.key.starts_with("2026-08-10T21:38:18Z|"), "key was {}", dm.key);
@@ -550,7 +762,7 @@ mod tests {
 
         let events = tailer.poll().unwrap();
         assert_eq!(events.len(), 1);
-        let EeLogEvent::DirectMessage(dm) = &events[0];
+        let EeLogEvent::DirectMessage(dm) = &events[0] else { panic!("expected a DM") };
         assert_eq!(dm.user, "NewSession");
         // Stamped from the NEW anchor, not the previous session's.
         assert_eq!(dm.occurred_at.unwrap().hour(), 0);
@@ -579,7 +791,7 @@ mod tests {
 
         let events = tailer.poll().unwrap();
         assert_eq!(events.len(), 1, "completed line should parse once");
-        let EeLogEvent::DirectMessage(dm) = &events[0];
+        let EeLogEvent::DirectMessage(dm) = &events[0] else { panic!("expected a DM") };
         assert_eq!(dm.user, "Someone");
 
         std::fs::remove_file(&path).ok();
@@ -593,7 +805,10 @@ mod tests {
         let events = parse_all(&text);
         let extracted: Vec<(String, f64)> = events
             .iter()
-            .map(|EeLogEvent::DirectMessage(dm)| (dm.user.clone(), dm.elapsed_s))
+            .filter_map(|event| match event {
+                EeLogEvent::DirectMessage(dm) => Some((dm.user.clone(), dm.elapsed_s)),
+                _ => None,
+            })
             .collect();
 
         let expected = [
@@ -610,6 +825,163 @@ mod tests {
         }
     }
 
+    fn trade_block(elapsed: &str, giving: &[&str], partner: &str, getting: &[&str]) -> String {
+        let mut out = format!(
+            "{elapsed} Script [Info]: Dialog.lua: Dialog::CreateOkCancel(description={}\n\n",
+            TRADE_OPEN
+        );
+        for item in giving {
+            out.push_str(item);
+            out.push('\n');
+        }
+        out.push_str("\n\n");
+        out.push_str(&format!("and will receive from {partner}\u{e000} the following:\n\n"));
+        for (index, item) in getting.iter().enumerate() {
+            out.push_str(item);
+            if index + 1 == getting.len() {
+                out.push_str(", title= leftItem=/Menu/Confirm_Item_Ok)");
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn only_trades(events: Vec<EeLogEvent>) -> Vec<TradeEvent> {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                EeLogEvent::Trade(trade) => Some(trade),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_confirmed_trade_is_recorded_with_both_sides() {
+        let mut text = String::from(ANCHOR_LINE);
+        text.push_str(&trade_block(
+            "793.432",
+            &["Alternox Prime Blueprint", "Alternox Prime Stock"],
+            "-ONG-.FxN",
+            &["Platinum x 24"],
+        ));
+        text.push_str("797.879 Script [Info]: Dialog.lua: Dialog::CreateOk(description=The trade was successful!, title=)\n");
+
+        let trades = only_trades(parse_all(&text));
+        assert_eq!(trades.len(), 1);
+        let trade = &trades[0];
+        assert_eq!(trade.partner, "-ONG-.FxN", "glyph must be stripped");
+        assert_eq!(trade.giving.len(), 2);
+        assert_eq!(trade.getting.len(), 1);
+        assert_eq!(trade.platinum_in, 24);
+        assert_eq!(trade.platinum_out, 0);
+        assert!((trade.elapsed_s - 793.432).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_cancelled_trade_is_never_recorded() {
+        // The dialog can be dismissed. Without the success line there is no trade, and
+        // recording one would invent a transaction that never happened.
+        let mut text = String::from(ANCHOR_LINE);
+        text.push_str(&trade_block("100.0", &["Platinum x 10"], "Someone", &["Ash Prime Blueprint"]));
+        text.push_str("104.0 Script [Info]: Dialog.lua: Dialog::SendResult(1)\n");
+        assert!(only_trades(parse_all(&text)).is_empty());
+    }
+
+    #[test]
+    fn a_cancelled_trade_does_not_contaminate_the_next_one() {
+        let mut text = String::from(ANCHOR_LINE);
+        text.push_str(&trade_block("100.0", &["Cancelled Item"], "Nobody", &["Platinum x 99"]));
+        text.push_str(&trade_block("200.0", &["Real Item"], "Partner", &["Platinum x 5"]));
+        text.push_str("205.0 Script [Info]: Dialog.lua: Dialog::CreateOk(description=The trade was successful!, title=)\n");
+
+        let trades = only_trades(parse_all(&text));
+        assert_eq!(trades.len(), 1, "only the confirmed trade counts");
+        assert_eq!(trades[0].partner, "Partner");
+        assert_eq!(trades[0].platinum_in, 5);
+        assert_eq!(trades[0].giving[0].name, "Real Item", "no leakage from the cancelled block");
+    }
+
+    #[test]
+    fn item_lines_carry_quantity_and_rank_pips() {
+        // `Name x N` is an explicit count; a bare line is one.
+        let single = parse_traded_item("Alternox Prime Blueprint").unwrap();
+        assert_eq!((single.name.as_str(), single.quantity), ("Alternox Prime Blueprint", 1));
+        assert_eq!(single.max_rank, None);
+
+        let many = parse_traded_item("Platinum x 24").unwrap();
+        assert_eq!((many.name.as_str(), many.quantity), ("Platinum", 24));
+
+        let thousands = parse_traded_item("Credits x 1,250").unwrap();
+        assert_eq!(thousands.quantity, 1250);
+
+        // Five rank pips = a 0-5 item. Verified against a real rank-0/5 arcane trade whose
+        // line carried exactly five U+E0A6, with the app's own whisper confirming "(Rank 0/5)".
+        // Five empty pips: a 0/5 item. Verified against a real trade whose whisper confirmed
+        // "(Rank 0/5)".
+        let unranked = parse_traded_item("Arcane Universal Fallout \u{e0a6}\u{e0a6}\u{e0a6}\u{e0a6}\u{e0a6}")
+            .unwrap();
+        assert_eq!(unranked.name, "Arcane Universal Fallout", "pips must not leak into the name");
+        assert_eq!((unranked.rank, unranked.max_rank), (Some(0), Some(5)));
+        assert_eq!(unranked.quantity, 1);
+
+        // Five filled pips: a 5/5 item, from a real Secondary Dexterity trade.
+        let maxed = parse_traded_item("Secondary Dexterity \u{e0cb}\u{e0cb}\u{e0cb}\u{e0cb}\u{e0cb}")
+            .unwrap();
+        assert_eq!(maxed.name, "Secondary Dexterity");
+        assert_eq!((maxed.rank, maxed.max_rank), (Some(5), Some(5)));
+
+        // A partial rank mixes the two. Inferred from the bar's structure rather than
+        // observed, so it is pinned here to make the assumption explicit.
+        let partial = parse_traded_item("Some Mod \u{e0cb}\u{e0cb}\u{e0cb}\u{e0a6}\u{e0a6}")
+            .unwrap();
+        assert_eq!((partial.rank, partial.max_rank), (Some(3), Some(5)));
+        assert_eq!(partial.name, "Some Mod");
+    }
+
+    #[test]
+    fn every_copy_of_an_item_is_counted() {
+        // Each copy occupies its own line and the last carries the dialog arguments, so two
+        // identical lines are two real items. Verified against a trade of two Arcane
+        // Universal Fallout for 10p. Treating the closing line as a repeat under-counts
+        // every multi-copy trade by one.
+        let mut text = String::from(ANCHOR_LINE);
+        text.push_str(&format!(
+            "500.0 Script [Info]: Dialog.lua: Dialog::CreateOkCancel(description={}\n\n\
+             Platinum x 10\n\n\
+             and will receive from Someone\u{e000} the following:\n\n\
+             Arcane Universal Fallout \u{e0a6}\u{e0a6}\u{e0a6}\u{e0a6}\u{e0a6}\n\n\
+             Arcane Universal Fallout \u{e0a6}\u{e0a6}\u{e0a6}\u{e0a6}\u{e0a6}, title= leftItem=/Menu/Confirm_Item_Ok)\n\
+             505.0 Script [Info]: Dialog.lua: Dialog::CreateOk(description=The trade was successful!, title=)\n",
+            TRADE_OPEN
+        ));
+
+        let trades = only_trades(parse_all(&text));
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].getting.len(), 2, "two arcanes were traded, not one");
+        assert_eq!(trades[0].platinum_out, 10);
+    }
+
+    #[test]
+    fn parses_the_real_trade_from_the_reference_log() {
+        let text = std::fs::read_to_string(reference_log()).expect("reference EE.log");
+        let trades = only_trades(parse_all(&text));
+        assert_eq!(trades.len(), 1, "the reference session holds one completed trade");
+
+        let trade = &trades[0];
+        assert_eq!(trade.partner, "Ervil_LeBaron");
+        assert_eq!(trade.platinum_out, 10, "user paid 10 platinum");
+        assert_eq!(trade.platinum_in, 0);
+        // Two arcanes for 10 platinum — a real multi-copy trade, not a parsing artefact.
+        assert_eq!(trade.getting.len(), 2);
+        assert_eq!(trade.getting[0].name, "Arcane Universal Fallout");
+        assert_eq!(trade.getting[1].name, "Arcane Universal Fallout");
+        // Rank is readable from the pips even though EE.log has no rank field.
+        assert_eq!(trade.getting[0].max_rank, Some(5));
+        assert_eq!(trade.getting[0].rank, Some(0), "both arcanes were unranked");
+        assert!(trade.occurred_at.is_some());
+    }
+
     #[test]
     fn parses_the_real_reference_log() {
         let text = std::fs::read_to_string(reference_log())
@@ -617,7 +989,8 @@ mod tests {
         let events = parse_all(&text);
 
         assert!(!events.is_empty(), "reference session contains DM tabs");
-        for EeLogEvent::DirectMessage(dm) in &events {
+        for event in &events {
+            let EeLogEvent::DirectMessage(dm) = event else { continue };
             assert!(!dm.user.is_empty());
             // A name that kept its glyph, or ran past the line, is the classic failure.
             assert!(

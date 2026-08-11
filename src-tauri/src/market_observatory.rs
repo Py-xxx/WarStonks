@@ -15,7 +15,6 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::error_log::{log_feature_error_best_effort, log_feature_event_best_effort};
 use crate::item_catalog_v2;
-use crate::settings;
 use crate::wfm_scheduler::{execute_coalesced_wfm_request, RequestPriority, WfmHttpResponse};
 
 const MARKET_OBSERVATORY_DATABASE_FILE: &str = "market_observatory.sqlite";
@@ -8704,17 +8703,6 @@ fn resolve_relic_catalog_entry(
     }
 }
 
-fn relic_tier_sort_order(value: &str) -> i64 {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "lith" => 0,
-        "meso" => 1,
-        "neo" => 2,
-        "axi" => 3,
-        "requiem" => 4,
-        _ => 9,
-    }
-}
-
 /// Maximum run value (plat/run EV) that maps to the highest run-value component score.
 /// Relics with EV above this still score at max, but the scale is linear below it,
 /// so a 40p/run relic and an 80p/run relic are now meaningfully differentiated.
@@ -10960,24 +10948,18 @@ struct OwnedRelicCacheRow {
 }
 
 fn fetch_owned_relic_inventory_rows(app: &tauri::AppHandle) -> Result<Vec<OwnedRelicCacheRow>> {
-    let settings = settings::load_settings_inner(app)?;
-    if !settings.alecaframe.enabled {
-        return Err(anyhow!("Enable Alecaframe API in Settings first."));
-    }
-
-    let public_link = settings
-        .alecaframe
-        .public_link
-        .ok_or_else(|| anyhow!("No Alecaframe public link is saved."))?;
-    let public_token = settings::extract_public_token(&public_link)
-        .ok_or_else(|| anyhow!("Could not extract a public token from the Alecaframe link."))?;
-    let inventory = settings::fetch_alecaframe_relic_inventory(&public_token)?;
+    // Sourced from AlecaFrame's local app data rather than its API: same numbers, no network
+    // request, and it carries every refinement rather than the API's narrower view.
+    let inventory = crate::alecaframe::load_inventory_for_internal_use(app)?.ok_or_else(|| {
+        anyhow!("Turn on AlecaFrame app data in Settings to read your owned relics.")
+    })?;
 
     let mut aggregates = BTreeMap::<(String, String), OwnedRelicRefinementCounts>::new();
-    for entry in inventory {
-        let key = (entry.tier.clone(), entry.code.clone());
+    for (tier, code, refinement, count) in crate::alecaframe::owned_relic_counts(&inventory) {
+        // The cache counts are u32; a negative or absurd count would be corrupt data.
+        let count = count.clamp(0, u32::MAX as i64) as u32;
         let counts = aggregates
-            .entry(key)
+            .entry((tier, code))
             .or_insert_with(|| OwnedRelicRefinementCounts {
                 intact: 0,
                 exceptional: 0,
@@ -10985,40 +10967,19 @@ fn fetch_owned_relic_inventory_rows(app: &tauri::AppHandle) -> Result<Vec<OwnedR
                 radiant: 0,
                 total: 0,
             });
-
-        match entry.refinement.as_str() {
-            RELIC_REFINEMENT_INTACT => counts.intact += entry.count,
-            RELIC_REFINEMENT_EXCEPTIONAL => counts.exceptional += entry.count,
-            RELIC_REFINEMENT_FLAWLESS => counts.flawless += entry.count,
-            RELIC_REFINEMENT_RADIANT => counts.radiant += entry.count,
-            _ => {
-                return Err(anyhow!(
-                    "Unsupported relic refinement value: {}",
-                    entry.refinement
-                ));
-            }
+        match refinement {
+            crate::alecaframe::RelicRefinement::Intact => counts.intact += count,
+            crate::alecaframe::RelicRefinement::Exceptional => counts.exceptional += count,
+            crate::alecaframe::RelicRefinement::Flawless => counts.flawless += count,
+            crate::alecaframe::RelicRefinement::Radiant => counts.radiant += count,
         }
+        counts.total += count;
     }
 
-    let mut rows = Vec::new();
-    for ((tier, code), mut counts) in aggregates {
-        counts.total = counts
-            .intact
-            .saturating_add(counts.exceptional)
-            .saturating_add(counts.flawless)
-            .saturating_add(counts.radiant);
-        rows.push(OwnedRelicCacheRow { tier, code, counts });
-    }
-
-    rows.sort_by(|left, right| {
-        let tier_cmp = relic_tier_sort_order(&left.tier).cmp(&relic_tier_sort_order(&right.tier));
-        if tier_cmp != Ordering::Equal {
-            return tier_cmp;
-        }
-        left.code.cmp(&right.code)
-    });
-
-    Ok(rows)
+    Ok(aggregates
+        .into_iter()
+        .map(|((tier, code), counts)| OwnedRelicCacheRow { tier, code, counts })
+        .collect())
 }
 
 fn load_owned_relic_inventory_cache(

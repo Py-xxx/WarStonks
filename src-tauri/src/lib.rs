@@ -2,6 +2,7 @@ mod alecaframe;
 mod commands;
 mod data_transfer;
 mod ee_log;
+mod ee_log_shadow;
 mod error_log;
 // The item catalog. Identity is the WFM item id (`item_key`), never a positional rowid, which
 // was the root cause of a class of "price shown under the wrong item" bugs in the predecessor
@@ -142,10 +143,8 @@ pub fn run() {
             trades::get_set_completion_owned_item_prices,
             trades::get_wfm_profile_trade_log,
             trades::refresh_wfm_trade_detection,
-            trades::refresh_alecaframe_trade_detection,
             trades::get_portfolio_pnl_summary,
             trades::set_wfm_trade_log_keep_item,
-            trades::migrate_alecaframe_trade_log,
             trades::update_trade_group_allocations,
             trades::force_wfm_trade_log_resync,
             trades::ensure_trade_set_map,
@@ -194,8 +193,11 @@ pub fn run() {
             settings::get_app_settings,
             local_sources::probe_local_sources,
             ee_log::poll_ee_log_events,
+            ee_log_shadow::record_ee_log_trades,
+            ee_log_shadow::get_ee_log_shadow_trades,
+            ee_log_shadow::get_trade_detection_comparison,
             alecaframe::read_alecaframe_inventory,
-            settings::test_alecaframe_public_link,
+            alecaframe::refresh_wallet_from_appdata,
             settings::save_alecaframe_settings,
             settings::save_discord_webhook_settings,
             settings::save_smart_manage_settings,
@@ -206,7 +208,6 @@ pub fn run() {
             settings::send_private_message_discord_notification,
             settings::send_app_update_discord_notification,
             settings::get_currency_balances,
-            settings::refresh_alecaframe_wallet_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

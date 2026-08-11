@@ -6,7 +6,6 @@ import {
   getPortfolioInventoryValue,
   getPortfolioPnlSummary,
   getWfmProfileTradeLog,
-  migrateAlecaframeTradeLog,
   setWfmTradeLogKeepItem,
   updateTradeGroupAllocations,
 } from '../../lib/tauriClient';
@@ -501,11 +500,6 @@ function formatMarginValue(value: number | null): string {
   return `${normalized}%`;
 }
 
-function buildDefaultMigrationDate(): string {
-  const baseline = new Date();
-  baseline.setDate(baseline.getDate() - 90);
-  return baseline.toISOString().slice(0, 10);
-}
 
 function normalizeFilterDate(value: string): number | null {
   if (!value) {
@@ -759,7 +753,6 @@ function TradeLogEntryRow({
 
 function TradeLogTab({ username }: { username: string | null }) {
   const { t } = useTranslation();
-  const appSettings = useAppStore((state) => state.appSettings);
   const [entries, setEntries] = useState<PortfolioTradeLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   // Optimistic "Keep item" toggle state. `keepOverrides` is what the UI shows
@@ -769,14 +762,11 @@ function TradeLogTab({ username }: { username: string | null }) {
   const [keepOverrides, setKeepOverrides] = useState<Record<string, boolean>>({});
   const keepDesiredRef = useRef<Map<string, boolean>>(new Map());
   const keepInFlightRef = useRef<Set<string>>(new Set());
-  const [migrating, setMigrating] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   const [savingAllocations, setSavingAllocations] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
-  const [migrateModalOpen, setMigrateModalOpen] = useState(false);
-  const [migrationBaselineDate, setMigrationBaselineDate] = useState(buildDefaultMigrationDate);
   const [allocationGroupId, setAllocationGroupId] = useState<string | null>(null);
   const [allocationDrafts, setAllocationDrafts] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
@@ -944,27 +934,6 @@ function TradeLogTab({ username }: { username: string | null }) {
     );
   };
 
-  const handleMigrate = async () => {
-    if (!username) {
-      setErrorMessage(t('pf.connectFirst2'));
-      return;
-    }
-
-    setMigrating(true);
-    setErrorMessage(null);
-
-    try {
-      const nextState = await migrateAlecaframeTradeLog(username, {
-        baselineDate: migrationBaselineDate,
-      });
-      applyTradeLogState(nextState);
-      setMigrateModalOpen(false);
-    } catch (error) {
-      setErrorMessage(formatPortfolioError(error));
-    } finally {
-      setMigrating(false);
-    }
-  };
 
   const handleForceResync = async () => {
     if (!username) {
@@ -1097,18 +1066,6 @@ function TradeLogTab({ username }: { username: string | null }) {
         <div className="period-right portfolio-log-toolbar">
           {lastUpdatedAt ? (
             <span className="portfolio-log-updated">{t('pf.lastUpdated')} {formatShortLocalDateTime(lastUpdatedAt)}</span>
-          ) : null}
-          {appSettings.alecaframe.enabled && username ? (
-            <button
-              className="act-btn portfolio-secondary-btn"
-              type="button"
-              onClick={() => {
-                setMigrationBaselineDate(buildDefaultMigrationDate());
-                setMigrateModalOpen(true);
-              }}
-            >
-              {t('pf.migrate')}
-            </button>
           ) : null}
           {username ? (
             <button
@@ -1322,69 +1279,6 @@ function TradeLogTab({ username }: { username: string | null }) {
         </div>
       )}
 
-      {migrateModalOpen ? (
-        <ModalPortal>
-        <div className="modal-backdrop" onClick={() => setMigrateModalOpen(false)}>
-          <div
-            className="settings-modal portfolio-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t('a11y.migrateTrades')}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-modal-header">
-              <div className="settings-modal-title">
-                <span className="card-label">{t('pf.tradeLog')}</span>
-                <h3>{t('pf.migrateAleca')}</h3>
-              </div>
-              <button
-                className="modal-close"
-                type="button"
-                aria-label={t('a11y.closeMigrate')}
-                onClick={() => setMigrateModalOpen(false)}
-              >
-                ×
-              </button>
-            </div>
-            <div className="settings-modal-body">
-              <div className="settings-preview-grid">
-                <article className="settings-preview-card">
-                  <span className="settings-field-label">{t('pf.purpose')}</span>
-                  <p className="settings-preview-value">
-                    {t('pf.migrateHint')}
-                  </p>
-                </article>
-                <article className="settings-preview-card">
-                  <span className="settings-field-label">{t('pf.baselineDate')}</span>
-                  <input
-                    className="settings-text-input"
-                    type="date"
-                    value={migrationBaselineDate}
-                    onChange={(event) => setMigrationBaselineDate(event.target.value)}
-                  />
-                </article>
-              </div>
-              <p className="portfolio-modal-note">
-                {t('pf.migrateFromHint')}
-              </p>
-            </div>
-            <div className="settings-modal-actions">
-              <button className="period-btn" type="button" onClick={() => setMigrateModalOpen(false)}>
-                {t('common.cancel')}
-              </button>
-              <button
-                className="act-btn"
-                type="button"
-                onClick={() => void handleMigrate()}
-                disabled={migrating || !migrationBaselineDate}
-              >
-                {migrating ? t('pf.migrating') : t('pf.migrate')}
-              </button>
-            </div>
-          </div>
-        </div>
-        </ModalPortal>
-      ) : null}
 
       {allocationGroup ? (
         <ModalPortal>
