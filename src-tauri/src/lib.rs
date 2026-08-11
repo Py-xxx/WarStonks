@@ -8,6 +8,7 @@ mod error_log;
 // was the root cause of a class of "price shown under the wrong item" bugs in the predecessor
 // of this module. See the module doc comment for the full design rationale.
 mod item_catalog_v2;
+mod listing_close;
 mod local_sources;
 mod maintenance;
 mod market_observatory;
@@ -221,6 +222,7 @@ pub fn run() {
             settings::save_alecaframe_settings,
             settings::save_discord_webhook_settings,
             settings::save_smart_manage_settings,
+            settings::set_auto_close_listings,
             settings::send_watchlist_found_discord_notification,
             settings::send_underpriced_listing_discord_notification,
             settings::send_listing_health_discord_notification,

@@ -145,6 +145,12 @@ pub struct AppSettings {
     pub discord_webhook: DiscordWebhookSettings,
     #[serde(default)]
     pub smart_manage: SmartManageSettings,
+    /// Auto-closing the Warframe.Market listing behind a detected trade.
+    ///
+    /// Default **off**, deliberately: this is the only path where trade detection writes to
+    /// WFM, and a wrong close destroys a real listing (plan §4.5).
+    #[serde(default)]
+    pub auto_close_listings: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1386,6 +1392,46 @@ pub fn save_smart_manage_settings(
     Ok(settings)
 }
 
+/// Turns listing auto-close on or off.
+///
+/// Its own command rather than a field on a bigger save, because it is the one setting that
+/// grants trade detection permission to **write to Warframe.Market** — the user should be
+/// turning exactly this on, not carrying it along with something else.
+#[tauri::command]
+pub fn set_auto_close_listings(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<AppSettings, String> {
+    let _settings_guard = lock_settings_file().map_err(|error| error.to_string())?;
+    let mut settings = load_settings_inner(&app).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "load-for-auto-close-save",
+            "Failed to load settings before saving the listing auto-close preference.",
+            "Couldn\u{2019}t save that right now. Please try again.",
+            "AUTOCLOSE-SAVE-LOAD-01",
+            &error,
+        )
+    })?;
+
+    settings.auto_close_listings = enabled;
+
+    save_settings_inner(&app, &settings).map_err(|error| {
+        log_settings_error_and_build_message(
+            &app,
+            "settings",
+            "save-auto-close-setting",
+            "Failed to persist the listing auto-close preference.",
+            "Couldn\u{2019}t save that right now. Please try again.",
+            "AUTOCLOSE-SAVE-STORE-01",
+            &error,
+        )
+    })?;
+
+    Ok(settings)
+}
+
 pub(crate) fn send_watchlist_found_discord_notification_inner(
     app: &tauri::AppHandle,
     input: &DiscordWatchlistNotificationInput,
@@ -1845,6 +1891,7 @@ mod tests {
         let path = temp_settings_path();
         let settings = AppSettings {
             warstonks_version: None,
+            auto_close_listings: false,
             alecaframe: AlecaframeSettings {
                 enabled: true,
                 public_link: Some(

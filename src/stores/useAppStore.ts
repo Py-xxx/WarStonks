@@ -225,6 +225,9 @@ let autocompleteCatalogPromise: Promise<WfmAutocompleteItem[]> | null = null;
 let autocompleteCatalogLang: AppLanguage | null = null;
 
 const defaultAppSettings: AppSettings = {
+  // Off until the user explicitly opts in: this is the one setting that lets trade detection
+  // write to Warframe.Market.
+  autoCloseListings: false,
   alecaframe: {
     enabled: false,
     publicLink: null,

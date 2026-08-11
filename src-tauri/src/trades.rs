@@ -6483,6 +6483,10 @@ pub(crate) fn apply_detected_trade_entries(
         session_started_at,
     )?;
 
+    // Last, and deliberately after everything that persists: the trade is recorded whatever
+    // happens to the listing.
+    settle_listings_for_detected_trades(app, &new_entries);
+
     Ok(DetectedTradeOutcome {
         added: new_entries.len() as i64,
         notification_count,
@@ -6512,6 +6516,74 @@ pub(crate) fn rebuild_owned_set_components_from_trade_log(app: &tauri::AppHandle
     let state = load_cached_trade_log_state_for_app(app, &username)?;
     let deltas = build_owned_set_component_deltas_for_entries(app, &state.entries)?;
     replace_owned_set_component_deltas(app, &deltas)
+}
+
+/// Settles the Warframe.Market listings behind freshly detected trades (plan §4.5, step 9).
+///
+/// Runs on its own thread and never reports back. Two reasons: these are network writes that
+/// would otherwise stall the one-second EE.log poll, and the trade is *already recorded* by the
+/// time this runs — an unclosed listing is a nuisance, a blocked detector is data loss.
+///
+/// Gated on `auto_close_listings`, default off. Reads the user's live listings once for the
+/// whole batch rather than per row.
+fn settle_listings_for_detected_trades(app: &tauri::AppHandle, entries: &[PortfolioTradeLogEntry]) {
+    let enabled = crate::settings::load_settings_inner(app)
+        .map(|settings| settings.auto_close_listings)
+        .unwrap_or(false);
+    if !enabled || entries.is_empty() {
+        return;
+    }
+
+    // Only rows that name an item and carry a price can be matched to a listing.
+    let candidates: Vec<(String, String, Option<i64>, i64, i64)> = entries
+        .iter()
+        .filter(|entry| !entry.slug.trim().is_empty() && entry.platinum > 0)
+        .map(|entry| {
+            (
+                entry.slug.clone(),
+                entry.order_type.clone(),
+                entry.rank,
+                entry.quantity.max(1),
+                entry.platinum,
+            )
+        })
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let seller_mode = watchlist_seller_mode()
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| "ingame".to_string());
+        let Ok(overview) = build_trade_overview_inner(&app, &seller_mode) else {
+            // Signed out, or WFM unreachable. The listing simply stays open.
+            return;
+        };
+        let listings: Vec<TradeSellOrder> = overview
+            .sell_orders
+            .iter()
+            .chain(overview.buy_orders.iter())
+            .cloned()
+            .collect();
+
+        for (slug, order_type, rank, quantity, unit_price) in candidates {
+            crate::listing_close::settle_listing_for_trade(
+                &app,
+                &crate::listing_close::DetectedTrade {
+                    slug: &slug,
+                    order_type: &order_type,
+                    rank,
+                    quantity,
+                    unit_price,
+                },
+                &listings,
+                &seller_mode,
+            );
+        }
+    });
 }
 
 /// Manual, user-triggered backfill from Warframe.Market (plan §7.1 rule 3).
@@ -9219,7 +9291,7 @@ pub async fn verify_market_listing(
     Ok(result)
 }
 
-fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
+pub(crate) fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
     let mut session = ensure_authenticated_session(app)?;
     let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
     let client = shared_wfm_client()?;
@@ -9388,7 +9460,7 @@ fn resolve_per_trade(
     Ok(Some(value))
 }
 
-fn create_order_inner(
+pub(crate) fn create_order_inner(
     app: &tauri::AppHandle,
     input: &TradeCreateListingInput,
     order_type: &str,
@@ -9501,7 +9573,7 @@ fn create_order_inner(
 /// queues behind background work, while Smart Manage passes `High` — prompt, but always yielding
 /// to the user. (Priority only orders the queue; the scheduler's 3 req/s ceiling applies to every
 /// tier, so this can't be used to push more throughput.)
-fn update_order_inner(
+pub(crate) fn update_order_inner(
     app: &tauri::AppHandle,
     input: &TradeUpdateListingInput,
     order_type: &str,
@@ -9616,7 +9688,7 @@ fn set_orders_group_visibility_inner(
     build_trade_overview_inner(app, seller_mode)
 }
 
-fn close_order_inner(
+pub(crate) fn close_order_inner(
     app: &tauri::AppHandle,
     order_id: &str,
     quantity: i64,

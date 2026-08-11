@@ -180,6 +180,14 @@ export async function saveDiscordWebhookSettings(
   return invoke<AppSettings>('save_discord_webhook_settings', { input });
 }
 
+/**
+ * Grants (or revokes) trade detection's permission to close listings on Warframe.Market.
+ * Default off — this is the only path where detection writes to WFM.
+ */
+export async function setAutoCloseListings(enabled: boolean): Promise<AppSettings> {
+  return invoke<AppSettings>('set_auto_close_listings', { enabled });
+}
+
 export async function saveSmartManageSettings(
   input: SmartManageSettings,
 ): Promise<AppSettings> {
