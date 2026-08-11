@@ -36,7 +36,6 @@ import { useWorldStateActivities } from './hooks/useWorldStateActivities';
 import { useWorldStateExtras } from './hooks/useWorldStateExtras';
 import { useMarketTracking } from './hooks/useMarketTracking';
 import { useAutoScanScheduler } from './hooks/useAutoScanScheduler';
-import { useTradeDetection } from './hooks/useTradeDetection';
 import { useTradeHealthBackground } from './hooks/useTradeHealthBackground';
 import { useSmartManageAlerts } from './hooks/useSmartManageAlerts';
 import { useTradeDetectedAlerts } from './hooks/useTradeDetectedAlerts';
@@ -114,7 +113,6 @@ function AppShell() {
   useImageErrorRecovery();
   useMarketTracking();
   useAutoScanScheduler();
-  useTradeDetection();
   useTradeHealthBackground();
   useSmartManageAlerts();
   useTradeDetectedAlerts();

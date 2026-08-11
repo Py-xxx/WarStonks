@@ -40,6 +40,9 @@ export function usePrivateMessageAlerts(): void {
     }
 
     let cancelled = false;
+    // Trades detected before the app started are history the user has already seen — the
+    // backend uses this to decide what may notify, not what may be recorded.
+    const sessionStartedAt = new Date().toISOString();
 
     const drain = async () => {
       if (inFlight.current) {
@@ -58,7 +61,7 @@ export function usePrivateMessageAlerts(): void {
           // EE.log is the trade-log source. The shadow store is kept alongside purely as a
           // debug aid for the Detection tab and can be dropped without affecting anything.
           const username = useAppStore.getState().tradeAccount?.name ?? '';
-          void recordEeLogTradesToLog(username, trades).catch(() => undefined);
+          void recordEeLogTradesToLog(username, trades, sessionStartedAt).catch(() => undefined);
           void recordEeLogTrades(trades).catch(() => undefined);
         }
 

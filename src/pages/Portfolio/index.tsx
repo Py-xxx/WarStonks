@@ -5,7 +5,7 @@ import {
   getCachedWfmProfileTradeLog,
   getPortfolioInventoryValue,
   getPortfolioPnlSummary,
-  getWfmProfileTradeLog,
+  importWfmTradeLog,
   setWfmTradeLogKeepItem,
   updateTradeGroupAllocations,
 } from '../../lib/tauriClient';
@@ -34,6 +34,50 @@ function formatPortfolioError(error: unknown): string {
     return error.trim();
   }
   return tActive('pf.somethingWentWrong');
+}
+
+type TradeSourceFilter = 'all' | 'eelog' | 'wfm' | 'alecaframe';
+
+/**
+ * Where a trade-log row came from.
+ *
+ * `eelog` rows are detected live from the game as the trade completes. Everything else
+ * predates the cutover or arrived through the manual Warframe.Market backfill, so it is
+ * labelled **Imported** — the origin stays visible rather than being flattened away.
+ */
+function tradeSourceLabel(source: string, t: (key: TranslationKey) => string): string {
+  if (source === 'eelog') {
+    return t('pf.sourceInGame');
+  }
+  if (source === 'alecaframe') {
+    return t('pf.alecaframe');
+  }
+  return t('pf.sourceImported');
+}
+
+/**
+ * Whether a grouped trade still needs the user to say what each item was worth.
+ *
+ * EE.log gives a platinum **total per trade and never a per-item price** (plan §4.2), so a
+ * multi-item trade lands with a provisional even split. That split is a placeholder, not a
+ * measurement: left unmarked it would flow into realized profit and margins looking settled.
+ * A group stops needing pricing the moment any child is promoted to a manual allocation.
+ *
+ * Two exclusions are deliberate:
+ * - **Single-item groups** — the total *is* the item's price, so there is nothing to divide.
+ * - **Zero-platinum trades** — item-for-item swaps have no cost basis to allocate at all.
+ */
+function groupNeedsPricing(
+  children: PortfolioTradeLogEntry[],
+  totalPlatinum: number,
+): boolean {
+  if (children.length < 2 || totalPlatinum <= 0) {
+    return false;
+  }
+  if (!children.some((child) => child.source === 'eelog')) {
+    return false;
+  }
+  return !children.some((child) => child.allocationMode === 'manual');
 }
 
 const RefreshIcon = () => (
@@ -668,11 +712,14 @@ function PortfolioPanelHeader({
 function TradeLogEntryRow({
   entry,
   isChild = false,
+  provisionalPrice = false,
   keepOn,
   onToggleKeep,
 }: {
   entry: PortfolioTradeLogEntry;
   isChild?: boolean;
+  /** Row belongs to a group whose platinum total has only been split provisionally. */
+  provisionalPrice?: boolean;
   keepOn: boolean;
   onToggleKeep: (entry: PortfolioTradeLogEntry) => void;
 }) {
@@ -680,11 +727,12 @@ function TradeLogEntryRow({
   const profitTone = entry.profit == null ? '' : entry.profit < 0 ? ' neg' : ' pos';
   const statusDetail = renderTradeStatusDetail(entry);
   const metaParts = [
-    entry.source === 'wfm' ? 'WFM' : t('pf.alecaframe'),
+    tradeSourceLabel(entry.source, t),
     entry.rank !== null && entry.rank !== undefined ? `${t('pf.rank')} ${entry.rank}` : null,
     isChild && entry.allocationMode
       ? entry.allocationMode === 'manual' ? t('pf.manual') : t('pf.auto')
       : null,
+    provisionalPrice ? t('pf.estimatedPrice') : null,
   ].filter(Boolean);
 
   return (
@@ -773,7 +821,10 @@ function TradeLogTab({ username }: { username: string | null }) {
   const [orderTypeFilter, setOrderTypeFilter] = useState<'all' | 'buy' | 'sell'>('all');
   const [statusFilter, setStatusFilter] =
     useState<'all' | 'Flip' | 'Sold As Set' | 'Partial' | 'Open' | 'Kept' | 'none'>('all');
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'wfm' | 'alecaframe'>('all');
+  const [sourceFilter, setSourceFilter] = useState<TradeSourceFilter>('all');
+  const [onlyNeedsPricing, setOnlyNeedsPricing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
@@ -816,7 +867,23 @@ function TradeLogTab({ username }: { username: string | null }) {
     });
   }, [entries, fromDate, orderTypeFilter, searchQuery, sourceFilter, statusFilter, toDate]);
 
-  const displayRows = useMemo(() => buildTradeLogDisplayRows(filteredEntries), [filteredEntries]);
+  const allDisplayRows = useMemo(() => buildTradeLogDisplayRows(filteredEntries), [filteredEntries]);
+  const needsPricingCount = useMemo(
+    () =>
+      allDisplayRows.filter(
+        (row) => row.kind === 'group' && groupNeedsPricing(row.children, row.totalPlatinum),
+      ).length,
+    [allDisplayRows],
+  );
+  const displayRows = useMemo(
+    () =>
+      onlyNeedsPricing
+        ? allDisplayRows.filter(
+            (row) => row.kind === 'group' && groupNeedsPricing(row.children, row.totalPlatinum),
+          )
+        : allDisplayRows,
+    [allDisplayRows, onlyNeedsPricing],
+  );
   const allocationGroup = useMemo(
     () =>
       displayRows.find(
@@ -849,12 +916,37 @@ function TradeLogTab({ username }: { username: string | null }) {
     setErrorMessage(null);
 
     try {
-      const nextState = await getWfmProfileTradeLog(username);
+      // Reloads what is already stored. EE.log is the trade-log source, so there is
+      // nothing to fetch here — a WFM backfill is the separate Import button.
+      const nextState = await getCachedWfmProfileTradeLog(username);
       applyTradeLogState(nextState);
     } catch (error) {
       setErrorMessage(formatPortfolioError(error));
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Manual backfill for trades made while WarStonks was closed — the one gap EE.log
+  // cannot cover, because the game truncates its log on every launch.
+  const handleImportFromWfm = async () => {
+    if (!username) {
+      setErrorMessage(t('pf.connectFirst2'));
+      return;
+    }
+
+    setImporting(true);
+    setErrorMessage(null);
+    setImportMessage(null);
+
+    try {
+      const outcome = await importWfmTradeLog(username);
+      applyTradeLogState(await getCachedWfmProfileTradeLog(username));
+      setImportMessage(t('pf.importedCount', { count: String(outcome.added) }));
+    } catch (error) {
+      setErrorMessage(formatPortfolioError(error));
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -1010,20 +1102,8 @@ function TradeLogTab({ username }: { username: string | null }) {
         }
       }
 
-      try {
-        const nextState = await getWfmProfileTradeLog(username);
-        if (!cancelled) {
-          applyTradeLogState(nextState);
-          setErrorMessage(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setErrorMessage(formatPortfolioError(error));
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+      if (!cancelled) {
+        setLoading(false);
       }
     };
 
@@ -1086,6 +1166,15 @@ function TradeLogTab({ username }: { username: string | null }) {
             {t('pf.exportCsv')}
           </button>
           <button
+            className="act-btn portfolio-secondary-btn"
+            type="button"
+            onClick={() => void handleImportFromWfm()}
+            disabled={loading || resyncing || importing || !username}
+            title={t('pf.importFromWfmHint')}
+          >
+            {importing ? t('pf.importing') : t('pf.importFromWfm')}
+          </button>
+          <button
             className="act-btn portfolio-refresh-btn"
             type="button"
             onClick={() => void handleRefresh()}
@@ -1097,7 +1186,22 @@ function TradeLogTab({ username }: { username: string | null }) {
         </div>
       </div>
 
+      {needsPricingCount > 0 ? (
+        <div className="portfolio-needs-pricing-banner">
+          <span>{t('pf.needsPricingBanner', { count: String(needsPricingCount) })}</span>
+          <button
+            className="act-btn portfolio-secondary-btn"
+            type="button"
+            onClick={() => setOnlyNeedsPricing((current) => !current)}
+            aria-pressed={onlyNeedsPricing}
+          >
+            {onlyNeedsPricing ? t('pf.showAllTrades') : t('pf.showOnlyNeedsPricing')}
+          </button>
+        </div>
+      ) : null}
+
       {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
+      {importMessage ? <div className="settings-inline-success">{importMessage}</div> : null}
 
       {!username ? (
         <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
@@ -1166,10 +1270,11 @@ function TradeLogTab({ username }: { username: string | null }) {
                 <select
                   className="settings-text-input"
                   value={sourceFilter}
-                  onChange={(event) => setSourceFilter(event.target.value as 'all' | 'wfm' | 'alecaframe')}
+                  onChange={(event) => setSourceFilter(event.target.value as TradeSourceFilter)}
                 >
                   <option value="all">{t('oppf.all')}</option>
-                  <option value="wfm">warframe.market</option>
+                  <option value="eelog">{t('pf.sourceInGame')}</option>
+                  <option value="wfm">{t('pf.sourceImported')}</option>
                   <option value="alecaframe">{t('pf.alecaframe')}</option>
                 </select>
               </label>
@@ -1249,12 +1354,22 @@ function TradeLogTab({ username }: { username: string | null }) {
                           <span className="portfolio-log-cell-main">—</span>
                         </div>
                         <span className="portfolio-log-status-cell">
-                          <span className="badge">{t('pf.grouped')}</span>
+                          {groupNeedsPricing(row.children, row.totalPlatinum) ? (
+                            <span className="badge badge-amber" title={t('pf.needsPricingHint')}>
+                              {t('pf.needsPricing')}
+                            </span>
+                          ) : (
+                            <span className="badge">{t('pf.grouped')}</span>
+                          )}
                         </span>
                         <span className="portfolio-log-date">{formatShortLocalDateTime(row.closedAt)}</span>
                         <span className="portfolio-log-actions">
-                          <button className="act-btn portfolio-secondary-btn" type="button" onClick={() => handleOpenAllocationModal(row)}>
-                            {t('pf.adjustAmounts')}
+                          <button
+                            className={`act-btn ${groupNeedsPricing(row.children, row.totalPlatinum) ? 'portfolio-needs-pricing-btn' : 'portfolio-secondary-btn'}`}
+                            type="button"
+                            onClick={() => handleOpenAllocationModal(row)}
+                          >
+                            {groupNeedsPricing(row.children, row.totalPlatinum) ? t('pf.setPrices') : t('pf.adjustAmounts')}
                           </button>
                         </span>
                       </div>
@@ -1264,6 +1379,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                               key={child.id}
                               entry={child}
                               isChild
+                              provisionalPrice={groupNeedsPricing(row.children, row.totalPlatinum)}
                               keepOn={keepOverrides[child.id] ?? child.keepItem}
                               onToggleKeep={handleToggleKeepItem}
                             />
@@ -1924,7 +2040,8 @@ export function PortfolioPage() {
       return;
     }
 
-    await getWfmProfileTradeLog(tradeAccount.name);
+    // Recomputes from the stored log; trades arrive from EE.log, not a WFM pull.
+    await getCachedWfmProfileTradeLog(tradeAccount.name);
   };
 
   return (

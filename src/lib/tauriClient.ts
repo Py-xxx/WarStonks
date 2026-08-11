@@ -36,8 +36,7 @@ import type {
   TradeOverview,
   PortfolioTradeLogState,
   TradeGroupAllocationInput,
-  TradeDetectionRefreshResult,
-  TradeDetectionRefreshInput,
+  DetectedTradeOutcome,
   TradeSetMapSummary,
   TradeSessionState,
   TradeSignInInput,
@@ -518,12 +517,17 @@ export async function recordEeLogTrades(trades: EeLogTradeEvent[]): Promise<numb
 export async function recordEeLogTradesToLog(
   username: string,
   trades: EeLogTradeEvent[],
-): Promise<number> {
+  sessionStartedAt: string | null,
+): Promise<DetectedTradeOutcome> {
   if (!isTauriRuntime() || trades.length === 0 || !username) {
-    return 0;
+    return { added: 0, notificationCount: 0, lastUpdatedAt: null };
   }
 
-  return invoke<number>('record_ee_log_trades_to_log', { username, trades });
+  return invoke<DetectedTradeOutcome>('record_ee_log_trades_to_log', {
+    username,
+    trades,
+    sessionStartedAt,
+  });
 }
 
 export async function getEeLogShadowTrades(): Promise<ShadowTradeRow[]> {
@@ -716,17 +720,12 @@ export async function importMarketData(path: string): Promise<TransferSummary> {
   return invoke<TransferSummary>('import_market_data', { path });
 }
 
-export async function getWfmProfileTradeLog(
-  username: string,
-): Promise<PortfolioTradeLogState> {
-  return invoke<PortfolioTradeLogState>('get_wfm_profile_trade_log', { username });
-}
-
-export async function refreshWfmTradeDetection(
-  username: string,
-  input: TradeDetectionRefreshInput,
-): Promise<TradeDetectionRefreshResult> {
-  return invoke<TradeDetectionRefreshResult>('refresh_wfm_trade_detection', { username, input });
+/**
+ * Manual backfill of trades from Warframe.Market. WFM is never polled for trades — this is
+ * only for the gap case, trades made while WarStonks was closed.
+ */
+export async function importWfmTradeLog(username: string): Promise<DetectedTradeOutcome> {
+  return invoke<DetectedTradeOutcome>('import_wfm_trade_log', { username });
 }
 
 export async function getCachedWfmProfileTradeLog(

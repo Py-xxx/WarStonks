@@ -438,9 +438,10 @@ pub fn record_ee_log_trades_to_log(
     app: tauri::AppHandle,
     username: String,
     trades: Vec<TradeEvent>,
-) -> Result<usize, String> {
+    session_started_at: Option<String>,
+) -> Result<crate::trades::DetectedTradeOutcome, String> {
     if trades.is_empty() || username.trim().is_empty() {
-        return Ok(0);
+        return Ok(crate::trades::DetectedTradeOutcome::default());
     }
 
     let catalog = crate::item_catalog_v2::open_catalog_v2_from_remembered_path();
@@ -458,11 +459,23 @@ pub fn record_ee_log_trades_to_log(
         .flat_map(|trade| trade_log_entries_from_event(trade, &resolve))
         .collect();
     if incoming.is_empty() {
-        return Ok(0);
+        return Ok(crate::trades::DetectedTradeOutcome::default());
     }
 
-    crate::trades::append_trade_log_entries(&app, username.trim(), &incoming)
-        .map_err(|error| error.to_string())
+    // Only trades that happened during this app session may notify; anything older is
+    // history the user has already seen.
+    let session_started_at = session_started_at
+        .as_deref()
+        .and_then(crate::trades::parse_timestamp);
+
+    crate::trades::apply_detected_trade_entries(
+        &app,
+        username.trim(),
+        &incoming,
+        TRADE_SOURCE_EELOG,
+        session_started_at.as_ref(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

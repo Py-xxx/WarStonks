@@ -240,7 +240,7 @@ export interface PortfolioTradeLogEntry {
   slug: string;
   imagePath: string | null;
   orderType: 'buy' | 'sell';
-  source: 'wfm' | 'alecaframe';
+  source: 'eelog' | 'wfm' | 'alecaframe';
   platinum: number;
   quantity: number;
   rank: number | null;
@@ -333,7 +333,7 @@ export interface PortfolioAuditRow {
   itemName: string;
   slug: string;
   orderType: 'buy' | 'sell';
-  source: 'wfm' | 'alecaframe';
+  source: 'eelog' | 'wfm' | 'alecaframe';
   closedAt: string;
   label: string;
   detail: string;
@@ -412,19 +412,11 @@ export interface TradeSetMapSummary {
   filePath: string;
 }
 
-export interface TradeDetectionRefreshResult {
-  source: 'wfm' | 'alecaframe';
-  newTradeCount: number;
+/** Result of writing detected (or imported) trades into the trade log. */
+export interface DetectedTradeOutcome {
+  added: number;
   notificationCount: number;
   lastUpdatedAt: string | null;
-  skipped: boolean;
-  message: string | null;
-  detectedBuys?: TradeDetectedBuy[];
-}
-
-export interface TradeDetectionRefreshInput {
-  sessionStartedAt: string | null;
-  requestPriority?: 'low' | 'medium' | 'high';
 }
 
 export interface TradeDetectedBuy {

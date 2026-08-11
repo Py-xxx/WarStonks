@@ -482,34 +482,6 @@ pub struct TradeGroupAllocationInput {
     pub total_platinum: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TradeDetectionRefreshResult {
-    pub source: String,
-    pub new_trade_count: i64,
-    pub notification_count: i64,
-    pub last_updated_at: Option<String>,
-    pub skipped: bool,
-    pub message: Option<String>,
-    pub detected_buys: Vec<DetectedTradeBuy>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TradeDetectionRefreshInput {
-    pub session_started_at: Option<String>,
-    pub request_priority: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DetectedTradeBuy {
-    pub slug: String,
-    pub rank: Option<i64>,
-    pub quantity: i64,
-    pub platinum: i64,
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredTradeSession {
@@ -4166,9 +4138,15 @@ fn build_trade_notification_items_for_wfm_entry(
     Ok(items)
 }
 
-fn build_trade_notification_candidates_for_wfm(
+/// Builds notification candidates for stored trade-log entries.
+///
+/// `source` is carried onto the candidate rather than hardcoded: the same entry shape now
+/// arrives from EE.log detection and from a manual WFM import, and the notification
+/// bookkeeping (fingerprint dedup, per-source pending retry) keys off it.
+fn build_trade_notification_candidates_for_entries(
     app: &tauri::AppHandle,
     entries: &[PortfolioTradeLogEntry],
+    source: &str,
 ) -> Result<Vec<TradeNotificationCandidate>> {
     let mut candidates = Vec::with_capacity(entries.len());
 
@@ -4196,7 +4174,7 @@ fn build_trade_notification_candidates_for_wfm(
                 &entry.closed_at,
                 &items,
             ),
-            source: "wfm".to_string(),
+            source: source.to_string(),
             order_type: entry.order_type.clone(),
             total_platinum,
             closed_at: entry.closed_at.clone(),
@@ -4792,40 +4770,6 @@ fn append_unique_trade_entries(
     }
 
     combined
-}
-
-fn merge_wfm_trade_log_entries(
-    existing: &[StoredTradeLogRecord],
-    fetched_entries: &[PortfolioTradeLogEntry],
-) -> (Vec<PortfolioTradeLogEntry>, Vec<PortfolioTradeLogEntry>) {
-    let existing_ids = existing
-        .iter()
-        .map(|record| record.id.clone())
-        .collect::<HashSet<_>>();
-
-    // Same accumulation rule as `append_unique_trade_entries`: an entry accepted earlier in this
-    // batch has to be visible to the ones checked after it, or a batch can duplicate itself.
-    let mut seen = existing.to_vec();
-    let mut persisted_entries = Vec::with_capacity(fetched_entries.len());
-    for entry in fetched_entries {
-        if existing_ids.contains(&entry.id) {
-            persisted_entries.push(entry.clone());
-            continue;
-        }
-        if trade_record_matches_existing_duplicate(&seen, entry) {
-            continue;
-        }
-        seen.push(build_stored_trade_record_from_entry(entry));
-        persisted_entries.push(entry.clone());
-    }
-
-    let new_entries = persisted_entries
-        .iter()
-        .filter(|entry| !existing_ids.contains(&entry.id))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    (persisted_entries, new_entries)
 }
 
 fn has_complete_derived_trade_log_state(connection: &Connection, username: &str) -> Result<bool> {
@@ -6351,19 +6295,6 @@ fn load_cached_trade_log_state_for_app(
     ensure_trade_log_state_inner(app, &mut connection, username)
 }
 
-fn refresh_trade_log_state_for_app(
-    app: &tauri::AppHandle,
-    username: &str,
-) -> Result<PortfolioTradeLogState> {
-    let mut connection = open_trades_cache_database(app)?;
-    let existing = load_stored_trade_log_records_inner(&connection, username)?;
-    let fetched_entries =
-        fetch_profile_trade_log_inner_with_priority(username, RequestPriority::Instant)?;
-    let (persisted_entries, _) = merge_wfm_trade_log_entries(&existing, &fetched_entries);
-    save_trade_log_rows_inner(&mut connection, username, &persisted_entries)?;
-    reconcile_trade_log_state_inner(app, &mut connection, username)
-}
-
 fn load_recent_trade_records_by_source(
     connection: &Connection,
     username: &str,
@@ -6458,9 +6389,7 @@ fn check_pending_trade_notifications_inner(
         .map(build_portfolio_entry_from_stored_record)
         .collect();
 
-    // WFM is the only remaining notification source; EE.log-detected trades notify through
-    // their own path.
-    let candidates = build_trade_notification_candidates_for_wfm(app, &entries)?;
+    let candidates = build_trade_notification_candidates_for_entries(app, &entries, source)?;
 
     send_trade_notification_candidates_inner(
         app,
@@ -6472,65 +6401,70 @@ fn check_pending_trade_notifications_inner(
     )
 }
 
-fn refresh_wfm_trade_detection_inner(
+/// What `apply_detected_trade_entries` did, so callers can report it without re-querying.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedTradeOutcome {
+    pub added: i64,
+    pub notification_count: i64,
+    pub last_updated_at: Option<String>,
+}
+
+/// Persists newly detected trades and runs everything that must follow from them.
+///
+/// This is the single write path into the trade log now that EE.log is the only live source
+/// (plan §7.1). Appending alone is not enough — a trade also moves owned set components and
+/// should notify — so those side effects live here rather than in the detector, which keeps
+/// the manual WFM import (§7.1 rule 3) on exactly the same path.
+///
+/// De-duplication is `append_unique_trade_entries`', i.e. **cross-source only**: two real
+/// trades of the same item minutes apart both survive, and an imported row that matches a
+/// stored EE.log row is dropped — EE.log always wins because it is already stored.
+pub(crate) fn apply_detected_trade_entries(
     app: &tauri::AppHandle,
     username: &str,
-    input: &TradeDetectionRefreshInput,
-) -> Result<TradeDetectionRefreshResult> {
+    incoming: &[PortfolioTradeLogEntry],
+    source: &str,
+    session_started_at: Option<&OffsetDateTime>,
+) -> Result<DetectedTradeOutcome> {
     let trimmed_username = username.trim();
     if trimmed_username.is_empty() {
-        return Err(anyhow!(
-            "Username is required to detect new Warframe Market trades."
-        ));
+        return Err(anyhow!("Username is required to record trades."));
+    }
+    if incoming.is_empty() {
+        return Ok(DetectedTradeOutcome::default());
     }
 
     let mut connection = open_trades_cache_database(app)?;
-    let session_started_at = input
-        .session_started_at
-        .as_deref()
-        .and_then(parse_timestamp);
-    let request_priority = RequestPriority::from_wire(
-        input.request_priority.as_deref(),
-        RequestPriority::Low,
-    );
-    let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
-    let fetched_entries = fetch_profile_trade_log_inner_with_priority(trimmed_username, request_priority)?;
-    let (persisted_entries, new_entries) = merge_wfm_trade_log_entries(&existing, &fetched_entries);
+    let existing = load_stored_trade_log_records_inner(&connection, trimmed_username)?
+        .iter()
+        .map(build_portfolio_entry_from_stored_record)
+        .collect::<Vec<_>>();
 
-    if persisted_entries.is_empty() {
-        return Ok(TradeDetectionRefreshResult {
-            source: "wfm".to_string(),
-            new_trade_count: 0,
-            notification_count: 0,
-            last_updated_at: load_trade_log_last_updated_at(&connection, trimmed_username)?,
-            skipped: false,
-            message: Some("No trade history rows were returned.".to_string()),
-            detected_buys: Vec::new(),
-        });
+    let before = existing.len();
+    let combined = append_unique_trade_entries(&existing, incoming);
+    // `append_unique_trade_entries` only ever appends, so everything past the original
+    // length is new. Taking the tail avoids re-deriving which rows were accepted.
+    let new_entries = combined.get(before..).unwrap_or_default().to_vec();
+    if new_entries.is_empty() {
+        return Ok(DetectedTradeOutcome::default());
     }
 
-    let mut notification_count = 0_i64;
-    let mut last_updated_at = None;
+    let updated_at = save_trade_log_rows_inner(&mut connection, trimmed_username, &combined)?;
+    let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
 
-    if !new_entries.is_empty() {
-        let updated_at =
-            save_trade_log_rows_inner(&mut connection, trimmed_username, &persisted_entries)?;
-        let _ = reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)?;
-        let owned_part_deltas =
-            build_owned_set_component_deltas_for_entries(app, &new_entries)?;
-        apply_owned_set_component_deltas(app, &owned_part_deltas)?;
-        let wfm_candidates =
-            build_trade_notification_candidates_for_wfm(app, &new_entries)?;
-        notification_count += send_trade_notification_candidates_inner(
-            app,
-            &connection,
-            trimmed_username,
-            &wfm_candidates,
-            "wfm",
-            session_started_at.as_ref(),
-        )?;
-        last_updated_at = Some(updated_at);
-    }
+    let owned_part_deltas = build_owned_set_component_deltas_for_entries(app, &new_entries)?;
+    apply_owned_set_component_deltas(app, &owned_part_deltas)?;
+
+    let candidates = build_trade_notification_candidates_for_entries(app, &new_entries, source)?;
+    let mut notification_count = send_trade_notification_candidates_inner(
+        app,
+        &connection,
+        trimmed_username,
+        &candidates,
+        source,
+        session_started_at,
+    )?;
 
     // Retry notifications for any recent trades whose webhook call previously
     // failed or was otherwise missed (webhook down, transient error, etc.).
@@ -6538,20 +6472,39 @@ fn refresh_wfm_trade_detection_inner(
         app,
         &connection,
         trimmed_username,
-        "wfm",
-        session_started_at.as_ref(),
+        source,
+        session_started_at,
     )?;
 
-    Ok(TradeDetectionRefreshResult {
-        source: "wfm".to_string(),
-        new_trade_count: new_entries.len() as i64,
+    Ok(DetectedTradeOutcome {
+        added: new_entries.len() as i64,
         notification_count,
-        last_updated_at: last_updated_at
-            .or_else(|| load_trade_log_last_updated_at(&connection, trimmed_username).ok().flatten()),
-        skipped: false,
-        message: None,
-        detected_buys: Vec::new(),
+        last_updated_at: Some(updated_at),
     })
+}
+
+/// Manual, user-triggered backfill from Warframe.Market (plan §7.1 rule 3).
+///
+/// WFM is never polled for trades any more — it has no trade detection of its own, it only
+/// holds listings we mark sold. This exists for the gap case: trades made while WarStonks was
+/// closed, which EE.log cannot recover because the game truncates the log on every launch.
+fn import_wfm_trade_log_inner(
+    app: &tauri::AppHandle,
+    username: &str,
+) -> Result<DetectedTradeOutcome> {
+    let trimmed_username = username.trim();
+    if trimmed_username.is_empty() {
+        return Err(anyhow!(
+            "Username is required to import trades from Warframe.Market."
+        ));
+    }
+
+    let fetched_entries =
+        fetch_profile_trade_log_inner_with_priority(trimmed_username, RequestPriority::Instant)?;
+
+    // No session start: an import is backfill, so its rows are historical by definition and
+    // must not fire notifications for trades the user already knows about.
+    apply_detected_trade_entries(app, trimmed_username, &fetched_entries, "wfm", None)
 }
 
 fn normalize_portfolio_pnl_period(value: &str) -> String {
@@ -9965,30 +9918,6 @@ pub async fn get_wfm_trade_overview(
     .map_err(|error| error.to_string())
 }
 
-/// Appends entries to the cached trade log, skipping any that duplicate a stored row.
-///
-/// Shared entry point so EE.log detection and the manual WFM import go through the same
-/// de-duplication rather than each inventing their own.
-pub(crate) fn append_trade_log_entries(
-    app: &tauri::AppHandle,
-    username: &str,
-    incoming: &[PortfolioTradeLogEntry],
-) -> Result<usize> {
-    let mut connection = open_trades_cache_database(app)?;
-    let existing = load_stored_trade_log_records_inner(&connection, username)?
-        .iter()
-        .map(build_portfolio_entry_from_stored_record)
-        .collect::<Vec<_>>();
-
-    let before = existing.len();
-    let combined = append_unique_trade_entries(&existing, incoming);
-    let added = combined.len().saturating_sub(before);
-    if added > 0 {
-        save_trade_log_rows_inner(&mut connection, username, &combined)?;
-    }
-    Ok(added)
-}
-
 #[tauri::command]
 pub async fn get_cached_wfm_profile_trade_log(
     app: tauri::AppHandle,
@@ -10002,31 +9931,16 @@ pub async fn get_cached_wfm_profile_trade_log(
     .map_err(|error| error.to_string())
 }
 
+/// User-triggered WFM backfill. Deliberately has no polling counterpart — see §7.1.
 #[tauri::command]
-pub async fn get_wfm_profile_trade_log(
+pub async fn import_wfm_trade_log(
     app: tauri::AppHandle,
     username: String,
-) -> Result<PortfolioTradeLogState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        refresh_trade_log_state_for_app(&app, username.trim())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn refresh_wfm_trade_detection(
-    app: tauri::AppHandle,
-    username: String,
-    input: TradeDetectionRefreshInput,
-) -> Result<TradeDetectionRefreshResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        refresh_wfm_trade_detection_inner(&app, username.trim(), &input)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+) -> Result<DetectedTradeOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || import_wfm_trade_log_inner(&app, username.trim()))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -10460,6 +10374,7 @@ mod presence_liveness_tests {
 mod tests {
     use super::{
         append_unique_trade_entries, build_cost_basis_confidence,
+        build_portfolio_entry_from_stored_record,
         build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
         build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
         compute_current_value_coverage, decide_trade_health, estimate_sell_hours,
@@ -10468,7 +10383,6 @@ mod tests {
         initialize_trades_cache_schema, insert_smart_manage_log, parse_timestamp,
         smart_change_rate_state, smart_failure_streak,
         load_stored_trade_log_records_inner, load_trade_log_last_updated_at,
-        merge_wfm_trade_log_entries,
         normalize_avatar_url, normalize_status_set_request,
         parse_status_from_payload, prune_stale_trade_log_overrides_inner, resolve_per_trade,
         replace_trade_log_rows_inner, save_trade_log_rows_inner,
@@ -12014,7 +11928,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_wfm_trade_log_entries_skips_cross_source_duplicates() {
+    fn importing_a_wfm_row_matching_a_local_trade_is_dropped() {
         let existing = vec![StoredTradeLogRecord {
             id: "af-trade-1".to_string(),
             item_name: "Wisp Prime Chassis Blueprint".to_string(),
@@ -12070,11 +11984,53 @@ mod tests {
             duplicate_risk: false,
         }];
 
-        let (persisted_entries, new_entries) =
-            merge_wfm_trade_log_entries(&existing, &fetched_entries);
+        let existing_entries = existing
+            .iter()
+            .map(build_portfolio_entry_from_stored_record)
+            .collect::<Vec<_>>();
+        let combined = append_unique_trade_entries(&existing_entries, &fetched_entries);
 
-        assert!(persisted_entries.is_empty());
-        assert!(new_entries.is_empty());
+        // The WFM import describes the same physical sale the local source already recorded,
+        // so nothing is added — the locally detected row wins because it is already stored.
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].id, "af-trade-1");
+    }
+
+    /// Plan §7.1 rule 4: cross-source de-dup must not swallow genuine repeat sales. Two WFM
+    /// trades of the same item minutes apart are two real trades and must both survive, or a
+    /// manual import silently loses the user's money.
+    #[test]
+    fn importing_repeat_same_source_trades_keeps_both() {
+        let wfm_row = |id: &str, closed_at: &str| StoredTradeLogRecord {
+            id: id.to_string(),
+            item_name: "Wisp Prime Chassis Blueprint".to_string(),
+            slug: "wisp_prime_chassis_blueprint".to_string(),
+            image_path: None,
+            order_type: "sell".to_string(),
+            source: "wfm".to_string(),
+            platinum: 34,
+            quantity: 1,
+            rank: None,
+            closed_at: closed_at.to_string(),
+            updated_at: closed_at.to_string(),
+            keep_item: false,
+            group_id: None,
+            group_label: None,
+            group_total_platinum: None,
+            group_item_count: None,
+            allocation_total_platinum: None,
+            group_sort_order: None,
+        };
+
+        // Four minutes apart: outside the 60s same-source window, inside the 5min cross-source
+        // one — so this only survives because both rows carry the same source.
+        let first = build_portfolio_entry_from_stored_record(&wfm_row("wfm-1", "2026-03-10T09:00:00Z"));
+        let second = build_portfolio_entry_from_stored_record(&wfm_row("wfm-2", "2026-03-10T09:04:00Z"));
+
+        let combined = append_unique_trade_entries(&[first], &[second]);
+
+        assert_eq!(combined.len(), 2);
+        assert_eq!(combined[1].id, "wfm-2");
     }
 
     #[test]
