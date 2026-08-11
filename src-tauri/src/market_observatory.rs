@@ -7324,15 +7324,23 @@ fn upsert_set_completion_owned_item(
     load_set_completion_owned_items(connection)
 }
 
+/// Replaces the protected owned baseline.
+///
+/// `as_of` is the instant the data describes, and becomes the cutoff that later trade deltas
+/// are filtered against. A screenshot import passes `None` (it describes *now*, because the
+/// user just took it); an AlecaFrame snapshot must pass its own `last_inventory_sync`, which
+/// can be far older than now — stamping that one with `now()` would silently discard every
+/// trade made between the snapshot and the moment we read it.
 fn replace_set_completion_owned_items(
     connection: &mut Connection,
     rows: &[SetCompletionScreenshotImportRow],
+    as_of: Option<OffsetDateTime>,
 ) -> Result<Vec<SetCompletionOwnedItem>> {
     if rows.is_empty() {
         return load_set_completion_owned_items(connection);
     }
 
-    let imported_at = format_timestamp(now_utc())?;
+    let imported_at = format_timestamp(as_of.unwrap_or_else(now_utc))?;
     let mut seen_slugs = HashSet::new();
     for row in rows {
         if row.slug.trim().is_empty() {
@@ -10924,6 +10932,94 @@ pub async fn set_set_completion_owned_item_quantity(
     .map_err(|error| error.to_string())
 }
 
+/// The `last_inventory_sync` stamp of the snapshot we last wrote to `owned_set_components`.
+///
+/// AlecaFrame only writes at session boundaries, so the overwhelming majority of background
+/// passes see the same snapshot they saw a minute ago. Remembering the stamp keeps those
+/// passes from rewriting identical rows and needlessly invalidating the opportunity board.
+static LAST_SYNCED_INVENTORY_STAMP: OnceLock<Mutex<Option<i64>>> = OnceLock::new();
+
+fn last_synced_inventory_stamp() -> &'static Mutex<Option<i64>> {
+    LAST_SYNCED_INVENTORY_STAMP.get_or_init(|| Mutex::new(None))
+}
+
+/// Rebuilds owned set components from AlecaFrame, skipping the write when nothing has changed.
+///
+/// This runs on the background cadence rather than only when the Set Completion planner is
+/// opened. The planner and the opportunity board both read `owned_set_components`, and the
+/// board recomputes on a timer whether or not anyone is looking at the planner — so gating the
+/// refresh on a tab being open meant the board could run indefinitely against a stale manual
+/// import. Being the same snapshot-replace as the tab path, running it more often is safe.
+///
+/// `None` means AlecaFrame is off or unavailable — distinct from `Some(false)`, which means
+/// it is on and its snapshot simply hasn't advanced. Callers must not confuse the two: the
+/// first has to leave the manual baseline alone, the second can read what is already stored.
+pub(crate) fn sync_owned_items_from_alecaframe_if_changed(
+    app: &tauri::AppHandle,
+) -> Result<Option<bool>> {
+    let Some(inventory) = crate::alecaframe::load_inventory_for_internal_use(app)? else {
+        return Ok(None);
+    };
+
+    // `None` means AlecaFrame gave us no stamp; treat that as "always sync" rather than
+    // caching against an unknown, so a missing stamp degrades to the old behaviour.
+    if let Some(stamp) = inventory.last_inventory_sync {
+        let last = last_synced_inventory_stamp()
+            .lock()
+            .map_err(|_| anyhow!("owned-items sync stamp lock was poisoned"))?;
+        if *last == Some(stamp) {
+            return Ok(Some(false));
+        }
+    }
+
+    let rows = owned_set_component_rows_from_inventory(&inventory);
+    if rows.is_empty() {
+        return Ok(Some(false));
+    }
+
+    let as_of = inventory
+        .last_inventory_sync
+        .and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok());
+
+    let mut connection = open_market_observatory_database(app)?;
+    replace_set_completion_owned_items(&mut connection, &rows, as_of)?;
+    drop(connection);
+
+    // The snapshot is authoritative only up to its own stamp. Trades detected after it are
+    // still pending and have to be layered back on — see §5.1.
+    crate::trades::rebuild_owned_set_components_from_trade_log(app)?;
+
+    // Recorded only once the write has actually landed. Marking it up front would make a
+    // failed write permanent — the next pass would see a matching stamp and skip forever.
+    if let Some(stamp) = inventory.last_inventory_sync {
+        if let Ok(mut last) = last_synced_inventory_stamp().lock() {
+            *last = Some(stamp);
+        }
+    }
+
+    crate::opportunities::signal_stale(app);
+    Ok(Some(true))
+}
+
+/// Prime parts only. Mods, arcanes and relics are tradable but are not set components, and
+/// adding them here would corrupt set-completion maths.
+fn owned_set_component_rows_from_inventory(
+    inventory: &crate::alecaframe::AlecaframeInventory,
+) -> Vec<SetCompletionScreenshotImportRow> {
+    inventory
+        .items
+        .iter()
+        .filter(|item| item.category == crate::alecaframe::ItemCategory::Blueprint)
+        .map(|item| SetCompletionScreenshotImportRow {
+            item_key: Some(item.item_key.clone()),
+            slug: item.slug.clone(),
+            name: item.name.clone(),
+            image_path: None,
+            quantity: item.count,
+        })
+        .collect()
+}
+
 /// Rebuilds owned set components from AlecaFrame's inventory.
 ///
 /// Reuses the screenshot-import path deliberately: that is already the "replace the owned
@@ -10938,29 +11034,15 @@ pub async fn sync_owned_items_from_alecaframe(
     app: tauri::AppHandle,
 ) -> Result<Option<Vec<SetCompletionOwnedItem>>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(inventory) = crate::alecaframe::load_inventory_for_internal_use(&app)? else {
-            // AlecaFrame off or unavailable: leave whatever the user imported manually alone
-            // rather than wiping it.
+        // Delegates so the tab-open refresh and the background pass cannot drift apart. A
+        // `None` result means AlecaFrame is off or unavailable, and the caller must then leave
+        // the manual baseline exactly as the user entered it.
+        let Some(_wrote) = sync_owned_items_from_alecaframe_if_changed(&app)? else {
             return Ok::<_, anyhow::Error>(None);
         };
 
-        let rows = inventory
-            .items
-            .iter()
-            .filter(|item| item.category == crate::alecaframe::ItemCategory::Blueprint)
-            .map(|item| SetCompletionScreenshotImportRow {
-                item_key: Some(item.item_key.clone()),
-                slug: item.slug.clone(),
-                name: item.name.clone(),
-                image_path: None,
-                quantity: item.count,
-            })
-            .collect::<Vec<_>>();
-
-        let mut connection = open_market_observatory_database(&app)?;
-        let result = replace_set_completion_owned_items(&mut connection, &rows)?;
-        crate::opportunities::signal_stale(&app);
-        Ok(Some(result))
+        let connection = open_market_observatory_database(&app)?;
+        load_set_completion_owned_items(&connection).map(Some)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -10974,7 +11056,8 @@ pub async fn apply_set_completion_screenshot_import_rows(
 ) -> Result<Vec<SetCompletionOwnedItem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut connection = open_market_observatory_database(&app)?;
-        let result = replace_set_completion_owned_items(&mut connection, &rows)?;
+        // A screenshot describes the inventory as of right now, so `None` (= now) is correct.
+        let result = replace_set_completion_owned_items(&mut connection, &rows, None)?;
         crate::opportunities::signal_stale(&app); // Owned parts changed → board is stale.
         Ok::<_, anyhow::Error>(result)
     })
@@ -12554,6 +12637,62 @@ mod tests {
             .expect("count row");
 
         assert_eq!(row_count, 1);
+    }
+
+    /// The cutoff a baseline replace stores decides which trades are considered already
+    /// baked into it. AlecaFrame snapshots describe an instant that can be far in the past
+    /// (it only writes at session boundaries), so stamping one with `now()` would mark trades
+    /// made *after* the snapshot as already-counted and silently drop them.
+    #[test]
+    fn alecaframe_baseline_is_stamped_as_of_the_snapshot_not_now() {
+        let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        let snapshot_taken_at = super::now_utc() - super::TimeDuration::minutes(45);
+        let rows = vec![super::SetCompletionScreenshotImportRow {
+            item_key: Some("42".to_string()),
+            slug: "wisp_prime_chassis".to_string(),
+            name: "Wisp Prime Chassis".to_string(),
+            image_path: None,
+            quantity: 2,
+        }];
+
+        super::replace_set_completion_owned_items(&mut connection, &rows, Some(snapshot_taken_at))
+            .expect("replace owned items");
+
+        let cutoff = super::load_screenshot_import_cutoff(&connection)
+            .expect("cutoff")
+            .and_then(|value| crate::trades::parse_timestamp(&value))
+            .expect("cutoff parses");
+
+        // Within a second of the snapshot, and unambiguously not "now".
+        assert!((cutoff - snapshot_taken_at).whole_seconds().abs() <= 1);
+        assert!((super::now_utc() - cutoff).whole_minutes() >= 44);
+    }
+
+    /// A screenshot describes the inventory the user is looking at, so its cutoff is now.
+    #[test]
+    fn screenshot_baseline_is_stamped_now() {
+        let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+
+        let rows = vec![super::SetCompletionScreenshotImportRow {
+            item_key: Some("42".to_string()),
+            slug: "wisp_prime_chassis".to_string(),
+            name: "Wisp Prime Chassis".to_string(),
+            image_path: None,
+            quantity: 2,
+        }];
+
+        super::replace_set_completion_owned_items(&mut connection, &rows, None)
+            .expect("replace owned items");
+
+        let cutoff = super::load_screenshot_import_cutoff(&connection)
+            .expect("cutoff")
+            .and_then(|value| crate::trades::parse_timestamp(&value))
+            .expect("cutoff parses");
+
+        assert!((super::now_utc() - cutoff).whole_seconds().abs() <= 5);
     }
 
     #[test]

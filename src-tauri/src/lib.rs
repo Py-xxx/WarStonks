@@ -79,6 +79,12 @@ pub fn run() {
             // instantly on open. Both are cache-only (no WFM calls).
             let index_app = app.handle().clone();
             std::thread::spawn(move || loop {
+                // Pull owned parts from AlecaFrame *first*, so the index and the board are both
+                // computed from the current inventory. This used to happen only when the user
+                // opened the Set Completion planner, which left the board recomputing against
+                // whatever was last written — usually a stale manual import. Skips its write
+                // when AlecaFrame's snapshot hasn't advanced, so the common case costs nothing.
+                let _ = market_observatory::sync_owned_items_from_alecaframe_if_changed(&index_app);
                 let _ = opportunities::refresh_owned_set_index(&index_app);
                 let _ = opportunities::compute_opportunities(&index_app);
                 std::thread::sleep(std::time::Duration::from_secs(60));

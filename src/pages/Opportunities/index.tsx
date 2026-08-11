@@ -1293,15 +1293,20 @@ export function OpportunitiesPage({
   // AlecaFrame replaces the manual inventory rather than supplementing it: when it's the
   // source, hand-edits would be silently overwritten at the next session boundary, so the
   // manual tab is swapped out entirely instead of left there to mislead.
-  const [alecaframeInventoryAvailable, setAlecaframeInventoryAvailable] = useState(false);
+  //
+  // Availability is **both** halves: the file has to exist *and* the setting has to be on.
+  // The backend already refuses to read AlecaFrame when the setting is off, so gating the UI
+  // on the probe alone left the Prime Parts / Mods / Arcanes tabs in place, rendering nothing,
+  // with the manual Inventory tab unreachable.
+  const [alecaframeFilePresent, setAlecaframeFilePresent] = useState(false);
+  const alecaframeEnabled = useAppStore((state) => state.appSettings.alecaframe.enabled);
+  const alecaframeInventoryAvailable = alecaframeFilePresent && alecaframeEnabled;
   useEffect(() => {
     let cancelled = false;
     void probeLocalSources()
       .then((availability) => {
         if (!cancelled) {
-          setAlecaframeInventoryAvailable(
-            availability.alecaframeInventory.status === 'available',
-          );
+          setAlecaframeFilePresent(availability.alecaframeInventory.status === 'available');
         }
       })
       .catch(() => undefined);
@@ -1309,6 +1314,21 @@ export function OpportunitiesPage({
       cancelled = true;
     };
   }, []);
+
+  // Toggling AlecaFrame swaps which inventory tabs exist, so a tab that was open can vanish
+  // underneath the user. Move them to the equivalent tab in the other mode rather than
+  // leaving them on a tab that renders nothing.
+  useEffect(() => {
+    setActiveTab((current) => {
+      if (!alecaframeInventoryAvailable && (current === 'prime-parts' || current === 'mods' || current === 'arcanes')) {
+        return 'inventory';
+      }
+      if (alecaframeInventoryAvailable && current === 'inventory') {
+        return 'prime-parts';
+      }
+      return current;
+    });
+  }, [alecaframeInventoryAvailable]);
 
   const [farmNowSearch, setFarmNowSearch] = useState('');
   useEffect(() => {

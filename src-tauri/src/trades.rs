@@ -6483,6 +6483,30 @@ pub(crate) fn apply_detected_trade_entries(
     })
 }
 
+/// Rebuilds `owned_set_components` as *baseline + trade deltas*.
+///
+/// Call after the owned baseline is replaced by a fresh AlecaFrame snapshot. The replace wipes
+/// the applied-trade log, so without this every trade detected **after** the snapshot's own
+/// `last_inventory_sync` would vanish: it is neither in the snapshot nor re-applied. That is
+/// exactly the pending layer §5.1 describes, and the deltas machinery already implements it —
+/// `build_owned_set_component_deltas_for_entries` skips anything at or before the stored
+/// cutoff, so only genuinely-newer trades are layered back on.
+///
+/// A no-op when nobody is signed in: there is no trade log to layer.
+pub(crate) fn rebuild_owned_set_components_from_trade_log(app: &tauri::AppHandle) -> Result<()> {
+    let Some(session) = load_session(app)? else {
+        return Ok(());
+    };
+    let username = session.account.name.trim().to_string();
+    if username.is_empty() {
+        return Ok(());
+    }
+
+    let state = load_cached_trade_log_state_for_app(app, &username)?;
+    let deltas = build_owned_set_component_deltas_for_entries(app, &state.entries)?;
+    replace_owned_set_component_deltas(app, &deltas)
+}
+
 /// Manual, user-triggered backfill from Warframe.Market (plan §7.1 rule 3).
 ///
 /// WFM is never polled for trades any more — it has no trade detection of its own, it only
