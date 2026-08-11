@@ -198,6 +198,36 @@ impl EeLogParser {
         *self = Self::new();
     }
 
+    /// Supplies the session anchor read from the file's header.
+    ///
+    /// The tailer attaches at EOF, so it never feeds the header through `push_line` and the
+    /// anchor has to arrive this way. A later anchor in the stream still wins nothing — the
+    /// first one is the session's, and `push_line` only sets it when unset.
+    pub fn adopt_session_start(&mut self, anchor: OffsetDateTime) {
+        if self.session_start.is_none() {
+            self.session_start = Some(anchor);
+        }
+    }
+
+    /// Wall-clock time for an event at `elapsed_s` seconds into the session.
+    ///
+    /// Prefers the log's own anchor. Without it — a log whose header has already been rotated
+    /// past, or a game that has only just started writing — it infers the session start from
+    /// the clock instead: the newest line in the file is, by definition of tailing, roughly
+    /// *now*, so `now - (latest - elapsed)` places the event correctly relative to it.
+    ///
+    /// Returning `None` here is what previously put untimed rows into the trade log, so this
+    /// deliberately always produces a timestamp.
+    fn wall_clock_for(&self, elapsed_s: f64) -> Option<OffsetDateTime> {
+        match self.session_start {
+            Some(start) => Some(start + time::Duration::seconds_f64(elapsed_s)),
+            None => Some(
+                OffsetDateTime::now_utc()
+                    - time::Duration::seconds_f64((self.latest_elapsed - elapsed_s).max(0.0)),
+            ),
+        }
+    }
+
     /// Feeds one line, returning any events it completes.
     ///
     /// `AddTab` alone cannot tell an incoming DM from one the user opened: it fires for
@@ -276,9 +306,7 @@ impl EeLogParser {
                 platinum_in,
                 platinum_out,
                 elapsed_s: pending.elapsed_s,
-                occurred_at: self
-                    .session_start
-                    .map(|start| start + time::Duration::seconds_f64(pending.elapsed_s)),
+                occurred_at: self.wall_clock_for(pending.elapsed_s),
                 key: build_event_key(self.session_start, pending.elapsed_s),
             }));
         }
@@ -330,19 +358,22 @@ impl EeLogParser {
     fn release_settled_tabs(&mut self, now_elapsed: f64) -> Vec<EeLogEvent> {
         let mut released = Vec::new();
         let session_start = self.session_start;
+        let mut settled = Vec::new();
         self.pending_tabs.retain(|tab| {
             if now_elapsed - tab.elapsed_s <= SELF_STARTED_AFTER_S {
                 return true;
             }
+            settled.push(tab.clone());
+            false
+        });
+        for tab in settled {
             released.push(EeLogEvent::DirectMessage(DirectMessageEvent {
                 user: tab.user.clone(),
                 elapsed_s: tab.elapsed_s,
-                occurred_at: session_start
-                    .map(|start| start + time::Duration::seconds_f64(tab.elapsed_s)),
+                occurred_at: self.wall_clock_for(tab.elapsed_s),
                 key: build_event_key(session_start, tab.elapsed_s),
             }));
-            false
-        });
+        }
         released
     }
 
@@ -491,9 +522,46 @@ impl EeLogTailer {
 
     /// Starts from the end, so attaching to an in-progress session doesn't replay hours
     /// of history as fresh notifications.
+    ///
+    /// **Reads the header first.** Every timestamp in this log is "seconds since launch", and
+    /// the only thing that turns those into wall-clock time is the `Current time: ... [UTC: ...]`
+    /// line the game writes once, at the very top. Seeking straight to EOF skipped it, so the
+    /// parser ran the whole session with `session_start = None` and stamped every live-detected
+    /// event with no time at all — which is fine for a debug table and fatal once those events
+    /// became real trade-log rows.
     pub fn skip_to_end(&mut self) -> std::io::Result<()> {
+        self.prime_session_anchor();
         self.offset = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
         Ok(())
+    }
+
+    /// Scans the start of the file for the session anchor without consuming it as events.
+    ///
+    /// Best-effort by design: a log with no anchor yet (the game just launched) still tails
+    /// fine, because `EeLogParser` falls back to inferring the session start from the clock.
+    fn prime_session_anchor(&mut self) {
+        use std::io::Read;
+
+        // The anchor is within the first few lines; 64 KiB is far more than enough and bounds
+        // the read on a log that has already grown to megabytes.
+        const HEADER_BYTES: usize = 64 * 1024;
+
+        let Ok(mut file) = std::fs::File::open(&self.path) else {
+            return;
+        };
+        let mut buffer = vec![0_u8; HEADER_BYTES];
+        let Ok(read) = file.read(&mut buffer) else {
+            return;
+        };
+        buffer.truncate(read);
+
+        let text = String::from_utf8_lossy(&buffer);
+        for line in text.split('\n') {
+            if let Some(anchor) = parse_session_anchor(line) {
+                self.parser.adopt_session_start(anchor);
+                return;
+            }
+        }
     }
 
     /// Reads whatever has been appended since the last call.
@@ -733,6 +801,66 @@ mod tests {
         assert_eq!(events.len(), 1);
         // Nothing new appended, so a second poll must not repeat it.
         assert!(tailer.poll().unwrap().is_empty(), "events must not be re-emitted");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The bug that silently broke live trade detection.
+    ///
+    /// The tailer attaches at EOF so it doesn't replay history — which meant it never read the
+    /// header, and the header is the only place the log states its own start time. Every
+    /// timestamp in the file is "seconds since launch", so without it the parser produced
+    /// events with `occurred_at: None`, and a trade-log row with no `closed_at` is not a
+    /// usable trade.
+    #[test]
+    fn a_tailer_attached_mid_session_still_times_its_trades() {
+        let path = std::env::temp_dir().join("warstonks-tailer-anchor.log");
+        let mut existing = String::from(ANCHOR_LINE);
+        existing.push_str("500.0 Sys [Info]: history we must not replay\n");
+        std::fs::write(&path, &existing).unwrap();
+
+        let mut tailer = EeLogTailer::new(&path);
+        tailer.skip_to_end().unwrap();
+        assert!(tailer.poll().unwrap().is_empty(), "attaching must not replay history");
+
+        // A trade happens after we attached, so it arrives without the header.
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str(&trade_block("793.432", &["Grendel Prime Systems Blueprint"], "Partner", &["Platinum x 8"]));
+        text.push_str("795.0 Script [Info]: Dialog.lua: Dialog::CreateOk(description=The trade was successful!, title=)\n");
+        std::fs::write(&path, &text).unwrap();
+
+        let trades = only_trades(tailer.poll().unwrap());
+        assert_eq!(trades.len(), 1);
+
+        let occurred_at = trades[0].occurred_at.expect("a live trade must carry a timestamp");
+        // 21:38:18 UTC + 793.432s = 21:51:31.
+        assert_eq!((occurred_at.hour(), occurred_at.minute()), (21, 51));
+        assert_ne!(trades[0].key, "?|793.432", "the dedup key must not degrade to a bare '?'");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A log whose header is missing entirely (rotated past, or the game only just started)
+    /// must still produce a usable timestamp rather than none at all.
+    #[test]
+    fn a_missing_anchor_falls_back_to_the_wall_clock() {
+        let path = std::env::temp_dir().join("warstonks-tailer-no-anchor.log");
+        std::fs::write(&path, "500.0 Sys [Info]: no header in this file\n").unwrap();
+
+        let mut tailer = EeLogTailer::new(&path);
+        tailer.skip_to_end().unwrap();
+
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str(&trade_block("505.0", &["Some Prime Blueprint"], "Partner", &["Platinum x 8"]));
+        text.push_str("506.0 Script [Info]: Dialog.lua: Dialog::CreateOk(description=The trade was successful!, title=)\n");
+        std::fs::write(&path, &text).unwrap();
+
+        let trades = only_trades(tailer.poll().unwrap());
+        assert_eq!(trades.len(), 1);
+
+        let occurred_at = trades[0].occurred_at.expect("must still be timed");
+        let drift = (OffsetDateTime::now_utc() - occurred_at).whole_seconds().abs();
+        assert!(drift < 60, "a live trade should land near now, drifted {drift}s");
 
         std::fs::remove_file(&path).ok();
     }

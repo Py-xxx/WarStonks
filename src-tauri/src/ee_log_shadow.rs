@@ -211,9 +211,14 @@ pub fn trade_log_entries_from_event(
     trade: &TradeEvent,
     resolve: &dyn Fn(&str) -> Option<(String, String)>,
 ) -> Vec<crate::trades::PortfolioTradeLogEntry> {
+    // Never empty. A row with no `closed_at` is not a usable trade — it cannot be sorted,
+    // filtered, matched to a buy lot, or counted in P&L — and an empty string here is exactly
+    // what a missing session anchor used to produce. The tailer now always supplies a time;
+    // this is the backstop, and an approximately-right timestamp beats an unusable row.
     let closed_at = trade
         .occurred_at
-        .and_then(|value| value.format(&time::format_description::well_known::Rfc3339).ok())
+        .unwrap_or_else(time::OffsetDateTime::now_utc)
+        .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default();
 
     let mut entries = Vec::new();
@@ -525,6 +530,25 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         initialize_schema(&connection).unwrap();
         connection
+    }
+
+    /// An untimed trade is an unusable trade-log row: nothing can sort, filter, match or
+    /// account for it. This is the contract the missing session anchor broke.
+    #[test]
+    fn every_converted_entry_carries_a_timestamp() {
+        let mut trade = sample_trade("k1", 8);
+        trade.occurred_at = None;
+
+        let entries = trade_log_entries_from_event(&trade, &|_| None);
+
+        assert!(!entries.is_empty());
+        for entry in entries {
+            assert!(!entry.closed_at.is_empty(), "closed_at must never be empty");
+            assert!(
+                crate::trades::parse_timestamp(&entry.closed_at).is_some(),
+                "closed_at must parse",
+            );
+        }
     }
 
     fn sample_trade(key: &str, platinum_in: i64) -> TradeEvent {

@@ -16,6 +16,7 @@ mod market_observatory;
 mod market_observatory_migration;
 mod opportunities;
 mod order_flow;
+mod part_images;
 mod recommended_prices;
 mod smart_manage;
 mod settings;
@@ -84,7 +85,20 @@ pub fn run() {
                 // opened the Set Completion planner, which left the board recomputing against
                 // whatever was last written — usually a stale manual import. Skips its write
                 // when AlecaFrame's snapshot hasn't advanced, so the common case costs nothing.
-                let _ = market_observatory::sync_owned_items_from_alecaframe_if_changed(&index_app);
+                // Logged rather than discarded: a failure here is invisible in the UI — the
+                // planner just keeps showing older data — so a swallowed error is the
+                // difference between a five-minute diagnosis and a silent wrong number.
+                if let Err(error) =
+                    market_observatory::sync_owned_items_from_alecaframe_if_changed(&index_app)
+                {
+                    error_log::log_feature_error_best_effort(
+                        &index_app,
+                        "inventory",
+                        "alecaframe-owned-sync",
+                        "failed to refresh owned set components from AlecaFrame",
+                        &error,
+                    );
+                }
                 let _ = opportunities::refresh_owned_set_index(&index_app);
                 let _ = opportunities::compute_opportunities(&index_app);
                 std::thread::sleep(std::time::Duration::from_secs(60));

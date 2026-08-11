@@ -11003,21 +11003,41 @@ pub(crate) fn sync_owned_items_from_alecaframe_if_changed(
 
 /// Prime parts only. Mods, arcanes and relics are tradable but are not set components, and
 /// adding them here would corrupt set-completion maths.
+///
+/// **Aggregates by slug**, which is not optional. AlecaFrame's inventory is a list of stacks,
+/// not of items: the same slug legitimately appears more than once — the same part held in two
+/// buckets, or two `uniqueName`s that resolve to one Warframe.Market entry. Passing those
+/// through raw made `replace_set_completion_owned_items` reject the whole batch with
+/// "duplicate screenshot import row", and every caller swallowed the error, so the planner
+/// silently kept serving the old manual import. Zero and negative counts are dropped for the
+/// same reason: that function rejects them outright, failing the entire sync over one bad row.
 fn owned_set_component_rows_from_inventory(
     inventory: &crate::alecaframe::AlecaframeInventory,
 ) -> Vec<SetCompletionScreenshotImportRow> {
-    inventory
-        .items
-        .iter()
-        .filter(|item| item.category == crate::alecaframe::ItemCategory::Blueprint)
-        .map(|item| SetCompletionScreenshotImportRow {
-            item_key: Some(item.item_key.clone()),
-            slug: item.slug.clone(),
-            name: item.name.clone(),
-            image_path: None,
-            quantity: item.count,
-        })
-        .collect()
+    let mut by_slug: BTreeMap<String, SetCompletionScreenshotImportRow> = BTreeMap::new();
+
+    for item in &inventory.items {
+        if item.category != crate::alecaframe::ItemCategory::Blueprint {
+            continue;
+        }
+        let slug = item.slug.trim();
+        if slug.is_empty() || item.name.trim().is_empty() || item.count <= 0 {
+            continue;
+        }
+
+        by_slug
+            .entry(slug.to_string())
+            .and_modify(|row| row.quantity = row.quantity.saturating_add(item.count))
+            .or_insert_with(|| SetCompletionScreenshotImportRow {
+                item_key: Some(item.item_key.clone()),
+                slug: slug.to_string(),
+                name: item.name.clone(),
+                image_path: None,
+                quantity: item.count,
+            });
+    }
+
+    by_slug.into_values().collect()
 }
 
 /// Rebuilds owned set components from AlecaFrame's inventory.
@@ -12637,6 +12657,85 @@ mod tests {
             .expect("count row");
 
         assert_eq!(row_count, 1);
+    }
+
+    fn alecaframe_item(
+        slug: &str,
+        count: i64,
+        category: crate::alecaframe::ItemCategory,
+    ) -> crate::alecaframe::AlecaframeItem {
+        crate::alecaframe::AlecaframeItem {
+            unique_name: format!("/Lotus/Types/Recipes/{slug}"),
+            name: slug.replace('_', " "),
+            slug: slug.to_string(),
+            item_key: format!("key-{slug}"),
+            count,
+            rank: None,
+            max_rank: None,
+            refinement: None,
+            bucket: "MiscItems".to_string(),
+            category,
+        }
+    }
+
+    fn inventory_of(items: Vec<crate::alecaframe::AlecaframeItem>) -> crate::alecaframe::AlecaframeInventory {
+        crate::alecaframe::AlecaframeInventory {
+            account: crate::alecaframe::AlecaframeAccount {
+                platinum: 0,
+                credits: 0,
+                fusion_points: 0,
+                prime_tokens: 0,
+                mastery_rank: 0,
+                trades_remaining: 0,
+            },
+            last_inventory_sync: None,
+            items,
+            untradable_count: 0,
+        }
+    }
+
+    /// AlecaFrame reports stacks, not items — one slug can appear twice (two buckets, or two
+    /// `uniqueName`s resolving to one WFM entry). `replace_set_completion_owned_items` rejects
+    /// a batch containing a duplicate slug, so passing these through raw failed the *entire*
+    /// sync, and every caller swallowed the error. That is why the planner kept showing the
+    /// old manual import while the Inventory tab looked correct.
+    #[test]
+    fn duplicate_slugs_are_summed_rather_than_failing_the_whole_sync() {
+        let inventory = inventory_of(vec![
+            alecaframe_item("grendel_prime_systems", 2, crate::alecaframe::ItemCategory::Blueprint),
+            alecaframe_item("grendel_prime_systems", 3, crate::alecaframe::ItemCategory::Blueprint),
+        ]);
+
+        let rows = super::owned_set_component_rows_from_inventory(&inventory);
+
+        assert_eq!(rows.len(), 1, "one slug must produce one row");
+        assert_eq!(rows[0].quantity, 5, "owned quantity is the sum of every stack");
+
+        // The real proof: the replace now accepts it instead of erroring.
+        let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_market_observatory_schema(&connection).expect("schema");
+        let owned = super::replace_set_completion_owned_items(&mut connection, &rows, None)
+            .expect("replace must not reject AlecaFrame's own inventory");
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].quantity, 5);
+    }
+
+    /// A single zero-count stack used to reject the whole batch, taking every other part with
+    /// it. Only prime parts belong here at all.
+    #[test]
+    fn empty_stacks_and_non_components_are_dropped_not_fatal() {
+        let inventory = inventory_of(vec![
+            alecaframe_item("grendel_prime_systems", 0, crate::alecaframe::ItemCategory::Blueprint),
+            alecaframe_item("wisp_prime_chassis", 4, crate::alecaframe::ItemCategory::Blueprint),
+            alecaframe_item("primed_flow", 1, crate::alecaframe::ItemCategory::Mod),
+            alecaframe_item("lith_c11", 9, crate::alecaframe::ItemCategory::Relic),
+        ]);
+
+        let rows = super::owned_set_component_rows_from_inventory(&inventory);
+
+        assert_eq!(rows.len(), 1, "only the positive-count prime part survives");
+        assert_eq!(rows[0].slug, "wisp_prime_chassis");
+        assert_eq!(rows[0].quantity, 4);
     }
 
     /// The cutoff a baseline replace stores decides which trades are considered already

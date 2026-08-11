@@ -61,7 +61,11 @@ export function usePrivateMessageAlerts(): void {
           // EE.log is the trade-log source. The shadow store is kept alongside purely as a
           // debug aid for the Detection tab and can be dropped without affecting anything.
           const username = useAppStore.getState().tradeAccount?.name ?? '';
-          void recordEeLogTradesToLog(username, trades, sessionStartedAt).catch(() => undefined);
+          void recordEeLogTradesToLog(username, trades, sessionStartedAt).catch((error) => {
+            // A detected trade that fails to persist is lost for good — EE.log is truncated on
+            // the next game launch — so this is the one failure here worth shouting about.
+            console.error('[trades] failed to record detected trade', error);
+          });
           void recordEeLogTrades(trades).catch(() => undefined);
         }
 

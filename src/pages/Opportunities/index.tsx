@@ -1440,7 +1440,12 @@ export function OpportunitiesPage({
         // Refresh owned parts from AlecaFrame before reading them, so the planner reflects
         // the current inventory rather than a stale manual import. A null result means
         // AlecaFrame is off — the existing baseline is then left alone.
-        await syncOwnedItemsFromAlecaframe().catch(() => null);
+        await syncOwnedItemsFromAlecaframe().catch((error) => {
+          // Not fatal — the planner still renders the stored baseline — but it must not be
+          // silent, or a broken sync looks exactly like an unchanged inventory.
+          console.error('[inventory] AlecaFrame owned-item sync failed', error);
+          return null;
+        });
         if (cancelled) {
           return;
         }

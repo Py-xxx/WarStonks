@@ -505,7 +505,14 @@ pub(crate) fn build_item_rows(bulk_json: &str) -> serde_json::Result<Vec<ItemRow
             };
             // Thumb first: every consumer renders this at icon size, so the 128px asset is the
             // right default and `icon` is the full-size fallback.
-            let preferred_image = thumb.clone().or_else(|| icon.clone());
+            //
+            // A component overrides both. WFM gives every part of a set the parent item's art,
+            // so a Neuroptics and a Systems are the same picture — useless in a list of parts.
+            // Our own per-part icon wins where we have one; `icon`/`thumb` keep WFM's original
+            // so nothing else loses access to it.
+            let preferred_image = crate::part_images::part_image_for_item_name(&name_en)
+                .or_else(|| thumb.clone())
+                .or_else(|| icon.clone());
             ItemRow {
                 item_key: item.id,
                 slug: item.slug,
@@ -1985,7 +1992,11 @@ const CATALOG_V2_DATABASE_TMP_FILE: &str = "item_catalog_v2.sqlite.building";
 /// `set_parts.quantity_in_set`, `wfstat_relic_variants`, `language_pack_meta`, etc. were added).
 /// Without this, a launch would silently keep reusing an older file missing those columns/tables
 /// forever, since nothing about WFM's data changed to trigger a rebuild.
-const CATALOG_V2_SCHEMA_VERSION: &str = "6";
+// 7: component items' `preferred_image` now carries a `warstonks:part/...` override instead of
+//    WFM's parent-item art. The column's *shape* is unchanged, so nothing here would have
+//    triggered a rebuild — without the bump, existing installs would keep serving the old
+//    duplicate icons until WFM happened to publish new data.
+const CATALOG_V2_SCHEMA_VERSION: &str = "7";
 
 /// One point in the build the caller might want to report progress at. Internal plumbing only —
 /// no `Serialize`, nothing crosses the IPC boundary here; the startup caller translates each
@@ -2930,6 +2941,30 @@ struct ImageCache {
     built_from_modified: Option<std::time::SystemTime>,
     by_item_key: HashMap<String, String>,
     by_slug: HashMap<String, String>,
+}
+
+/// The item's **Warframe.Market** art, never our own component override.
+///
+/// `preferred_image` carries a `warstonks:part/...` sentinel for components, which only the
+/// frontend can resolve — it maps to an asset bundled in the app. Anywhere the image has to be
+/// a URL somebody else can fetch (Discord embeds, most obviously) needs the real WFM path
+/// instead, which is what this returns.
+pub(crate) fn wfm_art_for_key_or_slug(app: &tauri::AppHandle, key_or_slug: &str) -> Option<String> {
+    let key_or_slug = key_or_slug.trim();
+    if key_or_slug.is_empty() {
+        return None;
+    }
+    let connection = open_catalog_v2_readonly(app).ok()?;
+    connection
+        .query_row(
+            "SELECT COALESCE(thumb, icon) FROM items WHERE item_key = ?1 OR slug = ?1",
+            params![key_or_slug],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .flatten()
 }
 
 static IMAGE_CACHE: std::sync::OnceLock<std::sync::RwLock<Option<ImageCache>>> =
@@ -4353,6 +4388,34 @@ mod tests {
         // up an empty string. Confirmed live on 15 brand-new items.
         let entries = serde_json::json!([{
             "id": "item-1",
+            "slug": "vadarya_prime_set",
+            "gameRef": null,
+            "tags": ["set"],
+            "ducats": null,
+            "maxRank": null,
+            "bulkTradable": false,
+            "i18n": { "en": {
+                "name": "Vadarya Prime Set",
+                "icon": "items/images/en/vadarya_prime_set.abc.webp",
+                "thumb": ""
+            }}
+        }]);
+        let items = build_item_rows(&serde_json::json!({"data": entries}).to_string())
+            .expect("parses");
+        assert_eq!(items[0].thumb, None, "an empty thumb must normalize to None");
+        assert_eq!(
+            items[0].preferred_image.as_deref(),
+            Some("items/images/en/vadarya_prime_set.abc.webp"),
+            "preferred_image must fall through to icon, never be a blank string"
+        );
+    }
+
+    /// WFM gives a component the parent item's art, so every part of a set arrives as the same
+    /// picture. Our own part icon has to win over both `thumb` and `icon`.
+    #[test]
+    fn component_items_prefer_our_part_icon_over_wfm_art() {
+        let entries = serde_json::json!([{
+            "id": "item-1",
             "slug": "vadarya_prime_barrel",
             "gameRef": null,
             "tags": ["component"],
@@ -4362,16 +4425,20 @@ mod tests {
             "i18n": { "en": {
                 "name": "Vadarya Prime Barrel",
                 "icon": "items/images/en/vadarya_prime_barrel.abc.webp",
-                "thumb": ""
+                "thumb": "items/images/en/thumbs/vadarya_prime_barrel.abc.128x128.png"
             }}
         }]);
         let items = build_item_rows(&serde_json::json!({"data": entries}).to_string())
             .expect("parses");
-        assert_eq!(items[0].thumb, None, "an empty thumb must normalize to None");
+
         assert_eq!(
             items[0].preferred_image.as_deref(),
+            Some("warstonks:part/barrel_prime"),
+        );
+        // WFM's own art is still stored, so nothing else loses access to it.
+        assert_eq!(
+            items[0].icon.as_deref(),
             Some("items/images/en/vadarya_prime_barrel.abc.webp"),
-            "preferred_image must fall through to icon, never be a blank string"
         );
     }
 
