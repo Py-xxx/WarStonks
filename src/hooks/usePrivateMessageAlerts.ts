@@ -3,10 +3,12 @@ import {
   isTauriRuntime,
   pollEeLogEvents,
   recordEeLogTrades,
+  recordEeLogTradesToLog,
   sendPrivateMessageDiscordNotification,
 } from '../lib/tauriClient';
 import { fireAlertNotification, loadNotificationSettings } from '../lib/notifications';
 import { tActive } from '../i18n';
+import { useAppStore } from '../stores/useAppStore';
 
 /**
  * How often to drain Warframe's `EE.log`. The log is written as events happen, so this
@@ -51,10 +53,12 @@ export function usePrivateMessageAlerts(): void {
         }
         // Read settings per batch rather than per mount, so toggling the setting takes
         // effect immediately instead of on the next reload.
-        // Shadow mode: parsed trades are persisted to a separate store for comparison
-        // against WFM detection. They do not reach the trade log.
         const trades = events.filter((event) => event.kind === 'trade');
         if (trades.length > 0) {
+          // EE.log is the trade-log source. The shadow store is kept alongside purely as a
+          // debug aid for the Detection tab and can be dropped without affecting anything.
+          const username = useAppStore.getState().tradeAccount?.name ?? '';
+          void recordEeLogTradesToLog(username, trades).catch(() => undefined);
           void recordEeLogTrades(trades).catch(() => undefined);
         }
 

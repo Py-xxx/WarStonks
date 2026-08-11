@@ -8,6 +8,7 @@ import {
   getSetCompletionOwnedItemPrices,
   setSetCompletionOwnedItemQuantity,
   probeLocalSources,
+  syncOwnedItemsFromAlecaframe,
 } from '../../lib/tauriClient';
 import {
   analyzeSetCompletionInventoryScreenshot,
@@ -1416,6 +1417,14 @@ export function OpportunitiesPage({
       setErrorMessage(null);
 
       try {
+        // Refresh owned parts from AlecaFrame before reading them, so the planner reflects
+        // the current inventory rather than a stale manual import. A null result means
+        // AlecaFrame is off — the existing baseline is then left alone.
+        await syncOwnedItemsFromAlecaframe().catch(() => null);
+        if (cancelled) {
+          return;
+        }
+
         const [scannerState, owned, autocompleteItems, ownedPrices] = await Promise.all([
           getArbitrageScannerState(),
           getSetCompletionOwnedItems(),

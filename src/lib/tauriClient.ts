@@ -511,6 +511,21 @@ export async function recordEeLogTrades(trades: EeLogTradeEvent[]): Promise<numb
   return invoke<number>('record_ee_log_trades', { trades });
 }
 
+/**
+ * Writes detected trades into the real trade log. EE.log is the trade-log source — WFM is
+ * never polled for trades, only imported from on request.
+ */
+export async function recordEeLogTradesToLog(
+  username: string,
+  trades: EeLogTradeEvent[],
+): Promise<number> {
+  if (!isTauriRuntime() || trades.length === 0 || !username) {
+    return 0;
+  }
+
+  return invoke<number>('record_ee_log_trades_to_log', { username, trades });
+}
+
 export async function getEeLogShadowTrades(): Promise<ShadowTradeRow[]> {
   if (!isTauriRuntime()) {
     return [];
@@ -535,6 +550,21 @@ export async function getTradeDetectionComparison(username: string): Promise<Tra
   }
 
   return invoke<TradeComparison>('get_trade_detection_comparison', { username });
+}
+
+/**
+ * Rebuilds owned set components from AlecaFrame's inventory, so the set-completion planner
+ * and Opportunities reflect what the player actually owns.
+ *
+ * Returns `null` when AlecaFrame is off or unavailable — in that case the manually imported
+ * baseline is deliberately left untouched rather than wiped.
+ */
+export async function syncOwnedItemsFromAlecaframe(): Promise<SetCompletionOwnedItem[] | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return invoke<SetCompletionOwnedItem[] | null>('sync_owned_items_from_alecaframe');
 }
 
 export async function probeLocalSources(): Promise<LocalSourceAvailability> {

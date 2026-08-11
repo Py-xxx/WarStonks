@@ -10924,6 +10924,49 @@ pub async fn set_set_completion_owned_item_quantity(
     .map_err(|error| error.to_string())
 }
 
+/// Rebuilds owned set components from AlecaFrame's inventory.
+///
+/// Reuses the screenshot-import path deliberately: that is already the "replace the owned
+/// baseline wholesale" operation, and AlecaFrame is the same kind of source — a full snapshot,
+/// never a delta. Going through it means set completion, the planner and Opportunities all
+/// pick the data up without changes.
+///
+/// Only prime parts are written. Mods, arcanes and relics are tradable but are not set
+/// components, and adding them here would corrupt set-completion maths.
+#[tauri::command]
+pub async fn sync_owned_items_from_alecaframe(
+    app: tauri::AppHandle,
+) -> Result<Option<Vec<SetCompletionOwnedItem>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(inventory) = crate::alecaframe::load_inventory_for_internal_use(&app)? else {
+            // AlecaFrame off or unavailable: leave whatever the user imported manually alone
+            // rather than wiping it.
+            return Ok::<_, anyhow::Error>(None);
+        };
+
+        let rows = inventory
+            .items
+            .iter()
+            .filter(|item| item.category == crate::alecaframe::ItemCategory::Blueprint)
+            .map(|item| SetCompletionScreenshotImportRow {
+                item_key: Some(item.item_key.clone()),
+                slug: item.slug.clone(),
+                name: item.name.clone(),
+                image_path: None,
+                quantity: item.count,
+            })
+            .collect::<Vec<_>>();
+
+        let mut connection = open_market_observatory_database(&app)?;
+        let result = replace_set_completion_owned_items(&mut connection, &rows)?;
+        crate::opportunities::signal_stale(&app);
+        Ok(Some(result))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn apply_set_completion_screenshot_import_rows(
     app: tauri::AppHandle,

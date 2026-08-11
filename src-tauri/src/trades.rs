@@ -9965,6 +9965,30 @@ pub async fn get_wfm_trade_overview(
     .map_err(|error| error.to_string())
 }
 
+/// Appends entries to the cached trade log, skipping any that duplicate a stored row.
+///
+/// Shared entry point so EE.log detection and the manual WFM import go through the same
+/// de-duplication rather than each inventing their own.
+pub(crate) fn append_trade_log_entries(
+    app: &tauri::AppHandle,
+    username: &str,
+    incoming: &[PortfolioTradeLogEntry],
+) -> Result<usize> {
+    let mut connection = open_trades_cache_database(app)?;
+    let existing = load_stored_trade_log_records_inner(&connection, username)?
+        .iter()
+        .map(build_portfolio_entry_from_stored_record)
+        .collect::<Vec<_>>();
+
+    let before = existing.len();
+    let combined = append_unique_trade_entries(&existing, incoming);
+    let added = combined.len().saturating_sub(before);
+    if added > 0 {
+        save_trade_log_rows_inner(&mut connection, username, &combined)?;
+    }
+    Ok(added)
+}
+
 #[tauri::command]
 pub async fn get_cached_wfm_profile_trade_log(
     app: tauri::AppHandle,

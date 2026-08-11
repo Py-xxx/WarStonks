@@ -189,6 +189,92 @@ pub(crate) fn load_trades_inner(connection: &Connection) -> Result<Vec<ShadowTra
     Ok(rows)
 }
 
+/// Marks trades the app recorded itself, as opposed to `wfm` (imported) or the legacy
+/// `alecaframe` rows.
+pub const TRADE_SOURCE_EELOG: &str = "eelog";
+
+/// Converts one parsed trade into trade-log entries — one per item, both sides.
+///
+/// The shape mirrors what the log actually contains rather than what would be convenient:
+///
+/// * **Direction is per item.** Items the user *received* are buys; items they *gave* are
+///   sells. A trade can legitimately contain both (an item-for-item swap).
+/// * **Platinum is the consideration, never a row.** It sets the trade's total, and is not
+///   itself a traded good.
+/// * **Every row of one trade shares a `group_id`**, so the existing allocation machinery
+///   treats them as one transaction — the same mechanism the trade log already uses for
+///   multi-item trades, so "sold as set", "flip" and "partial" keep working untouched.
+/// * **Per-item price is left to the user.** The log gives a total only, so splitting it
+///   automatically would fabricate a cost basis that flows into realized profit. The rows
+///   carry `allocation_total_platinum` and the UI marks them as needing pricing.
+pub fn trade_log_entries_from_event(
+    trade: &TradeEvent,
+    resolve: &dyn Fn(&str) -> Option<(String, String)>,
+) -> Vec<crate::trades::PortfolioTradeLogEntry> {
+    let closed_at = trade
+        .occurred_at
+        .and_then(|value| value.format(&time::format_description::well_known::Rfc3339).ok())
+        .unwrap_or_default();
+
+    let mut entries = Vec::new();
+    let mut sort_order = 0_i64;
+
+    for (items, order_type, total) in [
+        (&trade.getting, "buy", trade.platinum_out),
+        (&trade.giving, "sell", trade.platinum_in),
+    ] {
+        let tradable: Vec<_> = items
+            .iter()
+            .filter(|item| !item.name.eq_ignore_ascii_case("platinum"))
+            .collect();
+        if tradable.is_empty() {
+            continue;
+        }
+
+        for item in tradable {
+            let (slug, name) = resolve(&item.name)
+                .unwrap_or_else(|| (String::new(), item.name.clone()));
+            entries.push(crate::trades::PortfolioTradeLogEntry {
+                // Deterministic: re-reading the same session updates rather than duplicating.
+                id: format!("ee-{}-{}-{}", trade.key, order_type, sort_order),
+                item_name: name,
+                slug,
+                image_path: None,
+                order_type: order_type.to_string(),
+                source: TRADE_SOURCE_EELOG.to_string(),
+                platinum: 0,
+                quantity: item.quantity,
+                rank: item.rank,
+                closed_at: closed_at.clone(),
+                updated_at: closed_at.clone(),
+                profit: None,
+                margin: None,
+                status: None,
+                keep_item: false,
+                group_id: Some(trade.key.clone()),
+                group_label: Some(trade.partner.clone()),
+                group_total_platinum: Some(total),
+                group_item_count: None,
+                allocation_total_platinum: Some(total),
+                group_sort_order: Some(sort_order),
+                allocation_mode: None,
+                cost_basis_confidence: None,
+                cost_basis_label: None,
+                matched_cost: None,
+                matched_quantity: None,
+                matched_buy_count: 0,
+                matched_buy_rows: Vec::new(),
+                set_component_rows: Vec::new(),
+                profit_formula: None,
+                duplicate_risk: false,
+            });
+            sort_order += 1;
+        }
+    }
+
+    entries
+}
+
 /// How far apart an EE.log trade and a WFM order may be and still be the same event.
 ///
 /// WFM's `closed_at` is when the *order* closed, which is not the instant the in-game trade
@@ -335,6 +421,48 @@ pub(crate) fn compare_inner(
         wfm_only_count,
         unresolved_item_count,
     }
+}
+
+/// Writes detected trades into the real trade log.
+///
+/// EE.log is the trade-log source: WFM has no trade detection of its own, so there is nothing
+/// to poll and nothing to reconcile against. Existing rows (WFM-imported or legacy) are left
+/// untouched — this only appends.
+///
+/// De-duplication is deliberately **cross-source only**. Two trades of the same item at the
+/// same price minutes apart are two real trades, and merging them would silently lose one.
+/// Only an incoming row matching one already stored is skipped, which `append_unique_trade_entries`
+/// already implements.
+#[tauri::command]
+pub fn record_ee_log_trades_to_log(
+    app: tauri::AppHandle,
+    username: String,
+    trades: Vec<TradeEvent>,
+) -> Result<usize, String> {
+    if trades.is_empty() || username.trim().is_empty() {
+        return Ok(0);
+    }
+
+    let catalog = crate::item_catalog_v2::open_catalog_v2_from_remembered_path();
+    let resolve = |name: &str| {
+        catalog.as_ref().and_then(|connection| {
+            crate::item_catalog_v2::lookup_item_v2_inner(connection, name)
+                .ok()
+                .flatten()
+                .map(|entry| (entry.slug, entry.name_en))
+        })
+    };
+
+    let incoming: Vec<_> = trades
+        .iter()
+        .flat_map(|trade| trade_log_entries_from_event(trade, &resolve))
+        .collect();
+    if incoming.is_empty() {
+        return Ok(0);
+    }
+
+    crate::trades::append_trade_log_entries(&app, username.trim(), &incoming)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
