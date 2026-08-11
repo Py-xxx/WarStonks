@@ -4581,6 +4581,13 @@ pub(crate) fn load_stored_trade_log_records_inner(
               ON overrides.username = cache.username
              AND overrides.order_id = cache.order_id
             WHERE cache.username = ?1
+              -- Orphans: rows with no close time. A trade that cannot be placed in time
+              -- cannot be sorted, matched to a buy lot, or counted in a period's P&L, and
+              -- one sitting at the bottom of the log with a blank date is worse than absent.
+              -- The EE.log tailer used to produce these when it attached mid-session without
+              -- reading the log's header; the rows are left in the table rather than deleted,
+              -- but they are excluded from every read, so nothing downstream can use them.
+              AND TRIM(COALESCE(cache.closed_at, '')) <> ''
             ORDER BY cache.closed_at ASC, cache.updated_at ASC, cache.order_id ASC
             ",
         )

@@ -193,24 +193,89 @@ pub(crate) fn load_trades_inner(connection: &Connection) -> Result<Vec<ShadowTra
 /// `alecaframe` rows.
 pub const TRADE_SOURCE_EELOG: &str = "eelog";
 
-/// Converts one parsed trade into trade-log entries — one per item, both sides.
+/// What kind of transaction a parsed trade is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TradeShape {
+    /// The user paid platinum and received items.
+    Buy,
+    /// The user gave items and received platinum.
+    Sell,
+}
+
+/// Classifies a trade, or `None` when it is not a priced purchase or sale.
 ///
-/// The shape mirrors what the log actually contains rather than what would be convenient:
+/// Only a **clean** exchange counts: one side is nothing but platinum, the other nothing but
+/// items. Anything else — item-for-item swaps, or a side mixing platinum with goods — has no
+/// derivable per-item price, so a cost basis for it would be invented rather than measured.
+/// Those are left out of the ledger entirely (they remain in the EE.log shadow store).
+fn classify_trade(trade: &TradeEvent) -> Option<TradeShape> {
+    let is_platinum = |item: &&crate::ee_log::TradedItem| item.name.eq_ignore_ascii_case("platinum");
+
+    let giving_items = trade.giving.iter().filter(|item| !is_platinum(item)).count();
+    let getting_items = trade.getting.iter().filter(|item| !is_platinum(item)).count();
+
+    // `platinum_out` is what the user handed over, `platinum_in` what they received.
+    match (
+        giving_items,
+        getting_items,
+        trade.platinum_out,
+        trade.platinum_in,
+    ) {
+        // Paid platinum, received goods, and nothing came back the other way.
+        (0, getting, paid, 0) if getting > 0 && paid > 0 => Some(TradeShape::Buy),
+        // Gave goods, received platinum only.
+        (giving, 0, 0, received) if giving > 0 && received > 0 => Some(TradeShape::Sell),
+        _ => None,
+    }
+}
+
+/// Splits a platinum total across rows in proportion to quantity.
 ///
-/// * **Direction is per item.** Items the user *received* are buys; items they *gave* are
-///   sells. A trade can legitimately contain both (an item-for-item swap).
-/// * **Platinum is the consideration, never a row.** It sets the trade's total, and is not
-///   itself a traded good.
-/// * **Every row of one trade shares a `group_id`**, so the existing allocation machinery
-///   treats them as one transaction — the same mechanism the trade log already uses for
-///   multi-item trades, so "sold as set", "flip" and "partial" keep working untouched.
-/// * **Per-item price is left to the user.** The log gives a total only, so splitting it
-///   automatically would fabricate a cost basis that flows into realized profit. The rows
-///   carry `allocation_total_platinum` and the UI marks them as needing pricing.
+/// The remainder goes to the earliest rows one platinum at a time, so the shares always add
+/// back up to exactly the total — the trade-log allocation editor rejects a group whose parts
+/// do not sum to its total, and a rounding gap would make every multi-item trade unsaveable.
+fn split_platinum(total: i64, quantities: &[i64]) -> Vec<i64> {
+    let units: i64 = quantities.iter().map(|value| value.max(&1)).sum();
+    if units <= 0 || total <= 0 {
+        return quantities.iter().map(|_| 0).collect();
+    }
+
+    let mut shares: Vec<i64> = quantities
+        .iter()
+        .map(|quantity| total * quantity.max(&1) / units)
+        .collect();
+
+    let mut remainder = total - shares.iter().sum::<i64>();
+    for share in shares.iter_mut() {
+        if remainder <= 0 {
+            break;
+        }
+        *share += 1;
+        remainder -= 1;
+    }
+
+    shares
+}
+
+/// Converts one parsed trade into trade-log entries — one row per item.
+///
+/// * **Only clean buys and sells become rows** (see [`classify_trade`]). An item-for-item swap
+///   has no price to record, and guessing one would corrupt every downstream number.
+/// * **The platinum total is divided across the items**, weighted by quantity, never repeated
+///   on each row. The split is provisional — the game records a total per *trade*, never a
+///   price per item — so the UI marks the group as needing pricing and the user can reassign
+///   it. Provisional is not the same as wrong-by-construction: giving four parts the full
+///   total each would quadruple the trade's value everywhere it is summed.
+/// * **A single-item trade is not a group.** Group fields are set only when the trade really
+///   did contain more than one item, otherwise the log renders a one-item trade as "Grouped".
 pub fn trade_log_entries_from_event(
     trade: &TradeEvent,
     resolve: &dyn Fn(&str) -> Option<(String, String)>,
 ) -> Vec<crate::trades::PortfolioTradeLogEntry> {
+    let Some(shape) = classify_trade(trade) else {
+        return Vec::new();
+    };
+
     // Never empty. A row with no `closed_at` is not a usable trade — it cannot be sorted,
     // filtered, matched to a buy lot, or counted in P&L — and an empty string here is exactly
     // what a missing session anchor used to produce. The tailer now always supplies a time;
@@ -221,25 +286,34 @@ pub fn trade_log_entries_from_event(
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default();
 
-    let mut entries = Vec::new();
-    let mut sort_order = 0_i64;
+    let (items, order_type, total) = match shape {
+        TradeShape::Buy => (&trade.getting, "buy", trade.platinum_out),
+        TradeShape::Sell => (&trade.giving, "sell", trade.platinum_in),
+    };
 
-    for (items, order_type, total) in [
-        (&trade.getting, "buy", trade.platinum_out),
-        (&trade.giving, "sell", trade.platinum_in),
-    ] {
-        let tradable: Vec<_> = items
-            .iter()
-            .filter(|item| !item.name.eq_ignore_ascii_case("platinum"))
-            .collect();
-        if tradable.is_empty() {
-            continue;
-        }
+    let tradable: Vec<_> = items
+        .iter()
+        .filter(|item| !item.name.eq_ignore_ascii_case("platinum"))
+        .collect();
+    if tradable.is_empty() {
+        return Vec::new();
+    }
 
-        for item in tradable {
-            let (slug, name) = resolve(&item.name)
-                .unwrap_or_else(|| (String::new(), item.name.clone()));
-            entries.push(crate::trades::PortfolioTradeLogEntry {
+    let quantities: Vec<i64> = tradable.iter().map(|item| item.quantity.max(1)).collect();
+    let shares = split_platinum(total, &quantities);
+    let is_group = tradable.len() > 1;
+
+    tradable
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let (slug, name) =
+                resolve(&item.name).unwrap_or_else(|| (String::new(), item.name.clone()));
+            let quantity = item.quantity.max(1);
+            let share = shares.get(index).copied().unwrap_or(0);
+            let sort_order = index as i64;
+
+            crate::trades::PortfolioTradeLogEntry {
                 // Deterministic: re-reading the same session updates rather than duplicating.
                 id: format!("ee-{}-{}-{}", trade.key, order_type, sort_order),
                 item_name: name,
@@ -247,8 +321,9 @@ pub fn trade_log_entries_from_event(
                 image_path: None,
                 order_type: order_type.to_string(),
                 source: TRADE_SOURCE_EELOG.to_string(),
-                platinum: 0,
-                quantity: item.quantity,
+                // Per unit, matching what a Warframe.Market row stores.
+                platinum: share / quantity,
+                quantity,
                 rank: item.rank,
                 closed_at: closed_at.clone(),
                 updated_at: closed_at.clone(),
@@ -256,12 +331,14 @@ pub fn trade_log_entries_from_event(
                 margin: None,
                 status: None,
                 keep_item: false,
-                group_id: Some(trade.key.clone()),
-                group_label: Some(trade.partner.clone()),
-                group_total_platinum: Some(total),
-                group_item_count: None,
-                allocation_total_platinum: Some(total),
-                group_sort_order: Some(sort_order),
+                group_id: is_group.then(|| trade.key.clone()),
+                group_label: is_group.then(|| trade.partner.clone()),
+                group_total_platinum: is_group.then_some(total),
+                group_item_count: is_group.then_some(tradable.len() as i64),
+                // The row's exact share, so the group's parts always sum to its total even
+                // when the per-unit price had to be rounded.
+                allocation_total_platinum: Some(share),
+                group_sort_order: is_group.then_some(sort_order),
                 allocation_mode: None,
                 cost_basis_confidence: None,
                 cost_basis_label: None,
@@ -272,12 +349,9 @@ pub fn trade_log_entries_from_event(
                 set_component_rows: Vec::new(),
                 profit_formula: None,
                 duplicate_risk: false,
-            });
-            sort_order += 1;
-        }
-    }
-
-    entries
+            }
+        })
+        .collect()
 }
 
 /// How far apart an EE.log trade and a WFM order may be and still be the same event.
@@ -536,7 +610,7 @@ mod tests {
     /// account for it. This is the contract the missing session anchor broke.
     #[test]
     fn every_converted_entry_carries_a_timestamp() {
-        let mut trade = sample_trade("k1", 8);
+        let mut trade = trade_of(vec![plat(8)], vec![item("Ash Prime Blueprint", 1)]);
         trade.occurred_at = None;
 
         let entries = trade_log_entries_from_event(&trade, &|_| None);
@@ -549,6 +623,138 @@ mod tests {
                 "closed_at must parse",
             );
         }
+    }
+
+    fn item(name: &str, quantity: i64) -> TradedItem {
+        TradedItem { name: name.to_string(), quantity, rank: None, max_rank: None }
+    }
+
+    fn plat(amount: i64) -> TradedItem {
+        TradedItem { name: "Platinum".to_string(), quantity: amount, rank: None, max_rank: None }
+    }
+
+    /// `giving` is what the user handed over, `getting` what they received.
+    fn trade_of(giving: Vec<TradedItem>, getting: Vec<TradedItem>) -> TradeEvent {
+        let platinum_out = giving.iter().filter(|i| i.name == "Platinum").map(|i| i.quantity).sum();
+        let platinum_in = getting.iter().filter(|i| i.name == "Platinum").map(|i| i.quantity).sum();
+        TradeEvent {
+            partner: "Partner".to_string(),
+            giving,
+            getting,
+            platinum_in,
+            platinum_out,
+            elapsed_s: 100.0,
+            occurred_at: Some(time::OffsetDateTime::now_utc()),
+            key: "k-shape".to_string(),
+        }
+    }
+
+    fn entries_for(trade: &TradeEvent) -> Vec<crate::trades::PortfolioTradeLogEntry> {
+        trade_log_entries_from_event(trade, &|name| {
+            Some((name.to_lowercase().replace(' ', "_"), name.to_string()))
+        })
+    }
+
+    /// The reported bug: four parts bought for 24p each showed 24p, quadrupling the trade's
+    /// value everywhere it was summed. The total must be *divided*, and the parts must add
+    /// back up to it exactly or the allocation editor refuses to save the group.
+    #[test]
+    fn a_multi_item_trade_divides_the_total_instead_of_repeating_it() {
+        let trade = trade_of(
+            vec![plat(24)],
+            vec![
+                item("Alternox Prime Blueprint", 1),
+                item("Alternox Prime Barrel", 1),
+                item("Alternox Prime Receiver", 1),
+                item("Alternox Prime Stock", 1),
+            ],
+        );
+
+        let entries = entries_for(&trade);
+
+        assert_eq!(entries.len(), 4);
+        for entry in &entries {
+            assert_eq!(entry.allocation_total_platinum, Some(6));
+            assert_eq!(entry.platinum, 6);
+            assert_eq!(entry.order_type, "buy");
+        }
+        let allocated: i64 = entries.iter().filter_map(|e| e.allocation_total_platinum).sum();
+        assert_eq!(allocated, 24, "the parts must sum back to the trade total");
+        assert_eq!(entries[0].group_total_platinum, Some(24));
+    }
+
+    /// An uneven split still has to reconcile; the remainder goes to the earliest rows.
+    #[test]
+    fn an_uneven_split_still_sums_to_the_total() {
+        let trade = trade_of(
+            vec![plat(10)],
+            vec![item("Part A", 1), item("Part B", 1), item("Part C", 1)],
+        );
+
+        let entries = entries_for(&trade);
+        let shares: Vec<i64> = entries.iter().filter_map(|e| e.allocation_total_platinum).collect();
+
+        assert_eq!(shares, vec![4, 3, 3]);
+        assert_eq!(shares.iter().sum::<i64>(), 10);
+    }
+
+    /// Quantity matters: a stack of three is three units of value, not one.
+    #[test]
+    fn the_split_is_weighted_by_quantity() {
+        let trade = trade_of(vec![plat(40)], vec![item("Part A", 3), item("Part B", 1)]);
+
+        let entries = entries_for(&trade);
+
+        assert_eq!(entries[0].allocation_total_platinum, Some(30));
+        assert_eq!(entries[0].platinum, 10, "per-unit price, as a WFM row stores it");
+        assert_eq!(entries[1].allocation_total_platinum, Some(10));
+    }
+
+    /// The other reported bug: a one-item trade was rendering as "Grouped".
+    #[test]
+    fn a_single_item_trade_is_not_a_group() {
+        let trade = trade_of(vec![plat(8)], vec![item("Grendel Prime Neuroptics Blueprint", 1)]);
+
+        let entries = entries_for(&trade);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].group_id, None, "one item is not a group");
+        assert_eq!(entries[0].group_label, None);
+        assert_eq!(entries[0].group_total_platinum, None);
+        assert_eq!(entries[0].group_sort_order, None);
+        assert_eq!(entries[0].platinum, 8);
+    }
+
+    /// Only a clean platinum-for-items exchange has a derivable price. Everything else is
+    /// kept in the shadow store but must never reach the ledger, where it would be counted.
+    #[test]
+    fn only_clean_buys_and_sells_reach_the_trade_log() {
+        // Item for item: no platinum anywhere, so no cost basis exists.
+        assert!(entries_for(&trade_of(vec![item("Part A", 1)], vec![item("Part B", 1)])).is_empty());
+
+        // Platinum mixed with goods on one side: the total cannot be attributed.
+        assert!(entries_for(&trade_of(
+            vec![plat(10), item("Part A", 1)],
+            vec![item("Part B", 1)],
+        ))
+        .is_empty());
+
+        // Platinum on both sides.
+        assert!(entries_for(&trade_of(vec![plat(10)], vec![plat(5), item("Part B", 1)])).is_empty());
+
+        // Platinum only, nothing traded.
+        assert!(entries_for(&trade_of(vec![plat(10)], vec![plat(10)])).is_empty());
+    }
+
+    #[test]
+    fn a_clean_sale_is_recorded_as_a_sell() {
+        let trade = trade_of(vec![item("Wisp Prime Chassis", 1)], vec![plat(34)]);
+
+        let entries = entries_for(&trade);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].order_type, "sell");
+        assert_eq!(entries[0].platinum, 34);
     }
 
     fn sample_trade(key: &str, platinum_in: i64) -> TradeEvent {
