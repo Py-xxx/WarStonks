@@ -1018,8 +1018,8 @@ function ListingModal({
                       onClick={() => onSelectItem(item)}
                     >
                       <span className="trade-listing-autocomplete-thumb">
-                        {resolveWfmAssetUrl(item.imagePath) ? (
-                          <img src={resolveWfmAssetUrl(item.imagePath) ?? undefined} alt="" />
+                        {resolveWfmAssetUrl(item.imagePath, item.slug) ? (
+                          <img src={resolveWfmAssetUrl(item.imagePath, item.slug) ?? undefined} alt="" />
                         ) : (
                           <span>{item.name.slice(0, 1)}</span>
                         )}
@@ -2452,8 +2452,8 @@ function ListingsTab() {
             onClick={() => void handleToggleOrderVisibility(order)}
           >
             <span className="trade-thumb-art" aria-hidden="true">
-              {resolveWfmAssetUrl(order.imagePath) ? (
-                <img src={resolveWfmAssetUrl(order.imagePath) ?? undefined} alt="" />
+              {resolveWfmAssetUrl(order.imagePath, order.slug) ? (
+                <img src={resolveWfmAssetUrl(order.imagePath, order.slug) ?? undefined} alt="" />
               ) : (
                 <span>{order.name.slice(0, 1)}</span>
               )}

@@ -255,10 +255,6 @@ pub struct DiscordTradeNotificationItem {
     pub quantity: i64,
     pub rank: Option<i64>,
     pub image_path: Option<String>,
-    /// Only needed to recover Warframe.Market art when `image_path` is one of our own
-    /// component overrides, which Discord cannot fetch.
-    #[serde(default)]
-    pub slug: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -570,39 +566,9 @@ fn post_discord_webhook_payload(webhook_url: &str, payload: serde_json::Value) -
     Ok(())
 }
 
-/// Prefix the catalog stamps onto a component's image. See `part_images.rs`.
-const PART_IMAGE_SENTINEL: &str = "warstonks:part/";
-
-/// Discord fetches thumbnails over the network, so it can only be given a public URL. A
-/// component's `preferred_image` is our own bundled asset, which Discord cannot reach — fall
-/// back to the item's Warframe.Market art, which is exactly what these embeds showed before
-/// the override existed.
-fn build_wfm_asset_url_with_fallback(
-    app: &tauri::AppHandle,
-    asset_path: Option<&str>,
-    key_or_slug: Option<&str>,
-) -> Option<String> {
-    let is_part_override = asset_path
-        .map(|path| path.trim().starts_with(PART_IMAGE_SENTINEL))
-        .unwrap_or(false);
-
-    if is_part_override {
-        return key_or_slug
-            .and_then(|value| crate::item_catalog_v2::wfm_art_for_key_or_slug(app, value))
-            .and_then(|path| build_wfm_asset_url(Some(&path)));
-    }
-
-    build_wfm_asset_url(asset_path)
-}
-
 fn build_wfm_asset_url(asset_path: Option<&str>) -> Option<String> {
     let trimmed = asset_path?.trim();
     if trimmed.is_empty() {
-        return None;
-    }
-    // Never emit a sentinel as a URL: only the frontend can resolve it, and Discord would
-    // render a broken image. Callers with an item key should use the fallback variant.
-    if trimmed.starts_with(PART_IMAGE_SENTINEL) {
         return None;
     }
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -854,19 +820,12 @@ fn now_iso8601() -> String {
         .unwrap_or_default()
 }
 
-fn build_watchlist_found_payload(
-    app: &tauri::AppHandle,
-    input: &DiscordWatchlistNotificationInput,
-) -> serde_json::Value {
+fn build_watchlist_found_payload(input: &DiscordWatchlistNotificationInput) -> serde_json::Value {
     let rank_value = input
         .rank
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".to_string());
-    let image_url = build_wfm_asset_url_with_fallback(
-        app,
-        input.item_image_path.as_deref(),
-        Some(input.item_slug.as_str()),
-    );
+    let image_url = build_wfm_asset_url(input.item_image_path.as_deref());
 
     let market_url = format!("https://warframe.market/items/{}", input.item_slug);
     let savings = (input.target_price - input.current_price).max(0);
@@ -927,7 +886,6 @@ fn build_underpriced_listing_payload(
 }
 
 fn build_trade_detected_payload(
-    app: &tauri::AppHandle,
     input: &DiscordTradeDetectedNotificationInput,
 ) -> serde_json::Value {
     let labels = discord_i18n::resolve(&crate::commands::app_language());
@@ -948,9 +906,10 @@ fn build_trade_detected_payload(
     } else {
         "Alecaframe"
     };
-    let image_url = input.items.iter().find_map(|item| {
-        build_wfm_asset_url_with_fallback(app, item.image_path.as_deref(), item.slug.as_deref())
-    });
+    let image_url = input
+        .items
+        .iter()
+        .find_map(|item| build_wfm_asset_url(item.image_path.as_deref()));
     let item_lines = input
         .items
         .iter()
@@ -1440,7 +1399,7 @@ pub(crate) fn send_watchlist_found_discord_notification_inner(
         return Ok(false);
     };
 
-    post_discord_webhook_payload(&webhook_url, build_watchlist_found_payload(app, input))?;
+    post_discord_webhook_payload(&webhook_url, build_watchlist_found_payload(input))?;
     Ok(true)
 }
 
@@ -1457,7 +1416,7 @@ pub(crate) fn send_trade_detected_discord_notification_inner(
         return Ok(false);
     };
 
-    post_discord_webhook_payload(&webhook_url, build_trade_detected_payload(app, input))?;
+    post_discord_webhook_payload(&webhook_url, build_trade_detected_payload(input))?;
     Ok(true)
 }
 

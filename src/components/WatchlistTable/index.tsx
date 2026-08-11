@@ -219,7 +219,7 @@ export function WatchlistTable({
             <div className="wl-compact-list">
               {rows.map((item) => {
                 const visualState = getWatchlistVisualState(item);
-                const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
                 const canCopy =
                   visualState.tone === 'green' && Boolean(item.currentSeller) && item.currentPrice !== null;
                 return (
@@ -272,7 +272,7 @@ export function WatchlistTable({
             <tbody>
               {rows.map((item) => {
                 const visualState = getWatchlistVisualState(item);
-                const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
                 const canCopy =
                   visualState.tone === 'green' && Boolean(item.currentSeller) && item.currentPrice !== null;
                 return (

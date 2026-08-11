@@ -77,7 +77,7 @@ export function ItemSearchInput({ selected, onSelect, placeholder }: ItemSearchI
   // Once an item is chosen the input shows it as a clearable chip — the field can't drift out of
   // sync with what will actually be added.
   if (selected) {
-    const imageUrl = resolveWfmAssetUrl(selected.imagePath);
+    const imageUrl = resolveWfmAssetUrl(selected.imagePath, selected.slug);
     return (
       <div className="wl-field-control wl-search-chip">
         <span className="wl-row-thumb">
@@ -139,7 +139,7 @@ export function ItemSearchInput({ selected, onSelect, placeholder }: ItemSearchI
             <div className="wl-search-note">{t('wl.searchNoMatches')}</div>
           ) : null}
           {suggestions.map((item, index) => {
-            const imageUrl = resolveWfmAssetUrl(item.imagePath);
+            const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
             return (
               <button
                 key={item.wfmId}

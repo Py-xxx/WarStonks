@@ -358,8 +358,8 @@ export function TopBar() {
                     >
                       <span className="search-suggestion-main">
                         <span className="search-suggestion-thumb">
-                          {resolveWfmAssetUrl(item.imagePath) ? (
-                            <img src={resolveWfmAssetUrl(item.imagePath) ?? undefined} alt="" loading="lazy" />
+                          {resolveWfmAssetUrl(item.imagePath, item.slug) ? (
+                            <img src={resolveWfmAssetUrl(item.imagePath, item.slug) ?? undefined} alt="" loading="lazy" />
                           ) : (
                             <span>{item.name.slice(0, 1)}</span>
                           )}
@@ -401,9 +401,9 @@ export function TopBar() {
                     >
                       <span className="search-suggestion-main">
                         <span className="search-suggestion-thumb">
-                          {resolveWfmAssetUrl(item.imagePath) ? (
+                          {resolveWfmAssetUrl(item.imagePath, item.slug) ? (
                             <img
-                              src={resolveWfmAssetUrl(item.imagePath) ?? undefined}
+                              src={resolveWfmAssetUrl(item.imagePath, item.slug) ?? undefined}
                               alt=""
                               loading="lazy"
                             />

@@ -86,7 +86,7 @@ export function VaultTraderPanel() {
               </span>
               <div className="vault-trader-grid">
                 {group.items.map((item, index) => {
-                  const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                  const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
                   return (
                     <div key={`${item.slug ?? item.name}-${index}`} className="vault-trader-card">
                       {imageUrl ? (

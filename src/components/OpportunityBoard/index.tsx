@@ -264,6 +264,8 @@ function OpportunityCard({
   const { t } = useTranslation();
   const localizeParams = useLocalizedParams();
   const confidenceClass = `opp-conf-${opp.confidenceLabel.toLowerCase()}`;
+  // Deliberately no slug: an opportunity is about the *set* — "complete this set", "buy this
+  // part to finish it" — so the parent art is the right picture, not a lone component icon.
   const imageUrl = resolveWfmAssetUrl(opp.imagePath);
   const urgent = opp.urgency === 'expiring';
   return (

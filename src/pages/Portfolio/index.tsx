@@ -740,7 +740,7 @@ function TradeLogEntryRow({
       <div className={`portfolio-log-item${isChild ? ' portfolio-log-item-child' : ''}`}>
         <span className="portfolio-log-thumb">
           {entry.imagePath ? (
-            <img src={resolveWfmAssetUrl(entry.imagePath) ?? undefined} alt="" />
+            <img src={resolveWfmAssetUrl(entry.imagePath, entry.slug) ?? undefined} alt="" />
           ) : (
             <span className="portfolio-log-thumb-fallback">{entry.itemName.charAt(0)}</span>
           )}
@@ -1331,7 +1331,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                           </button>
                           <span className="portfolio-log-thumb">
                             {row.children[0]?.imagePath ? (
-                              <img src={resolveWfmAssetUrl(row.children[0].imagePath) ?? undefined} alt="" />
+                              <img src={resolveWfmAssetUrl(row.children[0].imagePath, row.children[0].slug) ?? undefined} alt="" />
                             ) : (
                               <span className="portfolio-log-thumb-fallback">M</span>
                             )}
@@ -1848,8 +1848,8 @@ function PnlSummaryTab({
                         <td>
                           <div className="pf-position-item">
                             <span className="pf-position-thumb">
-                              {resolveWfmAssetUrl(row.imagePath) ? (
-                                <img src={resolveWfmAssetUrl(row.imagePath) ?? undefined} alt="" loading="lazy" />
+                              {resolveWfmAssetUrl(row.imagePath, row.slug) ? (
+                                <img src={resolveWfmAssetUrl(row.imagePath, row.slug) ?? undefined} alt="" loading="lazy" />
                               ) : (
                                 <span>{row.itemName.slice(0, 1)}</span>
                               )}

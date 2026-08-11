@@ -2519,7 +2519,7 @@ function AnalysisTab() {
   // pending content and per-panel loading overlays so it matches the loaded version.
 
   const effectiveItemDetails = itemDetails ?? analysis?.itemDetails ?? null;
-  const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath);
+  const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath, effectiveItemDetails?.slug);
   const itemDetailSections = buildItemDetailSections(effectiveItemDetails, t);
   const heroState = buildAnalysisHeroState(analysis, t);
   const liquidityMeterValue = toUnitInterval(analysis?.headline.liquidityScore);
@@ -2887,7 +2887,7 @@ function AnalysisTab() {
             {analysis?.supplyContext.mode === 'set-components' ? (
               <div className="market-component-list">
                 {(analysis?.supplyContext.components ?? []).map((component) => {
-                  const imageUrl = resolveWfmAssetUrl(component.imagePath);
+                  const imageUrl = resolveWfmAssetUrl(component.imagePath, component.slug);
                   const targetValue = componentTargets[component.slug] ?? '';
                   const watchlistItem: WfmAutocompleteItem | null =
                     component.itemKey !== null

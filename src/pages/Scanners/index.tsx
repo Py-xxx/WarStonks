@@ -188,7 +188,7 @@ function ArbitrageComponentRow({
   onAdd: () => void;
 }) {
   const { t } = useTranslation();
-  const imageUrl = resolveWfmAssetUrl(component.imagePath);
+  const imageUrl = resolveWfmAssetUrl(component.imagePath, component.slug);
   const isDisabled = !component.itemKey || !targetValue.trim();
 
   return (
@@ -269,7 +269,7 @@ function ArbitrageRow({
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
 }) {
   const { t } = useTranslation();
-  const imageUrl = resolveWfmAssetUrl(entry.imagePath);
+  const imageUrl = resolveWfmAssetUrl(entry.imagePath, entry.slug);
 
   return (
     <article className={`sp-set${expanded ? ' is-expanded' : ''}`}>
@@ -355,7 +355,7 @@ function RelicDropRow({
 }) {
   const { t } = useTranslation();
   const localizeName = useLocalizedName();
-  const imageUrl = resolveWfmAssetUrl(drop.imagePath);
+  const imageUrl = resolveWfmAssetUrl(drop.imagePath, drop.slug);
   const chance = chanceForRefinement(drop.chanceProfile, refinementKey);
   const normalizedChance = normalizeRelicChance(chance);
   const representativeExitPrice = getRepresentativeZonePrice(
@@ -418,7 +418,7 @@ function RelicRoiRow({
   onToggle: () => void;
 }) {
   const { t } = useTranslation();
-  const imageUrl = resolveWfmAssetUrl(entry.imagePath);
+  const imageUrl = resolveWfmAssetUrl(entry.imagePath, entry.slug);
   const summary = getRelicRefinementSummary(entry, refinementKey);
 
   // Highest-value drop at the active refinement — the single most useful fact about a relic,

@@ -374,7 +374,7 @@ function QuickViewCard() {
   const mainOrder = allOrders[0] ?? null;
   const topSellers = allOrders.slice(0, 5);
   const cheapestPrice = mainOrder?.platinum ?? null;
-  const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath);
+  const selectedItemImageUrl = resolveWfmAssetUrl(selectedItem?.imagePath, selectedItem?.slug);
   const spreadLabel = formatSpreadLabel(quickView.sellOrders, t);
   // Both bounds come from the shared analysis pipeline (the same numbers the Market analysis
   // shows), so the position badge agrees with the full analysis rather than re-deriving its own.

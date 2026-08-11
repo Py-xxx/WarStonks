@@ -1,27 +1,35 @@
 import { partIcons } from '../assets/partImages';
+import { partKeyForSlug } from './partImages';
 
 const WFM_ASSET_BASE_URL = 'https://warframe.market/static/assets/';
 
 /**
- * Marks an image as one of our own bundled part icons rather than a Warframe.Market path.
+ * Resolves an item's icon URL.
  *
- * The catalog stamps this onto a component's `preferred_image` (see `part_images.rs`), because
- * WFM serves every component of a set the parent item's art — a Neuroptics, a Chassis and a
- * Systems all arrive as the same warframe picture. Resolving it here rather than at the call
- * sites means every surface that already renders an item icon picks the override up for free.
+ * Pass `slug` wherever the surface is rendering a specific item. Components of a set all share
+ * the parent item's art on Warframe.Market — a Neuroptics and a Systems come back as the same
+ * warframe picture — so a slug that names a part resolves to our own bundled icon instead.
+ * Resolving it here, from the slug, is what makes every surface agree: icons arrive from a
+ * dozen different backend tables, so anything keyed on the image path is inconsistent by
+ * construction.
+ *
+ * Omit `slug` deliberately where the parent art is the right picture — an opportunity to
+ * complete a set is about the set, not the part.
  */
-const PART_IMAGE_SENTINEL = 'warstonks:part/';
+export function resolveWfmAssetUrl(
+  assetPath: string | null | undefined,
+  slug?: string | null,
+): string | null {
+  const partKey = partKeyForSlug(slug);
+  // A key with no art behind it means the parts list and the shipped files have drifted
+  // (`partImages.test.ts` guards that); fall through to WFM's art rather than render nothing.
+  if (partKey && partIcons[partKey]) {
+    return partIcons[partKey];
+  }
 
-export function resolveWfmAssetUrl(assetPath: string | null | undefined): string | null {
   const trimmedAssetPath = assetPath?.trim();
   if (!trimmedAssetPath) {
     return null;
-  }
-
-  if (trimmedAssetPath.startsWith(PART_IMAGE_SENTINEL)) {
-    // An unknown key means the catalog and the shipped art have drifted. Fall back to null
-    // rather than a broken URL, so the caller's own placeholder shows instead.
-    return partIcons[trimmedAssetPath.slice(PART_IMAGE_SENTINEL.length)] ?? null;
   }
 
   if (/^https?:\/\//i.test(trimmedAssetPath)) {

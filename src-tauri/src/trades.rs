@@ -4070,7 +4070,6 @@ fn build_trade_owned_sync_key(record: &StoredTradeLogRecord) -> String {
         quantity: record.quantity.max(1),
         rank: record.rank,
         image_path: record.image_path.clone(),
-        slug: Some(record.slug.clone()),
     }];
 
     build_trade_notification_fingerprint(
@@ -4089,7 +4088,6 @@ fn build_trade_notification_items_from_entry(
         quantity: entry.quantity.max(1),
         rank: entry.rank,
         image_path: entry.image_path.clone(),
-        slug: Some(entry.slug.clone()),
     }]
 }
 
@@ -4130,7 +4128,6 @@ fn build_trade_notification_items_for_wfm_entry(
             quantity,
             rank: None,
             image_path,
-            slug: Some(component.component_slug.clone()),
         });
     }
 
@@ -11636,7 +11633,6 @@ mod tests {
                 quantity: 1,
                 rank: None,
                 image_path: None,
-                slug: None,
             }],
         );
         let same_trade_fingerprint = build_trade_notification_fingerprint(
@@ -11648,7 +11644,6 @@ mod tests {
                 quantity: 1,
                 rank: None,
                 image_path: None,
-                slug: None,
             }],
         );
 

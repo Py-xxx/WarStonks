@@ -142,7 +142,7 @@ export function FarmingSessionPanel() {
       : null;
 
   const renderDrop = (drop: FarmingSessionDrop) => {
-    const image = resolveWfmAssetUrl(drop.imagePath);
+    const image = resolveWfmAssetUrl(drop.imagePath, drop.slug);
     return (
       <button
         key={drop.slug}

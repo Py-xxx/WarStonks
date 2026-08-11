@@ -677,7 +677,7 @@ function SetPlannerRow({
 }) {
   const localizeName = useLocalizedName();
   const { t } = useTranslation();
-  const imageUrl = resolveWfmAssetUrl(planner.entry.imagePath);
+  const imageUrl = resolveWfmAssetUrl(planner.entry.imagePath, planner.entry.slug);
   const isComplete =
     planner.totalPartsNeeded > 0 && planner.ownedPartsCount >= planner.totalPartsNeeded;
 
@@ -697,7 +697,7 @@ function SetPlannerRow({
       (component.itemKey !== null ? ownedRelicHints.get(`item:${component.itemKey}`) : undefined) ??
       ownedRelicHints.get(`slug:${component.slug}`) ??
       [];
-    const partImage = resolveWfmAssetUrl(component.imagePath);
+    const partImage = resolveWfmAssetUrl(component.imagePath, component.slug);
     return (
       <div key={`${planner.entry.slug}-${component.slug}`} className="sp-part sp-part-missing">
         <span className="sp-part-thumb" aria-hidden="true">
@@ -860,7 +860,7 @@ function SetPlannerRow({
               </div>
               <div className="sp-part-list">
                 {ownedComponents.map((componentState) => {
-                  const ownedImage = resolveWfmAssetUrl(componentState.component.imagePath);
+                  const ownedImage = resolveWfmAssetUrl(componentState.component.imagePath, componentState.component.slug);
                   return (
                     <div
                       key={`${planner.entry.slug}-${componentState.component.slug}`}
@@ -2860,7 +2860,7 @@ export function OpportunitiesPage({
                 ) : (
                   <div className="inventory-list">
                     {filteredCatalog.map((item) => {
-                      const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                      const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
                       const ownedQty = ownedMap.get(item.slug) ?? 0;
                       return (
                         <div key={item.slug} className={`inventory-row${ownedQty > 0 ? ' is-owned' : ''}`}>
@@ -2986,7 +2986,7 @@ export function OpportunitiesPage({
                 ) : (
                   <div className="inventory-list">
                     {filteredOwnedItems.map((item) => {
-                      const imageUrl = resolveWfmAssetUrl(item.imagePath);
+                      const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
                       return (
                         <div key={item.slug} className="inventory-row is-owned">
                           <span className="inventory-thumb">
@@ -3158,7 +3158,7 @@ export function OpportunitiesPage({
                             ) : (
                               <div className="owned-relics-drop-grid">
                                 {relic.drops.map((drop) => {
-                                  const dropImage = resolveWfmAssetUrl(drop.imagePath);
+                                  const dropImage = resolveWfmAssetUrl(drop.imagePath, drop.slug);
                                   const tone = relicRarityTone(drop.rarity);
                                   return (
                                     <div key={`${relicKey}-${drop.slug}`} className="owned-relics-drop-card">
@@ -3687,7 +3687,7 @@ export function OpportunitiesPage({
                                   entry: (typeof row.drops)[number],
                                   isNeeded: boolean,
                                 ) => {
-                                  const dropImage = resolveWfmAssetUrl(entry.drop.imagePath);
+                                  const dropImage = resolveWfmAssetUrl(entry.drop.imagePath, entry.drop.slug);
                                   const tone = relicRarityTone(entry.drop.rarity);
                                   return (
                                     <div
@@ -3922,7 +3922,7 @@ export function OpportunitiesPage({
                               const low = ranked.filter((entry) => !worth.includes(entry));
                               const renderDrop = (entry: (typeof ranked)[number]) => {
                                 const drop = entry.drop;
-                                const dropImage = resolveWfmAssetUrl(drop.imagePath);
+                                const dropImage = resolveWfmAssetUrl(drop.imagePath, drop.slug);
                                 const tone = relicRarityTone(drop.rarity);
                                 const isBest = row.bestDropSlug === drop.slug;
                                 return (

@@ -16,7 +16,6 @@ mod market_observatory;
 mod market_observatory_migration;
 mod opportunities;
 mod order_flow;
-mod part_images;
 mod recommended_prices;
 mod smart_manage;
 mod settings;

@@ -253,7 +253,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
           </div>
           <div className="alerts-list">
             {visibleAlerts.map((alert) => {
-              const imageUrl = resolveWfmAssetUrl(alert.itemImagePath);
+              const imageUrl = resolveWfmAssetUrl(alert.itemImagePath, alert.itemSlug);
 
               return (
                 <div key={alert.id} className="alert-item">
