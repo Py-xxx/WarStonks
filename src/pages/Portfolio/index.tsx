@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { InfoHint, type InfoHintPlacement } from '../../components/InfoHint';
 import {
-  forceWfmTradeLogResync,
   getCachedWfmProfileTradeLog,
   getPortfolioInventoryValue,
   getPortfolioPnlSummary,
@@ -561,57 +560,6 @@ function buildEndFilterDate(value: string): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function downloadTradeLogCsv(entries: PortfolioTradeLogEntry[]) {
-  const rows = [
-    [
-      'Item',
-      'Slug',
-      'Type',
-      'Source',
-      'Price',
-      'Quantity',
-      'Rank',
-      'Profit',
-      'MarginPct',
-      'Status',
-      'ClosedAt',
-      'UpdatedAt',
-      'GroupId',
-      'AllocationMode',
-    ],
-    ...entries.map((entry) => [
-      entry.itemName,
-      entry.slug,
-      entry.orderType,
-      entry.source,
-      String(entry.platinum),
-      String(entry.quantity),
-      entry.rank == null ? '' : String(entry.rank),
-      entry.profit == null ? '' : String(entry.profit),
-      entry.margin == null ? '' : entry.margin.toFixed(2),
-      entry.status ?? '',
-      entry.closedAt,
-      entry.updatedAt,
-      entry.groupId ?? '',
-      entry.allocationMode ?? '',
-    ]),
-  ];
-  const csv = rows
-    .map((row) =>
-      row
-        .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
-        .join(','),
-    )
-    .join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `warstonks-trade-log-${new Date().toISOString().slice(0, 10)}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
 type TradeLogDisplayRow =
   | { kind: 'single'; entry: PortfolioTradeLogEntry }
   | {
@@ -810,7 +758,6 @@ function TradeLogTab({ username }: { username: string | null }) {
   const [keepOverrides, setKeepOverrides] = useState<Record<string, boolean>>({});
   const keepDesiredRef = useRef<Map<string, boolean>>(new Map());
   const keepInFlightRef = useRef<Set<string>>(new Set());
-  const [resyncing, setResyncing] = useState(false);
   const [savingAllocations, setSavingAllocations] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
@@ -1027,25 +974,6 @@ function TradeLogTab({ username }: { username: string | null }) {
   };
 
 
-  const handleForceResync = async () => {
-    if (!username) {
-      setErrorMessage(t('pf.connectFirst2'));
-      return;
-    }
-
-    setResyncing(true);
-    setErrorMessage(null);
-
-    try {
-      const nextState = await forceWfmTradeLogResync(username);
-      applyTradeLogState(nextState);
-    } catch (error) {
-      setErrorMessage(formatPortfolioError(error));
-    } finally {
-      setResyncing(false);
-    }
-  };
-
   const handleSaveAllocations = async () => {
     if (!username || !allocationGroup) {
       return;
@@ -1147,29 +1075,11 @@ function TradeLogTab({ username }: { username: string | null }) {
           {lastUpdatedAt ? (
             <span className="portfolio-log-updated">{t('pf.lastUpdated')} {formatShortLocalDateTime(lastUpdatedAt)}</span>
           ) : null}
-          {username ? (
-            <button
-              className="act-btn portfolio-secondary-btn"
-              type="button"
-              onClick={() => void handleForceResync()}
-              disabled={resyncing || loading}
-            >
-              {resyncing ? t('pf.resyncing') : t('pf.forceResync')}
-            </button>
-          ) : null}
-          <button
-            className="act-btn portfolio-secondary-btn"
-            type="button"
-            onClick={() => downloadTradeLogCsv(filteredEntries)}
-            disabled={filteredEntries.length === 0}
-          >
-            {t('pf.exportCsv')}
-          </button>
           <button
             className="act-btn portfolio-secondary-btn"
             type="button"
             onClick={() => void handleImportFromWfm()}
-            disabled={loading || resyncing || importing || !username}
+            disabled={loading || importing || !username}
             title={t('pf.importFromWfmHint')}
           >
             {importing ? t('pf.importing') : t('pf.importFromWfm')}
@@ -1178,7 +1088,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             className="act-btn portfolio-refresh-btn"
             type="button"
             onClick={() => void handleRefresh()}
-            disabled={loading || resyncing}
+            disabled={loading}
           >
             <RefreshIcon />
             {loading ? t('common.refreshing') : t('common.refresh')}

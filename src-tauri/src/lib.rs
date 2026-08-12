@@ -166,7 +166,6 @@ pub fn run() {
             trades::get_portfolio_pnl_summary,
             trades::set_wfm_trade_log_keep_item,
             trades::update_trade_group_allocations,
-            trades::force_wfm_trade_log_resync,
             trades::ensure_trade_set_map,
             trades::get_wfm_item_subtypes,
             trades::create_wfm_sell_order,

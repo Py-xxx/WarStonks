@@ -68,7 +68,6 @@ const HEALTH_LOW_SELL_PROBABILITY: f64 = 0.35;
 /// A trim is only worth recommending once we're at least this far above the real market floor —
 /// below it, matching would be churn for a 1-2p gain that a lone undercut would erase anyway.
 const HEALTH_MEANINGFUL_GAP: i64 = 3;
-const WFM_TRADE_LOG_LOCK_DAYS: i64 = 80;
 const PENDING_NOTIFICATION_WINDOW_MINUTES: i64 = 30;
 const WFM_API_BASE_URL_V1: &str = "https://api.warframe.market/v1";
 const WFM_API_BASE_URL_V2: &str = "https://api.warframe.market/v2";
@@ -1517,12 +1516,6 @@ fn get_or_create_device_id() -> String {
 
 pub(crate) fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
-}
-
-fn trade_record_is_before_cutoff(record: &StoredTradeLogRecord, cutoff: OffsetDateTime) -> bool {
-    parse_timestamp(&record.closed_at)
-        .map(|closed_at| closed_at < cutoff)
-        .unwrap_or(false)
 }
 
 fn extract_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -4714,10 +4707,6 @@ fn fetch_profile_trade_log_inner_with_priority(
     Ok(build_trade_log_entries_from_statistics(payload.payload))
 }
 
-fn fetch_profile_trade_log_inner(username: &str) -> Result<Vec<PortfolioTradeLogEntry>> {
-    fetch_profile_trade_log_inner_with_priority(username, RequestPriority::High)
-}
-
 pub(crate) fn load_stored_trade_log_records_inner(
     connection: &Connection,
     username: &str,
@@ -6468,34 +6457,6 @@ fn update_trade_group_allocations_inner(
         .commit()
         .context("failed to commit grouped trade allocation transaction")?;
 
-    reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
-}
-
-fn force_trade_log_resync_inner(
-    app: &tauri::AppHandle,
-    username: &str,
-) -> Result<PortfolioTradeLogState> {
-    let trimmed_username = username.trim();
-    if trimmed_username.is_empty() {
-        return Err(anyhow!("Username is required to resync the trade log."));
-    }
-
-    let mut connection = open_trades_cache_database(app)?;
-    let existing_records = load_stored_trade_log_records_inner(&connection, trimmed_username)?;
-    let mut fetched_entries = fetch_profile_trade_log_inner(trimmed_username)?;
-
-
-    let cutoff = now_utc() - time::Duration::days(WFM_TRADE_LOG_LOCK_DAYS);
-    let locked_entries = existing_records
-        .iter()
-        .filter(|record| trade_record_is_before_cutoff(record, cutoff))
-        .map(build_portfolio_entry_from_stored_record)
-        .collect::<Vec<_>>();
-    if !locked_entries.is_empty() {
-        fetched_entries = append_unique_trade_entries(&fetched_entries, &locked_entries);
-    }
-
-    replace_trade_log_rows_inner(&mut connection, trimmed_username, &fetched_entries)?;
     reconcile_trade_log_state_inner(app, &mut connection, trimmed_username)
 }
 
@@ -10378,21 +10339,6 @@ pub async fn update_trade_group_allocations(
 }
 
 #[tauri::command]
-pub async fn force_wfm_trade_log_resync(
-    app: tauri::AppHandle,
-    username: String,
-) -> Result<PortfolioTradeLogState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        force_trade_log_resync_inner(&app, username.trim())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    // `{:#}` prints the full anyhow context chain so the root cause (e.g. the underlying SQLite
-    // error) reaches the UI/error log instead of only the outermost context message.
-    .map_err(|error| format!("{error:#}"))
-}
-
-#[tauri::command]
 pub async fn ensure_trade_set_map(
     app: tauri::AppHandle,
     api_version: Option<String>,
@@ -10736,7 +10682,7 @@ mod tests {
         normalize_avatar_url, normalize_status_set_request,
         parse_status_from_payload, prune_stale_trade_log_overrides_inner, resolve_per_trade,
         replace_trade_log_rows_inner, save_trade_log_rows_inner,
-        should_attempt_trade_session_reauth, trade_record_is_before_cutoff,
+        should_attempt_trade_session_reauth,
         is_listing_underpriced, underpriced_trigger_ratio, UNDERPRICED_TRIGGER_BASE_RATIO,
         PortfolioTradeLogEntry, StoredTradeLogRecord, TradeSetComponentRecord,
         TradeSetRootRecord,
@@ -10836,39 +10782,6 @@ mod tests {
             normalize_status_set_request("invisible").ok(),
             Some("invisible")
         );
-    }
-
-    #[test]
-    fn locks_trade_records_older_than_cutoff() {
-        let cutoff = OffsetDateTime::parse("2026-03-01T00:00:00Z", &Rfc3339).expect("cutoff");
-        let old_record = StoredTradeLogRecord {
-            id: "old-1".to_string(),
-            item_name: "Old Item".to_string(),
-            slug: "old_item".to_string(),
-            image_path: None,
-            order_type: "sell".to_string(),
-            source: "wfm".to_string(),
-            platinum: 50,
-            quantity: 1,
-            rank: None,
-            closed_at: "2026-02-01T00:00:00Z".to_string(),
-            updated_at: "2026-02-01T00:00:00Z".to_string(),
-            keep_item: false,
-            group_id: None,
-            group_label: None,
-            group_total_platinum: None,
-            group_item_count: None,
-            allocation_total_platinum: None,
-            group_sort_order: None,
-        };
-        let recent_record = StoredTradeLogRecord {
-            closed_at: "2026-03-05T00:00:00Z".to_string(),
-            updated_at: "2026-03-05T00:00:00Z".to_string(),
-            ..old_record.clone()
-        };
-
-        assert!(trade_record_is_before_cutoff(&old_record, cutoff));
-        assert!(!trade_record_is_before_cutoff(&recent_record, cutoff));
     }
 
     #[test]

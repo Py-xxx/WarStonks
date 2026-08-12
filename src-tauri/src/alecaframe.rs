@@ -34,6 +34,21 @@ const LAST_DATA_IV: [u8; 16] = [
 /// The AlecaFrame release these constants were verified against.
 pub const VERIFIED_ALECAFRAME_VERSION: &str = "2.6.90";
 
+/// Ducats, as the game names them internally.
+const DUCAT_ITEM_TYPE: &str = "/Lotus/Types/Items/MiscItems/PrimeBucks";
+
+/// Reads one stacked item's count out of `MiscItems`.
+///
+/// Some currencies are inventory stacks rather than wallet fields, so they are absent from the
+/// payload's top level entirely and have to be looked up by their `/Lotus/...` type.
+fn stacked_item_count(root: &Value, item_type: &str) -> Option<i64> {
+    root.get("MiscItems")?
+        .as_array()?
+        .iter()
+        .find(|entry| entry.get("ItemType").and_then(Value::as_str) == Some(item_type))
+        .and_then(|entry| entry.get("ItemCount").and_then(Value::as_i64))
+}
+
 /// AES-128-CBC + PKCS7, UTF-8 — AlecaFrame's `Misc.ReadAllTextEncrypted`.
 pub fn decrypt_last_data(blob: &[u8]) -> Result<String> {
     if blob.is_empty() || blob.len() % 16 != 0 {
@@ -587,7 +602,11 @@ pub fn refresh_wallet_from_appdata(
                     platinum: root.get("PremiumCredits").and_then(Value::as_i64),
                     credits: root.get("RegularCredits").and_then(Value::as_i64),
                     endo: root.get("FusionPoints").and_then(Value::as_i64),
-                    ducats: None,
+                    // Ducats are not a wallet field — the game holds them as an inventory
+                    // stack under their internal name, "PrimeBucks". Verified against the
+                    // reference payload, which carries 286 of them while every top-level key
+                    // is silent about ducats.
+                    ducats: stacked_item_count(&root, DUCAT_ITEM_TYPE),
                     aya: root.get("PrimeTokens").and_then(Value::as_i64),
                 },
                 username_when_public: None,
@@ -750,6 +769,28 @@ mod tests {
         assert_eq!(inventory.account.trades_remaining, 15);
         // 2026-08-10T21:38:45Z — decoded from the LastInventorySync ObjectId.
         assert_eq!(inventory.last_inventory_sync, Some(1_786_397_925));
+    }
+
+    /// Ducats are not a wallet field. The game keeps them as an inventory stack named
+    /// "PrimeBucks", which is why the wallet reported a dash for them while the payload had
+    /// 286 sitting in `MiscItems` all along.
+    #[test]
+    fn ducats_are_read_from_the_inventory_stack_not_the_wallet_fields() {
+        let json = std::fs::read(reference_dir().join("lastData.dat")).expect("reference dat");
+        let decrypted = decrypt_last_data(&json).expect("decrypts");
+        let root: Value = serde_json::from_str(&decrypted).expect("parses");
+
+        assert_eq!(
+            root.get("Ducats"),
+            None,
+            "no top-level ducat field exists — that is the whole trap",
+        );
+        assert_eq!(stacked_item_count(&root, DUCAT_ITEM_TYPE), Some(286));
+        // An item the account does not hold reads as absent rather than zero.
+        assert_eq!(
+            stacked_item_count(&root, "/Lotus/Types/Items/MiscItems/NotAThing"),
+            None,
+        );
     }
 
     #[test]

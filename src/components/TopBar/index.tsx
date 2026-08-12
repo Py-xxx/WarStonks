@@ -549,18 +549,13 @@ export function TopBar() {
           >
             {formatCurrencyValue(walletSnapshot.balances.platinum, walletLoading)}
           </span>
-          {/* Always rendered, hidden when flat: showing it only on a change made the strip
-              grow by ~35px the instant a trade landed, shunting everything right of it. */}
-          <span
-            className={`currency-delta${platinumDelta === null ? ' is-flat' : ''}${
-              (platinumDelta ?? 0) < 0 ? ' is-down' : ''
-            }`}
-            aria-hidden={platinumDelta === null}
-          >
-            {platinumDelta === null
-              ? ''
-              : `${platinumDelta > 0 ? '+' : ''}${new Intl.NumberFormat().format(platinumDelta)}`}
-          </span>
+          {/* Only present once platinum has moved — an empty reserved slot reads as a gap. */}
+          {platinumDelta !== null ? (
+            <span className={`currency-delta${platinumDelta < 0 ? ' is-down' : ''}`}>
+              {platinumDelta > 0 ? '+' : ''}
+              {new Intl.NumberFormat().format(platinumDelta)}
+            </span>
+          ) : null}
         </div>
 
         <span className="currency-divider" aria-hidden="true" />

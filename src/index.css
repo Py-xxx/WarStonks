@@ -4719,13 +4719,13 @@ body {
 }
 
 /* ── CURRENCY STRIP ── */
-/* Platinum leads; the rest support it. The old strip gave all five currencies equal weight
-   and an 8px uppercase label each — below readable size, and redundant once the icon is there.
-   Names now live on hover, which buys back the room the two cramped lines were using. */
+/* Platinum leads by position, not by size. The old strip gave all five currencies equal
+   weight and an 8px uppercase label each — below readable size, and redundant once the icon is
+   there. Names now live on hover, which buys back the room the two cramped lines were using. */
 .currency-strip {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -4734,21 +4734,29 @@ body {
   flex-shrink: 0;
 }
 
-.currency-primary {
+.currency-primary,
+.currency-secondary {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   cursor: default;
 }
-.currency-primary-val {
+
+/* One size for every balance: platinum is distinguished by sitting first, behind its own
+   divider, rather than by shouting. */
+.currency-primary-val,
+.currency-secondary-val {
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-variant-numeric: tabular-nums;
-  font-size: 15px;
-  color: var(--text-primary);
+  font-size: 12px;
   line-height: 1;
 }
+.currency-primary-val { color: var(--text-primary); }
+.currency-secondary-val { color: var(--text-secondary); }
 
-/* Only appears once platinum has actually moved, so it reads as an event rather than chrome. */
+/* Only in the DOM once platinum has actually moved, so there is no blank slot the rest of the
+   time. The strip does shift by the chip's width when a trade lands — accepted deliberately:
+   a permanent gap to avoid a one-off nudge is the worse trade. */
 .currency-delta {
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
   font-variant-numeric: tabular-nums;
@@ -4763,13 +4771,6 @@ body {
   color: var(--accent-red);
   background: rgba(240, 79, 88, 0.12);
 }
-/* Holds its space while flat so the strip's width — and everything right of it in the top
-   bar — doesn't jump the moment a trade changes the balance. */
-.currency-delta {
-  min-width: 34px;
-  text-align: center;
-}
-.currency-delta.is-flat { visibility: hidden; }
 
 .currency-divider {
   width: 1px;
@@ -4778,34 +4779,35 @@ body {
   flex-shrink: 0;
 }
 
-.currency-secondary {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: default;
-}
-.currency-secondary-val {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1;
-}
-
+/* An equal box is not an equal icon.
+   Each source image carries a different amount of transparent padding — measured, the artwork
+   fills 97% of the credits canvas but only 52% of endo's — so `object-fit: contain` renders
+   endo at roughly half the visible size of credits even though both boxes are 17px. The
+   per-currency scales below correct for that, normalising every icon to ~15px of actual
+   artwork. Recompute them if an icon is ever replaced. */
 .currency-icon {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 17px;
+  height: 17px;
   border-radius: 5px;
   flex-shrink: 0;
   overflow: hidden;
 }
-.currency-icon img { width: 100%; height: 100%; object-fit: contain; }
-.currency-primary .currency-icon { width: 19px; height: 19px; }
-.currency-secondary .currency-icon { width: 15px; height: 15px; }
+.currency-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ci-platinum img { transform: scale(1.01); }
+.ci-credits img  { transform: scale(0.91); }
+.ci-endo img     { transform: scale(1.71); }
+.ci-ducats img   { transform: scale(1.05); }
+.ci-aya img      { transform: scale(1.12); }
 
 /* The tint only remains behind platinum. On the secondary icons it was five competing
-   coloured chips fighting the one number that matters. */
+   coloured chips fighting the balances themselves. */
 .currency-primary .ci-platinum { background: rgba(160, 180, 255, 0.16); }
 
 .currency-primary-val.no-data,

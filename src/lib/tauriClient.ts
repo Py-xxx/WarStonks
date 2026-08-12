@@ -785,12 +785,6 @@ export async function updateTradeGroupAllocations(
   });
 }
 
-export async function forceWfmTradeLogResync(
-  username: string,
-): Promise<PortfolioTradeLogState> {
-  return invoke<PortfolioTradeLogState>('force_wfm_trade_log_resync', { username });
-}
-
 export async function ensureTradeSetMap(
   apiVersion: string | null,
 ): Promise<TradeSetMapSummary> {
