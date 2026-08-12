@@ -1342,6 +1342,10 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
         ",
     )?;
 
+    // Derived from `statistics_cache` and rebuildable from it, so it owns its own schema rather
+    // than joining the migration's item-keyed table lists — see `price_book.rs`.
+    crate::price_book::ensure_price_book_schema(connection)?;
+
     Ok(())
 }
 
@@ -1610,6 +1614,12 @@ fn insert_statistics_rows_for_domain(
             fetched_at
         ])?;
     }
+
+    // Keep the durable price book in step with the statistics it derives from, so an item the
+    // user just looked at is valued from what we just learned rather than from the last full
+    // rebuild. Deliberately best-effort: the statistics write is the caller's actual job, and a
+    // price-book hiccup must not fail it — the next rebuild picks the item up regardless.
+    let _ = crate::price_book::refresh_price_book_entry(connection, item_key, variant_key);
 
     Ok(())
 }
@@ -8006,6 +8016,33 @@ pub(crate) fn prime_recommended_prices_on_startup(app: &tauri::AppHandle) {
     if let Ok(Some(response)) = load_arbitrage_scanner_cache(&connection) {
         update_recommended_prices_from_scan(app, &response);
     }
+
+    // Rebuild the durable price book from the statistics already on disk. Unlike the radar prime
+    // above, this covers every item the app has ever fetched statistics for, not just the ones
+    // the last scan touched — which is the point of it being durable.
+    match crate::price_book::rebuild_price_book(&connection) {
+        Ok(count) => log_feature_event_best_effort(
+            app,
+            "price-book",
+            "rebuild",
+            &format!("Rebuilt the price book at startup: {count} priced items."),
+        ),
+        Err(error) => log_feature_event_best_effort(
+            app,
+            "price-book",
+            "rebuild-failed",
+            &format!("Price book rebuild failed: {error}"),
+        ),
+    }
+}
+
+/// The whole price book in one call. It is ~1k rows on a well-used install, and every consumer
+/// so far (the inventory grid) values a full screen of items at once — a per-item command would
+/// be one IPC round trip per tile.
+#[tauri::command]
+pub async fn get_price_book(app: tauri::AppHandle) -> Result<Vec<crate::price_book::PriceBookEntry>, String> {
+    let connection = open_market_observatory_database(&app).map_err(|error| error.to_string())?;
+    crate::price_book::load_price_book(&connection).map_err(|error| error.to_string())
 }
 
 fn emit_arbitrage_scanner_progress(app: &tauri::AppHandle, progress: &ArbitrageScannerProgress) {

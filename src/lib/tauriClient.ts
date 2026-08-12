@@ -42,6 +42,7 @@ import type {
   TradeUpdateListingInput,
   SetCompletionOwnedItem,
   OwnedRelicInventoryCache,
+  PriceBookEntry,
   PersistedWorldStateCacheEntry,
   SellerMode,
   WfmDetailedOrder,
@@ -1123,6 +1124,15 @@ export async function applySetCompletionScreenshotImportRows(rows: Array<{
 
 export async function getOwnedRelicInventoryCache(): Promise<OwnedRelicInventoryCache> {
   return invoke<OwnedRelicInventoryCache>('get_owned_relic_inventory_cache');
+}
+
+/**
+ * The whole durable price book in one call — around a thousand rows on a well-used install.
+ * Fetched once and indexed by the caller rather than queried per item, because every consumer
+ * so far values a full screen of items at once.
+ */
+export async function getPriceBook(): Promise<PriceBookEntry[]> {
+  return invoke<PriceBookEntry[]>('get_price_book');
 }
 
 export async function refreshOwnedRelicInventory(): Promise<OwnedRelicInventoryCache> {

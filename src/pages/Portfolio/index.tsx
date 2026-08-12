@@ -1069,14 +1069,20 @@ function TradeLogTab({ username }: { username: string | null }) {
 
   return (
     <>
-      <div className="period-bar">
-        <label>{t('pf.tradeLog')}</label>
+      {/* No heading here — the sub-tab the user just clicked already says "Trade Log", and
+          repeating it directly underneath spends a row saying nothing. */}
+      <div className="period-bar portfolio-log-bar">
         <div className="period-right portfolio-log-toolbar">
           {lastUpdatedAt ? (
-            <span className="portfolio-log-updated">{t('pf.lastUpdated')} {formatShortLocalDateTime(lastUpdatedAt)}</span>
+            <span className="portfolio-log-updated">
+              <span className="portfolio-log-updated-label">{t('pf.updated')}</span>
+              <time className="portfolio-log-updated-value">
+                {formatShortLocalDateTime(lastUpdatedAt)}
+              </time>
+            </span>
           ) : null}
           <button
-            className="act-btn portfolio-secondary-btn"
+            className="portfolio-log-btn"
             type="button"
             onClick={() => void handleImportFromWfm()}
             disabled={loading || importing || !username}
@@ -1085,7 +1091,7 @@ function TradeLogTab({ username }: { username: string | null }) {
             {importing ? t('pf.importing') : t('pf.importFromWfm')}
           </button>
           <button
-            className="act-btn portfolio-refresh-btn"
+            className="portfolio-log-btn"
             type="button"
             onClick={() => void handleRefresh()}
             disabled={loading}

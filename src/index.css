@@ -5009,15 +5009,19 @@ body {
 }
 
 .settings-nav-description,
-.settings-field-help,
-.settings-nav-subtext {
+.settings-field-help {
   color: var(--text-secondary);
   line-height: 1.5;
 }
 
 /* The one setting whose "off" state silently empties the inventory, relic and currency views
-   — worth reading as a warning rather than as more description. */
-.settings-nav-recommend { color: var(--accent-red); }
+   — worth reading as a warning rather than as more description, so it gets its own line. */
+.settings-nav-recommend {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.5;
+  color: var(--accent-red);
+}
 
 .settings-form-card,
 .settings-preview-card {
@@ -9692,14 +9696,63 @@ body {
   align-items: center;
   gap: 10px;
 }
+/* With the redundant "Trade Log" heading gone this bar holds only the toolbar, so it no longer
+   needs to reserve a row's worth of height for a label. */
+.portfolio-log-bar {
+  margin-bottom: 10px;
+}
+/* Reads as a labelled data point in the app's established idiom (micro uppercase label + mono
+   value, as on every info card) rather than as a status pill — nothing here has a status. */
 .portfolio-log-updated {
-  font-size: 11px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-right: 2px;
+}
+.portfolio-log-updated-label {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: var(--text-muted);
 }
+.portfolio-log-updated-value {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+/* Still used by the Portfolio summary tab's own refresh button. */
 .portfolio-refresh-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+/* Matches the inventory toolbar's buttons — the app's current button shape. Both buttons in
+   this toolbar share it, so neither reads as more primary than the other. */
+.portfolio-log-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.portfolio-log-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+}
+.portfolio-log-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .portfolio-secondary-btn {
   display: inline-flex;
@@ -10500,9 +10553,12 @@ body {
     justify-content: flex-start;
   }
 
+  /* `space-between` was right when a "Trade Log" heading held the left of this bar. With the
+     heading gone it would fling the timestamp and the two buttons to opposite edges, so the
+     toolbar stays a group and simply sits right. */
   .portfolio-log-toolbar {
     width: 100%;
-    justify-content: space-between;
+    justify-content: flex-end;
   }
 
   .portfolio-log-filters,
@@ -15515,6 +15571,29 @@ img[data-asset-failed='true'] {
   font-variant-numeric: tabular-nums;
   font-size: 10px;
   color: var(--accent-green);
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
+}
+/* The per-unit price on a stack: present for reference, never competing with the stack total. */
+.af-tile-value-unit {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+/* A ranked item priced off its unranked row — a floor, so it must not wear the confident green
+   that a directly-priced item does. Amber is this app's "provisional" colour throughout. */
+.af-tile-value-floor {
+  color: var(--color-amber);
+}
+.af-tile-value-floor::before {
+  content: '≥';
+  opacity: 0.7;
+}
+/* The on-screen total. Reads as data, not as a heading. */
+.af-inv-total {
+  color: var(--accent-green);
+  font-weight: 600;
 }
 /* Relic drop table. Values come from the same scanner results "what to farm now" reads, so
    the two tabs can never quote different prices for the same drop. */

@@ -17,6 +17,7 @@ mod market_observatory;
 mod market_observatory_migration;
 mod opportunities;
 mod order_flow;
+mod price_book;
 mod recommended_prices;
 mod smart_manage;
 mod settings;
@@ -147,6 +148,7 @@ pub fn run() {
             market_observatory::get_set_completion_owned_items,
             market_observatory::set_set_completion_owned_item_quantity,
             market_observatory::apply_set_completion_screenshot_import_rows,
+            market_observatory::get_price_book,
             market_observatory::get_owned_relic_inventory_cache,
             market_observatory::refresh_owned_relic_inventory,
             market_observatory::start_arbitrage_scanner,

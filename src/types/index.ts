@@ -1741,6 +1741,27 @@ export interface AlecaframeItem {
   category: AlecaframeItemCategory;
 }
 
+/**
+ * Which rung of the price ladder a valuation came from — see `price_book.rs`. Ordered by how
+ * much it should be trusted, and never flattened away, because "23p, traded in the last two
+ * days" and "23p, because that is the standing bid" are not the same claim.
+ */
+export type PriceBasis = 'recentTrades' | 'historicalTrades' | 'standingBids';
+
+/** One item's durable valuation: what a holder could realistically expect to receive. */
+export interface PriceBookEntry {
+  itemKey: string;
+  variantKey: string;
+  slug: string;
+  /** Platinum per unit. Never zero — an unpriceable item has no row at all. */
+  exitPrice: number;
+  basis: PriceBasis;
+  /** Trades (closed rungs) or orders (bid rung) behind the median. */
+  sampleVolume: number;
+  /** When the market observation was made — not when the book was last recomputed. */
+  observedAt: string;
+}
+
 export interface AlecaframeInventory {
   account: AlecaframeAccount;
   /** Authoritative "as of", unix seconds, decoded from LastInventorySync. Not file mtime. */

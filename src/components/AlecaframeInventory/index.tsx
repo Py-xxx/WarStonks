@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { getArbitrageScannerState, readAlecaframeInventory } from '../../lib/tauriClient';
+import { getArbitrageScannerState, getPriceBook, readAlecaframeInventory } from '../../lib/tauriClient';
+import { indexPriceBook, totalValue, valueItem, type PriceBookIndex } from '../../lib/priceBook';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { partKeyForSlug } from '../../lib/partImages';
@@ -58,7 +59,7 @@ const REFRESH_INTERVAL_MS = 15_000;
  */
 const STALE_SYNC_MS = 60 * 60 * 1000;
 
-type SortKey = 'name' | 'count' | 'rank';
+type SortKey = 'name' | 'count' | 'rank' | 'value';
 
 /** Rank as a proportion of this item's own maximum.
  *
@@ -162,6 +163,26 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
   const [refreshedAt, setRefreshedAt] = useState<number>(0);
   const [relicDrops, setRelicDrops] = useState<RelicDropIndex>(new Map());
   const [openRelic, setOpenRelic] = useState<AlecaframeItem | null>(null);
+  const [prices, setPrices] = useState<PriceBookIndex>(() => indexPriceBook([]));
+
+  // The durable price book — every item the app has ever fetched statistics for, not just what
+  // the last scan touched. One fetch per mount: it is a plain SQLite read of ~1k rows, and the
+  // book only moves when the market tracker writes new statistics.
+  useEffect(() => {
+    let cancelled = false;
+    void getPriceBook()
+      .then((entries) => {
+        if (!cancelled) {
+          setPrices(indexPriceBook(entries));
+        }
+      })
+      // Not fatal: tiles fall back to showing no value, which is what they did before the book
+      // existed. An inventory the user cannot see is a worse outcome than one without prices.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Relics only: the scanner's ROI results carry each relic's drop table and what those drops
   // are worth. Fetched once per mount — it is a cached read, and the drop tables change only
@@ -259,6 +280,13 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
         );
       })
       .sort((left, right) => {
+        if (sortKey === 'value') {
+          // Stack total, not unit price — "what is this pile worth" is the question sorting by
+          // value is asked to answer. Unpriced items sort last rather than as 0p.
+          const leftValue = valueItem(left, prices)?.totalPlatinum ?? -1;
+          const rightValue = valueItem(right, prices)?.totalPlatinum ?? -1;
+          return rightValue - leftValue || left.name.localeCompare(right.name);
+        }
         if (sortKey === 'rank') {
           return (
             rankFraction(right) - rankFraction(left) ||
@@ -272,12 +300,16 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
           left.name.localeCompare(right.name) || rankFraction(right) - rankFraction(left)
         );
       });
-  }, [inventory, tab, deferredSearch, sortKey, relicDrops]);
+  }, [inventory, tab, deferredSearch, sortKey, relicDrops, prices]);
 
   const totalCount = useMemo(
     () => rows.reduce((sum, item) => sum + item.count, 0),
     [rows],
   );
+
+  // Of what is on screen, not of the whole inventory — the number has to agree with the tiles
+  // under it, or a filtered view turns it into a lie.
+  const valuation = useMemo(() => totalValue(rows, prices), [rows, prices]);
 
   // Prime parts never rank, so the column would be a wall of dashes.
   const showsRank = tab !== 'prime-parts';
@@ -322,6 +354,7 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
           aria-label={t('inv.sortBy')}
         >
           <option value="count">{t('inv.sortCount')}</option>
+          <option value="value">{t('inv.sortValue')}</option>
           <option value="name">{t('inv.sortName')}</option>
           {showsRank ? <option value="rank">{t('inv.sortRank')}</option> : null}
         </select>
@@ -335,6 +368,17 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
         </button>
         <span className="af-inv-meta">
           {t('inv.stackSummary', { stacks: String(rows.length), total: String(totalCount) })}
+          {valuation.pricedItems > 0 ? (
+            <>
+              {' · '}
+              <strong className="af-inv-total">{formatPlatinum(valuation.platinum)}</strong>
+              {/* Saying how many stacks are unpriced is what keeps the total honest — without
+                  it a partial sum reads as the whole inventory's worth. */}
+              {valuation.unpricedItems > 0
+                ? ` (${t('inv.valueUnpricedCount', { count: String(valuation.unpricedItems) })})`
+                : ''}
+            </>
+          ) : null}
           {syncedAt ? ` · ${t('inv.syncedAgo', { time: formatElapsedTime(syncedAt) })}` : ''}
         </span>
       </div>
@@ -358,6 +402,8 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
               key={`${item.bucket}:${item.uniqueName}:${item.rank ?? 'na'}:${item.refinement ?? 'na'}`}
               item={item}
               showsRank={showsRank}
+              prices={prices}
+              t={t}
             />
           ))}
         </div>
@@ -374,6 +420,33 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
   );
 }
 
+/** Platinum with no decimals — inventory values are compared at a glance, not audited. */
+function formatPlatinum(value: number): string {
+  return `${Math.round(value).toLocaleString()}p`;
+}
+
+/**
+ * The tooltip behind a tile's value: where the number came from and how old it is. The price
+ * book deliberately keeps its basis rather than flattening every rung into one figure, so this
+ * is where that distinction is spent — a bid-derived price should not read like a traded one.
+ */
+function valuationTitle(
+  valuation: NonNullable<ReturnType<typeof valueItem>>,
+  item: AlecaframeItem,
+  t: TranslateFn,
+): string {
+  const basis = t(`inv.basis.${valuation.entry.basis}`);
+  const observed = formatElapsedTime(valuation.entry.observedAt);
+  const lines = [
+    `${formatPlatinum(valuation.entry.exitPrice)} ${t('inv.each')} — ${basis}`,
+    t('inv.valueObserved', { elapsed: observed }),
+  ];
+  if (valuation.fromUnrankedVariant) {
+    lines.push(t('inv.valueUnrankedFloor', { rank: String(item.rank ?? 0) }));
+  }
+  return lines.join('\n');
+}
+
 /**
  * One inventory item.
  *
@@ -384,17 +457,22 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
 function InventoryTile({
   item,
   showsRank,
+  prices,
   onOpen,
+  t,
 }: {
   item: AlecaframeItem;
   showsRank: boolean;
+  prices: PriceBookIndex;
   /** Present only where a tile has something to open — relics, which have a drop table. */
   onOpen?: (item: AlecaframeItem) => void;
+  t: TranslateFn;
 }) {
   const { primary, secondary } = splitItemLabel(item);
   // Components resolve to our own part art; everything else keeps Warframe.Market's, which is
   // already unique per mod and per arcane.
   const iconUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
+  const valuation = valueItem(item, prices);
 
   const body = (
     <>
@@ -411,9 +489,25 @@ function InventoryTile({
         {secondary ? <span className="af-tile-name-secondary">{secondary}</span> : null}
       </span>
       {showsRank ? <RankPips item={item} /> : null}
-      {/* Placeholder until the price book is durable: `recommended_prices` is in-memory and
-          only covers items the scanner has touched, so most tiles would read a stale price. */}
-      <span className="af-tile-value af-inv-muted">—</span>
+      {valuation ? (
+        <span
+          className={`af-tile-value${valuation.fromUnrankedVariant ? ' af-tile-value-floor' : ''}`}
+          title={valuationTitle(valuation, item, t)}
+        >
+          {/* The stack total leads — that is the number the user is deciding on. A per-unit
+              price is only worth the space when there is more than one. */}
+          {formatPlatinum(valuation.totalPlatinum)}
+          {item.count > 1 ? (
+            <span className="af-tile-value-unit">
+              {formatPlatinum(valuation.entry.exitPrice)} {t('inv.each')}
+            </span>
+          ) : null}
+        </span>
+      ) : (
+        <span className="af-tile-value af-inv-muted" title={t('inv.valueUnpriced')}>
+          —
+        </span>
+      )}
     </>
   );
 

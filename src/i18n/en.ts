@@ -54,6 +54,17 @@ export const en = {
   'inv.sortRank': 'Most ranked',
   'inv.colOwned': 'Owned',
   'inv.colValue': 'Value',
+  'inv.sortValue': 'Most valuable',
+  'inv.each': 'each',
+  // The three rungs of the price ladder (see price_book.rs). Worded so the weakest one cannot be
+  // mistaken for a valuation: a standing bid is what someone offers, not what the item is worth.
+  'inv.basis.recentTrades': 'median of trades in the last 48h',
+  'inv.basis.historicalTrades': 'median of trades over 90 days',
+  'inv.basis.standingBids': 'highest standing buy order — a floor, not a valuation',
+  'inv.valueObserved': 'Observed {elapsed}',
+  'inv.valueUnpriced': 'No price data for this item yet.',
+  'inv.valueUnpricedCount': '{count} unpriced',
+  'inv.valueUnrankedFloor': 'Priced at rank 0 — a rank {rank} copy is likely worth more.',
   'nav.trades': 'Trades',
   'nav.portfolio': 'Portfolio',
   'nav.strategy': 'Strategy',
@@ -1292,6 +1303,9 @@ export const en = {
   'pf.totalPnl': 'Estimated Total P&L',
   'pf.openBuys': 'Open Buys',
   'pf.lastUpdated': 'Last updated',
+  // The trade log's version: a standalone micro-label above a mono timestamp, so it drops the
+  // "Last" that only read well as part of a sentence.
+  'pf.updated': 'Updated',
   'pf.refreshTrades': 'Refresh Trades',
   'pf.refreshing': 'Refreshing…',
   'pf.tradesCount': '{count} trades',
