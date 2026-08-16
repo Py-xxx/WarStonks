@@ -281,10 +281,10 @@ export function AlecaframeInventoryPanel({ tab }: { tab: AlecaframeInventoryTab 
       })
       .sort((left, right) => {
         if (sortKey === 'value') {
-          // Stack total, not unit price — "what is this pile worth" is the question sorting by
-          // value is asked to answer. Unpriced items sort last rather than as 0p.
-          const leftValue = valueItem(left, prices)?.totalPlatinum ?? -1;
-          const rightValue = valueItem(right, prices)?.totalPlatinum ?? -1;
+          // Unit price, matching what the tiles display — sorting by stack total would order the
+          // grid by a number that is nowhere on it. Unpriced items sort last, not as 0p.
+          const leftValue = valueItem(left, prices)?.entry.exitPrice ?? -1;
+          const rightValue = valueItem(right, prices)?.entry.exitPrice ?? -1;
           return rightValue - leftValue || left.name.localeCompare(right.name);
         }
         if (sortKey === 'rank') {
@@ -437,10 +437,20 @@ function valuationTitle(
 ): string {
   const basis = t(`inv.basis.${valuation.entry.basis}`);
   const observed = formatElapsedTime(valuation.entry.observedAt);
+  // The tile shows the unit price, so the tooltip is where the stack total lives — stated only
+  // when there is actually a stack, otherwise it would just repeat the number above it.
   const lines = [
-    `${formatPlatinum(valuation.entry.exitPrice)} ${t('inv.each')} — ${basis}`,
+    `${formatPlatinum(valuation.entry.exitPrice)} — ${basis}`,
     t('inv.valueObserved', { elapsed: observed }),
   ];
+  if (item.count > 1) {
+    lines.push(
+      t('inv.valueStackTotal', {
+        count: String(item.count),
+        total: formatPlatinum(valuation.totalPlatinum),
+      }),
+    );
+  }
   if (valuation.fromUnrankedVariant) {
     lines.push(t('inv.valueUnrankedFloor', { rank: String(item.rank ?? 0) }));
   }
@@ -494,14 +504,10 @@ function InventoryTile({
           className={`af-tile-value${valuation.fromUnrankedVariant ? ' af-tile-value-floor' : ''}`}
           title={valuationTitle(valuation, item, t)}
         >
-          {/* The stack total leads — that is the number the user is deciding on. A per-unit
-              price is only worth the space when there is more than one. */}
-          {formatPlatinum(valuation.totalPlatinum)}
-          {item.count > 1 ? (
-            <span className="af-tile-value-unit">
-              {formatPlatinum(valuation.entry.exitPrice)} {t('inv.each')}
-            </span>
-          ) : null}
+          {/* Unit price, never the stack total: the count sits in the corner, and one price per
+              tile keeps every tile on the grid directly comparable. The stack total is still a
+              click away in the tooltip, and summed for the toolbar. */}
+          {formatPlatinum(valuation.entry.exitPrice)}
         </span>
       ) : (
         <span className="af-tile-value af-inv-muted" title={t('inv.valueUnpriced')}>

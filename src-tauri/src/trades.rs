@@ -665,6 +665,10 @@ pub(crate) struct StoredTradeLogRecord {
     pub(crate) group_item_count: Option<i64>,
     pub(crate) allocation_total_platinum: Option<i64>,
     pub(crate) group_sort_order: Option<i64>,
+    /// `Some("manual")` only when the user priced this row in the allocation editor. `None` is
+    /// an automatic split — including every row the EE.log converter produces, which carries an
+    /// exact `allocation_total_platinum` purely so a group's parts reconcile under rounding.
+    pub(crate) allocation_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1418,6 +1422,16 @@ fn migrate_trades_cache_schema(connection: &Connection) -> Result<()> {
             "group_sort_order",
             "ALTER TABLE portfolio_trade_log_cache ADD COLUMN group_sort_order INTEGER NOT NULL DEFAULT 0",
             "failed to add group_sort_order column to trade log cache",
+        ),
+        // Whether the user set this row's share themselves. Previously inferred from
+        // `allocation_total_platinum` being present, which stopped meaning "the user priced
+        // it" the moment the EE.log converter began stamping an exact share on every row for
+        // reconciliation — silently marking every detected group as already-priced. NULL
+        // means auto, which is the correct reading for every row written before this column.
+        (
+            "allocation_mode",
+            "ALTER TABLE portfolio_trade_log_cache ADD COLUMN allocation_mode TEXT",
+            "failed to add allocation_mode column to trade log cache",
         ),
     ] {
         if !columns.iter().any(|existing| existing == column) {
@@ -4249,6 +4263,20 @@ fn find_duplicate_trade_record(
     source: &str,
 ) -> bool {
     existing.iter().any(|record| {
+        // Two EE.log rows are never fuzzy-duplicates of each other. This heuristic exists to
+        // merge *different sources* describing one physical sale (a WFM order-close against
+        // the in-game record); within EE.log the row id already settles it, because the id
+        // carries the trade key — session anchor plus seconds-since-launch — which is stable
+        // across re-reads and necessarily differs between two distinct trades.
+        //
+        // Left broader, it deletes real trades: two genuine sales of the same item to the
+        // same partner inside the window read as one. That is the shape that lost data before
+        // identical copies were merged in the converter, and it is still reachable whenever a
+        // player makes the same trade twice in quick succession.
+        if record.source == source && source == crate::ee_log_shadow::TRADE_SOURCE_EELOG {
+            return false;
+        }
+
         if record.order_type != order_type || record.quantity != quantity {
             return false;
         }
@@ -4653,6 +4681,9 @@ fn collapse_grouped_trade_sets(
             group_item_count: None,
             allocation_total_platinum: Some(set_platinum),
             group_sort_order: None,
+            // A collapsed set is one row with no `group_id`, so it is never asked for an
+            // allocation mode — the split it replaced is gone.
+            allocation_mode: None,
         });
     }
 
@@ -4737,7 +4768,8 @@ pub(crate) fn load_stored_trade_log_records_inner(
               cache.group_total_platinum,
               cache.group_item_count,
               cache.allocation_total_platinum,
-              cache.group_sort_order
+              cache.group_sort_order,
+              cache.allocation_mode
             FROM portfolio_trade_log_cache AS cache
             LEFT JOIN portfolio_trade_log_overrides AS overrides
               ON overrides.username = cache.username
@@ -4776,6 +4808,7 @@ pub(crate) fn load_stored_trade_log_records_inner(
                 group_item_count: row.get(15)?,
                 allocation_total_platinum: row.get(16)?,
                 group_sort_order: row.get(17)?,
+                allocation_mode: row.get(18)?,
             })
         })
         .context("failed to read stored trade log rows")?
@@ -4914,6 +4947,17 @@ fn trade_record_matches_existing_duplicate(
         &closed_at,
         &entry.source,
     )
+}
+
+/// Test-only door onto the dedup, so `ee_log_shadow` can assert that what its converter emits
+/// actually survives into the log. The two halves of the multi-copy bug were each invisible in
+/// their own module's tests; only the pair shows it.
+#[cfg(test)]
+pub(crate) fn append_unique_trade_entries_for_test(
+    existing: &[PortfolioTradeLogEntry],
+    incoming: &[PortfolioTradeLogEntry],
+) -> Vec<PortfolioTradeLogEntry> {
+    append_unique_trade_entries(existing, incoming)
 }
 
 fn append_unique_trade_entries(
@@ -5281,7 +5325,8 @@ fn write_trade_log_rows_in_transaction(
               group_item_count,
               allocation_total_platinum,
               group_sort_order,
-              keep_item
+              keep_item,
+              allocation_mode
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
               COALESCE(
@@ -5289,7 +5334,8 @@ fn write_trade_log_rows_in_transaction(
                  FROM portfolio_trade_log_overrides
                  WHERE username = ?1 AND order_id = ?2),
                 ?19
-              )
+              ),
+              ?20
             )
             ON CONFLICT(username, order_id) DO UPDATE SET
               item_name = excluded.item_name,
@@ -5307,7 +5353,11 @@ fn write_trade_log_rows_in_transaction(
               group_total_platinum = excluded.group_total_platinum,
               group_item_count = excluded.group_item_count,
               allocation_total_platinum = excluded.allocation_total_platinum,
-              group_sort_order = excluded.group_sort_order
+              group_sort_order = excluded.group_sort_order,
+              -- COALESCE, not a plain overwrite: a re-sync rebuilds every row from the
+              -- detected entries, and those carry no mode. Taking `excluded` here would erase
+              -- the user's manual split on the next detected trade.
+              allocation_mode = COALESCE(excluded.allocation_mode, portfolio_trade_log_cache.allocation_mode)
             ",
         )
         .context("failed to prepare trade log cache upsert")?;
@@ -5334,6 +5384,10 @@ fn write_trade_log_rows_in_transaction(
                 entry.allocation_total_platinum,
                 entry.group_sort_order.unwrap_or(0),
                 if entry.keep_item { 1 } else { 0 },
+                // Only ever carries "manual" back in, from a row that was read out of the
+                // cache; a freshly detected entry has none and must not clear a stored one
+                // (see the COALESCE in the conflict clause above).
+                entry.allocation_mode.as_deref().filter(|mode| *mode == "manual"),
             ])
             .context("failed to upsert cached trade log row")?;
     }
@@ -5485,12 +5539,18 @@ fn record_total_platinum(record: &StoredTradeLogRecord) -> i64 {
         .unwrap_or(record.platinum.saturating_mul(record.quantity))
 }
 
+/// Whether a grouped row's share was set by the user or split automatically.
+///
+/// Reads the stored flag rather than inferring from `allocation_total_platinum`. That inference
+/// was correct only while a manual edit was the sole thing that wrote an allocation; once the
+/// EE.log converter began stamping an exact share on every row — so a group's parts reconcile
+/// under rounding — every detected group started reporting "manual", which silently switched
+/// off the "needs pricing" prompt for exactly the trades that most needed it.
 fn build_trade_allocation_mode(record: &StoredTradeLogRecord) -> Option<String> {
     record.group_id.as_ref()?;
-    Some(if record.allocation_total_platinum.is_some() {
-        "manual".to_string()
-    } else {
-        "auto".to_string()
+    Some(match record.allocation_mode.as_deref() {
+        Some("manual") => "manual".to_string(),
+        _ => "auto".to_string(),
     })
 }
 
@@ -5606,6 +5666,9 @@ fn build_stored_trade_record_from_entry(entry: &PortfolioTradeLogEntry) -> Store
         group_item_count: entry.group_item_count,
         allocation_total_platinum: entry.allocation_total_platinum,
         group_sort_order: entry.group_sort_order,
+        // Round-trips the stored flag so re-saving an existing row keeps the user's manual
+        // split; a freshly detected entry carries none, which reads as automatic.
+        allocation_mode: entry.allocation_mode.clone(),
     }
 }
 
@@ -6436,7 +6499,10 @@ fn update_trade_group_allocations_inner(
                 "
                 UPDATE portfolio_trade_log_cache
                 SET allocation_total_platinum = ?3,
-                    platinum = ?3
+                    platinum = ?3,
+                    -- The only place a row is promoted to a manual allocation. Everything
+                    -- else that writes a share is an automatic split, however exact.
+                    allocation_mode = 'manual'
                 WHERE username = ?1
                   AND order_id = ?2
                 ",
@@ -6495,7 +6561,8 @@ fn load_recent_trade_records_by_source(
               cache.group_total_platinum,
               cache.group_item_count,
               cache.allocation_total_platinum,
-              cache.group_sort_order
+              cache.group_sort_order,
+              cache.allocation_mode
             FROM portfolio_trade_log_cache AS cache
             LEFT JOIN portfolio_trade_log_overrides AS overrides
               ON overrides.username = cache.username
@@ -6529,6 +6596,7 @@ fn load_recent_trade_records_by_source(
                 group_item_count: row.get(15)?,
                 allocation_total_platinum: row.get(16)?,
                 group_sort_order: row.get(17)?,
+                allocation_mode: row.get(18)?,
             })
         })
         .context("failed to query recent trade records")?
@@ -10670,7 +10738,7 @@ mod tests {
     use super::{
         append_unique_trade_entries, build_cost_basis_confidence, entries_representing_batch,
         group_entries_by_trade,
-        build_portfolio_entry_from_stored_record,
+        build_portfolio_entry_from_stored_record, build_trade_allocation_mode,
         build_trade_log_entries_from_statistics, build_trade_notification_fingerprint,
         build_trade_owned_sync_key, collapse_grouped_trade_sets, compute_cost_basis_coverage,
         compute_current_value_coverage, decide_trade_health, estimate_sell_hours,
@@ -10969,6 +11037,54 @@ mod tests {
         assert!(last.is_some());
     }
 
+    /// A manual split must survive the next detected trade.
+    ///
+    /// `apply_detected_trade_entries` re-saves **every** row on each sync, and the rows it
+    /// re-saves are rebuilt from entries that carry no allocation mode. A plain
+    /// `SET allocation_mode = excluded.allocation_mode` would therefore silently reset the
+    /// user's pricing the next time they traded anything — so the conflict clause coalesces,
+    /// and this pins that.
+    #[test]
+    fn a_manual_allocation_survives_a_later_resync() {
+        let mut connection = Connection::open_in_memory().expect("in-memory trades cache");
+        initialize_trades_cache_schema(&connection).expect("schema");
+
+        let mut entry = log_entry("ee-k-buy-0", "Bronco Prime Barrel", "eelog", "2026-03-09T10:00:00.000+00:00");
+        entry.group_id = Some("ee-k".to_string());
+        entry.group_total_platinum = Some(10);
+        entry.group_item_count = Some(2);
+        entry.allocation_total_platinum = Some(5);
+        entry.group_sort_order = Some(0);
+
+        save_trade_log_rows_inner(&mut connection, "tenno", &[entry.clone()]).expect("first save");
+
+        // The user prices the group by hand.
+        connection
+            .execute(
+                "UPDATE portfolio_trade_log_cache
+                    SET allocation_mode = 'manual', allocation_total_platinum = 8, platinum = 8
+                  WHERE username = 'tenno' AND order_id = 'ee-k-buy-0'",
+                [],
+            )
+            .expect("manual allocation");
+
+        let priced = load_stored_trade_log_records_inner(&connection, "tenno").expect("read back");
+        assert_eq!(build_trade_allocation_mode(&priced[0]), Some("manual".to_string()));
+
+        // A later sync re-saves the same rows, rebuilt from records that carry the stored mode.
+        let round_tripped: Vec<_> =
+            priced.iter().map(build_portfolio_entry_from_stored_record).collect();
+        save_trade_log_rows_inner(&mut connection, "tenno", &round_tripped).expect("resync");
+
+        let after = load_stored_trade_log_records_inner(&connection, "tenno").expect("read again");
+        assert_eq!(
+            build_trade_allocation_mode(&after[0]),
+            Some("manual".to_string()),
+            "the manual split must not be reset by a resync",
+        );
+        assert_eq!(after[0].allocation_total_platinum, Some(8));
+    }
+
     #[test]
     fn persists_trade_log_cache_state() {
         let mut connection = Connection::open_in_memory().expect("in-memory trades cache");
@@ -11078,6 +11194,7 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
             },
             StoredTradeLogRecord {
                 id: "buy-neuro".to_string(),
@@ -11098,6 +11215,7 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
             },
             StoredTradeLogRecord {
                 id: "buy-systems".to_string(),
@@ -11118,6 +11236,7 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
             },
             StoredTradeLogRecord {
                 id: "sell-set".to_string(),
@@ -11138,6 +11257,7 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
             },
         ];
 
@@ -11203,6 +11323,7 @@ mod tests {
                 group_item_count: Some(4),
                 allocation_total_platinum: Some(23),
                 group_sort_order: Some(0),
+                allocation_mode: None,
             },
             StoredTradeLogRecord {
                 id: "child-2".to_string(),
@@ -11223,6 +11344,7 @@ mod tests {
                 group_item_count: Some(4),
                 allocation_total_platinum: Some(15),
                 group_sort_order: Some(1),
+                allocation_mode: None,
             },
             StoredTradeLogRecord {
                 id: "child-3".to_string(),
@@ -11243,6 +11365,7 @@ mod tests {
                 group_item_count: Some(4),
                 allocation_total_platinum: Some(15),
                 group_sort_order: Some(2),
+                allocation_mode: None,
             },
             StoredTradeLogRecord {
                 id: "child-4".to_string(),
@@ -11263,6 +11386,7 @@ mod tests {
                 group_item_count: Some(4),
                 allocation_total_platinum: Some(15),
                 group_sort_order: Some(3),
+                allocation_mode: None,
             },
         ];
 
@@ -11364,6 +11488,7 @@ mod tests {
             group_item_count: group_id.map(|_| 2),
             allocation_total_platinum: Some(4),
             group_sort_order: group_id.map(|_| 0),
+            allocation_mode: None,
         }
     }
 
@@ -11782,6 +11907,104 @@ mod tests {
         ));
     }
 
+    /// EE.log is now the only live source, so two EE.log rows must never fuzzy-match: the row
+    /// id (which carries the trade key) is the idempotency guard. Left broader, a player who
+    /// traded the same item twice inside a minute lost the second trade.
+    #[test]
+    fn two_ee_log_rows_never_fuzzy_match_each_other() {
+        let existing = vec![stored_record(
+            "ee-a-sell-0",
+            "bronco_prime_barrel",
+            crate::ee_log_shadow::TRADE_SOURCE_EELOG,
+            None,
+            "2026-03-10T09:00:00.000+00:00",
+        )];
+        // Same item, same quantity, seconds apart — the exact shape that used to be swallowed.
+        let seconds_later =
+            parse_timestamp("2026-03-10T09:00:20.000+00:00").expect("timestamp parses");
+
+        assert!(!find_duplicate_trade_record(
+            &existing,
+            "sell",
+            "bronco_prime_barrel",
+            1,
+            &seconds_later,
+            crate::ee_log_shadow::TRADE_SOURCE_EELOG,
+        ));
+
+        // A WFM row for the same sale still dedupes across sources — that is what the
+        // heuristic is actually for.
+        assert!(find_duplicate_trade_record(
+            &existing,
+            "sell",
+            "bronco_prime_barrel",
+            1,
+            &seconds_later,
+            "wfm",
+        ));
+    }
+
+    /// The regression: a detected group carries an exact `allocation_total_platinum` so its
+    /// parts reconcile under rounding, and that alone used to be read as "the user priced
+    /// this" — which switched off the "needs pricing" prompt for every EE.log group and
+    /// labelled an automatic split as manual in the log.
+    #[test]
+    fn a_detected_group_with_an_exact_share_is_still_an_automatic_split() {
+        let record = stored_record(
+            "ee-k-sell-0",
+            "bronco_prime_barrel",
+            crate::ee_log_shadow::TRADE_SOURCE_EELOG,
+            Some("ee-k"),
+            "2026-03-10T09:00:00.000+00:00",
+        );
+        assert!(
+            record.allocation_total_platinum.is_some(),
+            "precondition: the converter stamps an exact share",
+        );
+        assert_eq!(build_trade_allocation_mode(&record), Some("auto".to_string()));
+    }
+
+    #[test]
+    fn a_row_the_user_priced_reads_as_manual() {
+        let mut record = stored_record(
+            "ee-k-sell-0",
+            "bronco_prime_barrel",
+            crate::ee_log_shadow::TRADE_SOURCE_EELOG,
+            Some("ee-k"),
+            "2026-03-10T09:00:00.000+00:00",
+        );
+        record.allocation_mode = Some("manual".to_string());
+        assert_eq!(build_trade_allocation_mode(&record), Some("manual".to_string()));
+    }
+
+    /// A row outside a group has no split to describe, manual or otherwise.
+    #[test]
+    fn an_ungrouped_row_has_no_allocation_mode() {
+        let record = stored_record(
+            "ee-k-sell-0",
+            "bronco_prime_barrel",
+            crate::ee_log_shadow::TRADE_SOURCE_EELOG,
+            None,
+            "2026-03-10T09:00:00.000+00:00",
+        );
+        assert_eq!(build_trade_allocation_mode(&record), None);
+    }
+
+    /// An unrecognised stored value is an automatic split, not a manual one — the failure
+    /// direction that shows the prompt rather than hiding it.
+    #[test]
+    fn an_unknown_stored_allocation_mode_falls_back_to_auto() {
+        let mut record = stored_record(
+            "ee-k-sell-0",
+            "bronco_prime_barrel",
+            crate::ee_log_shadow::TRADE_SOURCE_EELOG,
+            Some("ee-k"),
+            "2026-03-10T09:00:00.000+00:00",
+        );
+        record.allocation_mode = Some("something-else".to_string());
+        assert_eq!(build_trade_allocation_mode(&record), Some("auto".to_string()));
+    }
+
     #[test]
     fn two_same_source_set_sales_are_not_merged() {
         // A prior AlecaFrame set sale and a new AlecaFrame set sale of the same set are two real
@@ -11824,6 +12047,7 @@ mod tests {
             group_item_count: None,
             allocation_total_platinum: None,
             group_sort_order: None,
+            allocation_mode: None,
         }
     }
 
@@ -12030,6 +12254,7 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
             },
             StoredTradeLogRecord {
                 id: "sell-set".to_string(),
@@ -12050,6 +12275,7 @@ mod tests {
                 group_item_count: None,
                 allocation_total_platinum: None,
                 group_sort_order: None,
+                allocation_mode: None,
             },
         ];
 
@@ -12169,6 +12395,7 @@ mod tests {
             group_item_count: None,
             allocation_total_platinum: None,
             group_sort_order: None,
+            allocation_mode: None,
         };
 
         let mut other_record = base_record.clone();
@@ -12477,6 +12704,7 @@ mod tests {
             group_item_count: None,
             allocation_total_platinum: None,
             group_sort_order: None,
+            allocation_mode: None,
         }];
 
         let fetched_entries = vec![PortfolioTradeLogEntry {
@@ -12549,6 +12777,7 @@ mod tests {
             group_item_count: None,
             allocation_total_platinum: None,
             group_sort_order: None,
+            allocation_mode: None,
         };
 
         // Four minutes apart: outside the 60s same-source window, inside the 5min cross-source

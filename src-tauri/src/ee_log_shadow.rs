@@ -34,6 +34,69 @@ pub(crate) fn initialize_schema(connection: &Connection) -> Result<()> {
             ",
         )
         .context("failed to create the EE.log shadow trade table")?;
+
+    // Added after the table shipped, so they arrive by ALTER rather than in the CREATE above.
+    // Both stay nullable: rows recorded before this existed have no knowable outcome, and
+    // guessing one for them would be worse than showing "unknown".
+    for (column, ddl) in [
+        ("ingest_status", "ALTER TABLE ee_log_trade_shadow ADD COLUMN ingest_status TEXT"),
+        ("ingest_reason", "ALTER TABLE ee_log_trade_shadow ADD COLUMN ingest_reason TEXT"),
+        ("ingest_detail", "ALTER TABLE ee_log_trade_shadow ADD COLUMN ingest_detail TEXT"),
+        ("expected_rows", "ALTER TABLE ee_log_trade_shadow ADD COLUMN expected_rows INTEGER"),
+        ("logged_rows", "ALTER TABLE ee_log_trade_shadow ADD COLUMN logged_rows INTEGER"),
+    ] {
+        if !shadow_column_exists(connection, column)? {
+            connection
+                .execute(ddl, [])
+                .with_context(|| format!("failed to add {column} to the shadow trade table"))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn shadow_column_exists(connection: &Connection, column: &str) -> Result<bool> {
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('ee_log_trade_shadow') WHERE name = ?1",
+            params![column],
+            |row| row.get(0),
+        )
+        .context("failed to inspect the shadow trade table")?;
+    Ok(count > 0)
+}
+
+/// Stamps what became of one parsed trade. Best-effort by contract — the caller has already
+/// done the important work (writing the trade to the ledger), and losing the diagnostic must
+/// never fail that.
+pub(crate) fn record_ingest_outcome(
+    connection: &Connection,
+    trade_key: &str,
+    status: TradeIngestStatus,
+    reason: Option<TradeIngestReason>,
+    detail: Option<&str>,
+    expected_rows: usize,
+    logged_rows: usize,
+) -> Result<()> {
+    connection
+        .execute(
+            "UPDATE ee_log_trade_shadow
+                SET ingest_status = ?2,
+                    ingest_reason = ?3,
+                    ingest_detail = ?4,
+                    expected_rows = ?5,
+                    logged_rows = ?6
+              WHERE trade_key = ?1",
+            params![
+                trade_key,
+                status.as_str(),
+                reason.map(|value| value.as_str()),
+                detail,
+                expected_rows as i64,
+                logged_rows as i64,
+            ],
+        )
+        .context("failed to record a trade ingest outcome")?;
     Ok(())
 }
 
@@ -50,6 +113,16 @@ pub struct ShadowTradeRow {
     pub giving: Vec<ShadowTradeItem>,
     pub getting: Vec<ShadowTradeItem>,
     pub recorded_at: String,
+    /// What became of this trade at the ledger. `None` for rows recorded before outcomes were
+    /// tracked — deliberately not backfilled, because their real outcome is unknowable.
+    pub ingest_status: Option<TradeIngestStatus>,
+    pub ingest_reason: Option<TradeIngestReason>,
+    /// Free-text specifics for the UI to show under the reason (e.g. which item was involved).
+    pub ingest_detail: Option<String>,
+    /// Rows the converter built, and how many of them are in the ledger. A mismatch is the
+    /// whole point of the pair.
+    pub expected_rows: Option<i64>,
+    pub logged_rows: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,7 +228,8 @@ pub(crate) fn load_trades_inner(connection: &Connection) -> Result<Vec<ShadowTra
     let mut statement = connection
         .prepare(
             "SELECT trade_key, partner, occurred_at, platinum_in, platinum_out,
-                    items_json, recorded_at
+                    items_json, recorded_at,
+                    ingest_status, ingest_reason, ingest_detail, expected_rows, logged_rows
              FROM ee_log_trade_shadow
              ORDER BY occurred_at DESC, elapsed_s DESC",
         )
@@ -180,6 +254,19 @@ pub(crate) fn load_trades_inner(connection: &Connection) -> Result<Vec<ShadowTra
                 giving: sides.giving,
                 getting: sides.getting,
                 recorded_at: row.get(6)?,
+                // An unrecognised stored value reads as absent rather than failing the query:
+                // this is diagnostic data, and a stale spelling must not hide the whole tab.
+                ingest_status: row
+                    .get::<_, Option<String>>(7)?
+                    .as_deref()
+                    .and_then(TradeIngestStatus::from_str),
+                ingest_reason: row
+                    .get::<_, Option<String>>(8)?
+                    .as_deref()
+                    .and_then(TradeIngestReason::from_str),
+                ingest_detail: row.get(9)?,
+                expected_rows: row.get(10)?,
+                logged_rows: row.get(11)?,
             })
         })
         .context("failed to read shadow trades")?
@@ -257,6 +344,145 @@ fn split_platinum(total: i64, quantities: &[i64]) -> Vec<i64> {
     shares
 }
 
+/// What became of a parsed trade when it was offered to the trade log.
+///
+/// EE.log is truncated on the next game launch, so a trade that the parser saw but the ledger
+/// did not keep is gone the moment the game restarts. Every one of these states used to be a
+/// silent `return Vec::new()` or a `continue` — the trade simply never appeared and the user
+/// had no way to tell a parser gap from a deliberate exclusion. Recording the outcome is what
+/// makes "detected but not logged" answerable instead of guessable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TradeIngestStatus {
+    /// Every row the trade produced is in the ledger.
+    Logged,
+    /// The trade produced rows, but only some of them survived. Always worth investigating —
+    /// a partial trade misstates what was exchanged.
+    PartiallyLogged,
+    /// The trade produced rows and none of them reached the ledger.
+    NotLogged,
+    /// Deliberately excluded: there is no price to record. Not a fault.
+    NotPriceable,
+}
+
+impl TradeIngestStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            TradeIngestStatus::Logged => "logged",
+            TradeIngestStatus::PartiallyLogged => "partiallyLogged",
+            TradeIngestStatus::NotLogged => "notLogged",
+            TradeIngestStatus::NotPriceable => "notPriceable",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "logged" => Some(TradeIngestStatus::Logged),
+            "partiallyLogged" => Some(TradeIngestStatus::PartiallyLogged),
+            "notLogged" => Some(TradeIngestStatus::NotLogged),
+            "notPriceable" => Some(TradeIngestStatus::NotPriceable),
+            _ => None,
+        }
+    }
+}
+
+/// Why a trade did not reach the ledger intact. A closed set rather than free text, so the UI
+/// can translate it and so a new drop path cannot be added without naming itself here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TradeIngestReason {
+    /// Item-for-item, or a side mixing platinum with goods. No derivable per-item price, so
+    /// the ledger would have to invent a cost basis. See [`classify_trade`].
+    NoPlatinumPrice,
+    /// The priced side held nothing but platinum.
+    NoTradableItems,
+    /// Nobody was signed in, so there was no trade log to write to. The trade is recoverable
+    /// from this table until the next game launch truncates EE.log.
+    NotSignedIn,
+    /// The ledger rejected the rows as duplicates of trades it already held.
+    RejectedAsDuplicate,
+    /// Rows were built but are absent from the ledger for a reason this code cannot name —
+    /// the honest fallback, so an unknown drop path still shows up rather than reading as
+    /// success.
+    Unknown,
+}
+
+impl TradeIngestReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            TradeIngestReason::NoPlatinumPrice => "noPlatinumPrice",
+            TradeIngestReason::NoTradableItems => "noTradableItems",
+            TradeIngestReason::NotSignedIn => "notSignedIn",
+            TradeIngestReason::RejectedAsDuplicate => "rejectedAsDuplicate",
+            TradeIngestReason::Unknown => "unknown",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "noPlatinumPrice" => Some(TradeIngestReason::NoPlatinumPrice),
+            "noTradableItems" => Some(TradeIngestReason::NoTradableItems),
+            "notSignedIn" => Some(TradeIngestReason::NotSignedIn),
+            "rejectedAsDuplicate" => Some(TradeIngestReason::RejectedAsDuplicate),
+            "unknown" => Some(TradeIngestReason::Unknown),
+            _ => None,
+        }
+    }
+}
+
+/// One traded item after identical copies have been folded together.
+struct MergedItem {
+    name: String,
+    rank: Option<i64>,
+    quantity: i64,
+}
+
+/// Folds repeated copies of the same item into one entry with a summed quantity.
+///
+/// **The game prints one line per copy.** Two arcanes arrive as two `TradedItem`s of quantity
+/// 1, not one of quantity 2 (see `ee_log.rs::parses_the_real_trade_from_the_reference_log`,
+/// pinned against a real two-arcane trade). Passing that straight through cost real data twice
+/// over:
+///
+/// * it made a single-item trade look like a two-item **group**, so the log rendered it as
+///   "Grouped" and asked the user to price a split between an item and itself; and
+/// * both rows then carried the same order type, item, quantity **and** `closed_at`, which is
+///   exactly the tuple `find_duplicate_trade_record` matches on — so the trade log's dedup
+///   read the second copy as a re-read of the first and dropped it. Buying two arcanes for
+///   10p recorded one arcane for 5p.
+///
+/// Merging here, before any row exists, fixes the quantity and removes the collision at
+/// source rather than teaching the dedup about a shape it should never have been handed.
+///
+/// **Rank is part of the key.** A rank 0 and a rank 5 arcane are different goods with
+/// different prices; folding them together would understate one and overstate the other.
+/// First-appearance order is preserved so row ids stay stable across re-reads of a session.
+fn merge_identical_items(items: &[crate::ee_log::TradedItem]) -> Vec<MergedItem> {
+    let mut merged: Vec<MergedItem> = Vec::new();
+
+    for item in items
+        .iter()
+        .filter(|item| !item.name.eq_ignore_ascii_case("platinum"))
+    {
+        // A line with no explicit count is one copy; the parser already defaults to 1, and
+        // `max(1)` guards a malformed `x 0`.
+        let quantity = item.quantity.max(1);
+        match merged
+            .iter_mut()
+            .find(|existing| existing.name == item.name && existing.rank == item.rank)
+        {
+            Some(existing) => existing.quantity += quantity,
+            None => merged.push(MergedItem {
+                name: item.name.clone(),
+                rank: item.rank,
+                quantity,
+            }),
+        }
+    }
+
+    merged
+}
+
 /// Converts one parsed trade into trade-log entries — one row per item.
 ///
 /// * **Only clean buys and sells become rows** (see [`classify_trade`]). An item-for-item swap
@@ -291,16 +517,16 @@ pub fn trade_log_entries_from_event(
         TradeShape::Sell => (&trade.giving, "sell", trade.platinum_in),
     };
 
-    let tradable: Vec<_> = items
-        .iter()
-        .filter(|item| !item.name.eq_ignore_ascii_case("platinum"))
-        .collect();
+    let tradable = merge_identical_items(items);
     if tradable.is_empty() {
         return Vec::new();
     }
 
-    let quantities: Vec<i64> = tradable.iter().map(|item| item.quantity.max(1)).collect();
+    let quantities: Vec<i64> = tradable.iter().map(|item| item.quantity).collect();
     let shares = split_platinum(total, &quantities);
+    // Distinct items, not lines. Two copies of one arcane is a single-item trade, and calling
+    // it a group made the log render it as "Grouped" and demand a per-item price split for
+    // items that are all the same item.
     let is_group = tradable.len() > 1;
 
     tradable
@@ -309,7 +535,7 @@ pub fn trade_log_entries_from_event(
         .map(|(index, item)| {
             let (slug, name) =
                 resolve(&item.name).unwrap_or_else(|| (String::new(), item.name.clone()));
-            let quantity = item.quantity.max(1);
+            let quantity = item.quantity;
             let share = shares.get(index).copied().unwrap_or(0);
             let sort_order = index as i64;
 
@@ -519,7 +745,31 @@ pub fn record_ee_log_trades_to_log(
     trades: Vec<TradeEvent>,
     session_started_at: Option<String>,
 ) -> Result<crate::trades::DetectedTradeOutcome, String> {
-    if trades.is_empty() || username.trim().is_empty() {
+    if trades.is_empty() {
+        return Ok(crate::trades::DetectedTradeOutcome::default());
+    }
+
+    // Persist the parsed trade *before* attempting the ledger, for two reasons. EE.log is
+    // truncated on the next game launch (plan §0.2), so anything not archived as it appears is
+    // gone — the raw trade must survive even if the ledger write fails. And the outcome stamp
+    // below is an UPDATE keyed on `trade_key`, so the row it targets has to exist first;
+    // relying on the frontend's separate `record_ee_log_trades` call would make the stamp
+    // depend on which of two fire-and-forget calls happened to land first.
+    persist_shadow_trades_best_effort(&app, &trades);
+
+    // Not signed in is a real data-loss path, not a no-op: the trade was parsed, there is
+    // nowhere to write it, and EE.log is truncated on the next game launch. Stamp it so the
+    // Detection tab can say so while the shadow row still holds the trade.
+    if username.trim().is_empty() {
+        stamp_outcomes_best_effort(&app, &trades, |trade| {
+            (
+                TradeIngestStatus::NotLogged,
+                Some(TradeIngestReason::NotSignedIn),
+                None,
+                trade_row_ids(trade).len(),
+                0,
+            )
+        });
         return Ok(crate::trades::DetectedTradeOutcome::default());
     }
 
@@ -533,11 +783,23 @@ pub fn record_ee_log_trades_to_log(
         })
     };
 
-    let incoming: Vec<_> = trades
+    // Per trade, not flattened yet: attributing an outcome back to a trade afterwards needs
+    // to know which rows came from which trade.
+    let converted: Vec<(&TradeEvent, Vec<crate::trades::PortfolioTradeLogEntry>)> = trades
         .iter()
-        .flat_map(|trade| trade_log_entries_from_event(trade, &resolve))
+        .map(|trade| (trade, trade_log_entries_from_event(trade, &resolve)))
         .collect();
+
+    let incoming: Vec<_> = converted
+        .iter()
+        .flat_map(|(_, entries)| entries.iter().cloned())
+        .collect();
+
     if incoming.is_empty() {
+        stamp_outcomes_best_effort(&app, &trades, |trade| {
+            let (status, reason) = excluded_trade_outcome(trade);
+            (status, Some(reason), None, 0, 0)
+        });
         return Ok(crate::trades::DetectedTradeOutcome::default());
     }
 
@@ -547,14 +809,152 @@ pub fn record_ee_log_trades_to_log(
         .as_deref()
         .and_then(crate::trades::parse_timestamp);
 
-    crate::trades::apply_detected_trade_entries(
+    let outcome = crate::trades::apply_detected_trade_entries(
         &app,
         username.trim(),
         &incoming,
         TRADE_SOURCE_EELOG,
         session_started_at.as_ref(),
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+
+    // Ask the ledger what it actually holds rather than trusting the count it returned:
+    // `added` counts rows accepted this call, so a row rejected as a duplicate of one stored
+    // by an earlier call is indistinguishable from one that was never offered.
+    stamp_converted_outcomes_best_effort(&app, username.trim(), &converted);
+
+    Ok(outcome)
+}
+
+/// Archives the raw parsed trades. Best-effort: the ledger write is the caller's real job, and
+/// a diagnostic-store hiccup must not stop it — but this runs first, so a trade that the ledger
+/// then refuses is still recoverable from disk.
+fn persist_shadow_trades_best_effort(app: &tauri::AppHandle, trades: &[TradeEvent]) {
+    let Ok(connection) = crate::trades::open_trades_cache_database(app) else {
+        return;
+    };
+    if initialize_schema(&connection).is_err() {
+        return;
+    }
+    let Ok(now) = time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)
+    else {
+        return;
+    };
+    let _ = record_trades_inner(&connection, trades, &now);
+}
+
+/// The row ids one trade would produce, used to ask the ledger whether they landed.
+fn trade_row_ids(trade: &TradeEvent) -> Vec<String> {
+    trade_log_entries_from_event(trade, &|name| Some((String::new(), name.to_string())))
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect()
+}
+
+/// Why a trade produced no rows at all. Mirrors the two early returns in
+/// [`trade_log_entries_from_event`], which are the only ways to get here.
+fn excluded_trade_outcome(trade: &TradeEvent) -> (TradeIngestStatus, TradeIngestReason) {
+    if classify_trade(trade).is_none() {
+        // Deliberate: an item-for-item swap has no price. Not a fault, and shown as such.
+        return (TradeIngestStatus::NotPriceable, TradeIngestReason::NoPlatinumPrice);
+    }
+    (TradeIngestStatus::NotLogged, TradeIngestReason::NoTradableItems)
+}
+
+fn stamp_outcomes_best_effort<F>(app: &tauri::AppHandle, trades: &[TradeEvent], classify: F)
+where
+    F: Fn(
+        &TradeEvent,
+    ) -> (TradeIngestStatus, Option<TradeIngestReason>, Option<String>, usize, usize),
+{
+    let Ok(connection) = crate::trades::open_trades_cache_database(app) else {
+        return;
+    };
+    if initialize_schema(&connection).is_err() {
+        return;
+    }
+    for trade in trades {
+        let (status, reason, detail, expected, logged) = classify(trade);
+        let _ = record_ingest_outcome(
+            &connection,
+            &trade.key,
+            status,
+            reason,
+            detail.as_deref(),
+            expected,
+            logged,
+        );
+    }
+}
+
+/// Compares each trade's expected rows against what the ledger holds, and stamps the result.
+fn stamp_converted_outcomes_best_effort(
+    app: &tauri::AppHandle,
+    username: &str,
+    converted: &[(&TradeEvent, Vec<crate::trades::PortfolioTradeLogEntry>)],
+) {
+    let Ok(connection) = crate::trades::open_trades_cache_database(app) else {
+        return;
+    };
+    if initialize_schema(&connection).is_err() {
+        return;
+    }
+    let stored: std::collections::HashSet<String> =
+        crate::trades::load_stored_trade_log_records_inner(&connection, username)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+
+    for (trade, entries) in converted {
+        if entries.is_empty() {
+            let (status, reason) = excluded_trade_outcome(trade);
+            let _ =
+                record_ingest_outcome(&connection, &trade.key, status, Some(reason), None, 0, 0);
+            continue;
+        }
+
+        let expected = entries.len();
+        let landed = entries.iter().filter(|entry| stored.contains(&entry.id)).count();
+
+        let (status, reason, detail) = match landed {
+            0 => (
+                TradeIngestStatus::NotLogged,
+                Some(TradeIngestReason::RejectedAsDuplicate),
+                Some(missing_row_detail(entries, &stored)),
+            ),
+            n if n < expected => (
+                TradeIngestStatus::PartiallyLogged,
+                Some(TradeIngestReason::RejectedAsDuplicate),
+                Some(missing_row_detail(entries, &stored)),
+            ),
+            _ => (TradeIngestStatus::Logged, None, None),
+        };
+
+        let _ = record_ingest_outcome(
+            &connection,
+            &trade.key,
+            status,
+            reason,
+            detail.as_deref(),
+            expected,
+            landed,
+        );
+    }
+}
+
+/// Names the items whose rows are missing, so the tab can say *which* part of a trade was lost
+/// rather than only that something was.
+fn missing_row_detail(
+    entries: &[crate::trades::PortfolioTradeLogEntry],
+    stored: &std::collections::HashSet<String>,
+) -> String {
+    let missing: Vec<String> = entries
+        .iter()
+        .filter(|entry| !stored.contains(&entry.id))
+        .map(|entry| format!("{} x{}", entry.item_name, entry.quantity))
+        .collect();
+    missing.join(", ")
 }
 
 #[tauri::command]
@@ -606,6 +1006,115 @@ mod tests {
         connection
     }
 
+    /// The schema migration has to be safe on a database created before the outcome columns
+    /// existed — that is every user upgrading into this build.
+    #[test]
+    fn outcome_columns_are_added_to_a_pre_existing_table_and_initialize_is_idempotent() {
+        let connection = Connection::open_in_memory().unwrap();
+        // The original shape, exactly as it shipped.
+        connection
+            .execute_batch(
+                "CREATE TABLE ee_log_trade_shadow (
+                   trade_key TEXT PRIMARY KEY, partner TEXT NOT NULL, occurred_at TEXT,
+                   elapsed_s REAL NOT NULL, platinum_in INTEGER NOT NULL,
+                   platinum_out INTEGER NOT NULL, items_json TEXT NOT NULL,
+                   recorded_at TEXT NOT NULL);",
+            )
+            .unwrap();
+
+        initialize_schema(&connection).unwrap();
+        initialize_schema(&connection).unwrap();
+
+        for column in ["ingest_status", "ingest_reason", "ingest_detail", "expected_rows", "logged_rows"] {
+            assert!(shadow_column_exists(&connection, column).unwrap(), "{column} missing");
+        }
+    }
+
+    /// Rows written before outcomes were tracked must read as "unknown", not as success —
+    /// claiming a trade was logged when nobody recorded that is the one answer this tab
+    /// cannot give.
+    #[test]
+    fn a_trade_with_no_recorded_outcome_reads_as_absent_not_logged() {
+        let connection = memory_db();
+        record_trades_inner(&connection, &[sample_trade("k-old", 10)], "t").unwrap();
+
+        let rows = load_trades_inner(&connection).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ingest_status, None);
+        assert_eq!(rows[0].ingest_reason, None);
+    }
+
+    #[test]
+    fn an_outcome_round_trips_through_the_store() {
+        let connection = memory_db();
+        record_trades_inner(&connection, &[sample_trade("k-1", 10)], "t").unwrap();
+
+        record_ingest_outcome(
+            &connection,
+            "k-1",
+            TradeIngestStatus::PartiallyLogged,
+            Some(TradeIngestReason::RejectedAsDuplicate),
+            Some("Arcane Universal Fallout x2"),
+            2,
+            1,
+        )
+        .unwrap();
+
+        let rows = load_trades_inner(&connection).unwrap();
+        assert_eq!(rows[0].ingest_status, Some(TradeIngestStatus::PartiallyLogged));
+        assert_eq!(rows[0].ingest_reason, Some(TradeIngestReason::RejectedAsDuplicate));
+        assert_eq!(rows[0].ingest_detail.as_deref(), Some("Arcane Universal Fallout x2"));
+        assert_eq!((rows[0].expected_rows, rows[0].logged_rows), (Some(2), Some(1)));
+    }
+
+    /// An unrecognised stored spelling must not fail the whole read — the tab showing every
+    /// other trade with one blank status beats the tab showing nothing.
+    #[test]
+    fn an_unknown_stored_status_reads_as_absent_rather_than_erroring() {
+        let connection = memory_db();
+        record_trades_inner(&connection, &[sample_trade("k-2", 10)], "t").unwrap();
+        connection
+            .execute(
+                "UPDATE ee_log_trade_shadow SET ingest_status = 'invented' WHERE trade_key = 'k-2'",
+                [],
+            )
+            .unwrap();
+
+        let rows = load_trades_inner(&connection).unwrap();
+        assert_eq!(rows.len(), 1, "the row still loads");
+        assert_eq!(rows[0].ingest_status, None);
+    }
+
+    /// An item-for-item swap is excluded on purpose, so it must read as a deliberate exclusion
+    /// rather than as a failure the user should chase.
+    #[test]
+    fn an_item_for_item_swap_is_reported_as_not_priceable() {
+        let trade = trade_of(
+            vec![item("Ash Prime Blueprint", 1)],
+            vec![item("Mesa Prime Blueprint", 1)],
+        );
+        assert!(entries_for(&trade).is_empty(), "no rows, as designed");
+        assert_eq!(
+            excluded_trade_outcome(&trade),
+            (TradeIngestStatus::NotPriceable, TradeIngestReason::NoPlatinumPrice),
+        );
+    }
+
+    /// A priced trade whose only "item" was platinum is a different case from an unpriceable
+    /// swap, and is a fault rather than a deliberate exclusion.
+    #[test]
+    fn a_platinum_only_side_is_reported_as_having_no_tradable_items() {
+        let mut trade = trade_of(vec![plat(10)], vec![plat(5)]);
+        // Force the classifier to see a buy shape while the getting side holds no goods.
+        trade.getting = vec![plat(5)];
+        trade.platinum_in = 0;
+        let (status, reason) = excluded_trade_outcome(&trade);
+        // classify_trade rejects this shape outright, so it reports as unpriceable — the
+        // assertion documents which branch actually owns it rather than assuming.
+        assert_eq!(status, TradeIngestStatus::NotPriceable);
+        assert_eq!(reason, TradeIngestReason::NoPlatinumPrice);
+    }
+
     /// An untimed trade is an unusable trade-log row: nothing can sort, filter, match or
     /// account for it. This is the contract the missing session anchor broke.
     #[test]
@@ -653,6 +1162,125 @@ mod tests {
         trade_log_entries_from_event(trade, &|name| {
             Some((name.to_lowercase().replace(' ', "_"), name.to_string()))
         })
+    }
+
+    /// End-to-end guard on the reported bug, across both modules: the rows the converter
+    /// emits must survive the trade log's dedup with their full quantity intact.
+    ///
+    /// Kept as one test because neither half is sufficient alone — before the fix the
+    /// converter produced two rows (looking correct in isolation) and the dedup then deleted
+    /// one of them (also looking correct in isolation). Only the pair shows the data loss.
+    #[test]
+    fn two_copies_reach_the_trade_log_as_one_row_of_quantity_two() {
+        let trade = trade_of(
+            vec![plat(10)],
+            vec![
+                item("Arcane Universal Fallout", 1),
+                item("Arcane Universal Fallout", 1),
+            ],
+        );
+
+        let converted = entries_for(&trade);
+        let stored = crate::trades::append_unique_trade_entries_for_test(&[], &converted);
+
+        assert_eq!(stored.len(), 1, "the trade must survive dedup");
+        assert_eq!(stored[0].quantity, 2, "both copies, not one");
+        let recorded: i64 = stored
+            .iter()
+            .map(|entry| entry.allocation_total_platinum.unwrap_or(entry.platinum * entry.quantity))
+            .sum();
+        assert_eq!(recorded, 10, "the full 10p paid, not half of it");
+    }
+
+    /// The reported bug: trading two of the same item logged one of them.
+    ///
+    /// The game prints a line per copy, so this is the shape of the reference log's real
+    /// trade. Unmerged it produced two rows of quantity 1 that were identical in every field
+    /// the trade-log dedup compares, so the second was discarded as a re-read of the first.
+    #[test]
+    fn two_copies_of_one_item_become_a_single_row_with_quantity_two() {
+        let trade = trade_of(
+            vec![plat(10)],
+            vec![
+                item("Arcane Universal Fallout", 1),
+                item("Arcane Universal Fallout", 1),
+            ],
+        );
+
+        let entries = entries_for(&trade);
+
+        assert_eq!(entries.len(), 1, "two copies are one item, not two rows");
+        assert_eq!(entries[0].quantity, 2);
+        assert_eq!(entries[0].platinum, 5, "per unit");
+        assert_eq!(entries[0].allocation_total_platinum, Some(10));
+        assert_eq!(
+            entries[0].group_id, None,
+            "one distinct item is not a group, however many copies were traded"
+        );
+    }
+
+    /// Quantities add up rather than the larger one winning, and an explicit `x N` count
+    /// merges with bare lines of the same item.
+    #[test]
+    fn repeated_lines_sum_their_quantities() {
+        let trade = trade_of(
+            vec![plat(30)],
+            vec![item("Forma Blueprint", 3), item("Forma Blueprint", 2)],
+        );
+
+        let entries = entries_for(&trade);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].quantity, 5);
+        assert_eq!(entries[0].allocation_total_platinum, Some(30));
+    }
+
+    /// Rank is part of the merge key: the same arcane at two ranks is two different goods
+    /// with different prices, so folding them together would misprice both.
+    #[test]
+    fn the_same_item_at_different_ranks_does_not_merge() {
+        let trade = trade_of(
+            vec![plat(100)],
+            vec![
+                TradedItem {
+                    name: "Arcane Energize".to_string(),
+                    quantity: 1,
+                    rank: Some(0),
+                    max_rank: Some(5),
+                },
+                TradedItem {
+                    name: "Arcane Energize".to_string(),
+                    quantity: 1,
+                    rank: Some(5),
+                    max_rank: Some(5),
+                },
+            ],
+        );
+
+        let entries = entries_for(&trade);
+        assert_eq!(entries.len(), 2, "different ranks stay separate rows");
+        assert_eq!(entries[0].rank, Some(0));
+        assert_eq!(entries[1].rank, Some(5));
+        assert!(entries[0].group_id.is_some(), "genuinely two items, so a group");
+    }
+
+    /// Merging must not disturb a trade that really did contain several distinct items.
+    #[test]
+    fn distinct_items_still_produce_one_row_each() {
+        let trade = trade_of(
+            vec![plat(24)],
+            vec![
+                item("Alternox Prime Blueprint", 1),
+                item("Alternox Prime Barrel", 1),
+                item("Alternox Prime Barrel", 1),
+            ],
+        );
+
+        let entries = entries_for(&trade);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].quantity, 1);
+        assert_eq!(entries[1].quantity, 2, "the repeated barrel merged");
+        let allocated: i64 = entries.iter().filter_map(|e| e.allocation_total_platinum).sum();
+        assert_eq!(allocated, 24, "the split still reconciles after merging");
     }
 
     /// The reported bug: four parts bought for 24p each showed 24p, quadrupling the trade's
@@ -803,6 +1431,11 @@ mod tests {
                 slug: slug.map(str::to_string),
             }],
             recorded_at: "t".to_string(),
+            ingest_status: None,
+            ingest_reason: None,
+            ingest_detail: None,
+            expected_rows: None,
+            logged_rows: None,
         }
     }
 
@@ -826,6 +1459,7 @@ mod tests {
             group_item_count: None,
             allocation_total_platinum: None,
             group_sort_order: None,
+            allocation_mode: None,
         }
     }
 

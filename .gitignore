@@ -25,3 +25,5 @@ yarn-error.log*
 pnpm-debug.log*
 __pycache__/
 *.pyc
+
+graphify-out/

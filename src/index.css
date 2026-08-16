@@ -15576,11 +15576,6 @@ img[data-asset-failed='true'] {
   justify-content: center;
   gap: 4px;
 }
-/* The per-unit price on a stack: present for reference, never competing with the stack total. */
-.af-tile-value-unit {
-  font-size: 9px;
-  color: var(--text-muted);
-}
 /* A ranked item priced off its unranked row — a floor, so it must not wear the confident green
    that a directly-priced item does. Amber is this app's "provisional" colour throughout. */
 .af-tile-value-floor {
@@ -15792,6 +15787,46 @@ img[data-asset-failed='true'] {
 
 /* ── TRADE DETECTION COMPARISON (shadow mode, temporary) ── */
 .det { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+/* Detected-but-not-logged. Carries its own surface and sits above the WFM comparison because
+   it reports live data loss, where the comparison below is a cutover-era debug artefact. */
+.det-ingest {
+  margin-bottom: 22px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+.det-ingest-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.det-ingest-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.det-ingest-sub { font-size: 11px; color: var(--text-muted); }
+/* "Nothing was lost" is good news and should read calmly, not as an empty-state apology.
+   Scoped to beat `.det-state`, which is defined later in this file and would otherwise win
+   on equal specificity and grey it out. */
+.det-ingest .det-ingest-clear { color: var(--accent-green); }
+.det-ingest-table { margin-top: 4px; }
+.det-reason { display: flex; flex-direction: column; gap: 3px; max-width: 380px; }
+.det-reason-detail {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.det-ingest-untracked {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .det-summary { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .det-stat { display: flex; flex-direction: column; gap: 2px; }
 .det-stat-value {

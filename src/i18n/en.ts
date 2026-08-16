@@ -29,6 +29,27 @@ export const en = {
   'det.colPlat': 'Plat',
   'det.unresolvedTag': 'unnamed',
   'det.unresolvedHelp': 'The catalog could not identify this item, so it would reach the trade log unnamed.',
+  // Detected-but-not-logged. Worded so the user can act: each reason says what happened and,
+  // where there is one, what to do about it.
+  'det.ingest.title': 'Detected but not logged',
+  'det.ingest.subtitle': 'Trades EE.log saw that did not reach your trade log intact.',
+  'det.ingest.allLogged': 'Every detected trade reached the trade log.',
+  'det.ingest.colReason': 'Reason',
+  'det.ingest.colRows': 'Rows',
+  'det.ingest.logged': 'Logged',
+  'det.ingest.partiallyLogged': 'Partial',
+  'det.ingest.notLogged': 'Not logged',
+  'det.ingest.notPriceable': 'No price',
+  'det.ingest.untracked':
+    '{count} older trade(s) were recorded before outcomes were tracked, so whether they reached the log is unknown.',
+  'det.reason.noPlatinumPrice':
+    'No platinum price — an item-for-item swap has no per-item value to record, so it is left out of the ledger on purpose.',
+  'det.reason.noTradableItems': 'The priced side contained nothing but platinum.',
+  'det.reason.notSignedIn':
+    'You were not signed in, so there was no trade log to write to. Sign in and the next trade will record; this one is still listed here.',
+  'det.reason.rejectedAsDuplicate':
+    'The trade log treated this as a repeat of a trade it already held and discarded it.',
+  'det.reason.unknown': 'The rows were built but are missing from the trade log, for an unrecorded reason.',
   'det.verdictReady': 'EE.log caught every trade WFM did. Safe to make it the only source.',
   'det.verdictNotReady': 'Keep both sources running until “WFM only” reaches zero across real trading — those are trades EE.log missed.',
   'inv.loading': 'Reading AlecaFrame inventory…',
@@ -54,8 +75,8 @@ export const en = {
   'inv.sortRank': 'Most ranked',
   'inv.colOwned': 'Owned',
   'inv.colValue': 'Value',
-  'inv.sortValue': 'Most valuable',
-  'inv.each': 'each',
+  'inv.sortValue': 'Highest price',
+  'inv.valueStackTotal': '{count} owned — {total} for the stack',
   // The three rungs of the price ladder (see price_book.rs). Worded so the weakest one cannot be
   // mistaken for a valuation: a standing bid is what someone offers, not what the item is worth.
   'inv.basis.recentTrades': 'median of trades in the last 48h',

@@ -1690,6 +1690,28 @@ export interface ShadowTradeItem {
   slug: string | null;
 }
 
+/**
+ * What became of a detected trade at the trade log. EE.log is truncated on the next game
+ * launch, so a trade the parser saw but the ledger did not keep is unrecoverable once the game
+ * restarts — which is why every outcome is recorded rather than only the failures.
+ */
+export type TradeIngestStatus =
+  | 'logged'
+  /** Some of the trade's rows are missing — the trade is in the log, but understated. */
+  | 'partiallyLogged'
+  | 'notLogged'
+  /** Excluded on purpose: no derivable price. Not a fault. */
+  | 'notPriceable';
+
+export type TradeIngestReason =
+  /** Item-for-item, or a side mixing platinum with goods. */
+  | 'noPlatinumPrice'
+  | 'noTradableItems'
+  | 'notSignedIn'
+  | 'rejectedAsDuplicate'
+  /** A drop path this build cannot name — shown rather than hidden. */
+  | 'unknown';
+
 export interface ShadowTradeRow {
   tradeKey: string;
   partner: string;
@@ -1700,6 +1722,14 @@ export interface ShadowTradeRow {
   giving: ShadowTradeItem[];
   getting: ShadowTradeItem[];
   recordedAt: string;
+  /** Null for trades recorded before outcomes were tracked; their outcome is unknowable. */
+  ingestStatus: TradeIngestStatus | null;
+  ingestReason: TradeIngestReason | null;
+  /** Specifics under the reason — e.g. which items' rows are missing. */
+  ingestDetail: string | null;
+  /** Rows the converter built vs rows the ledger holds. A mismatch is the point of the pair. */
+  expectedRows: number | null;
+  loggedRows: number | null;
 }
 
 export type AlecaframeItemCategory =
