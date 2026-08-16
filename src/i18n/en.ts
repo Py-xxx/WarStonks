@@ -149,6 +149,9 @@ export const en = {
 
   // Balance labels
   'bal.platinum': 'Platinum',
+  // Shown when the strip is displaying carried-forward or restored balances rather than a
+  // fresh read — the numbers are real, just old, and saying which is the honest part.
+  'bal.stale': 'Last known balances, from {time}. AlecaFrame has not sent an update since.',
   'bal.credits': 'Credits',
   'bal.endo': 'Endo',
   'bal.ducats': 'Ducats',

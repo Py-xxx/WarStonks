@@ -5,6 +5,7 @@ import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
+import { formatElapsedTime } from '../../lib/dateTime';
 import { formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -91,6 +92,9 @@ function formatCompactCurrencyValue(value: number | null, loading: boolean): str
   return new Intl.NumberFormat().format(value);
 }
 
+/** Matches `STALE_SYNC_MS` in the inventory tab — the same measured push-gap reasoning. */
+const CURRENCY_STALE_MS = 60 * 60 * 1000;
+
 function formatCurrencyValue(value: number | null, loading: boolean): string {
   if (loading) {
     return '…';
@@ -144,6 +148,21 @@ export function TopBar() {
     const delta = current - walletSessionPlatinum;
     return delta === 0 ? null : delta;
   }, [walletSnapshot.balances.platinum, walletSessionPlatinum]);
+  /**
+   * Whether the balances on screen are old enough to say so.
+   *
+   * Keyed on AlecaFrame's own "as of", which is preserved when a failed read carries the last
+   * known values forward and when they are restored from the on-disk cache at startup — so
+   * this reflects the age of the numbers rather than of the last attempt to fetch them.
+   * One hour matches the inventory tab's measured threshold.
+   */
+  const currencyIsStale = useMemo(() => {
+    if (!walletSnapshot.lastUpdate) {
+      return false;
+    }
+    const asOf = Date.parse(walletSnapshot.lastUpdate);
+    return Number.isFinite(asOf) && Date.now() - asOf > CURRENCY_STALE_MS;
+  }, [walletSnapshot.lastUpdate]);
   const openSettingsSidebar = useAppStore((s) => s.openSettingsSidebar);
   const openItemInQuickView = useAppStore((s) => s.openItemInQuickView);
   const navigationBack = useAppStore((s) => s.navigationBack);
@@ -539,7 +558,16 @@ export function TopBar() {
 
       {/* role="group" (not "status"): balances update on every poll, and a live region would
           re-announce all of them on each refresh. */}
-      <div className="currency-strip" role="group" aria-label={t('a11y.currencyBalances')}>
+      {/* Balances now survive a failed read and an app restart, so they can be genuinely old.
+          The strip has no other age cue, and a stale platinum count read as current is a
+          trading decision made on bad data — so mark it, using the same one-hour threshold the
+          inventory tab settled on from measured push gaps. */}
+      <div
+        className={`currency-strip${currencyIsStale ? ' is-stale' : ''}`}
+        role="group"
+        aria-label={t('a11y.currencyBalances')}
+        title={currencyIsStale ? t('bal.stale', { time: formatElapsedTime(walletSnapshot.lastUpdate) }) : undefined}
+      >
         <div className="currency-primary" title={t('bal.platinum')}>
           <span className="currency-icon ci-platinum">
             <img src={walletIcons.platinum} alt="" />

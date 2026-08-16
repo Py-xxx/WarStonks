@@ -13588,6 +13588,16 @@ img[data-asset-failed='true'] {
   border-radius: 7px;
   background: linear-gradient(180deg, #0E1118, #0C0F15);
 }
+/* Balances survive a failed read and a restart, so they can be genuinely old. Dimmed rather
+   than recoloured: the numbers are still real, just not fresh, and an amber currency strip
+   would read as an error the user has to act on. */
+.currency-strip.is-stale {
+  border-color: rgba(240, 160, 48, 0.28);
+}
+.currency-strip.is-stale .currency-primary-val,
+.currency-strip.is-stale .currency-secondary-val {
+  opacity: 0.6;
+}
 .currency-icon { transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .currency-primary:hover .currency-icon,
 .currency-secondary:hover .currency-icon { transform: scale(1.14); }

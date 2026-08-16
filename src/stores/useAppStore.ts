@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { type AppUpdateSummary, clearPendingAppUpdate, installPendingAppUpdate } from '../lib/appUpdater';
 import {
+  mergeWalletSnapshot,
+  parsePersistedWalletBalances,
+  serializeWalletBalances,
+  shouldPersistWalletSnapshot,
+  type PersistedWalletBalances,
+} from '../lib/walletSnapshot';
+import {
   closeWfmBuyOrder,
   settleListingForManualTrade,
   createWfmBuyOrder,
@@ -271,7 +278,60 @@ const defaultWalletSnapshot: WalletSnapshot = {
   errorMessage: null,
 };
 
+/**
+ * The snapshot the app opens with: last known balances if any were cached, otherwise empty.
+ *
+ * `enabled` stays false until a refresh says otherwise — the cache restores *numbers*, never
+ * the claim that the integration is live. If the first refresh succeeds it replaces these
+ * outright; if it fails, `mergeWalletSnapshot` keeps them, which is the whole point.
+ */
+function initialWalletSnapshot(): WalletSnapshot {
+  const cached = readPersistedWalletBalances();
+  if (!cached) {
+    return defaultWalletSnapshot;
+  }
+
+  return {
+    ...defaultWalletSnapshot,
+    balances: cached.balances,
+    lastUpdate: cached.lastUpdate,
+  };
+}
+
 const WATCHLIST_STORAGE_KEY = 'warstonks.watchlist.v1';
+const WALLET_BALANCES_STORAGE_KEY = 'warstonks.wallet.balances.v1';
+
+/**
+ * The last trustworthy currency balances, so a restart does not start with a blank strip.
+ *
+ * Only the numbers and their "as of" are kept — see `PersistedWalletBalances`. `enabled` and
+ * `configured` are re-established by the first refresh, which is also what replaces these the
+ * moment a real read succeeds.
+ */
+function readPersistedWalletBalances(): PersistedWalletBalances | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    return parsePersistedWalletBalances(window.localStorage.getItem(WALLET_BALANCES_STORAGE_KEY));
+  } catch (error) {
+    console.error('[wallet] failed to read persisted balances', error);
+    return null;
+  }
+}
+
+function writePersistedWalletBalances(snapshot: WalletSnapshot): void {
+  if (typeof window === 'undefined' || !shouldPersistWalletSnapshot(snapshot)) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(WALLET_BALANCES_STORAGE_KEY, serializeWalletBalances(snapshot));
+  } catch (error) {
+    console.error('[wallet] failed to persist balances', error);
+  }
+}
 
 interface PersistedWatchlistState {
   watchlist: Array<{
@@ -2005,7 +2065,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   wfstatDataStale: false,
   notificationSettings: loadNotificationSettings(),
   appSettings: defaultAppSettings,
-  walletSnapshot: defaultWalletSnapshot,
+  walletSnapshot: initialWalletSnapshot(),
   walletSessionPlatinum: null,
   settingsLoading: false,
   walletLoading: false,
@@ -2214,10 +2274,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ walletLoading: true });
 
     try {
-      const snapshot = await refreshWalletFromAppdata();
+      // Merged, not assigned: a failed read comes back as a successful `Ok` with every balance
+      // null, which would otherwise blank the currency strip. See `mergeWalletSnapshot`.
+      const merged = mergeWalletSnapshot(previousSnapshot, await refreshWalletFromAppdata());
+      // No-ops unless the read was trustworthy, so a carried-forward failure never overwrites
+      // the cache with the emptiness it exists to cover.
+      writePersistedWalletBalances(merged);
       set({
-        walletSnapshot: snapshot,
-        walletSessionPlatinum: get().walletSessionPlatinum ?? snapshot.balances.platinum,
+        walletSnapshot: merged,
+        walletSessionPlatinum: get().walletSessionPlatinum ?? merged.balances.platinum,
         walletLoading: false,
       });
     } catch (error) {
@@ -2240,10 +2305,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     backgroundWalletRefreshPromise = (async () => {
       try {
-        const snapshot = await refreshWalletFromAppdata();
+        // The 60-second background poll is the path that actually blanked the strip in use:
+        // it lands mid-write whenever AlecaFrame rewrites its data file.
+        const merged = mergeWalletSnapshot(
+          get().walletSnapshot,
+          await refreshWalletFromAppdata(),
+        );
+        writePersistedWalletBalances(merged);
         set({
-          walletSnapshot: snapshot,
-          walletSessionPlatinum: get().walletSessionPlatinum ?? snapshot.balances.platinum,
+          walletSnapshot: merged,
+          walletSessionPlatinum: get().walletSessionPlatinum ?? merged.balances.platinum,
         });
       } catch (error) {
         console.warn('[alecaframe] background wallet refresh failed', error);
@@ -2279,11 +2350,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
 
       try {
-        const snapshot = await refreshWalletFromAppdata();
-        set({
-          walletSnapshot: snapshot,
-          walletLoading: false,
-        });
+        const merged = mergeWalletSnapshot(previousSnapshot, await refreshWalletFromAppdata());
+        writePersistedWalletBalances(merged);
+        set({ walletSnapshot: merged, walletLoading: false });
       } catch (error) {
         set({
           walletSnapshot: {
