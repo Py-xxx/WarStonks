@@ -1797,6 +1797,20 @@ export interface PriceBookEntry {
   observedAt: string;
 }
 
+/**
+ * What bulk daily price history the app holds locally. Ingested in the background from
+ * WSHistory, which republishes relics.run's daily archive — see `price_history.rs`.
+ */
+export interface PriceHistoryStatus {
+  daysStored: number;
+  newestDay: string | null;
+  oldestDay: string | null;
+  rowCount: number;
+  /** Distinct items covered — the number that answers "is my inventory priced?". */
+  itemCount: number;
+  lastIngestAt: string | null;
+}
+
 export interface AlecaframeInventory {
   account: AlecaframeAccount;
   /** Authoritative "as of", unix seconds, decoded from LastInventorySync. Not file mtime. */

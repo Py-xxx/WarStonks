@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PriceHistoryBar } from '../../components/PriceHistoryBar';
 import {
   getArbitrageScannerState,
   listenToArbitrageScannerProgress,
@@ -944,6 +945,9 @@ export function ScannersPage() {
 
       <div className="page-content scanners-page-content">
         <div className="scanners-shell">
+            {/* Above the scanner's own status: this is the baseline both tabs now fall back to
+                for items no scan has reached, so it belongs before the scan-specific counts. */}
+            <PriceHistoryBar />
             <div className="scanner-statusbar">
               <div className="scanner-statusbar-progress">
                 <div className="scanner-progress-track">

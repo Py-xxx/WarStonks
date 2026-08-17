@@ -43,6 +43,7 @@ import type {
   SetCompletionOwnedItem,
   OwnedRelicInventoryCache,
   PriceBookEntry,
+  PriceHistoryStatus,
   PersistedWorldStateCacheEntry,
   SellerMode,
   WfmDetailedOrder,
@@ -1131,6 +1132,20 @@ export async function getOwnedRelicInventoryCache(): Promise<OwnedRelicInventory
  * Fetched once and indexed by the caller rather than queried per item, because every consumer
  * so far values a full screen of items at once.
  */
+/**
+ * What bulk daily price history the app holds. Populated by a background pass ~45s after
+ * startup and every six hours after that, so an empty result on a fresh install is normal
+ * rather than an error.
+ */
+export async function getPriceHistoryStatus(): Promise<PriceHistoryStatus> {
+  return invoke<PriceHistoryStatus>('get_price_history_status');
+}
+
+/** Pulls history now rather than waiting for the six-hourly timer. */
+export async function refreshPriceHistory(): Promise<void> {
+  return invoke<void>('refresh_price_history');
+}
+
 export async function getPriceBook(): Promise<PriceBookEntry[]> {
   return invoke<PriceBookEntry[]>('get_price_book');
 }

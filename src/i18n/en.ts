@@ -889,6 +889,15 @@ export const en = {
   'scan.relic': 'Relic',
   'scan.unvaulted': 'Unvaulted',
   'scan.vaulted': 'Vaulted',
+  // Bulk price history (WSHistory / relics.run). Worded so the source is credited plainly and
+  // "not ingested yet" reads as a normal fresh-install state rather than a failure.
+  'ph.coverage': '{items} items priced',
+  'ph.pending': 'Building price history…',
+  'ph.days': '{days} days',
+  'ph.newest': 'to {day}',
+  'ph.checked': 'checked {time}',
+  'ph.source': 'relics.run',
+  'ph.sourceHelp': 'Daily price history is collected by relics.run and republished via WSHistory. WarStonks fetches one small file per day.',
   'scan.arbitrage': 'Arbitrage',
   'scan.rescan': 'Rescan',
   'scan.startScan': 'Start Scan',

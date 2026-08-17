@@ -84,12 +84,20 @@ pub struct PriceSample {
     pub observed_at: String,
 }
 
-/// The three rungs for one (item, variant), any or all of which may be missing.
+/// The rungs for one (item, variant), any or all of which may be missing.
+///
+/// The first three come from `statistics_cache` (Warframe.Market, fetched when the user opens an
+/// item or runs a scan). The last two come from `price_history_daily` (WSHistory, refreshed
+/// daily, covering every item in the game).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PriceSamples {
     pub closed_recent: Option<PriceSample>,
     pub closed_historical: Option<PriceSample>,
     pub standing_bid: Option<PriceSample>,
+    /// Newest `closed` row from the bulk daily history.
+    pub history_closed: Option<PriceSample>,
+    /// Newest `buy` row from the bulk daily history.
+    pub history_bid: Option<PriceSample>,
 }
 
 /// A resolved price: one number, plus enough provenance to defend it.
@@ -111,24 +119,69 @@ fn usable(sample: &Option<PriceSample>) -> Option<&PriceSample> {
         .filter(|sample| sample.volume.is_finite() && sample.volume >= 0.0)
 }
 
-/// Walks the ladder. Pure, and the whole reason the derivation lives in Rust instead of being
-/// buried in the rebuild's SQL — the tier choice is the part with judgement in it, so it is the
-/// part that gets tests.
+/// Picks the price. Pure, and the whole reason the derivation lives in Rust instead of being
+/// buried in the rebuild's SQL — the choice is the part with judgement in it, so it is the part
+/// that gets tests.
+///
+/// ## Actual trades beat bids; within each, the freshest observation wins
+///
+/// The obvious rule would be "live source first, bulk history as a fallback". Measured against a
+/// real database, that is wrong: `statistics_cache` is only refilled when the user opens an item
+/// or runs a scan, so its rows were 7–30 days old for 1,033 of 1,051 items, with none under two
+/// days. `price_history_daily` refreshes daily and is at most ~2 days behind. Preferring the
+/// "live" table by name would routinely serve a nine-day-old price over yesterday's.
+///
+/// So sources are not ranked. Every `closed` sample competes on its observation date, and only
+/// if none exists do the bids compete the same way. Live data still wins whenever it genuinely
+/// is fresher, which is what "live first" was reaching for.
+///
+/// Ties go to `statistics_cache`, which buckets hourly rather than daily and is therefore the
+/// finer-grained reading of the same day.
 pub fn derive_exit_price(samples: &PriceSamples) -> Option<DerivedPrice> {
-    let rungs = [
+    // Ordered so that, at equal observation dates, the earlier entry wins.
+    let traded = [
         (PriceBasis::RecentTrades, usable(&samples.closed_recent)),
         (PriceBasis::HistoricalTrades, usable(&samples.closed_historical)),
-        (PriceBasis::StandingBids, usable(&samples.standing_bid)),
+        (PriceBasis::HistoricalTrades, usable(&samples.history_closed)),
     ];
+    if let Some(best) = freshest(traded) {
+        return Some(best);
+    }
 
-    rungs.into_iter().find_map(|(basis, sample)| {
-        sample.map(|sample| DerivedPrice {
+    // Nothing has actually traded — fall back to what someone is offering to pay. Still the
+    // freshest such offer, and reported as a bid so the UI can mark it a floor.
+    freshest([
+        (PriceBasis::StandingBids, usable(&samples.standing_bid)),
+        (PriceBasis::StandingBids, usable(&samples.history_bid)),
+    ])
+}
+
+/// The most recently observed of a set of candidates, `None` if all are absent.
+///
+/// Compared on the **calendar day only**. The two sources spell their timestamps differently —
+/// `statistics_cache` stores a full `2026-08-07T21:00:00Z`, `price_history_daily` a bare
+/// `2026-08-16` — and a plain string comparison across those would be deciding on formatting as
+/// much as on time. Taking the first ten characters compares like with like.
+///
+/// Within one day the candidates tie, and the tie is broken by argument order, which is how the
+/// caller expresses "prefer the hourly source over the daily one".
+fn freshest<const N: usize>(
+    candidates: [(PriceBasis, Option<&PriceSample>); N],
+) -> Option<DerivedPrice> {
+    candidates
+        .into_iter()
+        .filter_map(|(basis, sample)| sample.map(|sample| (basis, sample)))
+        // `max_by_key` keeps the *last* maximum; reversing the key and taking the minimum keeps
+        // the first, so the documented tie-break holds rather than depending on iteration order.
+        .min_by_key(|(_, sample)| {
+            std::cmp::Reverse(sample.observed_at.chars().take(10).collect::<String>())
+        })
+        .map(|(basis, sample)| DerivedPrice {
             exit_price: sample.price,
             basis,
             sample_volume: sample.volume,
             observed_at: sample.observed_at.clone(),
         })
-    })
 }
 
 /// Created here rather than in the migration module's `create_new_schema`: the price book is
@@ -155,11 +208,24 @@ pub(crate) fn ensure_price_book_schema(connection: &Connection) -> Result<()> {
         .context("failed to create the price_book table")
 }
 
-/// The latest bucket per (item, variant, rung), pivoted to one row per item so the ladder sees
-/// all three rungs together. `ROW_NUMBER` rather than `MAX(bucket_at)` because the price has to
-/// come from the *same row* as the timestamp it is reported with.
+/// The latest sample per (item, variant, rung) from both sources, pivoted to one row per item so
+/// the derivation sees every rung together.
+///
+/// `ROW_NUMBER` rather than `MAX(bucket_at)` throughout, because the price has to come from the
+/// *same row* as the timestamp it is reported with.
+///
+/// The two sources are **unioned, not joined**: `statistics_cache` holds ~1,050 items (only what
+/// the user opened or scanned) while `price_history_daily` holds ~3,800 (the whole game). A join
+/// from either side would silently drop the items only the other one knows — which is the entire
+/// coverage problem this feature exists to fix. `keys` is therefore the union of both key spaces,
+/// with both sources left-joined onto it.
+///
+/// `slug` comes only from `statistics_cache`; history rows carry an `item_key` but no slug, so
+/// an item known only to history stores an empty one. Nothing reads that field — the app keys on
+/// (item_key, variant_key) — and resolving it would mean opening the catalogue here purely to
+/// populate something unused.
 const LATEST_SAMPLES_SQL: &str = "
-    WITH ranked AS (
+    WITH stats_ranked AS (
       SELECT item_key, variant_key, slug, domain_key, source_kind,
              median, volume, bucket_at,
              ROW_NUMBER() OVER (
@@ -168,22 +234,65 @@ const LATEST_SAMPLES_SQL: &str = "
              ) AS rn
       FROM statistics_cache
       WHERE source_kind IN ('closed', 'live_buy')
+    ),
+    stats AS (
+      SELECT
+        item_key,
+        variant_key,
+        MAX(slug) AS slug,
+        MAX(CASE WHEN domain_key = '48hours' AND source_kind = 'closed' THEN median END) AS c48_median,
+        MAX(CASE WHEN domain_key = '48hours' AND source_kind = 'closed' THEN volume END) AS c48_volume,
+        MAX(CASE WHEN domain_key = '48hours' AND source_kind = 'closed' THEN bucket_at END) AS c48_at,
+        MAX(CASE WHEN domain_key = '90days' AND source_kind = 'closed' THEN median END) AS c90_median,
+        MAX(CASE WHEN domain_key = '90days' AND source_kind = 'closed' THEN volume END) AS c90_volume,
+        MAX(CASE WHEN domain_key = '90days' AND source_kind = 'closed' THEN bucket_at END) AS c90_at,
+        MAX(CASE WHEN source_kind = 'live_buy' THEN median END) AS bid_median,
+        MAX(CASE WHEN source_kind = 'live_buy' THEN volume END) AS bid_volume,
+        MAX(CASE WHEN source_kind = 'live_buy' THEN bucket_at END) AS bid_at
+      FROM stats_ranked
+      WHERE rn = 1
+      GROUP BY item_key, variant_key
+    ),
+    hist_ranked AS (
+      SELECT item_key, variant_key, order_type, median, volume, day,
+             ROW_NUMBER() OVER (
+               PARTITION BY item_key, variant_key, order_type
+               ORDER BY day DESC
+             ) AS rn
+      FROM price_history_daily
+    ),
+    hist AS (
+      SELECT
+        item_key,
+        variant_key,
+        MAX(CASE WHEN order_type = 'closed' THEN median END) AS h_closed_median,
+        MAX(CASE WHEN order_type = 'closed' THEN volume END) AS h_closed_volume,
+        MAX(CASE WHEN order_type = 'closed' THEN day END) AS h_closed_at,
+        MAX(CASE WHEN order_type = 'buy' THEN median END) AS h_bid_median,
+        MAX(CASE WHEN order_type = 'buy' THEN volume END) AS h_bid_volume,
+        MAX(CASE WHEN order_type = 'buy' THEN day END) AS h_bid_at
+      FROM hist_ranked
+      WHERE rn = 1
+      GROUP BY item_key, variant_key
+    ),
+    keys AS (
+      SELECT item_key, variant_key FROM stats
+      UNION
+      SELECT item_key, variant_key FROM hist
     )
     SELECT
-      item_key,
-      variant_key,
-      MAX(slug) AS slug,
-      MAX(CASE WHEN domain_key = '48hours' AND source_kind = 'closed' THEN median END),
-      MAX(CASE WHEN domain_key = '48hours' AND source_kind = 'closed' THEN volume END),
-      MAX(CASE WHEN domain_key = '48hours' AND source_kind = 'closed' THEN bucket_at END),
-      MAX(CASE WHEN domain_key = '90days' AND source_kind = 'closed' THEN median END),
-      MAX(CASE WHEN domain_key = '90days' AND source_kind = 'closed' THEN volume END),
-      MAX(CASE WHEN domain_key = '90days' AND source_kind = 'closed' THEN bucket_at END),
-      MAX(CASE WHEN source_kind = 'live_buy' THEN median END),
-      MAX(CASE WHEN source_kind = 'live_buy' THEN volume END),
-      MAX(CASE WHEN source_kind = 'live_buy' THEN bucket_at END)
-    FROM ranked
-    WHERE rn = 1
+      keys.item_key,
+      keys.variant_key,
+      COALESCE(stats.slug, ''),
+      stats.c48_median, stats.c48_volume, stats.c48_at,
+      stats.c90_median, stats.c90_volume, stats.c90_at,
+      stats.bid_median, stats.bid_volume, stats.bid_at,
+      hist.h_closed_median, hist.h_closed_volume, hist.h_closed_at,
+      hist.h_bid_median, hist.h_bid_volume, hist.h_bid_at
+    FROM keys
+    LEFT JOIN stats ON stats.item_key = keys.item_key AND stats.variant_key = keys.variant_key
+    LEFT JOIN hist ON hist.item_key = keys.item_key AND hist.variant_key = keys.variant_key
+    WHERE 1 = 1
 ";
 
 /// One item's samples as read back out of the pivot above.
@@ -207,10 +316,10 @@ fn sample_from_columns(
 fn read_sampled_items(connection: &Connection, filter: Option<(&str, &str)>) -> Result<Vec<SampledItem>> {
     let (sql, bound): (String, Vec<String>) = match filter {
         Some((item_key, variant_key)) => (
-            format!("{LATEST_SAMPLES_SQL} AND item_key = ?1 AND variant_key = ?2 GROUP BY item_key, variant_key"),
+            format!("{LATEST_SAMPLES_SQL} AND keys.item_key = ?1 AND keys.variant_key = ?2"),
             vec![item_key.to_string(), variant_key.to_string()],
         ),
-        None => (format!("{LATEST_SAMPLES_SQL} GROUP BY item_key, variant_key"), Vec::new()),
+        None => (LATEST_SAMPLES_SQL.to_string(), Vec::new()),
     };
 
     let mut statement = connection.prepare(&sql).context("failed to prepare the price sample query")?;
@@ -224,6 +333,8 @@ fn read_sampled_items(connection: &Connection, filter: Option<(&str, &str)>) -> 
                     closed_recent: sample_from_columns(row.get(3)?, row.get(4)?, row.get(5)?),
                     closed_historical: sample_from_columns(row.get(6)?, row.get(7)?, row.get(8)?),
                     standing_bid: sample_from_columns(row.get(9)?, row.get(10)?, row.get(11)?),
+                    history_closed: sample_from_columns(row.get(12)?, row.get(13)?, row.get(14)?),
+                    history_bid: sample_from_columns(row.get(15)?, row.get(16)?, row.get(17)?),
                 },
             })
         })
@@ -280,6 +391,9 @@ fn now_iso() -> String {
 /// something.
 pub(crate) fn rebuild_price_book(connection: &Connection) -> Result<usize> {
     ensure_price_book_schema(connection)?;
+    // The sample query unions bulk history in, so its table must exist even on an install that
+    // has never ingested a day.
+    crate::price_history::ensure_schema(connection)?;
     let items = read_sampled_items(connection, None)?;
     let refreshed_at = now_iso();
 
@@ -382,12 +496,137 @@ mod tests {
         Some(PriceSample { price, volume, observed_at: "2026-08-07T21:00:00Z".to_string() })
     }
 
+    fn dated(price: f64, volume: f64, observed_at: &str) -> Option<PriceSample> {
+        Some(PriceSample { price, volume, observed_at: observed_at.to_string() })
+    }
+
+    /// The whole feature, end to end: ingest real bulk history, rebuild, and count how many
+    /// items come out priced. Ignored by default because it needs the network.
+    ///
+    /// `cargo test price_book_coverage -- --ignored --nocapture`
+    #[test]
+    #[ignore = "hits the network"]
+    fn price_book_coverage_with_real_history() {
+        let mut connection = statistics_fixture();
+
+        // A handful of statistics rows, standing in for items the user actually opened.
+        insert_stat(&connection, "mesa_prime_set", "48hours", "closed", "2026-08-07T21:00:00Z", 70.0, 7.0);
+        let before = rebuild_price_book(&connection).expect("rebuild without history");
+
+        let ingested = crate::price_history::ingest(&mut connection).expect("ingest");
+        let after = rebuild_price_book(&connection).expect("rebuild with history");
+
+        println!("history: {} days, {} rows", ingested.days_added, ingested.rows_added);
+        println!("price book: {before} priced before, {after} after");
+
+        let book = load_price_book(&connection).expect("read");
+        let bids = book.iter().filter(|e| e.basis == PriceBasis::StandingBids).count();
+        println!(
+            "  traded {} / bid-floor {} ({:.0}% from real trades)",
+            book.len() - bids,
+            bids,
+            100.0 * (book.len() - bids) as f64 / book.len() as f64
+        );
+
+        assert!(after > before, "history must add coverage");
+        assert!(after > 3_000, "expected whole-game coverage, got {after}");
+        assert!(book.iter().all(|entry| entry.exit_price > 0.0), "no zero prices");
+    }
+
+    /// The measured reality this whole design turns on: `statistics_cache` is only refilled when
+    /// the user opens an item, so its "live" rows were 7–30 days old for 1,033 of 1,051 items,
+    /// while bulk history is at most ~2 days behind. Ranking by source would serve the stale one.
+    #[test]
+    fn fresher_bulk_history_beats_a_stale_live_statistic() {
+        let derived = derive_exit_price(&PriceSamples {
+            closed_recent: dated(70.0, 20.0, "2026-08-07T21:00:00Z"),
+            history_closed: dated(88.0, 9.0, "2026-08-16"),
+            ..Default::default()
+        })
+        .expect("a price");
+
+        assert_eq!(derived.exit_price, 88.0, "yesterday's trade beats one from nine days ago");
+        assert_eq!(derived.observed_at, "2026-08-16");
+    }
+
+    /// ...and the converse, which is what "live first" was actually reaching for.
+    #[test]
+    fn fresher_live_statistic_beats_older_history() {
+        let derived = derive_exit_price(&PriceSamples {
+            closed_recent: dated(70.0, 20.0, "2026-08-16T21:00:00Z"),
+            history_closed: dated(88.0, 9.0, "2026-08-10"),
+            ..Default::default()
+        })
+        .expect("a price");
+
+        assert_eq!(derived.exit_price, 70.0);
+        assert_eq!(derived.basis, PriceBasis::RecentTrades);
+    }
+
+    /// Same calendar day: the hourly source is the finer-grained reading, so it wins.
+    #[test]
+    fn on_the_same_day_the_hourly_source_wins() {
+        let derived = derive_exit_price(&PriceSamples {
+            closed_recent: dated(70.0, 20.0, "2026-08-16T21:00:00Z"),
+            history_closed: dated(88.0, 9.0, "2026-08-16"),
+            ..Default::default()
+        })
+        .expect("a price");
+
+        assert_eq!(
+            derived.exit_price, 70.0,
+            "a full timestamp and a bare date on one day must not be compared as strings",
+        );
+    }
+
+    /// A real trade outranks a bid regardless of age — a bid is what someone hopes to pay, and
+    /// promoting a fresh one over an actual sale would overstate nothing but understate plenty.
+    #[test]
+    fn a_stale_trade_still_beats_a_fresh_bid() {
+        let derived = derive_exit_price(&PriceSamples {
+            history_closed: dated(88.0, 9.0, "2026-07-20"),
+            standing_bid: dated(46.0, 2229.0, "2026-08-16T21:00:00Z"),
+            ..Default::default()
+        })
+        .expect("a price");
+
+        assert_eq!(derived.exit_price, 88.0);
+        assert_eq!(derived.basis, PriceBasis::HistoricalTrades);
+    }
+
+    /// The long tail: an item that has not traded in the window at all still gets a floor from
+    /// the bulk history's bids, which is the coverage bid data was included for.
+    #[test]
+    fn history_bids_price_items_that_never_traded() {
+        let derived = derive_exit_price(&PriceSamples {
+            history_bid: dated(12.0, 30.0, "2026-08-16"),
+            ..Default::default()
+        })
+        .expect("a price");
+
+        assert_eq!(derived.exit_price, 12.0);
+        assert_eq!(derived.basis, PriceBasis::StandingBids);
+    }
+
+    #[test]
+    fn the_freshest_bid_wins_when_nothing_traded() {
+        let derived = derive_exit_price(&PriceSamples {
+            standing_bid: dated(46.0, 10.0, "2026-08-07T21:00:00Z"),
+            history_bid: dated(12.0, 30.0, "2026-08-16"),
+            ..Default::default()
+        })
+        .expect("a price");
+
+        assert_eq!(derived.exit_price, 12.0, "the newer bid, even though it is lower");
+    }
+
     #[test]
     fn prefers_recent_trades_over_every_other_rung() {
         let derived = derive_exit_price(&PriceSamples {
             closed_recent: sample(70.0, 20.0),
             closed_historical: sample(65.0, 900.0),
             standing_bid: sample(46.0, 2229.0),
+            ..Default::default()
         })
         .expect("a price");
         assert_eq!(derived.exit_price, 70.0);
@@ -481,6 +720,9 @@ mod tests {
                  );",
             )
             .expect("schema");
+        // The sample query unions both sources, so the history table has to exist even when a
+        // test only exercises statistics.
+        crate::price_history::ensure_schema(&connection).expect("history schema");
         connection
     }
 

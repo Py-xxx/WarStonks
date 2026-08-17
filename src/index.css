@@ -15832,6 +15832,56 @@ img[data-asset-failed='true'] {
 
 /* ── TRADE DETECTION COMPARISON (shadow mode, temporary) ── */
 .det { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+/* Where baseline prices come from, shown above the scanner's own status. One slim line: this
+   is ambient provenance, not a feature competing with the scan controls. */
+.price-history-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-surface);
+}
+.price-history-primary {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-green);
+}
+.price-history-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+/* Credited, not decorated: the data is relics.run's and the attribution should read as a fact
+   rather than a badge. Pushed right so it reads as a footnote to the numbers. */
+.price-history-source {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-bottom: 1px dotted var(--border);
+  cursor: help;
+}
+.price-history-refresh {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.price-history-refresh:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+}
+.price-history-refresh:disabled { opacity: 0.55; cursor: not-allowed; }
+
 /* Detected-but-not-logged. Carries its own surface and sits above the WFM comparison because
    it reports live data loss, where the comparison below is a cutover-era debug artefact. */
 .det-ingest {

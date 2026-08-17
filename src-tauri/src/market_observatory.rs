@@ -1345,6 +1345,9 @@ fn initialize_market_observatory_schema(connection: &Connection) -> Result<()> {
     // Derived from `statistics_cache` and rebuildable from it, so it owns its own schema rather
     // than joining the migration's item-keyed table lists — see `price_book.rs`.
     crate::price_book::ensure_price_book_schema(connection)?;
+    // The price book now reads bulk daily history alongside live statistics, so its table has to
+    // exist before any rebuild runs — including on a fresh install that has never ingested.
+    crate::price_history::ensure_schema(connection)?;
 
     Ok(())
 }
@@ -8034,6 +8037,129 @@ pub(crate) fn prime_recommended_prices_on_startup(app: &tauri::AppHandle) {
             &format!("Price book rebuild failed: {error}"),
         ),
     }
+}
+
+/// Pulls any newly published daily history and, if anything landed, rebuilds the price book.
+///
+/// Runs on a background timer rather than during startup: the loading screen already waits on
+/// the catalogue build, and this is a network fetch whose absence degrades prices rather than
+/// breaking the app. A user who opens the app and closes it inside a minute simply keeps
+/// yesterday's book.
+///
+/// Cheap to call often. The manifest is an ETag'd conditional request, so the common outcome is
+/// a zero-byte 304 and an immediate return without touching the database.
+pub(crate) fn refresh_price_history_and_book(app: &tauri::AppHandle) {
+    let Ok(mut connection) = open_market_observatory_database(app) else {
+        return;
+    };
+
+    let outcome = match crate::price_history::ingest(&mut connection) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // Logged rather than swallowed: the symptom of a silent failure here is "prices stop
+            // getting fresher", which is invisible in the UI and nearly impossible to diagnose
+            // after the fact.
+            log_feature_event_best_effort(
+                app,
+                "price-history",
+                "ingest-failed",
+                &format!("Price history ingest failed: {error}"),
+            );
+            return;
+        }
+    };
+
+    for failure in &outcome.failures {
+        log_feature_event_best_effort(app, "price-history", "day-failed", failure);
+    }
+
+    // Retention runs on every pass, not only when a day landed: the window moves with the
+    // calendar, so yesterday's newest row becomes today's compaction candidate whether or not
+    // anything new arrived. It is a no-op once caught up.
+    let today = now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    let retention_changed =
+        match crate::price_history::apply_retention(&mut connection, &today[..10.min(today.len())]) {
+            Ok(retention) if retention.rows_deleted > 0 || retention.rows_compacted > 0 => {
+                log_feature_event_best_effort(
+                    app,
+                    "price-history",
+                    "retention",
+                    &format!(
+                        "Retention: {} row(s) deleted past a year, {} row(s) folded into {} week(s).",
+                        retention.rows_deleted, retention.rows_compacted, retention.weeks_compacted
+                    ),
+                );
+                true
+            }
+            Ok(_) => false,
+            Err(error) => {
+                log_feature_event_best_effort(
+                    app,
+                    "price-history",
+                    "retention-failed",
+                    &format!("Price history retention failed: {error}"),
+                );
+                false
+            }
+        };
+
+    // Nothing new means nothing to rebuild — the book already reflects what is stored.
+    //
+    // Retention counts as a change for the long tail: an item whose only data is older than the
+    // full-resolution window has its row rewritten by compaction (a weighted median under a new
+    // day label), and one older than a year loses its row entirely. Both would otherwise leave a
+    // price on screen that nothing in the database still supports.
+    if outcome.days_added == 0 && !retention_changed {
+        return;
+    }
+
+    log_feature_event_best_effort(
+        app,
+        "price-history",
+        "ingested",
+        &format!(
+            "Ingested {} day(s), {} rows from {} (newest {}).",
+            outcome.days_added,
+            outcome.rows_added,
+            if outcome.source.is_empty() { "WSHistory" } else { &outcome.source },
+            outcome.newest_day.as_deref().unwrap_or("unknown"),
+        ),
+    );
+
+    match crate::price_book::rebuild_price_book(&connection) {
+        Ok(count) => log_feature_event_best_effort(
+            app,
+            "price-book",
+            "rebuild",
+            &format!("Rebuilt the price book after ingest: {count} priced items."),
+        ),
+        Err(error) => log_feature_event_best_effort(
+            app,
+            "price-book",
+            "rebuild-failed",
+            &format!("Price book rebuild failed after ingest: {error}"),
+        ),
+    }
+}
+
+/// What bulk price history the app currently holds.
+#[tauri::command]
+pub async fn get_price_history_status(
+    app: tauri::AppHandle,
+) -> Result<crate::price_history::PriceHistoryStatus, String> {
+    let connection = open_market_observatory_database(&app).map_err(|error| error.to_string())?;
+    crate::price_history::status(&connection).map_err(|error| error.to_string())
+}
+
+/// Pulls history now instead of waiting for the six-hourly timer. Exposed so a user who has just
+/// been offline can refresh without restarting, and so the background path is testable by hand.
+#[tauri::command]
+pub async fn refresh_price_history(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || refresh_price_history_and_book(&app))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// The whole price book in one call. It is ~1k rows on a well-used install, and every consumer

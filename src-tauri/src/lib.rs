@@ -18,6 +18,7 @@ mod market_observatory_migration;
 mod opportunities;
 mod order_flow;
 mod price_book;
+mod price_history;
 mod recommended_prices;
 mod smart_manage;
 mod settings;
@@ -104,6 +105,23 @@ pub fn run() {
                 let _ = opportunities::compute_opportunities(&index_app);
                 std::thread::sleep(std::time::Duration::from_secs(60));
             });
+            // Pull newly published daily price history in the background, then rebuild the price
+            // book if anything landed. Deliberately *after* startup rather than part of it: the
+            // loading screen already waits on the catalogue build, and a user whose network is
+            // down should get an app with slightly older prices, not a slower launch.
+            //
+            // The first pass is delayed so it does not compete with the catalogue build for disk
+            // and CPU on a cold start. After that it re-checks every six hours — the publisher
+            // updates once a day around 03:00 UTC, so this picks a new day up within six hours
+            // of it appearing, and every check that finds nothing is a zero-byte 304.
+            let history_app = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(45));
+                loop {
+                    market_observatory::refresh_price_history_and_book(&history_app);
+                    std::thread::sleep(std::time::Duration::from_secs(6 * 60 * 60));
+                }
+            });
             // Start the single persistent Warframe.Market websocket: it holds presence when
             // signed in (surviving re-auth) and the newOrders subscription when there are
             // tracked items. Idles with no connection until either is true.
@@ -149,6 +167,8 @@ pub fn run() {
             market_observatory::set_set_completion_owned_item_quantity,
             market_observatory::apply_set_completion_screenshot_import_rows,
             market_observatory::get_price_book,
+            market_observatory::get_price_history_status,
+            market_observatory::refresh_price_history,
             market_observatory::get_owned_relic_inventory_cache,
             market_observatory::refresh_owned_relic_inventory,
             market_observatory::start_arbitrage_scanner,
