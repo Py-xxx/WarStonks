@@ -682,6 +682,11 @@ export interface CurrencyBalance {
   endo: number | null;
   ducats: number | null;
   aya: number | null;
+  /**
+   * Premium Prime Resurgence currency. Deliberately **not** in the currency strip — it only
+   * means anything next to Varzia's stock, so the Prime Resurgence panel shows it instead.
+   */
+  regalAya: number | null;
 }
 
 export interface AlecaframeSettings {

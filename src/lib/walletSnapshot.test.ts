@@ -16,6 +16,7 @@ const EMPTY: CurrencyBalance = {
   endo: null,
   ducats: null,
   aya: null,
+  regalAya: null,
 };
 
 const FULL: CurrencyBalance = {
@@ -24,6 +25,7 @@ const FULL: CurrencyBalance = {
   endo: 4200,
   ducats: 286,
   aya: 15,
+  regalAya: 0,
 };
 
 function snapshot(overrides: Partial<WalletSnapshot> = {}): WalletSnapshot {
@@ -154,6 +156,24 @@ test('a malformed or empty cache is rejected rather than half-restored', () => {
     parsePersistedWalletBalances(JSON.stringify({ balances: EMPTY })),
     null,
     'an all-empty cache is not worth restoring',
+  );
+});
+
+test('a cache written before a currency existed still restores', () => {
+  // Exactly what every user upgrading into the Regal Aya build has on disk: a payload with
+  // no `regalAya` key. Rejecting it would blank the strip on first launch after an update.
+  const legacy = JSON.stringify({
+    balances: { platinum: 672, credits: 1_250_000, endo: 4200, ducats: 286, aya: 15 },
+    lastUpdate: '2026-08-16T09:00:00Z',
+  });
+
+  const restored = parsePersistedWalletBalances(legacy);
+  assert.ok(restored);
+  assert.equal(restored.balances.platinum, 672);
+  assert.equal(
+    restored.balances.regalAya,
+    null,
+    'the new currency is an explicit null, not missing from the object',
   );
 });
 

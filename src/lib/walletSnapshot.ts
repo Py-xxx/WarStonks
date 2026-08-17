@@ -18,7 +18,7 @@ import type { CurrencyBalance, WalletSnapshot } from '../types';
  * last known values stay on screen.
  */
 
-const CURRENCY_KEYS = ['platinum', 'credits', 'endo', 'ducats', 'aya'] as const;
+const CURRENCY_KEYS = ['platinum', 'credits', 'endo', 'ducats', 'aya', 'regalAya'] as const;
 
 export function hasAnyBalance(balances: CurrencyBalance): boolean {
   return CURRENCY_KEYS.some((key) => balances[key] !== null);
@@ -76,8 +76,17 @@ export interface PersistedWalletBalances {
   lastUpdate: string | null;
 }
 
-function isFiniteOrNull(value: unknown): value is number | null {
-  return value === null || (typeof value === 'number' && Number.isFinite(value));
+/**
+ * `undefined` counts as absent, not invalid — a cache written before a currency was added
+ * simply lacks the key, and rejecting the whole payload over that would throw away good
+ * balances on every upgrade that introduces one.
+ */
+function isFiniteOrNull(value: unknown): value is number | null | undefined {
+  return (
+    value === null ||
+    value === undefined ||
+    (typeof value === 'number' && Number.isFinite(value))
+  );
 }
 
 /**
@@ -100,19 +109,23 @@ export function parsePersistedWalletBalances(raw: string | null): PersistedWalle
     if (!CURRENCY_KEYS.every((key) => isFiniteOrNull(balances[key]))) {
       return null;
     }
-    // A cache with nothing in it is not worth restoring.
-    if (!hasAnyBalance(balances as CurrencyBalance)) {
+
+    // Rebuilt key by key from CURRENCY_KEYS rather than spread, so a currency added later is
+    // always present as an explicit null instead of silently missing from the object.
+    const restored = {} as CurrencyBalance;
+    for (const key of CURRENCY_KEYS) {
+      restored[key] = balances[key] ?? null;
+    }
+
+    // Emptiness is judged on the rebuilt object, never the raw one: a key absent from the
+    // JSON reads as `undefined` there, and `undefined !== null` would count it as a balance —
+    // making an empty cache look populated.
+    if (!hasAnyBalance(restored)) {
       return null;
     }
 
     return {
-      balances: {
-        platinum: balances.platinum ?? null,
-        credits: balances.credits ?? null,
-        endo: balances.endo ?? null,
-        ducats: balances.ducats ?? null,
-        aya: balances.aya ?? null,
-      },
+      balances: restored,
       lastUpdate: typeof parsed.lastUpdate === 'string' ? parsed.lastUpdate : null,
     };
   } catch {

@@ -44,6 +44,10 @@ pub struct CurrencyBalance {
     pub endo: Option<i64>,
     pub ducats: Option<i64>,
     pub aya: Option<i64>,
+    /// The premium Prime Resurgence currency, from the wallet's `PrimeTokens`. Deliberately
+    /// absent from the currency strip — it is only meaningful next to Varzia's stock, so the
+    /// Prime Resurgence panel is the one place it is shown.
+    pub regal_aya: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -402,6 +406,9 @@ fn map_currency_balance(data_point: &AlecaframeDataPoint) -> CurrencyBalance {
         endo: data_point.endo,
         ducats: data_point.ducats,
         aya: data_point.aya,
+        // The legacy HTTP data point predates Regal Aya being surfaced and carries no field
+        // for it. Absent rather than zero — this path has no idea either way.
+        regal_aya: None,
     }
 }
 

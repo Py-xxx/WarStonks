@@ -1748,6 +1748,7 @@ export const en = {
   'evt.loadingVaultTrader': 'Loading Prime Resurgence…',
   'evt.vaultTraderUnavailable': 'Prime Resurgence data unavailable right now.',
   'evt.primeResurgenceVarziaLabel': 'Prime Resurgence · Varzia',
+  'evt.regalAyaBalance': 'Regal Aya',
   'evt.vaultedRelicsAvailable': 'Vaulted relics available',
   'evt.away': 'Away',
   'evt.leavesAt': 'Leaves {date}',

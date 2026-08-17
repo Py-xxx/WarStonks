@@ -37,6 +37,17 @@ pub const VERIFIED_ALECAFRAME_VERSION: &str = "2.6.90";
 /// Ducats, as the game names them internally.
 const DUCAT_ITEM_TYPE: &str = "/Lotus/Types/Items/MiscItems/PrimeBucks";
 
+/// Aya — the relic currency Varzia trades, and **not** a wallet field.
+///
+/// Same trap as ducats, one level deeper: the wallet *does* carry a plausible-looking
+/// `PrimeTokens`, so reading it looked right and returned a number. But `PrimeTokens` is
+/// **Regal Aya**, the premium currency bought with real money — AlecaFrame's own extractor
+/// labels it exactly that (`alecaframe_extract.py:61`, "# regal aya"). Most players hold none,
+/// so the strip showed a confident `0` while their actual Aya sat in `MiscItems` under a name
+/// that contains neither "aya" nor anything searchable: `SchismKey`. The reference account has
+/// 10 of them.
+const AYA_ITEM_TYPE: &str = "/Lotus/Types/Items/MiscItems/SchismKey";
+
 /// Reads one stacked item's count out of `MiscItems`.
 ///
 /// Some currencies are inventory stacks rather than wallet fields, so they are absent from the
@@ -549,6 +560,7 @@ pub fn refresh_wallet_from_appdata(
             endo: None,
             ducats: None,
             aya: None,
+            regal_aya: None,
         },
         username_when_public: None,
         last_update: None,
@@ -607,7 +619,11 @@ pub fn refresh_wallet_from_appdata(
                     // reference payload, which carries 286 of them while every top-level key
                     // is silent about ducats.
                     ducats: stacked_item_count(&root, DUCAT_ITEM_TYPE),
-                    aya: root.get("PrimeTokens").and_then(Value::as_i64),
+                    // Also an inventory stack, not a wallet field — see `AYA_ITEM_TYPE`.
+                    aya: stacked_item_count(&root, AYA_ITEM_TYPE),
+                    // `PrimeTokens` really is a wallet field; it was only ever the wrong
+                    // answer to "how much Aya?". Under its own name it is correct.
+                    regal_aya: root.get("PrimeTokens").and_then(Value::as_i64),
                 },
                 username_when_public: None,
                 last_update,
@@ -790,6 +806,35 @@ mod tests {
         assert_eq!(
             stacked_item_count(&root, "/Lotus/Types/Items/MiscItems/NotAThing"),
             None,
+        );
+    }
+
+    /// Aya was reported as `0` for every player who had any.
+    ///
+    /// Worse than the ducat bug, because the wrong source *looked* right: `PrimeTokens` exists,
+    /// is a number, and sits among the other wallet fields — but it is **Regal Aya**, the
+    /// paid currency, so the strip showed a confident zero rather than an obvious dash. The
+    /// reference account is the proof: 0 Regal Aya, 10 actual Aya.
+    #[test]
+    fn aya_comes_from_the_inventory_stack_not_the_regal_aya_wallet_field() {
+        let json = std::fs::read(reference_dir().join("lastData.dat")).expect("reference dat");
+        let decrypted = decrypt_last_data(&json).expect("decrypts");
+        let root: Value = serde_json::from_str(&decrypted).expect("parses");
+
+        assert_eq!(
+            root.get("PrimeTokens").and_then(Value::as_i64),
+            Some(0),
+            "precondition: the field we used to read is Regal Aya, and this account has none",
+        );
+        assert_eq!(
+            stacked_item_count(&root, AYA_ITEM_TYPE),
+            Some(10),
+            "the account's real Aya, which the wallet field could never have found",
+        );
+        assert_eq!(
+            root.get("Aya"),
+            None,
+            "there is no top-level Aya field — the whole reason this was missed",
         );
     }
 

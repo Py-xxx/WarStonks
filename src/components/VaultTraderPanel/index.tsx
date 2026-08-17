@@ -1,4 +1,5 @@
 import { useAppStore } from '../../stores/useAppStore';
+import { walletIcons } from '../../assets/wallet';
 import { useTranslation } from '../../i18n';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { parseVaultTraderPayload } from '../../lib/worldState';
@@ -38,6 +39,7 @@ function groupByFamily(
 export function VaultTraderPanel() {
   const { t } = useTranslation();
   const entry = useAppStore((state) => state.worldStateExtra['vault-trader']);
+  const regalAya = useAppStore((state) => state.walletSnapshot.balances.regalAya);
   const parsed = parseVaultTraderPayload(entry.payload);
 
   if (!parsed && entry.loading) {
@@ -72,6 +74,22 @@ export function VaultTraderPanel() {
               : t('evt.rotationBetweenCycles')}
         </p>
       </div>
+
+      {/* Regal Aya sits here rather than in the currency strip: it buys nothing outside Prime
+          Resurgence, so it is only worth knowing while looking at Varzia's stock. Hidden when
+          absent — a dash would imply a reading was attempted and failed, when in fact most
+          accounts simply hold none of a currency that costs real money. */}
+      {regalAya !== null ? (
+        <div className="vault-trader-balance">
+          <span className="vault-trader-balance-icon">
+            <img src={walletIcons.regalAya} alt="" />
+          </span>
+          <span className="vault-trader-balance-value">
+            {new Intl.NumberFormat().format(regalAya)}
+          </span>
+          <span className="vault-trader-balance-label">{t('evt.regalAyaBalance')}</span>
+        </div>
+      ) : null}
 
       {active && tradeableItems.length > 0 ? (
         <div className="vault-trader-family-list">

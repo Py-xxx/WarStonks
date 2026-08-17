@@ -272,6 +272,7 @@ const defaultWalletSnapshot: WalletSnapshot = {
     endo: null,
     ducats: null,
     aya: null,
+    regalAya: null,
   },
   usernameWhenPublic: null,
   lastUpdate: null,
