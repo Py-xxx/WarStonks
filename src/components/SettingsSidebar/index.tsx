@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
@@ -74,7 +75,7 @@ const LanguageIcon = () => (
   </svg>
 );
 
-const SECTION_ICONS: Record<SettingsSection, () => JSX.Element> = {
+const SECTION_ICONS: Record<SettingsSection, () => React.JSX.Element> = {
   alecaframe: AlecaframeIcon,
   'discord-webhook': DiscordWebhookIcon,
   notifications: NotificationsIcon,

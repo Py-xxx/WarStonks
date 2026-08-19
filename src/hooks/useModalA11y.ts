@@ -28,10 +28,12 @@ const FOCUSABLE_SELECTOR = [
  */
 export function useModalA11y<T extends HTMLElement = HTMLElement>(
   options: ModalA11yOptions = {},
-): RefObject<T> {
+): RefObject<T | null> {
   const { onClose, lockScroll = true, active = true } = options;
-  // `useRef<T>(null)` hits the overload returning RefObject<T> (assignable to a `ref` prop),
-  // whereas `useRef<T | null>` returns a type the JSX `ref` attribute rejects.
+  // React 19 collapsed the `useRef` overloads: `useRef<T>(null)` now yields
+  // `RefObject<T | null>`, and that IS assignable to a `ref` prop (React 19 accepts a
+  // nullable ref object). The pre-19 dance of picking an overload to get a non-null
+  // `RefObject<T>` is gone, so the return type simply follows what `useRef` produces.
   const ref = useRef<T>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
