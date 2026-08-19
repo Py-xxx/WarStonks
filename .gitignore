@@ -27,3 +27,7 @@ __pycache__/
 *.pyc
 
 graphify-out/
+
+# Vendored UI reference code (shadcn/Base UI/etc. pulled in to study and adapt).
+# Never imported by the app — see ui-reference/README.md.
+/ui-reference/
