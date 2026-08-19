@@ -25,8 +25,12 @@
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -2107,6 +2111,150 @@ fn fetch_wfm_item_detail(slug: &str) -> Result<String> {
     wfm_response_text(response, &action_label)
 }
 
+/// The last good WFStat payload, kept beside the catalog it was built into and gzipped (~41 MB
+/// of JSON compresses to ~6 MB).
+const WFSTAT_CACHE_FILE: &str = "wfstat_items.json.gz";
+
+/// The WFStat payload bundled into the installer, declared in `tauri.conf.json` under
+/// `bundle.resources`. Refreshed ONLY by `npm run seed:wfstat`, deliberately and by hand — never
+/// by a build step and never by anything the app does at runtime, so that two builds of the same
+/// commit always contain the same seed and a build never depends on warframestat.us being up.
+const WFSTAT_SEED_RESOURCE: &str = "resources/wfstat_items_seed.json.gz";
+
+/// Resolves the bundled seed, or `None` when it isn't present (which is the normal case in
+/// `cargo test` and any non-bundled run — the caller degrades exactly as it did before the seed
+/// existed).
+fn wfstat_seed_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .resolve(WFSTAT_SEED_RESOURCE, tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|path| path.exists())
+}
+
+/// Why a build did not use a live WFStat response. Kept as a type rather than a bare
+/// `Option<String>` because the two cases differ in severity by a lot: a cached payload is a few
+/// days stale at worst, while no payload at all means zero enrichment AND ~1,048 per-item WFM
+/// fetches, since every set falls back (see `derive_set_parts_from_wfstat`).
+#[derive(Debug, Clone)]
+pub(crate) struct WfstatDegraded {
+    pub fallback: WfstatFallback,
+    pub reason: String,
+}
+
+fn wfstat_cache_path_for(output_path: &Path) -> Option<PathBuf> {
+    output_path.parent().map(|dir| dir.join(WFSTAT_CACHE_FILE))
+}
+
+/// Writes through a temp file and renames, so a crash mid-write can never leave a truncated
+/// cache that would then be trusted on the next launch.
+fn write_wfstat_cache(path: &Path, json: &str) -> Result<()> {
+    let tmp_path = path.with_extension("tmp");
+    {
+        let file = std::fs::File::create(&tmp_path)
+            .with_context(|| format!("failed to create {}", tmp_path.display()))?;
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(json.as_bytes()).context("failed to compress WFStat cache")?;
+        encoder.finish().context("failed to finish WFStat cache")?;
+    }
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to finalize {}", path.display()))?;
+    Ok(())
+}
+
+fn read_wfstat_cache(path: &Path) -> Result<String> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    let mut json = String::new();
+    GzDecoder::new(file)
+        .read_to_string(&mut json)
+        .with_context(|| format!("failed to decompress {}", path.display()))?;
+    Ok(json)
+}
+
+/// Where WFStat data came from when the live fetch failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WfstatFallback {
+    /// The runtime cache written by this machine's last successful fetch.
+    DiskCache,
+    /// The payload bundled into the app at build time. Only reachable on a true first launch,
+    /// since any successful fetch since install would have written the disk cache.
+    BundledSeed,
+    /// Nothing available — zero enrichment, and every set on the per-item WFM path.
+    None,
+}
+
+/// Fetches WFStat, falling back to the last good payload on disk, then to the bundled seed.
+///
+/// The disk-cache half restores a fallback the v2 cutover dropped: the pre-v2 catalog kept a
+/// `WFStat-items.json` and rebuilt against it when WFStat was unreachable, and that went away
+/// with `item_catalog.rs`. It matters more now than it did then, because set composition is
+/// derived from this payload — without it every set falls back to the per-item WFM path, turning
+/// a ~42-second build back into a ~6-minute one.
+///
+/// The seed covers the one case the cache cannot: a TRUE first launch, where nothing has been
+/// written to disk yet. Staleness is cheap here — the derivation reads component *structure*,
+/// which only changes when DE ships new items, and any set the seed cannot account for falls back
+/// per-set on its own (see `derive_set_parts_from_wfstat`). So an old seed degrades gracefully
+/// into "a few more per-item fetches", never into wrong data.
+///
+/// Every fallback is a stand-in, never a new source of truth: the cache is refreshed on each
+/// successful fetch, and any build that used a fallback is still reported stale, so the next
+/// launch tries live again.
+fn acquire_wfstat_items(
+    cache_path: Option<&Path>,
+    seed_path: Option<&Path>,
+) -> (String, Option<WfstatDegraded>) {
+    acquire_wfstat_items_with(cache_path, seed_path, fetch_wfstat_items)
+}
+
+/// The logic above, with the fetch injected so every branch is reachable from a test without a
+/// network. `acquire_wfstat_items` is the only production caller.
+fn acquire_wfstat_items_with(
+    cache_path: Option<&Path>,
+    seed_path: Option<&Path>,
+    fetch: impl FnOnce() -> Result<String>,
+) -> (String, Option<WfstatDegraded>) {
+    match fetch() {
+        Ok(json) => {
+            // Best-effort: failing to persist the cache must never fail a build that already has
+            // the data it needs.
+            if let Some(path) = cache_path {
+                let _ = write_wfstat_cache(path, &json);
+            }
+            (json, None)
+        }
+        Err(fetch_error) => {
+            let reason = format!("{fetch_error:#}");
+            // Cache before seed: the cache is this machine's own last-known-good and is never
+            // older than the seed it shipped with.
+            if let Some(Ok(json)) = cache_path.map(read_wfstat_cache) {
+                return (
+                    json,
+                    Some(WfstatDegraded {
+                        fallback: WfstatFallback::DiskCache,
+                        reason: format!("{reason} (rebuilt against the cached WFStat payload)"),
+                    }),
+                );
+            }
+            if let Some(Ok(json)) = seed_path.map(read_wfstat_cache) {
+                return (
+                    json,
+                    Some(WfstatDegraded {
+                        fallback: WfstatFallback::BundledSeed,
+                        reason: format!("{reason} (rebuilt against the bundled WFStat seed)"),
+                    }),
+                );
+            }
+            // "[]" parses as zero items, which the matching pipeline already treats as
+            // "everything unmatched".
+            (
+                "[]".to_string(),
+                Some(WfstatDegraded { fallback: WfstatFallback::None, reason }),
+            )
+        }
+    }
+}
+
 fn fetch_wfstat_items() -> Result<String> {
     // 180s, not 60s — matches `item_catalog.rs`'s own timeout for the same ~40MB WFStat
     // response. This build's per-item WFM loop (230 sequential fetches through the shared
@@ -2203,16 +2351,18 @@ enum BuildPhase {
 #[cfg(test)]
 pub(crate) fn build_catalog_v2(
     output_path: &Path,
-) -> Result<(CatalogBuildSummary, Option<String>)> {
-    build_catalog_v2_with_progress(output_path, |_| {})
+    seed_path: Option<&Path>,
+) -> Result<(CatalogBuildSummary, Option<WfstatDegraded>)> {
+    build_catalog_v2_with_progress(output_path, seed_path, |_| {})
 }
 
 const SET_DETAIL_PROGRESS_REPORT_INTERVAL: usize = 15;
 
 fn build_catalog_v2_with_progress(
     output_path: &Path,
+    seed_path: Option<&Path>,
     mut on_phase: impl FnMut(BuildPhase),
-) -> Result<(CatalogBuildSummary, Option<String>)> {
+) -> Result<(CatalogBuildSummary, Option<WfstatDegraded>)> {
     on_phase(BuildPhase::FetchingBulkItems);
     let wfm_bulk_json = fetch_wfm_bulk_items().context("WFM bulk item fetch failed")?;
 
@@ -2222,10 +2372,8 @@ fn build_catalog_v2_with_progress(
     // offline. In that case every set falls back to the per-item path, i.e. exactly the old
     // behaviour, so an outage costs time rather than correctness.
     on_phase(BuildPhase::FetchingWfstat);
-    let (wfstat_json, wfstat_fetch_error) = match fetch_wfstat_items() {
-        Ok(json) => (json, None),
-        Err(error) => ("[]".to_string(), Some(format!("{error:#}"))),
-    };
+    let (wfstat_json, wfstat_degraded) =
+        acquire_wfstat_items(wfstat_cache_path_for(output_path).as_deref(), seed_path);
 
     let item_keys = item_keys_by_slug(&wfm_bulk_json)?;
     let slug_by_item_key: HashMap<String, String> =
@@ -2314,7 +2462,7 @@ fn build_catalog_v2_with_progress(
     let connection = Connection::open(output_path)
         .with_context(|| format!("failed to open {}", output_path.display()))?;
     let summary = build_and_write_catalog(&connection, &wfm_bulk_json, &details_by_key, &wfstat_json)?;
-    Ok((summary, wfstat_fetch_error))
+    Ok((summary, wfstat_degraded))
 }
 
 /// Reads back the WFM collection hash a catalog file was built against, so a launch can tell
@@ -2383,13 +2531,14 @@ fn perform_catalog_v2_rebuild(
     tmp_path: &Path,
     final_path: &Path,
     latest_collection_hash: Option<&str>,
+    seed_path: Option<&Path>,
     on_phase: impl FnMut(BuildPhase),
-) -> Result<(CatalogBuildSummary, Option<String>)> {
+) -> Result<(CatalogBuildSummary, Option<WfstatDegraded>)> {
     // A previous run that crashed mid-build could leave this behind; starting from nothing is
     // correct since `initialize_schema` cannot run twice against the same tables anyway.
     let _ = std::fs::remove_file(tmp_path);
 
-    let (summary, wfstat_fetch_error) = build_catalog_v2_with_progress(tmp_path, on_phase)?;
+    let (summary, wfstat_degraded) = build_catalog_v2_with_progress(tmp_path, seed_path, on_phase)?;
 
     // Record what we built against BEFORE the rename, so the file that lands at `final_path`
     // already carries the hash a future launch needs — there is no window where the live file
@@ -2406,7 +2555,7 @@ fn perform_catalog_v2_rebuild(
     std::fs::rename(tmp_path, final_path)
         .with_context(|| format!("failed to finalize {}", final_path.display()))?;
 
-    Ok((summary, wfstat_fetch_error))
+    Ok((summary, wfstat_degraded))
 }
 
 /// Maps a `BuildPhase` to the boot progress bar's 0.66-0.8 sub-range and emits it on
@@ -2476,7 +2625,7 @@ fn emit_background_build_phase(app: &AppHandle, phase: BuildPhase) {
 fn log_catalog_v2_build_result(
     app: &AppHandle,
     summary: &CatalogBuildSummary,
-    wfstat_fetch_error: &Option<String>,
+    wfstat_degraded: &Option<WfstatDegraded>,
 ) -> bool {
     let (t1, t2, t3, t4, t5) = summary.wfstat_tier_counts;
     let matched = t1 + t2 + t3 + t4 + t5;
@@ -2503,17 +2652,38 @@ fn log_catalog_v2_build_result(
     // failure reason was discarded instead of surfaced. It must never be quiet again: a catalog
     // with zero enrichment matches is a symptom, not a successful outcome, even though the build
     // itself did not fail.
-    let wfstat_stale = wfstat_fetch_error.is_some();
-    if let Some(reason) = wfstat_fetch_error {
+    // Either way the build is reported stale, so the next launch tries live again — but the two
+    // cases are logged apart because they are not remotely equally bad.
+    let wfstat_stale = wfstat_degraded.is_some();
+    if let Some(degraded) = wfstat_degraded {
+        let message = match degraded.fallback {
+            WfstatFallback::DiskCache => {
+                "Catalog v2 built successfully, but WFStat was unreachable and the build fell \
+                 back to the cached payload on disk. Enrichment and set composition are as of \
+                 the last successful fetch, so they may be a few days stale. Not fatal, and the \
+                 next launch will try live again."
+            }
+            WfstatFallback::BundledSeed => {
+                "Catalog v2 built successfully, but WFStat was unreachable and there was no \
+                 runtime cache, so the build fell back to the WFStat payload bundled with the \
+                 app. This is the true-first-launch-offline path. The catalog is correct; \
+                 enrichment is as of the shipped seed, and any set the seed cannot account for \
+                 was fetched individually from WFM."
+            }
+            WfstatFallback::None => {
+                "Catalog v2 built successfully but WFStat was unreachable AND neither the \
+                 runtime cache nor the bundled seed could be read, so every item is missing \
+                 enrichment data and every set fell back to the per-item WFM path (a far slower \
+                 build). The bundled seed should make this unreachable — if it happens, the \
+                 resource is missing from the installer or unreadable."
+            }
+        };
         log_feature_error_best_effort(
             app,
             "catalog-v2",
             "wfstat-fetch",
-            "Catalog v2 built successfully but WFStat was unreachable, so every item is missing \
-             enrichment data (damage/magazine/range/etc. once that layer exists). This is not \
-             fatal — the catalog is otherwise fully correct — but it should not happen every \
-             run. If it keeps happening, the fetch timeout or network conditions need attention.",
-            &anyhow!(reason.clone()),
+            message,
+            &anyhow!(degraded.reason.clone()),
         );
     }
     wfstat_stale
@@ -2545,16 +2715,18 @@ fn spawn_background_catalog_v2_refresh(
         return;
     }
 
+    let seed_path = wfstat_seed_path(&app);
     std::thread::spawn(move || {
         let result = perform_catalog_v2_rebuild(
             &tmp_path,
             &final_path,
             latest_collection_hash.as_deref(),
+            seed_path.as_deref(),
             |phase| emit_background_build_phase(&app, phase),
         );
         match result {
-            Ok((summary, wfstat_fetch_error)) => {
-                log_catalog_v2_build_result(&app, &summary, &wfstat_fetch_error);
+            Ok((summary, wfstat_degraded)) => {
+                log_catalog_v2_build_result(&app, &summary, &wfstat_degraded);
                 let _ = app.emit(CATALOG_V2_BACKGROUND_COMPLETE_EVENT, ());
             }
             Err(error) => {
@@ -2652,7 +2824,7 @@ fn cleanup_pre_v2_catalog_artifacts(app: &tauri::AppHandle, app_data_dir: &Path)
 pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<StartupSummary, String> {
     enum Decision {
         UpToDate,
-        RebuiltForeground(CatalogBuildSummary, Option<String>),
+        RebuiltForeground(CatalogBuildSummary, Option<WfstatDegraded>),
         DeferredToBackground,
     }
 
@@ -2704,10 +2876,11 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
                 "Fetching the latest item list from Warframe Market.",
                 0.64,
             );
-            let (summary, wfstat_fetch_error) = perform_catalog_v2_rebuild(
+            let (summary, wfstat_degraded) = perform_catalog_v2_rebuild(
                 &tmp_path,
                 &final_path,
                 latest_collection_hash.as_deref(),
+                wfstat_seed_path(app).as_deref(),
                 |phase| emit_foreground_build_phase(app, phase),
             )?;
             emit_progress(
@@ -2717,7 +2890,7 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
                 "Item catalog refreshed.",
                 0.8,
             );
-            return Ok(Decision::RebuiltForeground(summary, wfstat_fetch_error));
+            return Ok(Decision::RebuiltForeground(summary, wfstat_degraded));
         }
 
         // A usable (if stale) catalog already exists — don't block boot on the refresh.
@@ -2757,8 +2930,8 @@ pub fn initialize_catalog_v2_on_startup(app: &tauri::AppHandle) -> Result<Startu
             );
             summary_from_existing_file(app, false)
         }
-        Ok(Decision::RebuiltForeground(summary, wfstat_fetch_error)) => {
-            let wfstat_stale = log_catalog_v2_build_result(app, &summary, &wfstat_fetch_error);
+        Ok(Decision::RebuiltForeground(summary, wfstat_degraded)) => {
+            let wfstat_stale = log_catalog_v2_build_result(app, &summary, &wfstat_degraded);
             Ok(StartupSummary {
                 ready: true,
                 refreshed: true,
@@ -3944,9 +4117,10 @@ mod tests {
         let _ = std::fs::remove_file(output_path);
 
         println!("Building catalog v2 from live WFM + WFStat data (~1.5 minutes)...");
-        let (summary, wfstat_fetch_error) = build_catalog_v2(output_path).expect("catalog build");
-        if let Some(reason) = &wfstat_fetch_error {
-            println!("WFStat fetch FAILED (catalog still built, zero enrichment): {reason}");
+        let (summary, wfstat_degraded) =
+            build_catalog_v2(output_path, None).expect("catalog build");
+        if let Some(degraded) = &wfstat_degraded {
+            println!("WFStat fetch FAILED (fell back to {:?}): {}", degraded.fallback, degraded.reason);
         }
 
         let (t1, t2, t3, t4, t5) = summary.wfstat_tier_counts;
@@ -4218,6 +4392,136 @@ mod tests {
 
     fn wfstat_json(items: &[serde_json::Value]) -> String {
         serde_json::json!(items).to_string()
+    }
+
+    // ─── WFStat on-disk cache (restores the fallback the v2 cutover dropped) ────────────────
+
+    /// A unique directory per test, matching this file's existing `std::env::temp_dir()` idiom
+    /// rather than pulling in a dev-dependency for four tests.
+    fn wfstat_cache_test_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("warstonks_test_wfstat_cache_{label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn wfstat_cache_round_trips_through_gzip() {
+        let dir = wfstat_cache_test_dir("roundtrip");
+        let path = dir.join(WFSTAT_CACHE_FILE);
+        let payload =
+            serde_json::json!([{ "uniqueName": "/Lotus/Thing", "components": [] }]).to_string();
+        write_wfstat_cache(&path, &payload).unwrap();
+        assert!(path.exists(), "cache file should exist after a write");
+        assert_eq!(read_wfstat_cache(&path).unwrap(), payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The write goes through a temp file and a rename, so a crash mid-write cannot leave a
+    /// truncated cache that a later launch would then trust.
+    #[test]
+    fn wfstat_cache_write_leaves_no_temp_file_behind() {
+        let dir = wfstat_cache_test_dir("notemp");
+        write_wfstat_cache(&dir.join(WFSTAT_CACHE_FILE), "[]").unwrap();
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "unexpected temp files: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A corrupt or truncated cache must read as an error rather than feeding garbage into the
+    /// build — the caller then degrades exactly as it would with no cache at all.
+    #[test]
+    fn a_corrupt_wfstat_cache_is_rejected_not_returned() {
+        let dir = wfstat_cache_test_dir("corrupt");
+        let path = dir.join(WFSTAT_CACHE_FILE);
+        std::fs::write(&path, b"this is not gzip").unwrap();
+        assert!(read_wfstat_cache(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_cache_path_sits_beside_the_catalog_it_was_built_into() {
+        let path = wfstat_cache_path_for(Path::new("/data/item_catalog_v2.sqlite")).unwrap();
+        assert_eq!(path, Path::new("/data").join(WFSTAT_CACHE_FILE));
+    }
+
+    #[test]
+    fn a_successful_fetch_refreshes_the_cache_for_next_time() {
+        let dir = wfstat_cache_test_dir("refresh");
+        let path = dir.join(WFSTAT_CACHE_FILE);
+        std::fs::write(&path, b"stale garbage").unwrap();
+        let (json, degraded) =
+            acquire_wfstat_items_with(Some(&path), None, || Ok(r#"[{"uniqueName":"/a"}]"#.to_string()));
+        assert_eq!(json, r#"[{"uniqueName":"/a"}]"#);
+        assert!(degraded.is_none(), "a live fetch is not degraded");
+        assert_eq!(read_wfstat_cache(&path).unwrap(), r#"[{"uniqueName":"/a"}]"#);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreachable_wfstat_falls_back_to_the_cached_payload() {
+        let dir = wfstat_cache_test_dir("fallback");
+        let path = dir.join(WFSTAT_CACHE_FILE);
+        write_wfstat_cache(&path, r#"[{"uniqueName":"/cached"}]"#).unwrap();
+        let (json, degraded) =
+            acquire_wfstat_items_with(Some(&path), None, || Err(anyhow!("connection refused")));
+        assert_eq!(json, r#"[{"uniqueName":"/cached"}]"#);
+        let degraded = degraded.expect("a cached rebuild is still reported as stale");
+        assert_eq!(degraded.fallback, WfstatFallback::DiskCache);
+        assert!(degraded.reason.contains("connection refused"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The true-first-launch-offline case: nothing on disk yet, so the payload bundled with the
+    /// app stands in. This is the gap the seed exists to close.
+    #[test]
+    fn with_no_cache_an_unreachable_wfstat_falls_back_to_the_bundled_seed() {
+        let dir = wfstat_cache_test_dir("seed");
+        let cache = dir.join(WFSTAT_CACHE_FILE);
+        let seed = dir.join("wfstat_items_seed.json.gz");
+        write_wfstat_cache(&seed, r#"[{"uniqueName":"/seeded"}]"#).unwrap();
+        let (json, degraded) =
+            acquire_wfstat_items_with(Some(&cache), Some(&seed), || Err(anyhow!("dns failure")));
+        assert_eq!(json, r#"[{"uniqueName":"/seeded"}]"#);
+        assert_eq!(degraded.expect("degraded").fallback, WfstatFallback::BundledSeed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The runtime cache is this machine's own last-known-good, so it can never be older than the
+    /// seed that shipped with the install — it must win.
+    #[test]
+    fn the_disk_cache_is_preferred_over_the_bundled_seed() {
+        let dir = wfstat_cache_test_dir("precedence");
+        let cache = dir.join(WFSTAT_CACHE_FILE);
+        let seed = dir.join("wfstat_items_seed.json.gz");
+        write_wfstat_cache(&cache, r#"[{"uniqueName":"/cached"}]"#).unwrap();
+        write_wfstat_cache(&seed, r#"[{"uniqueName":"/seeded"}]"#).unwrap();
+        let (json, degraded) =
+            acquire_wfstat_items_with(Some(&cache), Some(&seed), || Err(anyhow!("offline")));
+        assert_eq!(json, r#"[{"uniqueName":"/cached"}]"#);
+        assert_eq!(degraded.expect("degraded").fallback, WfstatFallback::DiskCache);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A corrupt seed must not shadow the "nothing available" path — it degrades to empty rather
+    /// than feeding garbage into the build.
+    #[test]
+    fn no_cache_and_no_readable_seed_degrades_to_empty() {
+        let dir = wfstat_cache_test_dir("nocache");
+        let cache = dir.join(WFSTAT_CACHE_FILE);
+        let seed = dir.join("wfstat_items_seed.json.gz");
+        std::fs::write(&seed, b"not gzip").unwrap();
+        let (json, degraded) =
+            acquire_wfstat_items_with(Some(&cache), Some(&seed), || Err(anyhow!("dns failure")));
+        assert_eq!(json, "[]");
+        assert_eq!(degraded.expect("degraded").fallback, WfstatFallback::None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ─── Bulk set-part derivation (replaces ~1,048 per-item fetches) ────────────────────────

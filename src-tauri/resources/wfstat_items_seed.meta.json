@@ -1,0 +1,9 @@
+{
+  "source": "https://api.warframestat.us/items/",
+  "refreshedAt": "2026-08-19T07:22:43.912Z",
+  "items": 17527,
+  "itemsWithComponents": 1334,
+  "rawBytes": 41635615,
+  "gzipBytes": 5986933,
+  "sha256": "85b3ff25f5e71c4815ac64155f15782d2703ba8b2babdfe11872f39a264da8de"
+}

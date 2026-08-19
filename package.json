@@ -14,7 +14,8 @@
     "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "test:rust": "cd src-tauri && cargo test",
     "test:all": "npm run test && npm run test:rust",
-    "test:wfm-presence": "node ./scripts/test-wfm-presence.mjs"
+    "test:wfm-presence": "node ./scripts/test-wfm-presence.mjs",
+    "seed:wfstat": "node scripts/refresh-wfstat-seed.mjs"
   },
   "dependencies": {
     "@tabler/icons-webfont": "^3.45.0",
