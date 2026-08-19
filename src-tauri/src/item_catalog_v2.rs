@@ -1992,13 +1992,26 @@ pub(crate) fn build_and_write_catalog(
         wfstat_unmatched_count: wfstat_report.unmatched.len(),
     };
 
-    write_items(connection, &items)?;
-    write_item_subtypes(connection, &items)?;
-    write_item_i18n(connection, &i18n_rows)?;
-    write_set_parts(connection, &set_parts)?;
-    write_lookup(connection, &lookup, &rejected)?;
+    // ONE transaction around every write. Without it each INSERT auto-commits on its own, so
+    // building the catalog costs one durable commit per row — measured at 12.4s of a 14s build,
+    // with the 17,409-row `item_lookup` insert alone taking 5.7s. The parsing everyone assumes is
+    // the bottleneck is 0.6s of that same build. `unchecked_transaction` rather than
+    // `transaction()` because it only needs `&Connection`, keeping this function's signature (and
+    // every test that passes a plain connection) unchanged.
+    //
+    // It is also the more correct shape: the catalog is meaningless half-written, so a crash
+    // mid-build should roll back to nothing rather than leave a partially populated file that
+    // later launches would read as valid.
+    let transaction = connection
+        .unchecked_transaction()
+        .context("failed to open the catalog write transaction")?;
+    write_items(&transaction, &items)?;
+    write_item_subtypes(&transaction, &items)?;
+    write_item_i18n(&transaction, &i18n_rows)?;
+    write_set_parts(&transaction, &set_parts)?;
+    write_lookup(&transaction, &lookup, &rejected)?;
     write_wfstat_report_with_raw_json(
-        connection,
+        &transaction,
         &wfstat_report,
         &wfstat_category_map,
         &wfstat_raw_json_map,
@@ -2007,14 +2020,15 @@ pub(crate) fn build_and_write_catalog(
         let items_by_key: HashMap<String, &ItemRow> =
             items.iter().map(|item| (item.item_key.clone(), item)).collect();
         write_wfstat_relic_variants(
-            connection,
+            &transaction,
             &wfstat_report,
             &items_by_key,
             &wfstat_relic_variant_map,
         )?;
     }
-    write_catalog_meta(connection, "built_at", &now_iso8601())?;
-    write_catalog_meta(connection, "item_count", &summary.item_count.to_string())?;
+    write_catalog_meta(&transaction, "built_at", &now_iso8601())?;
+    write_catalog_meta(&transaction, "item_count", &summary.item_count.to_string())?;
+    transaction.commit().context("failed to commit the catalog write transaction")?;
 
     Ok(summary)
 }
@@ -4089,6 +4103,106 @@ mod tests {
             .map(|item| item.slug.as_str())
             .collect();
         assert_eq!(roots, vec!["mesa_prime_set"]);
+    }
+
+    /// Where first-launch time actually goes, measured against payloads already on disk so the
+    /// network is out of the picture entirely. Not a correctness test — a profiler for the
+    /// parse-and-write floor that remains after the per-item fetches were removed.
+    ///
+    ///   WARSTONKS_BENCH_WFM=/path/wfm.json WARSTONKS_BENCH_WFSTAT=/path/wfstat.json \
+    ///     cargo test --lib --release profile_catalog_build_stages -- --ignored --nocapture
+    ///
+    /// Use --release: a debug build's serde_json is several times slower and would point at the
+    /// wrong bottleneck.
+    #[test]
+    #[ignore = "profiling harness; needs local payload files, run explicitly"]
+    fn profile_catalog_build_stages() {
+        let wfm_path = match std::env::var("WARSTONKS_BENCH_WFM") {
+            Ok(value) => value,
+            Err(_) => {
+                println!("set WARSTONKS_BENCH_WFM and WARSTONKS_BENCH_WFSTAT; skipping");
+                return;
+            }
+        };
+        let wfstat_path = std::env::var("WARSTONKS_BENCH_WFSTAT").expect("WARSTONKS_BENCH_WFSTAT");
+
+        macro_rules! timed {
+            ($label:expr, $body:expr) => {{
+                let start = std::time::Instant::now();
+                let value = $body;
+                println!("  {:<34} {:>7.2}s", $label, start.elapsed().as_secs_f64());
+                value
+            }};
+        }
+
+        println!("\n─── Catalog build stage profile ───");
+        let wfm_bulk_json = timed!("read wfm.json", std::fs::read_to_string(&wfm_path).unwrap());
+        let wfstat_json =
+            timed!("read wfstat.json", std::fs::read_to_string(&wfstat_path).unwrap());
+
+        let path = std::env::temp_dir()
+            .join(format!("warstonks_bench_catalog_{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let connection = Connection::open(&path).unwrap();
+        timed!("initialize_schema", initialize_schema(&connection).unwrap());
+
+        let items = timed!("build_item_rows", build_item_rows(&wfm_bulk_json).unwrap());
+        let derived = timed!(
+            "derive_set_parts_from_wfstat",
+            derive_set_parts_from_wfstat(&items, &wfstat_json).unwrap()
+        );
+        let set_parts = derived.rows;
+        let wfstat_report = timed!(
+            "build_wfstat_matches",
+            build_wfstat_matches(&items, &wfstat_json, &set_parts).unwrap()
+        );
+        let (lookup, rejected) =
+            timed!("build_item_lookup", build_item_lookup(&items, &wfstat_report.matches));
+        let category_map = timed!(
+            "build_wfstat_category_map",
+            build_wfstat_category_map(&wfstat_json).unwrap()
+        );
+        let raw_json_map = timed!(
+            "build_wfstat_raw_json_map",
+            build_wfstat_raw_json_map(&wfstat_json).unwrap()
+        );
+        let relic_variant_map = timed!(
+            "build_wfstat_relic_variant_map",
+            build_wfstat_relic_variant_map(&wfstat_json).unwrap()
+        );
+        let i18n_rows =
+            timed!("build_item_i18n_rows", build_item_i18n_rows(&wfm_bulk_json).unwrap());
+
+        let transaction = timed!("open transaction", connection.unchecked_transaction().unwrap());
+        let connection = &transaction;
+        timed!("write_items", write_items(connection, &items).unwrap());
+        timed!("write_item_subtypes", write_item_subtypes(connection, &items).unwrap());
+        timed!("write_item_i18n", write_item_i18n(connection, &i18n_rows).unwrap());
+        timed!("write_set_parts", write_set_parts(connection, &set_parts).unwrap());
+        timed!("write_lookup", write_lookup(connection, &lookup, &rejected).unwrap());
+        timed!(
+            "write_wfstat_report(+raw json)",
+            write_wfstat_report_with_raw_json(
+                connection,
+                &wfstat_report,
+                &category_map,
+                &raw_json_map,
+            )
+            .unwrap()
+        );
+        {
+            let items_by_key: HashMap<String, &ItemRow> =
+                items.iter().map(|item| (item.item_key.clone(), item)).collect();
+            timed!(
+                "write_wfstat_relic_variants",
+                write_wfstat_relic_variants(connection, &wfstat_report, &items_by_key, &relic_variant_map)
+                    .unwrap()
+            );
+        }
+        timed!("commit", transaction.commit().unwrap());
+        let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+        println!("  resulting file: {:.1} MB", bytes as f64 / 1e6);
+        let _ = std::fs::remove_file(&path);
     }
 
     // ─── Live end-to-end harness ────────────────────────────────────────────────────────────
