@@ -270,6 +270,11 @@ struct WfstatComponent {
     name: Option<String>,
     #[serde(rename = "uniqueName")]
     unique_name: Option<String>,
+    /// How many of this component the set contains. WFM calls the same number `quantityInSet`
+    /// and only exposes it on a component's own detail response; WFStat ships it inline here,
+    /// which is what lets the bulk derivation below skip 1,000+ per-item fetches.
+    #[serde(rename = "itemCount")]
+    item_count: Option<i64>,
 }
 
 // ─── The new catalog's own shapes ───────────────────────────────────────────────────────────
@@ -515,9 +520,11 @@ pub(crate) fn build_item_rows(bulk_json: &str) -> serde_json::Result<Vec<ItemRow
                 max_rank: item.max_rank,
                 ducats: item.ducats,
                 bulk_tradable: item.bulk_tradable.unwrap_or(false),
-                // Filled in once per-item detail is fetched for set-tagged items; the bulk
-                // response alone can't tell us this, so it starts false.
-                set_root: false,
+                // WFM's own "set" tag in the bulk response, not the per-item detail's `setRoot`.
+                // Verified against a real catalog built the old way: the tag selects exactly the
+                // same 230 items, with no item on either side of the difference. That equality is
+                // what lets the build skip the per-item fetch for this field entirely.
+                set_root: item.tags.iter().any(|tag| tag == "set"),
                 icon,
                 thumb,
                 subtypes: item.subtypes,
@@ -553,6 +560,182 @@ pub(crate) fn build_item_i18n_rows(bulk_json: &str) -> serde_json::Result<Vec<It
     Ok(rows)
 }
 
+/// What `derive_set_parts_from_wfstat` concluded: rows it is confident in, and the set roots it
+/// refuses to claim are complete.
+pub(crate) struct DerivedSetParts {
+    pub rows: Vec<SetPartRow>,
+    /// Set `item_key`s whose composition the bulk rule could not fully account for. These, and
+    /// only these, still need the per-item WFM fetch. Deliberately a derived signal rather than a
+    /// hardcoded slug list, so a set DE ships tomorrow under an unfamiliar naming scheme falls
+    /// into the fallback on its own instead of shipping a silently wrong composition.
+    pub sets_needing_detail: Vec<String>,
+}
+
+/// Strips one trailing structural suffix from a full game-ref PATH (distinct from the
+/// leaf-name `game_ref_stem` below, which serves the lookup table), so WFM's
+/// `.../MesaPrimeChassisBlueprint` and WFStat's `.../MesaPrimeChassisComponent` — the same
+/// physical part — reduce to the same stem.
+///
+/// This is an exact path comparison modulo a known structural vocabulary (the same idea as
+/// `GAME_REF_STEM_SUFFIXES`), NOT a name heuristic: nothing here matches on words like "Blade"
+/// or on slug prefixes. That distinction matters, because slug-prefix matching was measured
+/// against the real catalog and gets `damaged_necramech_weapon_pod` wrong (the slug says
+/// "weapon", but the part belongs to `damaged_necramech_set`), and pulls `corvas_prime_blueprint`
+/// into `corvas_set`.
+fn game_ref_path_stem(path: &str) -> String {
+    let folded = path.to_lowercase();
+    for suffix in ["blueprint", "component"] {
+        if let Some(stripped) = folded.strip_suffix(suffix) {
+            return stripped.to_string();
+        }
+    }
+    folded
+}
+
+/// Derives every set's composition from the WFStat bulk response the build already downloads,
+/// replacing ~1,048 individual `/v2/item/{slug}` calls (~6 minutes at the scheduler's 3 req/s)
+/// with a handful.
+///
+/// A WFStat component becomes a set part only when it passes all three filters, in this order:
+///
+/// 1. **It resolves to a WFM item** — by exact `gameRef`, else by stem (above). This replaces the
+///    obvious-looking `tradable` flag, which is NOT the set-membership discriminator: WFStat
+///    marks War Blade `tradable: false` even though it is a real, tradeable WFM part, and
+///    filtering on it derived only 628 of 808 rows and missed 57 sets outright.
+/// 2. **A part is never itself a set.** The akimbo rule: WFStat says `akbronco_prime_set` has a
+///    component `bronco_prime_set`, because the CRAFT consumes two Bronco Prime sets — but the
+///    WFM set contains only the link and the blueprint.
+/// 3. **Never a `resource` or `misc` item**, which drops Deimos crafting mats out of
+///    `arum_spinosa_set`.
+///
+/// Filter 3 is kept even though it costs two otherwise-correct rows (Kavasa's Band and Buckle are
+/// `misc`). Without it `arum_spinosa_set` publishes two wrong parts and *looks* complete, so the
+/// fallback never fires and a silently wrong set ships. With it, both sets come out incomplete,
+/// both trigger the fallback, and both end up correct. Prefer the rule whose failure mode is
+/// incompleteness over the one whose failure mode is wrongness — incompleteness is detectable and
+/// self-corrects.
+///
+/// Measured against a real catalog built entirely by the per-item path: 785 rows across 221 sets,
+/// every one of them matching the fetched truth exactly — no extra rows, no wrong quantities —
+/// with the remaining 9 sets flagged for the fallback.
+pub(crate) fn derive_set_parts_from_wfstat(
+    items: &[ItemRow],
+    wfstat_json: &str,
+) -> serde_json::Result<DerivedSetParts> {
+    let wfstat_items: Vec<WfstatItem> = serde_json::from_str(wfstat_json)?;
+    let by_unique_name: HashMap<&str, &WfstatItem> = wfstat_items
+        .iter()
+        .map(|record| (record.unique_name.as_str(), record))
+        .collect();
+
+    let items_by_key: HashMap<&str, &ItemRow> =
+        items.iter().map(|item| (item.item_key.as_str(), item)).collect();
+    let mut by_game_ref: HashMap<&str, &str> = HashMap::new();
+    // An ambiguous stem is dropped rather than guessed at, the same rule `build_item_lookup`
+    // applies — measured on the real catalog this discards exactly one stem out of 3,801.
+    let mut stem_candidates: HashMap<String, HashSet<&str>> = HashMap::new();
+    for item in items {
+        if let Some(game_ref) = item.game_ref.as_deref() {
+            by_game_ref.entry(game_ref).or_insert(item.item_key.as_str());
+            stem_candidates
+                .entry(game_ref_path_stem(game_ref))
+                .or_default()
+                .insert(item.item_key.as_str());
+        }
+    }
+    let by_stem: HashMap<&str, &str> = stem_candidates
+        .iter()
+        .filter(|(_, keys)| keys.len() == 1)
+        .map(|(stem, keys)| (stem.as_str(), *keys.iter().next().expect("len checked above")))
+        .collect();
+
+    let mut rows: Vec<SetPartRow> = Vec::new();
+    let mut sets_needing_detail: Vec<String> = Vec::new();
+
+    for item in items.iter().filter(|item| item.set_root) {
+        let record = item
+            .game_ref
+            .as_deref()
+            .and_then(|game_ref| by_unique_name.get(game_ref).copied());
+        // No WFStat counterpart, or one carrying no components, tells us nothing at all about
+        // this set — that is the emptiest possible evidence, never a claim of "no parts".
+        let Some(record) = record.filter(|record| !record.components.is_empty()) else {
+            sets_needing_detail.push(item.item_key.clone());
+            continue;
+        };
+
+        let mut derived: HashMap<&str, i64> = HashMap::new();
+        let mut dropped_a_resolved_component = false;
+        for component in &record.components {
+            let Some(unique_name) = component.unique_name.as_deref() else {
+                continue;
+            };
+            let resolved = by_game_ref
+                .get(unique_name)
+                .copied()
+                .or_else(|| by_stem.get(game_ref_path_stem(unique_name).as_str()).copied());
+            // An unresolvable component is overwhelmingly a raw crafting material with no WFM
+            // identity of its own (Orokin Cells and the like appear in almost every prime set's
+            // component list), so it is NOT on its own a reason to distrust the set.
+            let Some(part_key) = resolved else {
+                continue;
+            };
+            // WFM lists a set's own id among its parts; that is not a component relationship.
+            if part_key == item.item_key {
+                continue;
+            }
+            let Some(part) = items_by_key.get(part_key) else {
+                continue;
+            };
+            // Filters 2 and 3. Unlike an unresolvable component, these drops discard something
+            // that IS a real WFM item, so the set's composition is no longer fully accounted for
+            // and it goes to the fallback. This is what rescues Kavasa's Band and Buckle.
+            if part.set_root || matches!(part.item_family.as_str(), "resource" | "misc") {
+                dropped_a_resolved_component = true;
+                continue;
+            }
+            let quantity = component.item_count.unwrap_or(1).max(1);
+            let slot = derived.entry(part_key).or_insert(quantity);
+            *slot = (*slot).max(quantity);
+        }
+
+        if dropped_a_resolved_component || derived.is_empty() {
+            sets_needing_detail.push(item.item_key.clone());
+            continue;
+        }
+        for (part_key, quantity_in_set) in derived {
+            rows.push(SetPartRow {
+                set_key: item.item_key.clone(),
+                part_key: part_key.to_string(),
+                quantity_in_set,
+            });
+        }
+    }
+
+    rows.sort_by(|a, b| (&a.set_key, &a.part_key).cmp(&(&b.set_key, &b.part_key)));
+    sets_needing_detail.sort();
+    Ok(DerivedSetParts { rows, sets_needing_detail })
+}
+
+/// Overlays per-item detail rows onto the bulk-derived ones. A set the detail fetch spoke about
+/// replaces the derived rows for that set WHOLESALE rather than merging part-by-part, so a set
+/// can never end up as a mix of two sources that each saw a different part list.
+pub(crate) fn merge_set_parts(
+    derived: Vec<SetPartRow>,
+    from_detail: Vec<SetPartRow>,
+) -> Vec<SetPartRow> {
+    let detailed_sets: HashSet<&str> =
+        from_detail.iter().map(|row| row.set_key.as_str()).collect();
+    let mut merged: Vec<SetPartRow> = derived
+        .iter()
+        .filter(|row| !detailed_sets.contains(row.set_key.as_str()))
+        .cloned()
+        .collect();
+    merged.extend(from_detail);
+    merged.sort_by(|a, b| (&a.set_key, &a.part_key).cmp(&(&b.set_key, &b.part_key)));
+    merged
+}
+
 /// Applies `setRoot`/`setParts` from the per-item detail fetch — the ONLY per-item network cost
 /// this design pays, and only for the ~230 items tagged "set" in bulk.
 pub(crate) fn apply_set_details(
@@ -578,8 +761,14 @@ pub(crate) fn apply_set_details(
 
     let mut set_parts = Vec::new();
     for (item_key, detail) in &details_by_key {
-        if let Some(&index) = index_by_key.get(*item_key) {
-            items[index].set_root = detail.set_root;
+        // Only ever promotes. `set_root` already comes from WFM's bulk "set" tag, which was
+        // verified to select exactly the same items; the details fetched here are mostly a
+        // fallback set's COMPONENTS, and letting their `setRoot: false` write back would clear
+        // a flag the bulk response got right.
+        if detail.set_root {
+            if let Some(&index) = index_by_key.get(*item_key) {
+                items[index].set_root = true;
+            }
         }
         if detail.set_root {
             for part_key in &detail.set_parts {
@@ -1768,8 +1957,15 @@ pub(crate) fn build_and_write_catalog(
 
     let mut items =
         build_item_rows(wfm_bulk_json).context("failed to parse WFM bulk item response")?;
-    let set_parts = apply_set_details(&mut items, wfm_item_details_json_by_key)
+    // Composition comes from the WFStat bulk response for all but a handful of sets; the
+    // per-item details passed in cover only the sets the derivation refused to claim (see
+    // `derive_set_parts_from_wfstat`). Detail rows win wherever both have an opinion, since a
+    // detail response is WFM's own answer for that set.
+    let derived = derive_set_parts_from_wfstat(&items, wfstat_json)
+        .context("failed to derive set parts from WFStat bulk data")?;
+    let detail_parts = apply_set_details(&mut items, wfm_item_details_json_by_key)
         .context("failed to apply WFM per-item set details")?;
+    let set_parts = merge_set_parts(derived.rows, detail_parts);
     let wfstat_report = build_wfstat_matches(&items, wfstat_json, &set_parts)
         .context("failed to parse WFStat item response")?;
     let (lookup, rejected) = build_item_lookup(&items, &wfstat_report.matches);
@@ -1932,29 +2128,6 @@ fn fetch_wfstat_items() -> Result<String> {
     response.text().context("failed to read WFStat items body")
 }
 
-/// Extracts the slug from a bulk item JSON string without a full parse — used to decide which
-/// items need the per-item detail fetch (anything WFM tagged "set") before the real parse runs.
-fn slugs_needing_set_detail(wfm_bulk_json: &str) -> Result<Vec<String>> {
-    #[derive(Deserialize)]
-    struct Row {
-        slug: String,
-        #[serde(default)]
-        tags: Vec<String>,
-    }
-    #[derive(Deserialize)]
-    struct Response {
-        data: Vec<Row>,
-    }
-    let parsed: Response =
-        serde_json::from_str(wfm_bulk_json).context("failed to parse WFM bulk items for slugs")?;
-    Ok(parsed
-        .data
-        .into_iter()
-        .filter(|row| row.tags.iter().any(|tag| tag == "set"))
-        .map(|row| row.slug)
-        .collect())
-}
-
 /// Maps a bulk item's slug to its `item_key`, needed because the per-item detail response
 /// carries no id of its own (see the `id` field comment on `WfmItemDetail`) — the caller must
 /// know which item a detail body belongs to before this function can file it correctly.
@@ -1989,7 +2162,11 @@ const CATALOG_V2_DATABASE_TMP_FILE: &str = "item_catalog_v2.sqlite.building";
 // 8: reverted that. Component art is now resolved in the frontend from the item's slug, so the
 //    catalog stores Warframe.Market's own art again — the bump exists to clear the sentinels
 //    from any catalog built while 7 was current, which would otherwise persist forever.
-const CATALOG_V2_SCHEMA_VERSION: &str = "8";
+// 9: set composition is now derived from the WFStat bulk response instead of ~1,048 per-item
+//    WFM fetches, and `set_root` comes from the bulk "set" tag. Both were verified to reproduce
+//    the fetched data exactly, but the bump forces one rebuild so no catalog keeps rows the old
+//    path produced under a since-changed derivation.
+const CATALOG_V2_SCHEMA_VERSION: &str = "9";
 
 /// One point in the build the caller might want to report progress at. Internal plumbing only —
 /// no `Serialize`, nothing crosses the IPC boundary here; the startup caller translates each
@@ -2039,17 +2216,41 @@ fn build_catalog_v2_with_progress(
     on_phase(BuildPhase::FetchingBulkItems);
     let wfm_bulk_json = fetch_wfm_bulk_items().context("WFM bulk item fetch failed")?;
 
-    let set_slugs = slugs_needing_set_detail(&wfm_bulk_json)?;
+    // WFStat now comes BEFORE the per-item fetches, not after: it is what decides which items
+    // need one at all. Still optional decoration — "[]" parses as zero items, which the matching
+    // pipeline already treats as "everything unmatched", the same outcome as WFStat being
+    // offline. In that case every set falls back to the per-item path, i.e. exactly the old
+    // behaviour, so an outage costs time rather than correctness.
+    on_phase(BuildPhase::FetchingWfstat);
+    let (wfstat_json, wfstat_fetch_error) = match fetch_wfstat_items() {
+        Ok(json) => (json, None),
+        Err(error) => ("[]".to_string(), Some(format!("{error:#}"))),
+    };
+
     let item_keys = item_keys_by_slug(&wfm_bulk_json)?;
     let slug_by_item_key: HashMap<String, String> =
         item_keys.iter().map(|(slug, key)| (key.clone(), slug.clone())).collect();
 
+    // Which sets the bulk rule cannot account for. Everything else needs no network call at all
+    // — that is the whole point of this step, replacing ~1,048 rate-limited requests (~6 minutes
+    // at 3 req/s) with roughly a dozen.
+    let items_for_derivation =
+        build_item_rows(&wfm_bulk_json).context("failed to parse WFM bulk item response")?;
+    let set_slugs: Vec<String> = derive_set_parts_from_wfstat(&items_for_derivation, &wfstat_json)
+        .context("failed to derive set parts from WFStat bulk data")?
+        .sets_needing_detail
+        .iter()
+        .filter_map(|item_key| slug_by_item_key.get(item_key).cloned())
+        .collect();
+    drop(items_for_derivation);
+
     let mut details_by_key: HashMap<String, String> = HashMap::with_capacity(set_slugs.len());
 
-    // Pass 1: every set ROOT (WFM-tagged "set" in bulk). This is what tells us setParts at all.
-    // Pass 2 (below) then broadens to every distinct COMPONENT referenced by those setParts,
-    // because `quantityInSet` only appears on a component's own detail response, never on the
-    // root's — confirmed live against `/v2/item/{slug}`.
+    // Pass 1: the fallback set ROOTS only. Pass 2 (below) then broadens to every distinct
+    // COMPONENT referenced by those setParts, because `quantityInSet` only appears on a
+    // component's own detail response, never on the root's — confirmed live against
+    // `/v2/item/{slug}`. (The derivation reads WFStat's equivalent `itemCount` inline, which is
+    // why it needs neither pass.)
     // Pass 1's true combined total (pass 1 + pass 2) isn't known until pass 1's responses are
     // parsed below, so pass 1 reports progress against an estimate — every set root has at least
     // one component in practice, so `total_pass1 * 2` undercounts more often than it overcounts,
@@ -2093,8 +2294,7 @@ fn build_catalog_v2_with_progress(
 
     // Pass 2 continues the SAME `completed`/`total` counter pass 1 was using, rather than
     // restarting from zero — a reset back to "0 of N" reads as the whole step having restarted
-    // even though it's real, new, bounded work (fetching each set's own COMPONENTS, since
-    // `quantityInSet` only appears on a component's own detail response — see above).
+    // even though it's real, new, bounded work.
     let total_combined = total_pass1 + component_slugs.len();
     for (index, slug) in component_slugs.iter().enumerate() {
         // Same tolerance as pass 1 — a failed component fetch just leaves its quantity at the
@@ -2109,15 +2309,6 @@ fn build_catalog_v2_with_progress(
             on_phase(BuildPhase::FetchingSetDetails { completed, total: total_combined });
         }
     }
-
-    // WFStat is optional decoration — "[]" parses as zero items, which the matching pipeline
-    // already treats as "everything unmatched", the exact same outcome as WFStat being offline.
-    // The failure reason is preserved (not discarded) so the caller can log it.
-    on_phase(BuildPhase::FetchingWfstat);
-    let (wfstat_json, wfstat_fetch_error) = match fetch_wfstat_items() {
-        Ok(json) => (json, None),
-        Err(error) => ("[]".to_string(), Some(format!("{error:#}"))),
-    };
 
     on_phase(BuildPhase::Writing);
     let connection = Connection::open(output_path)
@@ -3710,14 +3901,21 @@ mod tests {
         assert_eq!(resolvable, 0);
     }
 
+    /// `set_root` used to require a per-item detail fetch; it now comes straight off the bulk
+    /// "set" tag, which was verified against a real catalog to select exactly the same items.
     #[test]
-    fn slugs_needing_set_detail_finds_only_set_tagged_items() {
+    fn set_root_comes_from_the_bulk_set_tag() {
         let wfm = bulk_json(&[
             ("a", "mesa_prime_set", None, &["set", "warframe"], "Mesa Prime Set"),
             ("b", "mesa_prime_blueprint", None, &["blueprint", "warframe"], "Mesa Prime Blueprint"),
         ]);
-        let slugs = slugs_needing_set_detail(&wfm).unwrap();
-        assert_eq!(slugs, vec!["mesa_prime_set".to_string()]);
+        let items = build_item_rows(&wfm).unwrap();
+        let roots: Vec<&str> = items
+            .iter()
+            .filter(|item| item.set_root)
+            .map(|item| item.slug.as_str())
+            .collect();
+        assert_eq!(roots, vec!["mesa_prime_set"]);
     }
 
     // ─── Live end-to-end harness ────────────────────────────────────────────────────────────
@@ -4020,6 +4218,245 @@ mod tests {
 
     fn wfstat_json(items: &[serde_json::Value]) -> String {
         serde_json::json!(items).to_string()
+    }
+
+    // ─── Bulk set-part derivation (replaces ~1,048 per-item fetches) ────────────────────────
+
+    /// (item_key, slug, gameRef, family, set_root)
+    fn derive_item(
+        key: &str,
+        slug: &str,
+        game_ref: Option<&str>,
+        family: &str,
+        set_root: bool,
+    ) -> ItemRow {
+        ItemRow {
+            item_key: key.into(),
+            slug: slug.into(),
+            game_ref: game_ref.map(str::to_string),
+            name_en: slug.into(),
+            item_family: family.into(),
+            max_rank: None,
+            ducats: None,
+            bulk_tradable: false,
+            set_root,
+            icon: None,
+            thumb: None,
+            subtypes: Vec::new(),
+            relic_tier: None,
+            preferred_image: None,
+        }
+    }
+
+    fn derived_slugs(result: &DerivedSetParts, items: &[ItemRow]) -> Vec<(String, i64)> {
+        result
+            .rows
+            .iter()
+            .map(|row| {
+                let slug = items
+                    .iter()
+                    .find(|item| item.item_key == row.part_key)
+                    .map(|item| item.slug.clone())
+                    .unwrap_or_default();
+                (slug, row.quantity_in_set)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn derivation_reads_quantity_from_wfstat_item_count() {
+        let items = vec![
+            derive_item("set", "broken_war_set", Some("/Lotus/War"), "weapon", true),
+            derive_item("blade", "war_blade", Some("/Lotus/WarBlade"), "component", false),
+            derive_item("hilt", "war_hilt", Some("/Lotus/WarHilt"), "component", false),
+        ];
+        let wfstat = wfstat_json(&[serde_json::json!({
+            "uniqueName": "/Lotus/War",
+            "components": [
+                {"name": "Blade", "uniqueName": "/Lotus/WarBlade", "itemCount": 2},
+                {"name": "Hilt", "uniqueName": "/Lotus/WarHilt", "itemCount": 1},
+            ],
+        })]);
+        let result = derive_set_parts_from_wfstat(&items, &wfstat).unwrap();
+        assert!(result.sets_needing_detail.is_empty());
+        assert_eq!(
+            derived_slugs(&result, &items),
+            vec![("war_blade".to_string(), 2), ("war_hilt".to_string(), 1)]
+        );
+    }
+
+    /// The stem rule is the whole reason prime warframes derive at all: WFM's gameRef ends
+    /// "...ChassisBlueprint" while WFStat's own identifier for the very same part ends
+    /// "...ChassisComponent".
+    #[test]
+    fn derivation_matches_across_the_blueprint_component_suffix() {
+        let items = vec![
+            derive_item("set", "mesa_prime_set", Some("/Lotus/MesaPrime"), "warframe", true),
+            derive_item(
+                "chassis",
+                "mesa_prime_chassis_blueprint",
+                Some("/Lotus/Recipes/MesaPrimeChassisBlueprint"),
+                "component",
+                false,
+            ),
+        ];
+        let wfstat = wfstat_json(&[serde_json::json!({
+            "uniqueName": "/Lotus/MesaPrime",
+            "components": [{
+                "name": "Chassis",
+                "uniqueName": "/Lotus/Recipes/MesaPrimeChassisComponent",
+                "itemCount": 1,
+            }],
+        })]);
+        let result = derive_set_parts_from_wfstat(&items, &wfstat).unwrap();
+        assert!(result.sets_needing_detail.is_empty());
+        assert_eq!(
+            derived_slugs(&result, &items),
+            vec![("mesa_prime_chassis_blueprint".to_string(), 1)]
+        );
+    }
+
+    /// A raw crafting material has no WFM identity, appears in nearly every prime set's
+    /// component list, and must NOT by itself push a set into the fallback — otherwise almost
+    /// every set falls back and the whole optimisation evaporates.
+    #[test]
+    fn an_unresolvable_component_does_not_flag_the_set() {
+        let items = vec![
+            derive_item("set", "boltor_prime_set", Some("/Lotus/BoltorPrime"), "weapon", true),
+            derive_item("barrel", "boltor_prime_barrel", Some("/Lotus/BoltorPrimeBarrel"), "component", false),
+        ];
+        let wfstat = wfstat_json(&[serde_json::json!({
+            "uniqueName": "/Lotus/BoltorPrime",
+            "components": [
+                {"name": "Barrel", "uniqueName": "/Lotus/BoltorPrimeBarrel", "itemCount": 1},
+                {"name": "Orokin Cell", "uniqueName": "/Lotus/Types/Items/MiscItems/OrokinCell"},
+            ],
+        })]);
+        let result = derive_set_parts_from_wfstat(&items, &wfstat).unwrap();
+        assert!(result.sets_needing_detail.is_empty());
+        assert_eq!(derived_slugs(&result, &items), vec![("boltor_prime_barrel".to_string(), 1)]);
+    }
+
+    /// Filter 2, the akimbo rule: WFStat says `akbronco_prime_set` contains `bronco_prime_set`
+    /// because the CRAFT consumes two Bronco Prime sets, but the WFM set holds only link and
+    /// blueprint. Dropping a resolved item means the composition is no longer fully accounted
+    /// for, so the set must go to the fallback rather than ship short.
+    #[test]
+    fn a_part_that_is_itself_a_set_is_dropped_and_flags_the_set() {
+        let items = vec![
+            derive_item("set", "akbronco_prime_set", Some("/Lotus/AkBroncoPrime"), "weapon", true),
+            derive_item("link", "akbronco_prime_link", Some("/Lotus/AkBroncoPrimeLink"), "component", false),
+            derive_item("inner", "bronco_prime_set", Some("/Lotus/BroncoPrime"), "weapon", true),
+        ];
+        let wfstat = wfstat_json(&[serde_json::json!({
+            "uniqueName": "/Lotus/AkBroncoPrime",
+            "components": [
+                {"name": "Link", "uniqueName": "/Lotus/AkBroncoPrimeLink", "itemCount": 1},
+                {"name": "Bronco Prime", "uniqueName": "/Lotus/BroncoPrime", "itemCount": 2},
+            ],
+        })]);
+        let result = derive_set_parts_from_wfstat(&items, &wfstat).unwrap();
+        // `inner` is flagged too, on its own account: it is a set root that WFStat says nothing
+        // about here. What matters is that the OUTER set refused to publish a short list.
+        assert!(result.sets_needing_detail.contains(&"set".to_string()));
+        assert!(result.rows.is_empty(), "a flagged set publishes nothing of its own");
+    }
+
+    /// Filter 3 costs two genuinely-correct rows (Kavasa's Band and Buckle are `misc`), and that
+    /// is the deliberate trade: the set comes out flagged and the fallback fixes it, rather than
+    /// `arum_spinosa_set` silently publishing crafting mats as parts and *looking* complete.
+    #[test]
+    fn a_resource_or_misc_part_is_dropped_and_flags_the_set() {
+        let items = vec![
+            derive_item("set", "arum_spinosa_set", Some("/Lotus/ArumSpinosa"), "weapon", true),
+            derive_item("guard", "arum_spinosa_guard", Some("/Lotus/ArumSpinosaGuard"), "component", false),
+            derive_item("mat", "nistlepod", Some("/Lotus/Nistlepod"), "resource", false),
+        ];
+        let wfstat = wfstat_json(&[serde_json::json!({
+            "uniqueName": "/Lotus/ArumSpinosa",
+            "components": [
+                {"name": "Guard", "uniqueName": "/Lotus/ArumSpinosaGuard", "itemCount": 2},
+                {"name": "Nistlepod", "uniqueName": "/Lotus/Nistlepod", "itemCount": 30},
+            ],
+        })]);
+        let result = derive_set_parts_from_wfstat(&items, &wfstat).unwrap();
+        assert_eq!(result.sets_needing_detail, vec!["set".to_string()]);
+        assert!(result.rows.is_empty());
+    }
+
+    /// No WFStat counterpart, or one with an empty component list, is the emptiest possible
+    /// evidence — never a claim that the set has no parts. This is what routes the Archwing and
+    /// Landing Craft sets (which WFStat models differently) to the fallback.
+    #[test]
+    fn a_set_wfstat_says_nothing_about_is_flagged_not_published_empty() {
+        let items = vec![
+            derive_item("unknown", "prisma_shade_set", Some("/Lotus/PrismaShade"), "sentinel", true),
+            derive_item("empty", "itzal_set", Some("/Lotus/Itzal"), "archwing", true),
+        ];
+        let wfstat = wfstat_json(&[serde_json::json!({
+            "uniqueName": "/Lotus/Itzal",
+            "components": [],
+        })]);
+        let result = derive_set_parts_from_wfstat(&items, &wfstat).unwrap();
+        assert_eq!(
+            result.sets_needing_detail,
+            vec!["empty".to_string(), "unknown".to_string()]
+        );
+        assert!(result.rows.is_empty());
+    }
+
+    /// A set's own id appears among its parts; that is not a component relationship.
+    #[test]
+    fn a_set_never_contains_itself() {
+        let items = vec![
+            derive_item("set", "cedo_set", Some("/Lotus/Cedo"), "weapon", true),
+            derive_item("barrel", "cedo_barrel", Some("/Lotus/CedoBarrel"), "component", false),
+        ];
+        let wfstat = wfstat_json(&[serde_json::json!({
+            "uniqueName": "/Lotus/Cedo",
+            "components": [
+                {"name": "Cedo", "uniqueName": "/Lotus/Cedo", "itemCount": 1},
+                {"name": "Barrel", "uniqueName": "/Lotus/CedoBarrel", "itemCount": 1},
+            ],
+        })]);
+        let result = derive_set_parts_from_wfstat(&items, &wfstat).unwrap();
+        assert_eq!(derived_slugs(&result, &items), vec![("cedo_barrel".to_string(), 1)]);
+    }
+
+    /// WFStat being unreachable hands this function "[]", and every set then falls back to the
+    /// per-item path — i.e. exactly the old behaviour. An outage costs build TIME, never
+    /// correctness, which is why the fetch is allowed to fail soft upstream.
+    #[test]
+    fn an_empty_wfstat_response_sends_every_set_to_the_fallback() {
+        let items = vec![
+            derive_item("set_a", "mesa_prime_set", Some("/Lotus/MesaPrime"), "warframe", true),
+            derive_item("set_b", "cedo_set", Some("/Lotus/Cedo"), "weapon", true),
+            derive_item("part", "cedo_barrel", Some("/Lotus/CedoBarrel"), "component", false),
+        ];
+        let result = derive_set_parts_from_wfstat(&items, "[]").unwrap();
+        assert!(result.rows.is_empty());
+        assert_eq!(result.sets_needing_detail, vec!["set_a".to_string(), "set_b".to_string()]);
+    }
+
+    /// A fallback set's detail response replaces its derived rows wholesale, so a set is never a
+    /// blend of two sources that each saw a different part list.
+    #[test]
+    fn detail_rows_replace_derived_rows_for_the_same_set() {
+        let derived = vec![
+            SetPartRow { set_key: "a".into(), part_key: "a1".into(), quantity_in_set: 1 },
+            SetPartRow { set_key: "b".into(), part_key: "b1".into(), quantity_in_set: 1 },
+        ];
+        let from_detail = vec![
+            SetPartRow { set_key: "b".into(), part_key: "b2".into(), quantity_in_set: 3 },
+        ];
+        let merged = merge_set_parts(derived, from_detail);
+        assert_eq!(
+            merged
+                .iter()
+                .map(|row| (row.set_key.as_str(), row.part_key.as_str(), row.quantity_in_set))
+                .collect::<Vec<_>>(),
+            vec![("a", "a1", 1), ("b", "b2", 3)]
+        );
     }
 
     #[test]
