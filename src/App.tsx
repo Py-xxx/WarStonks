@@ -1,8 +1,12 @@
 import { useEffect } from 'react';
+
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { useAlecaframeProbe } from './hooks/useAlecaframeProbe';
 import { useAppStore } from './stores/useAppStore';
 import { TopBar } from './components/TopBar';
 import { Sidebar } from './components/Sidebar';
 import { HomePage } from './pages/Home';
+import { WatchlistPage } from './pages/Watchlist';
 import { MarketPage } from './pages/Market';
 import { EventsPage } from './pages/Events';
 import { ScannersPage } from './pages/Scanners';
@@ -91,6 +95,7 @@ function PageRouter() {
 
   switch (activePage) {
     case 'home':          return <HomePage />;
+    case 'watchlist':     return <WatchlistPage />;
     case 'market':        return <MarketPage />;
     case 'events':        return <EventsPage />;
     case 'scanners':      return <ScannersPage />;
@@ -131,9 +136,13 @@ function AppShell() {
   useWorldStateVoidTrader();
   useWorldStateActivities();
   useWorldStateExtras();
+  useAlecaframeProbe();
 
   return (
-    <>
+    // One provider for the whole app. Without it, Base UI falls back to its own OPEN_DELAY of
+    // 600ms and the primitive's documented 250ms never applies — `Tooltip.Root` takes no `delay`
+    // prop in this version, so the provider is the only place that delay can be set.
+    <TooltipProvider>
       <TopBar />
       <WfstatStaleBanner />
       <div className="app-body">
@@ -150,7 +159,7 @@ function AppShell() {
       <FarmingSessionPanel />
       <ToastHost />
       <BackgroundCatalogRefreshIndicator />
-    </>
+    </TooltipProvider>
   );
 }
 

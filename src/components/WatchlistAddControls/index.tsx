@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { ItemSearchInput } from '../ItemSearchInput';
 import { QuantityStepper } from '../QuantityStepper';
 import { getItemVariantsForMarket } from '../../lib/tauriClient';
@@ -43,6 +44,26 @@ export function WatchlistAddControls({ mode = 'selected' }: { mode?: WatchlistAd
   const [searchItem, setSearchItem] = useState<WfmAutocompleteItem | null>(null);
   const [searchVariants, setSearchVariants] = useState<MarketVariant[]>([]);
   const [searchVariantKey, setSearchVariantKey] = useState<string | null>(null);
+
+  /**
+   * Seed the search box from whatever the global search last selected, so opening the Watchlist
+   * with an item already searched arrives with it filled in and ready to add.
+   *
+   * One-directional on purpose. The isolation above exists so this box cannot *disturb* the
+   * global selection; reading from it breaks nothing. Keyed on the slug rather than the object,
+   * so picking a different item here sticks — the effect only re-runs when the GLOBAL item
+   * actually changes, not on every render or on local edits.
+   */
+  const quickViewSlug = quickViewItem?.slug ?? null;
+  useEffect(() => {
+    if (mode !== 'search' || !quickViewItem) {
+      return;
+    }
+    // Already a `WfmAutocompleteItem` — pass it straight through rather than rebuilding it
+    // field by field, which would invent defaults for anything the shape gains later.
+    setSearchItem(quickViewItem);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the slug: see above.
+  }, [mode, quickViewSlug]);
 
   useEffect(() => {
     if (mode !== 'search' || !searchItem) {
@@ -165,9 +186,9 @@ export function WatchlistAddControls({ mode = 'selected' }: { mode?: WatchlistAd
           />
         </label>
 
-        <button className="btn-primary wl-add-btn" type="button" onClick={submit} disabled={!canAdd}>
+        <Button className="wl-add-btn h-8 px-4 text-xs" onClick={submit} disabled={!canAdd}>
           {t('wl.add')}
-        </button>
+        </Button>
       </div>
 
       {marketVariantsError && !isSearchMode ? (

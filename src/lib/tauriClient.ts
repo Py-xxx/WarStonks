@@ -1083,6 +1083,30 @@ export async function getItemAnalysis(
   });
 }
 
+/**
+ * The cache-only half of the analysis: no WFM calls, so it answers in milliseconds.
+ *
+ * Selecting an item costs three rate-limited WFM requests before the live build can return
+ * anything. This lets the page paint from what SQLite already holds and then upgrade in place.
+ *
+ * **Rejects on a cache miss** — an item you have never opened has no snapshot to build from.
+ * That is an expected state, not a failure: callers should stay in their loading state and wait
+ * for the live build rather than surfacing an error.
+ */
+export async function getItemAnalysisCached(
+  itemKey: string,
+  slug: string,
+  variantKey: string | null,
+  sellerMode: SellerMode,
+): Promise<ItemAnalysisResponse> {
+  return invoke<ItemAnalysisResponse>('get_item_analysis_cached', {
+    itemKey,
+    slug,
+    variantKey,
+    sellerMode,
+  });
+}
+
 export async function getBacktestSummary(): Promise<BacktestSummary> {
   return invoke<BacktestSummary>('get_backtest_summary');
 }

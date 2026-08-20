@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import type { InventorySubTab, OpportunitiesSubTab } from '../../lib/navigation';
 import {
   applySetCompletionScreenshotImportRows,
   getArbitrageScannerState,
@@ -7,7 +8,6 @@ import {
   getSetCompletionOwnedItems,
   getSetCompletionOwnedItemPrices,
   setSetCompletionOwnedItemQuantity,
-  probeLocalSources,
   syncOwnedItemsFromAlecaframe,
 } from '../../lib/tauriClient';
 import {
@@ -24,13 +24,14 @@ import {
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
-import { UnderpricedListingsPanel } from '../../components/UnderpricedListingsPanel';
+import { OpportunitiesOverview } from './Overview';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
 } from '../../lib/watchlistAddFeedback';
-import { useAppStore } from '../../stores/useAppStore';
+import { PageHeading } from '../../components/PageHeading';
+import { selectAlecaframeInventoryAvailable, useAppStore } from '../../stores/useAppStore';
 import { AlecaframeInventoryPanel } from '../../components/AlecaframeInventory';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
@@ -1241,8 +1242,28 @@ export function OpportunitiesPage({
 }: {
   mode?: 'opportunities' | 'inventory';
 } = {}) {
-  const [activeTab, setActiveTab] = useState<OppTab>(
-    mode === 'inventory' ? 'set-planner' : 'opportunities',
+  // Sub-view selection lives in the store, because the sidebar renders this page's
+  // sub-navigation and cannot read component state. This component serves BOTH the Opportunities
+  // and Inventory pages (via `mode`), and their tab sets are disjoint, so they get one store key
+  // each rather than sharing one that would hold an id the other mode cannot render.
+  const opportunitiesSubTab = useAppStore((state) => state.opportunitiesSubTab);
+  const inventorySubTab = useAppStore((state) => state.inventorySubTab);
+  const setOpportunitiesSubTab = useAppStore((state) => state.setOpportunitiesSubTab);
+  const setInventorySubTab = useAppStore((state) => state.setInventorySubTab);
+  const activeTab: OppTab = mode === 'inventory' ? inventorySubTab : opportunitiesSubTab;
+  const setActiveTab = useCallback(
+    (next: OppTab | ((current: OppTab) => OppTab)) => {
+      if (mode === 'inventory') {
+        setInventorySubTab(
+          (typeof next === 'function' ? next(inventorySubTab) : next) as InventorySubTab,
+        );
+        return;
+      }
+      setOpportunitiesSubTab(
+        (typeof next === 'function' ? next(opportunitiesSubTab) : next) as OpportunitiesSubTab,
+      );
+    },
+    [mode, inventorySubTab, opportunitiesSubTab, setInventorySubTab, setOpportunitiesSubTab],
   );
   const localizeName = useLocalizedName();
   // Searches the localized name the row displays, not just the English name behind it.
@@ -1298,22 +1319,9 @@ export function OpportunitiesPage({
   // The backend already refuses to read AlecaFrame when the setting is off, so gating the UI
   // on the probe alone left the Prime Parts / Mods / Arcanes tabs in place, rendering nothing,
   // with the manual Inventory tab unreachable.
-  const [alecaframeFilePresent, setAlecaframeFilePresent] = useState(false);
-  const alecaframeEnabled = useAppStore((state) => state.appSettings.alecaframe.enabled);
-  const alecaframeInventoryAvailable = alecaframeFilePresent && alecaframeEnabled;
-  useEffect(() => {
-    let cancelled = false;
-    void probeLocalSources()
-      .then((availability) => {
-        if (!cancelled) {
-          setAlecaframeFilePresent(availability.alecaframeInventory.status === 'available');
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Probed once at app start (`useAlecaframeProbe`) rather than here, because the sidebar renders
+  // this page's sub-items and needs the answer before the page is ever opened.
+  const alecaframeInventoryAvailable = useAppStore(selectAlecaframeInventoryAvailable);
 
   // Toggling AlecaFrame swaps which inventory tabs exist, so a tab that was open can vanish
   // underneath the user. Move them to the equivalent tab in the other mode rather than
@@ -1407,23 +1415,6 @@ export function OpportunitiesPage({
   const setActivePage = useAppStore((state) => state.setActivePage);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
 
-  const tabs: { id: OppTab; label: string }[] =
-    mode === 'inventory'
-      ? [
-          { id: 'set-planner', label: t('opp.tabSetCompletionPlanner') },
-          ...(alecaframeInventoryAvailable
-            ? ([
-                { id: 'prime-parts', label: t('inv.tabPrimeParts') },
-                { id: 'mods', label: t('inv.tabMods') },
-                { id: 'arcanes', label: t('inv.tabArcanes') },
-              ] as { id: OppTab; label: string }[])
-            : ([{ id: 'inventory', label: t('opp.tabInventory') }] as { id: OppTab; label: string }[])),
-          { id: 'owned-relics', label: t('opp.tabOwnedRelics') },
-        ]
-      : [
-          { id: 'opportunities', label: t('opp.tabOpportunities') },
-          { id: 'farm-now', label: t('opp.tabWhatToFarmNow') },
-        ];
 
   useEffect(() => {
     if (activeTab !== 'set-planner' && activeTab !== 'inventory') {
@@ -2688,28 +2679,7 @@ export function OpportunitiesPage({
 
   return (
     <>
-      <div className="subnav opp-page-subnav">
-        <div className="subnav-left">
-          <span className="page-title">{mode === 'inventory' ? t('opp.inventory') : t('opp.opportunities')}</span>
-          <div className="subnav-tabs" role="tablist" aria-label={mode === 'inventory' ? t('opp.inventorySections') : t('opp.opportunitiesSections')}>
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`subtab${activeTab === tab.id ? ' active' : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-                role="tab"
-                aria-selected={activeTab === tab.id}
-              >
-                {tab.label}
-                {tab.id === 'opportunities' ? (
-                  <span className="subtab-beta-badge">{t('opp.beta')}</span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+      <PageHeading page={mode === 'inventory' ? 'inventory' : 'opportunities'} />
 
       <div className="page-content">
         {activeTab === 'set-planner' ? (
@@ -3986,12 +3956,10 @@ export function OpportunitiesPage({
               )}
             </section>
           </div>
-        ) : activeTab === 'opportunities' ? (
-          <UnderpricedListingsPanel />
         ) : (
-          <div className="opportunities-placeholder">
-            No opportunities found — try adjusting strategy filters
-          </div>
+          /* `opportunities` is the only remaining tab, and every other branch above is
+             exhaustive — the old fallback was an unreachable untranslated sentence. */
+          <OpportunitiesOverview />
         )}
       </div>
       <SetCompletionScreenshotImportWarningModal

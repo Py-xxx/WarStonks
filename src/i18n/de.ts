@@ -1,6 +1,7 @@
 // Deutsch — partial. Missing keys fall back to English. See en.ts for the full key list.
 export const de: Record<string, string> = {
   'nav.home': 'Start',
+  'nav.watchlist': 'Beobachtungsliste',
   'nav.market': 'Markt',
   'nav.events': 'Ereignisse',
   'nav.scanners': 'Scanner',

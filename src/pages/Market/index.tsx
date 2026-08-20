@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, MutableRefObject, ReactNode, SetStateAction } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import {
   getWfmAutocompleteItems,
   getItemAnalytics,
@@ -15,13 +15,28 @@ import {
 } from '../../lib/watchlistAddFeedback';
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  getConfidenceTone,
+  getRiskTone,
+  getTrendTone,
+  ratioToUnitInterval,
+  slopeToUnitInterval,
+  toUnitInterval,
+  clampNumber,
+} from './posture';
+import { Metric, MetricGrid } from '@/components/ui/metric';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { PageHeading } from '../../components/PageHeading';
 import { tActive, useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { resolveLocalizedName } from '../../lib/itemNames';
 import { parseWarframeMarkupLines, splitWarframeMarkupLines } from '../../lib/warframeMarkup';
 import { parseVaultTraderPayload } from '../../lib/worldState';
 import {
-  confidenceTone,
   tActionRationale,
   tConfidence,
   tEntryRationale,
@@ -33,6 +48,8 @@ import {
 import type { TranslationKey } from '../../i18n/en';
 import { translate } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
+import { QuickViewCard } from './DashboardPanels';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 import type {
   AnalyticsChartPoint,
   BacktestSummary,
@@ -48,38 +65,46 @@ type ChartDomainKey = '48h' | '7d' | '30d' | '90d';
 type ChartBucketKey = '1h' | '3h' | '6h' | '12h' | '24h' | '7d' | '14d';
 type ChartSeriesKey = 'median' | 'lowest' | 'movingAverage' | 'average' | 'entryZone' | 'exitZone';
 type ChartMode = 'line' | 'candlestick';
-type AnalyticsPanelKey = 'chart' | 'overview' | 'pressure' | 'trend' | 'action';
-type AnalysisPanelKey =
-  | 'itemDetails'
-  | 'headline'
-  | 'flip'
-  | 'liquidity'
-  | 'trend'
-  | 'eventContext'
-  | 'manipulation'
-  | 'timeOfDay'
-  | 'supply';
 
-type PanelTone = 'neutral' | 'blue' | 'green' | 'amber' | 'red';
+/**
+ * A chart-shaped placeholder for the plot area.
+ *
+ * Deliberately not the `Skeleton` primitive's generic blocks: this stands in for a line chart, and
+ * a stack of grey bars reads as a table loading, not a chart. It renders the same gridlines and a
+ * pulsing area silhouette so the shape on screen is the shape that arrives.
+ *
+ * It sits INSIDE the plot only. The previous version was `absolute inset-0` over the whole card,
+ * so it greyed out the range/bucket selects and the series toggles — controls that are usable
+ * while the chart loads, and that you often want to change *because* it is loading.
+ */
+function ChartSkeleton() {
+  return (
+    <div className="market-chart-skeleton" aria-hidden="true">
+      <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="market-chart-skeleton-svg">
+        {[8, 16, 24, 32].map((y) => (
+          <line key={y} x1="0" y1={y} x2="100" y2={y} className="market-chart-skeleton-grid" />
+        ))}
+        <path
+          d="M0 30 L12 26 L24 28 L36 18 L48 21 L60 12 L72 15 L84 8 L100 11 L100 40 L0 40 Z"
+          className="market-chart-skeleton-area"
+        />
+        <path
+          d="M0 30 L12 26 L24 28 L36 18 L48 21 L60 12 L72 15 L84 8 L100 11"
+          className="market-chart-skeleton-line"
+        />
+      </svg>
+    </div>
+  );
+}
 
-const PANEL_REVEAL_STEP_MS = 85;
-const ANALYTICS_PANEL_SEQUENCE: AnalyticsPanelKey[] = [
-  'chart',
-  'overview',
-  'pressure',
-  'trend',
-  'action',
-];
-const ANALYSIS_PANEL_SEQUENCE: AnalysisPanelKey[] = [
-  'headline',
-  'flip',
-  'liquidity',
-  'trend',
-  'eventContext',
-  'manipulation',
-  'timeOfDay',
-  'supply',
-];
+const RefreshIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
+  </svg>
+);
+
+
+
 
 interface MockBucketPoint {
   timestamp: number;
@@ -102,14 +127,7 @@ interface ChartSeriesOption {
   colorClass: string;
 }
 
-function createRevealState<T extends string>(keys: readonly T[]): Record<T, boolean> {
-  return Object.fromEntries(keys.map((key) => [key, false])) as Record<T, boolean>;
-}
 
-function clearRevealTimeouts(timeoutsRef: MutableRefObject<number[]>) {
-  timeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-  timeoutsRef.current = [];
-}
 
 function buildMarketSelectionIdentity(
   itemId: number | null,
@@ -123,90 +141,49 @@ function buildMarketSelectionIdentity(
   return `${itemId}:${variantKey}:${sellerMode}`;
 }
 
-function AdaptiveInfoHint({
-  text,
-  preferredPlacement = 'auto',
-}: {
-  text: string;
-  preferredPlacement?: 'auto' | 'below';
-}) {
-  const hintRef = useRef<HTMLSpanElement | null>(null);
-  const tooltipRef = useRef<HTMLSpanElement | null>(null);
-  const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({
-    bottom: 'calc(100% + 8px)',
-    left: 0,
-  });
-
-  const updatePlacement = () => {
-    const hintRect = hintRef.current?.getBoundingClientRect();
-    const tooltipRect = tooltipRef.current?.getBoundingClientRect();
-    if (!hintRect || !tooltipRect) {
-      return;
-    }
-
-    const viewportPadding = 12;
-    const tooltipGap = 8;
-    const placeBelow = preferredPlacement === 'below'
-      ? true
-      : hintRect.top < tooltipRect.height + 24;
-    let nextStyle: CSSProperties = placeBelow
-      ? { top: `calc(100% + ${tooltipGap}px)`, bottom: 'auto' }
-      : { bottom: `calc(100% + ${tooltipGap}px)`, top: 'auto' };
-
-    const shouldAlignRight = hintRect.left + tooltipRect.width > window.innerWidth - viewportPadding;
-    if (shouldAlignRight) {
-      nextStyle.right = 0;
-      nextStyle.left = 'auto';
-      const projectedLeft = hintRect.right - tooltipRect.width;
-      if (projectedLeft < viewportPadding) {
-        nextStyle.left = `${viewportPadding - hintRect.left}px`;
-        nextStyle.right = 'auto';
-      }
-    } else {
-      nextStyle.left = 0;
-      nextStyle.right = 'auto';
-    }
-
-    setTooltipStyle(nextStyle);
-  };
-
+/**
+ * The little "i" that explains a metric.
+ *
+ * This WAS `AdaptiveInfoHint`: 68 lines of `getBoundingClientRect`, hand-computed flip/shift
+ * logic and inline `style` positioning. The tooltip primitive's own header lists
+ * `.market-info-hint-tooltip` as one of the four implementations it replaced — it was written to
+ * kill this one, and then this one survived. Base UI's Portal + Positioner does the same
+ * collision work correctly, and without an ancestor's `overflow` being able to clip it.
+ *
+ * `preferredPlacement` is gone: the primitive flips automatically, so "below" was only ever a
+ * workaround for the hand-rolled version guessing wrong near the top of the viewport.
+ */
+function InfoHint({ text }: { text: string }) {
   return (
-    <span
-      ref={hintRef}
-      className="info-hint market-info-hint"
-      tabIndex={0}
-      aria-label={text}
-      onMouseEnter={updatePlacement}
-      onFocus={updatePlacement}
-    >
-      <span className="info-hint-glyph" aria-hidden="true">i</span>
-      <span
-        ref={tooltipRef}
-        className="info-hint-tooltip market-info-hint-tooltip"
-        style={tooltipStyle}
+    <Tooltip>
+      {/* The TRIGGER is the padded wrapper, not the glyph. The visible dot is 16px, but a 16px
+          hover target is a coin-flip with a mouse — the previous 14px one read as "the tooltips
+          do not work", because you mostly missed it. `p-1.5 -m-1.5` gives a 28px target and
+          cancels its own layout impact, so nothing around it shifts.
+
+          Still under the skill's 40×40 for standalone controls: 40px next to a 13px panel title
+          would swamp it. This is the density exception applied honestly — bigger than the glyph,
+          smaller than a toolbar button. */}
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            aria-label={text}
+            className="-m-1.5 inline-flex cursor-help p-1.5 text-ink-dim outline-none transition-colors duration-150 ease-out hover:text-ink focus-visible:text-ink"
+          />
+        }
       >
-        {text}
-      </span>
-    </span>
+        {/* `ink-dim` on `bg-panel` is ~5:1; the old `ink-faint` was ~2:1, under the skill's 3:1
+            floor for meaningful icons and control boundaries. */}
+        <span className="grid size-4 place-items-center rounded-full border border-current text-[10px] leading-none font-bold">
+          i
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{text}</TooltipContent>
+    </Tooltip>
   );
 }
 
-function queuePanelReveal<T extends string>(
-  keys: readonly T[],
-  setState: Dispatch<SetStateAction<Record<T, boolean>>>,
-  timeoutsRef: MutableRefObject<number[]>,
-) {
-  clearRevealTimeouts(timeoutsRef);
-  keys.forEach((key, index) => {
-    const timeoutId = window.setTimeout(() => {
-      setState((current) => ({
-        ...current,
-        [key]: true,
-      }));
-    }, index * PANEL_REVEAL_STEP_MS);
-    timeoutsRef.current.push(timeoutId);
-  });
-}
 
 const DOMAIN_OPTIONS: Array<{ key: ChartDomainKey; label: TranslationKey; hours: number }> = [
   { key: '48h', label: 'mkt.domain48h', hours: 48 },
@@ -311,121 +288,13 @@ function renderStatHighlightLine(line: string): ReactNode {
   );
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
 
-function toUnitInterval(value: number | null | undefined, fallback = 0): number {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return fallback;
-  }
-  return clampNumber(value > 1 ? value / 100 : value, 0, 1);
-}
 
-function ratioToUnitInterval(value: number | null | undefined): number {
-  if (value === null || value === undefined || Number.isNaN(value) || value <= 0) {
-    return 0;
-  }
-  return clampNumber(value / (value + 1), 0, 1);
-}
 
-function slopeToUnitInterval(value: number | null | undefined): number {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return 0.5;
-  }
-  return clampNumber(0.5 + value * 4, 0, 1);
-}
 
-function getRiskTone(riskLevel: string | null | undefined): PanelTone {
-  const normalized = riskLevel?.toLowerCase() ?? '';
-  if (normalized.includes('high') || normalized.includes('critical')) {
-    return 'red';
-  }
-  if (normalized.includes('medium') || normalized.includes('elevated')) {
-    return 'amber';
-  }
-  if (normalized.includes('low')) {
-    return 'green';
-  }
-  return 'neutral';
-}
 
-function getTrendTone(direction: string | null | undefined): PanelTone {
-  const normalized = direction?.toLowerCase() ?? '';
-  if (normalized.includes('up') || normalized.includes('bull')) {
-    return 'green';
-  }
-  if (normalized.includes('down') || normalized.includes('bear')) {
-    return 'red';
-  }
-  if (normalized.includes('flat') || normalized.includes('side')) {
-    return 'amber';
-  }
-  return 'blue';
-}
 
-function getConfidenceTone(confidence: MarketConfidenceSummary | null | undefined): PanelTone {
-  return confidenceTone(confidence);
-}
 
-function buildAnalysisHeroState(analysis: ItemAnalysisResponse | null, t: TranslateFn) {
-  const netMargin = analysis?.headline.netMargin ?? null;
-  const liquidityScore = analysis?.headline.liquidityScore ?? null;
-  const riskLevel = analysis?.manipulationRisk.riskLevel ?? null;
-  const riskTone = getRiskTone(riskLevel);
-  const trendTone = getTrendTone(analysis?.trend.direction);
-  const confidence = analysis?.trend.confidence ?? null;
-  const headlineConfidence = analysis?.headline.confidenceSummary ?? null;
-  const confidenceNote = headlineConfidence?.reasons.length
-    ? ` ${headlineConfidence.reasons.join(', ')}.`
-    : '';
-
-  if (netMargin === null || liquidityScore === null) {
-    return {
-      label: t('mkt.hero.buildingReadout'),
-      tone: 'blue' as PanelTone,
-      note: t('mkt.hero.note.building'),
-    };
-  }
-
-  if (riskTone === 'red') {
-    return {
-      label: t('mkt.hero.highCaution'),
-      tone: 'red' as PanelTone,
-      note: `${t('mkt.hero.note.highCaution')}${confidenceNote}`,
-    };
-  }
-
-  if (headlineConfidence?.level === 'low') {
-    return {
-      label: t('mkt.hero.cautiousRead'),
-      tone: 'amber' as PanelTone,
-      note: `${t('mkt.hero.note.cautiousRead')}${confidenceNote}`,
-    };
-  }
-
-  if (netMargin > 0 && liquidityScore >= 60 && trendTone === 'green') {
-    return {
-      label: t('mkt.hero.buyBias'),
-      tone: 'green' as PanelTone,
-      note: `${t('mkt.hero.note.buyBias', { liq: Math.round(liquidityScore), conf: Math.round(confidence ?? 0) })}${confidenceNote}`,
-    };
-  }
-
-  if (netMargin > 0 && liquidityScore >= 42) {
-    return {
-      label: t('mkt.hero.selective'),
-      tone: 'blue' as PanelTone,
-      note: `${t('mkt.hero.note.selective')}${confidenceNote}`,
-    };
-  }
-
-  return {
-    label: t('mkt.hero.wait'),
-    tone: 'amber' as PanelTone,
-    note: `${t('mkt.hero.note.wait')}${confidenceNote}`,
-  };
-}
 
 async function handleOpenExternalLink(url: string | null | undefined) {
   if (!url) {
@@ -523,7 +392,6 @@ function StaticAnalyticsChart({
   itemName,
   analytics,
   loading,
-  revealed,
   errorMessage,
   domain,
   bucket,
@@ -533,7 +401,6 @@ function StaticAnalyticsChart({
   itemName: string;
   analytics: ItemAnalyticsResponse | null;
   loading: boolean;
-  revealed: boolean;
   errorMessage: string | null;
   domain: ChartDomainKey;
   bucket: ChartBucketKey;
@@ -580,18 +447,6 @@ function StaticAnalyticsChart({
     (series) => series.key !== 'entryZone' && series.key !== 'exitZone',
   );
   const volumeMax = Math.max(...points.map((point) => point.volume), 1);
-  const latestPoint = points[points.length - 1] ?? null;
-  const latestDelta =
-    latestPoint?.open !== null &&
-    latestPoint?.close !== null &&
-    latestPoint?.open !== undefined &&
-    latestPoint?.close !== undefined
-      ? roundTo(latestPoint.close - latestPoint.open, 1)
-      : null;
-  const latestDeltaPct =
-    latestDelta !== null && latestPoint?.open !== null && latestPoint.open > 0
-      ? roundTo((latestDelta / latestPoint.open) * 100, 2)
-      : null;
   const entryBand = buildZoneBandRect(
     analytics?.entryExitZoneOverview.entryZoneLow,
     analytics?.entryExitZoneOverview.entryZoneHigh,
@@ -599,7 +454,7 @@ function StaticAnalyticsChart({
     minValue,
     maxValue,
   );
-  const chartLoading = loading || !revealed;
+  const chartLoading = loading;
   const exitBand = buildZoneBandRect(
     analytics?.entryExitZoneOverview.exitZoneLow,
     analytics?.entryExitZoneOverview.exitZoneHigh,
@@ -660,7 +515,7 @@ function StaticAnalyticsChart({
             <span className="panel-title-eyebrow">{t('market.priceChart')}</span>
             <span className="card-label market-panel-title-row">
               <span>{itemName}</span>
-              <AdaptiveInfoHint text={t('mki.chart')} />
+              <InfoHint text={t('mki.chart')} />
             </span>
           </div>
           <div className="market-chart-select-row">
@@ -714,19 +569,9 @@ function StaticAnalyticsChart({
       <div className="card-body market-panel-body">
         <div className="market-chart-card">
           <div className="market-chart-toolbar">
-            <div className="market-chart-toolbar-copy">
-              <div className="market-chart-ohlc-row">
-                <span>O {formatPrice(latestPoint?.open ?? null)}</span>
-                <span>H {formatPrice(latestPoint?.high ?? null)}</span>
-                <span>L {formatPrice(latestPoint?.low ?? null)}</span>
-                <span>C {formatPrice(latestPoint?.close ?? null)}</span>
-                <span className={`market-chart-delta${latestDelta !== null && latestDelta < 0 ? ' is-down' : ' is-up'}`}>
-                  {latestDelta !== null && latestDelta > 0 ? '+' : ''}{formatPrice(latestDelta)}
-                  {' '}
-                  ({latestDeltaPct !== null && latestDeltaPct > 0 ? '+' : ''}{formatPercent(latestDeltaPct)})
-                </span>
-              </div>
-            </div>
+            {/* The static O/H/L/C strip is gone. Only candlestick mode has open/high/low/close,
+                so in the default line view it rendered "O — H — L — C — — (—)" permanently, and
+                the hover readout already gives those four per point in candle mode. */}
             <div className="market-toggle-row">
               {SERIES_OPTIONS.map((option) => (
                 <button
@@ -755,7 +600,9 @@ function StaticAnalyticsChart({
                 </span>
               ))}
             </div>
-            {errorMessage && !chartLoading ? (
+            {chartLoading ? (
+              <ChartSkeleton />
+            ) : errorMessage ? (
               <div className="market-chart-status is-error">{errorMessage}</div>
             ) : points.length === 0 ? (
               <div className="market-chart-status">{t('mkt.noChartHistory')}</div>
@@ -1001,11 +848,6 @@ function StaticAnalyticsChart({
             <span>Volume {formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
           </div>
         </div>
-        <PanelOverlay
-          loading={chartLoading}
-          errorMessage={!chartLoading ? errorMessage : null}
-          label={t('mkt.loadingChartHistory')}
-        />
       </div>
     </div>
   );
@@ -1065,10 +907,12 @@ const WEEKDAY_LABEL_KEYS: TranslationKey[] = [
   'mkt.weekdaySun',
 ];
 
+/** `10:00–12:00`, not `10–12`. A bare number pair reads as a range of anything — the colon is
+ *  what makes it read as a clock. */
 function formatTwoHourBlockLabel(bucketIndex: number): string {
   const start = (bucketIndex * 2) % 24;
   const end = (start + 2) % 24;
-  return `${start.toString().padStart(2, '0')}–${end.toString().padStart(2, '0')}`;
+  return `${start.toString().padStart(2, '0')}:00–${end.toString().padStart(2, '0')}:00`;
 }
 
 function emptyTimeOfDayCell(weekday: number, bucketIndex: number): TimeOfDayLiquidityBucket {
@@ -1768,83 +1612,115 @@ function MarketInlineNotice({
   );
 }
 
-function PanelOverlay({
-  loading,
-  errorMessage,
-  label,
-}: {
-  loading: boolean;
-  errorMessage?: string | null;
-  label: string;
-}) {
-  if (!loading && !errorMessage) {
-    return null;
-  }
+/**
+ * What a panel is currently able to show.
+ *
+ * `idle`   — nothing selected. The panel's shape is drawn but inert, so the page reads as a real
+ *            interface waiting for input rather than one empty sentence where the UI should be.
+ * `loading`— selected, data not in yet. Same shape, now pulsing.
+ * `ready`  — data present.
+ *
+ * The three share one skeleton shape on purpose: idle and loading differ only by the pulse, so
+ * nothing moves or resizes as a panel walks through the states. That is the whole point — the
+ * page must not reflow while it fills in.
+ */
+type PanelPhase = 'idle' | 'loading' | 'ready';
 
+/**
+ * Panel contents for the current phase.
+ *
+ * Replaces `PanelOverlay`, which put a **spinner** over the panel — the interface-polish skill's
+ * rule 5 is skeletons, not spinners, precisely because the content's shape is known here.
+ * Errors still take over the body, because a failed panel has nothing to show.
+ */
+function PanelBody({
+  phase,
+  skeleton,
+  errorMessage,
+  children,
+}: {
+  phase: PanelPhase;
+  /** Skeleton composition string matching this panel's real layout. */
+  skeleton: string;
+  errorMessage?: string | null;
+  children: ReactNode;
+}) {
+  if (errorMessage) {
+    return <p className="text-[11px] text-accent-red">{errorMessage}</p>;
+  }
+  if (phase === 'ready') {
+    return <>{children}</>;
+  }
   return (
-    <div className={`market-panel-overlay${errorMessage ? ' is-error' : ''}`}>
-      {loading ? <span className="market-panel-spinner" aria-hidden="true" /> : null}
-      <span className="market-panel-overlay-copy">
-        {errorMessage ?? label}
-      </span>
-    </div>
+    <Skeleton
+      type={skeleton}
+      // Idle is the same shape holding still. `animate-none` also means an unselected page is
+      // not sitting there pulsing at the user with nothing loading.
+      leafClassName={phase === 'idle' ? 'animate-none opacity-25' : undefined}
+    />
   );
 }
 
 function AnalyticsPanel({
   title,
-  eyebrow,
   info,
-  infoPlacement = 'auto',
   children,
-  loading = false,
+  phase = 'ready',
+  skeleton = 'text@4',
   errorMessage = null,
-  loadingLabel,
   className = '',
-  accent = 'blue',
   headerAside = null,
 }: {
   title: string;
-  eyebrow: string;
   info?: string;
-  infoPlacement?: 'auto' | 'below';
   children: ReactNode;
-  loading?: boolean;
+  phase?: PanelPhase;
+  /** Skeleton composition matching this panel's real body. Defaults to a metric grid. */
+  skeleton?: string;
   errorMessage?: string | null;
-  loadingLabel?: string;
   className?: string;
-  accent?: 'blue' | 'green' | 'amber' | 'purple';
   headerAside?: ReactNode;
 }) {
-  const { t } = useTranslation();
-  const resolvedLoadingLabel = loadingLabel ?? t('mkl.panel');
 
   return (
-    <div className={`card market-panel accent-${accent} ${className}`.trim()}>
-      <div className="card-header">
-        <div className="market-panel-header">
-          <div className="market-panel-header-copy">
-              <span className="panel-title-eyebrow">{eyebrow}</span>
-              <span className="card-label market-panel-title-row">
-                <span>{title}</span>
-              {info ? <AdaptiveInfoHint text={info} preferredPlacement={infoPlacement} /> : null}
-              </span>
-            </div>
-          {headerAside ? <div className="market-panel-header-aside">{headerAside}</div> : null}
+    // Panel primitive, not `.card market-panel`. The accent used to paint a coloured top edge on
+    // every panel; with 14 of them on screen that was decoration spending the accent palette,
+    // which ELEMENTS.md §3 reserves for meaning. The eyebrow already says what the panel is.
+    <Panel className={`gap-0 ${className}`.trim()}>
+      <PanelHeader className="min-h-0 gap-2 border-b-0 px-4 pt-4 pb-0">
+        {/* No eyebrow. Every panel used to carry a second label above its title — "Observatory
+            Tape", "Analytics Carryover", "Execution Model" — category words that sound meaningful
+            and say nothing the title does not. A section heading is the noun, with nothing above
+            or below it. */}
+        <div className="flex min-w-0 flex-col gap-0.5">
+          {/* Panel titles are Inter 13/600 in full-strength ink, not the mono micro-label the
+              primitive defaults to. That treatment is right for a dense sub-label but reads as a
+              caption when it is the only heading a panel has. */}
+          <PanelTitle variant="heading" className="flex items-center gap-1.5">
+            <span className="truncate">{title}</span>
+            {info ? <InfoHint text={info} /> : null}
+          </PanelTitle>
         </div>
+        {/* Suppressed while idle: a status badge with nothing selected asserts something about
+            nothing — "0 matches" and "low confidence" were being claimed about an empty page. */}
+        {headerAside && phase !== 'idle' ? (
+          <div className="ml-auto shrink-0">{headerAside}</div>
+        ) : null}
+      </PanelHeader>
+      {/* Generous padding is the point — see ELEMENTS.md §5c. The metrics inside no longer carry
+          their own borders, so the panel's own space is what separates them. */}
+      <div className="relative flex min-h-20 flex-1 flex-col gap-4 p-4">
+        <PanelBody phase={phase} skeleton={skeleton} errorMessage={errorMessage}>
+          {children}
+        </PanelBody>
       </div>
-      <div className="card-body market-panel-body">
-        {children}
-        <PanelOverlay loading={loading} errorMessage={errorMessage} label={resolvedLoadingLabel} />
-      </div>
-    </div>
+    </Panel>
   );
 }
 
 function AnalyticsTab() {
   const { t } = useTranslation();
   const pageContentRef = useRef<HTMLDivElement | null>(null);
-  const revealTimeoutsRef = useRef<number[]>([]);
   const analyticsIdentityRef = useRef<string | null>(null);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const itemNameMap = useAppStore((state) => state.itemNameMap);
@@ -1862,9 +1738,10 @@ function AnalyticsTab() {
   const [trendTab, setTrendTab] = useState<'lowestSell' | 'medianSell' | 'weightedAvg'>('lowestSell');
   const [chartDomain, setChartDomain] = useState<ChartDomainKey>('48h');
   const [chartBucket, setChartBucket] = useState<ChartBucketKey>('1h');
-  const [revealedPanels, setRevealedPanels] = useState<Record<AnalyticsPanelKey, boolean>>(
-    () => createRevealState(ANALYTICS_PANEL_SEQUENCE),
-  );
+  // Panels used to be gated behind an 85ms staggered `revealedPanels` map. That existed to make
+  // one all-at-once payload *look* progressive. The backend now genuinely answers in two waves
+  // (cached, then live), so the stagger would only delay real data behind a fake animation.
+  
 
   useEffect(() => {
     pageContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -1879,12 +1756,10 @@ function AnalyticsTab() {
 
   useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey || !selectedItem.wfmId) {
-      clearRevealTimeouts(revealTimeoutsRef);
       analyticsIdentityRef.current = null;
       setAnalytics(null);
       setLoading(false);
       setErrorMessage(null);
-      setRevealedPanels(createRevealState(ANALYTICS_PANEL_SEQUENCE));
       return;
     }
 
@@ -1899,12 +1774,10 @@ function AnalyticsTab() {
       Boolean(selectionIdentity)
       && analyticsIdentityRef.current === selectionIdentity
       && analytics !== null;
-    clearRevealTimeouts(revealTimeoutsRef);
     setLoading(true);
     setErrorMessage(null);
     if (!canKeepCurrentSnapshot) {
       setAnalytics(null);
-      setRevealedPanels(createRevealState(ANALYTICS_PANEL_SEQUENCE));
     }
 
     void getItemAnalytics(
@@ -1923,7 +1796,6 @@ function AnalyticsTab() {
         setAnalytics(response);
         setLoading(false);
         setErrorMessage(null);
-        queuePanelReveal(ANALYTICS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       })
       .catch((error) => {
         if (!isMounted) {
@@ -1939,12 +1811,10 @@ function AnalyticsTab() {
         }
         setLoading(false);
         setErrorMessage(friendlyMessage);
-        clearRevealTimeouts(revealTimeoutsRef);
       });
 
     return () => {
       isMounted = false;
-      clearRevealTimeouts(revealTimeoutsRef);
       void stopMarketTracking(
         itemKey,
         selectedItem.slug,
@@ -1972,18 +1842,21 @@ function AnalyticsTab() {
     analytics?.trendQualityBreakdown.tabs[trendTab] ??
     analytics?.trendQualityBreakdown.tabs.lowestSell;
   const analyticsPanelError = analytics ? null : errorMessage;
+  /**
+   * `idle` when nothing is selected, so the panels render as inert shells rather than being
+   * replaced by a single empty sentence — the page should look like the interface it is while it
+   * waits for input. `ready` the moment data exists, which is what makes the fill-in progressive:
+   * the cached build lands first and panels populate from it, then the live build replaces it.
+   */
+  const analyticsPhase: PanelPhase = !selectedItem ? 'idle' : analytics ? 'ready' : 'loading';
 
-  if (!selectedItem) {
-    return (
-      <div className="page-content">
-        <EmptyAnalyticsState body={t('mkb.pickItemCharts')} />
-      </div>
-    );
-  }
+  // NOTE: no early return for "nothing selected". The panels below are null-safe and render as
+  // inert shells in `idle`, so the page shows the interface you are about to use instead of
+  // replacing it with one sentence. The prompt to pick an item is a notice above the grid.
 
   // While item variants are still loading we deliberately fall through to the real
   // analytics layout below. Every panel (and the chart) is null-safe and shows its
-  // own loading overlay while `revealedPanels` is still false, so the surface looks
+  // own loading state, so the surface looks
   // exactly like the loaded version with content pending — no separate skeleton.
 
   if (marketVariantsError && marketVariants.length === 0 && !selectedMarketVariantKey) {
@@ -1994,7 +1867,9 @@ function AnalyticsTab() {
           body={marketVariantsError}
           actionLabel={t('common.retry')}
           onAction={() => {
-            void loadQuickViewItem(selectedItem);
+            if (selectedItem) {
+              void loadQuickViewItem(selectedItem);
+            }
           }}
         />
       </div>
@@ -2023,75 +1898,56 @@ function AnalyticsTab() {
           onAction={() => setRefreshNonce((value) => value + 1)}
         />
       ) : null}
-      {!errorMessage || analytics || loading ? (
-        <>
-      <div className="market-header-actions">
-        <div className="market-item-freshness">
-          <span>{t('mkt.fresh.snapshot')} {formatRelativeTimestamp(analytics?.sourceSnapshotAt ?? null)}</span>
-          <span>{t('mkt.fresh.stats')} {formatRelativeTimestamp(analytics?.sourceStatsFetchedAt ?? null)}</span>
-          <span>{t('mkt.fresh.computed')} {formatRelativeTimestamp(analytics?.computedAt ?? null)}</span>
-        </div>
-        <button
-          className="market-refresh-button"
-          type="button"
+      {/* Always rendered — see the note in AnalysisTab. Panels are null-safe and draw as inert
+          shells in `idle`, so the interface stays on screen while it waits for a selection. */}
+      <>
+      {/* One provenance stamp, matching the rest of the app (Home's "Priced 1d ago",
+          Opportunities' "Prices 1d ago" beside Refresh). This was three separate pills —
+          Snapshot / Stats / Computed — each a full absolute datetime. Three timestamps for one
+          question is two too many, and "computed" is the only one that describes what is on
+          screen: the other two are inputs to it. */}
+      <div className="flex items-center gap-3 px-4 pt-3">
+        <span className="font-mono text-[10px] text-ink-faint tabular-nums">
+          {t('mkt.fresh.computed')} {formatRelativeTimestamp(analytics?.computedAt ?? null)}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="ml-auto text-ink-dim hover:text-ink"
           aria-label={t('market.refreshAnalytics')}
           title={t('market.refreshAnalytics')}
           onClick={() => setRefreshNonce((value) => value + 1)}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.9"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+          <RefreshIcon />
+        </Button>
       </div>
       <StaticAnalyticsChart
-        itemName={resolveLocalizedName(itemNameMap, selectedItem)}
+        itemName={selectedItem ? resolveLocalizedName(itemNameMap, selectedItem) : ''}
         analytics={analytics}
         loading={loading || marketVariantsLoading}
-        revealed={revealedPanels.chart}
         errorMessage={analyticsPanelError}
         domain={chartDomain}
         bucket={chartBucket}
         onDomainChange={setChartDomain}
         onBucketChange={setChartBucket}
       />
-      <div className="market-analytics-grid">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
             <AnalyticsPanel
               title={t('a11y.entryExitOverview')}
-              eyebrow={t('mkteb.marketState')}
               info={t('mki.zones')}
-              infoPlacement="below"
-              loading={!revealedPanels.overview && !analyticsPanelError}
-              errorMessage={!revealedPanels.overview ? analyticsPanelError : null}
-              loadingLabel={t('mkl.zones')}
+              phase={analyticsPhase}
+              errorMessage={analyticsPanelError}
               headerAside={<ConfidenceBadge confidence={analytics?.entryExitZoneOverview.confidenceSummary} />}
             >
-              <div className="market-metric-grid">
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.currentLowest')}</span>
-                  <span className="market-metric-value">{formatPrice(analytics?.entryExitZoneOverview.currentLowestPrice)}</span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.medianLowest')}</span>
-                  <span className="market-metric-value">{formatPrice(analytics?.entryExitZoneOverview.currentMedianLowestPrice)}</span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.fairValueBand')}</span>
-                  <span className="market-metric-value">
-                    {formatPrice(analytics?.entryExitZoneOverview.fairValueLow)} - {formatPrice(analytics?.entryExitZoneOverview.fairValueHigh)}
-                  </span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.zoneQuality')}</span>
-                  <span className="market-metric-value">{tHealth(t, analytics?.entryExitZoneOverview.zoneQuality) || '—'}</span>
-                </div>
-              </div>
+              <MetricGrid>
+                <Metric label={t('mkt.currentLowest')} value={formatPrice(analytics?.entryExitZoneOverview.currentLowestPrice)} />
+                <Metric label={t('mkt.medianLowest')} value={formatPrice(analytics?.entryExitZoneOverview.currentMedianLowestPrice)} />
+                <Metric
+                  label={t('mkt.fairValueBand')}
+                  value={`${formatPrice(analytics?.entryExitZoneOverview.fairValueLow)} - ${formatPrice(analytics?.entryExitZoneOverview.fairValueHigh)}`}
+                />
+                <Metric label={t('mkt.zoneQuality')} value={tHealth(t, analytics?.entryExitZoneOverview.zoneQuality) || '—'} />
+              </MetricGrid>
               <div className="market-copy-block">
                 <span className="market-copy-title">{t('mkt.entryZone')}</span>
                 <span>
@@ -2111,34 +1967,20 @@ function AnalyticsTab() {
 
             <AnalyticsPanel
               title={t('a11y.orderbookPressure')}
-              eyebrow={t('mkteb.execution')}
               info={t('mki.orderbook')}
-              infoPlacement="below"
-              loading={!revealedPanels.pressure && !analyticsPanelError}
-              errorMessage={!revealedPanels.pressure ? analyticsPanelError : null}
-              loadingLabel={t('mkl.orderbook')}
+              phase={analyticsPhase}
+              errorMessage={analyticsPanelError}
               headerAside={<ConfidenceBadge confidence={analytics?.orderbookPressure.confidenceSummary} />}
             >
-              <div className="market-metric-grid">
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.cheapestSell')}</span>
-                  <span className="market-metric-value">{formatPrice(analytics?.orderbookPressure.cheapestSell)}</span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.highestBuy')}</span>
-                  <span className="market-metric-value">{formatPrice(analytics?.orderbookPressure.highestBuy)}</span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.spread')}</span>
-                  <span className="market-metric-value">
-                    {formatPrice(analytics?.orderbookPressure.spread)} · {formatPercent(analytics?.orderbookPressure.spreadPct)}
-                  </span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.pressure')}</span>
-                  <span className="market-metric-value">{tHealth(t, analytics?.orderbookPressure.pressureLabel) || '—'}</span>
-                </div>
-              </div>
+              <MetricGrid>
+                <Metric label={t('mkt.cheapestSell')} value={formatPrice(analytics?.orderbookPressure.cheapestSell)} />
+                <Metric label={t('mkt.highestBuy')} value={formatPrice(analytics?.orderbookPressure.highestBuy)} />
+                <Metric
+                  label={t('mkt.spread')}
+                  value={`${formatPrice(analytics?.orderbookPressure.spread)} · ${formatPercent(analytics?.orderbookPressure.spreadPct)}`}
+                />
+                <Metric label={t('mkt.pressure')} value={tHealth(t, analytics?.orderbookPressure.pressureLabel) || '—'} />
+              </MetricGrid>
               <div className="market-pressure-row">
                 <div>
                   <span className="market-copy-title">{t('mkt.entryDepth')}</span>
@@ -2158,11 +2000,9 @@ function AnalyticsTab() {
 
             <AnalyticsPanel
               title={t('a11y.trendQualityBreakdown')}
-              eyebrow={t('mkteb.structure')}
               info={t('mki.trend')}
-              loading={!revealedPanels.trend && !analyticsPanelError}
-              errorMessage={!revealedPanels.trend ? analyticsPanelError : null}
-              loadingLabel={t('mkl.trend')}
+              phase={analyticsPhase}
+              errorMessage={analyticsPanelError}
               headerAside={<ConfidenceBadge confidence={analytics?.trendQualityBreakdown.confidenceSummary} />}
             >
               <div className="market-tab-row">
@@ -2177,24 +2017,12 @@ function AnalyticsTab() {
                   </button>
                 ))}
               </div>
-              <div className="market-metric-grid">
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.slope1h')}</span>
-                  <span className="market-metric-value">{formatPercent(trendMetrics?.slope1h)}</span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.slope3h')}</span>
-                  <span className="market-metric-value">{formatPercent(trendMetrics?.slope3h)}</span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.slope6h')}</span>
-                  <span className="market-metric-value">{formatPercent(trendMetrics?.slope6h)}</span>
-                </div>
-                <div className="market-metric-card">
-                  <span className="market-metric-label">{t('mkt.confidence')}</span>
-                  <span className="market-metric-value">{formatPercent(trendMetrics?.confidence)}</span>
-                </div>
-              </div>
+              <MetricGrid>
+                <Metric label={t('mkt.slope1h')} value={formatPercent(trendMetrics?.slope1h)} />
+                <Metric label={t('mkt.slope3h')} value={formatPercent(trendMetrics?.slope3h)} />
+                <Metric label={t('mkt.slope6h')} value={formatPercent(trendMetrics?.slope6h)} />
+                <Metric label={t('mkt.confidence')} value={formatPercent(trendMetrics?.confidence)} />
+              </MetricGrid>
               <div className="market-copy-block">
                 <span className="market-copy-title">{t('mkt.crossSignal')}</span>
                 <p>{tHealth(t, trendMetrics?.crossSignal) || '—'}</p>
@@ -2227,11 +2055,9 @@ function AnalyticsTab() {
 
             <AnalyticsPanel
               title={t('a11y.actionCard')}
-              eyebrow={t('mkteb.readout')}
               info={t('mki.action')}
-              loading={!revealedPanels.action && !analyticsPanelError}
-              errorMessage={!revealedPanels.action ? analyticsPanelError : null}
-              loadingLabel={t('mkl.readout')}
+              phase={analyticsPhase}
+              errorMessage={analyticsPanelError}
               headerAside={<ConfidenceBadge confidence={analytics?.actionCard.confidenceSummary} />}
             >
               <div className={`market-action-card tone-${analytics?.actionCard.tone ?? 'neutral'}`}>
@@ -2239,26 +2065,15 @@ function AnalyticsTab() {
                   <span className="market-action-label">{t('mkt.suggestedAction')}</span>
                   <span className="market-action-value">{tHealth(t, analytics?.actionCard.suggestedAction) || '—'}</span>
                 </div>
-                <div className="market-metric-grid">
-                  <div className="market-metric-card">
-                    <span className="market-metric-label">{t('mkt.zoneQuality')}</span>
-                    <span className="market-metric-value">{tHealth(t, analytics?.actionCard.zoneQuality) || '—'}</span>
-                  </div>
-                  <div className="market-metric-card">
-                    <span className="market-metric-label">{t('mkt.zoneAdjustedEdge')}</span>
-                    <span className="market-metric-value">{formatPrice(analytics?.actionCard.zoneAdjustedEdge)}</span>
-                  </div>
-                  <div className="market-metric-card">
-                    <span className="market-metric-label">{t('mkt.spread')}</span>
-                    <span className="market-metric-value">
-                      {formatPrice(analytics?.actionCard.spread)} · {formatPercent(analytics?.actionCard.spreadPct)}
-                    </span>
-                  </div>
-                  <div className="market-metric-card">
-                    <span className="market-metric-label">{t('mkt.bookBias')}</span>
-                    <span className="market-metric-value">{tHealth(t, analytics?.actionCard.pressureLabel) || '—'}</span>
-                  </div>
-                </div>
+                <MetricGrid>
+                  <Metric label={t('mkt.zoneQuality')} value={tHealth(t, analytics?.actionCard.zoneQuality) || '—'} />
+                  <Metric label={t('mkt.zoneAdjustedEdge')} value={formatPrice(analytics?.actionCard.zoneAdjustedEdge)} />
+                  <Metric
+                    label={t('mkt.spread')}
+                    value={`${formatPrice(analytics?.actionCard.spread)} · ${formatPercent(analytics?.actionCard.spreadPct)}`}
+                  />
+                  <Metric label={t('mkt.bookBias')} value={tHealth(t, analytics?.actionCard.pressureLabel) || '—'} />
+                </MetricGrid>
                 <p className="market-action-rationale">{tActionRationale(t, analytics?.actionCard.rationale, analytics?.actionCard.confidenceSummary) || '—'}</p>
                 <div className="market-signal-list">
                   {(analytics?.actionCard.alignedSignals ?? []).map((signal) => (
@@ -2273,8 +2088,7 @@ function AnalyticsTab() {
               </div>
             </AnalyticsPanel>
           </div>
-        </>
-      ) : null}
+      </>
     </div>
   );
 }
@@ -2314,17 +2128,17 @@ function ActionCardTrackRecord({
 function AnalysisTab() {
   const { t } = useTranslation();
   const pageContentRef = useRef<HTMLDivElement | null>(null);
-  const revealTimeoutsRef = useRef<number[]>([]);
   const selectedItem = useAppStore((state) => state.quickView.selectedItem);
   const itemNameMap = useAppStore((state) => state.itemNameMap);
   const marketVariants = useAppStore((state) => state.marketVariants);
-  const marketVariantsLoading = useAppStore((state) => state.marketVariantsLoading);
   const marketVariantsError = useAppStore((state) => state.marketVariantsError);
   const loadQuickViewItem = useAppStore((state) => state.loadQuickViewItem);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const analysis = useAppStore((state) => state.selectedMarketAnalysis);
   const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
   const analysisError = useAppStore((state) => state.selectedMarketAnalysisError);
+  /** Same three-phase rule as Analytics — see `analyticsPhase`. */
+  const analysisPhase: PanelPhase = !selectedItem ? 'idle' : analysis ? 'ready' : 'loading';
   const loadSelectedMarketAnalysis = useAppStore((state) => state.loadSelectedMarketAnalysis);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const worldStateAlerts = useAppStore((state) => state.worldStateAlerts);
@@ -2335,18 +2149,12 @@ function AnalysisTab() {
   const worldStateFlashSales = useAppStore((state) => state.worldStateFlashSales);
   const worldStateVaultTrader = useAppStore((state) => state.worldStateExtra['vault-trader'].payload);
   const [itemDetails, setItemDetails] = useState<ItemDetailSummary | null>(null);
-  const [itemDetailsLoading, setItemDetailsLoading] = useState(false);
+  const [, setItemDetailsLoading] = useState(false);
   const [itemDetailsError, setItemDetailsError] = useState<string | null>(null);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
   const [watchlistAddFeedback, setWatchlistAddFeedback] = useState<Record<string, boolean>>({});
   const [autocompleteItems, setAutocompleteItems] = useState<WfmAutocompleteItem[]>([]);
   const watchlistAddFeedbackTimeoutsRef = useRef(new Map<string, number>());
-  const [revealedPanels, setRevealedPanels] = useState<Record<AnalysisPanelKey, boolean>>(
-    () => ({
-      ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
-      itemDetails: false,
-    }),
-  );
 
   useEffect(() => {
     let isMounted = true;
@@ -2379,28 +2187,18 @@ function AnalysisTab() {
 
   useEffect(() => {
     if (!selectedItem || !selectedMarketVariantKey || !selectedItem.wfmId) {
-      clearRevealTimeouts(revealTimeoutsRef);
       setItemDetails(null);
       setItemDetailsLoading(false);
       setItemDetailsError(null);
       setComponentTargets({});
-      setRevealedPanels({
-        ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
-        itemDetails: false,
-      });
       return;
     }
 
     let isMounted = true;
-    clearRevealTimeouts(revealTimeoutsRef);
     setItemDetails(null);
     setItemDetailsLoading(true);
     setItemDetailsError(null);
     setComponentTargets({});
-    setRevealedPanels({
-      ...createRevealState(ANALYSIS_PANEL_SEQUENCE),
-      itemDetails: false,
-    });
 
     void getItemDetailSummary(selectedItem.wfmId, selectedItem.slug)
       .then((response) => {
@@ -2410,10 +2208,6 @@ function AnalysisTab() {
         setItemDetails(response);
         setItemDetailsLoading(false);
         setItemDetailsError(null);
-        setRevealedPanels((current) => ({
-          ...current,
-          itemDetails: true,
-        }));
       })
       .catch((error) => {
         if (!isMounted) {
@@ -2436,10 +2230,6 @@ function AnalysisTab() {
           setItemDetails(response.itemDetails);
           setItemDetailsLoading(false);
           setItemDetailsError(null);
-          setRevealedPanels((current) => ({
-            ...current,
-            itemDetails: true,
-          }));
         }
         setComponentTargets(
           Object.fromEntries(
@@ -2449,21 +2239,17 @@ function AnalysisTab() {
             ]),
           ),
         );
-        queuePanelReveal(ANALYSIS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       })
       .catch(() => {
         if (!isMounted) {
           return;
         }
-        clearRevealTimeouts(revealTimeoutsRef);
         // Reveal the panels anyway so they don't hang forever on "Building…"; the analysis
         // error state surfaces the failure to the user.
-        queuePanelReveal(ANALYSIS_PANEL_SEQUENCE, setRevealedPanels, revealTimeoutsRef);
       });
 
     return () => {
       isMounted = false;
-      clearRevealTimeouts(revealTimeoutsRef);
     };
   }, [selectedItem, selectedMarketVariantKey, loadSelectedMarketAnalysis]);
 
@@ -2478,13 +2264,7 @@ function AnalysisTab() {
   });
   const eventContextConfidence = buildEventContextConfidence(eventContextEntries, t);
 
-  if (!selectedItem) {
-    return (
-      <div className="page-content">
-        <EmptyAnalyticsState body={t('mkb.pickItemAnalysis')} />
-      </div>
-    );
-  }
+  // See the note in AnalyticsTab: panels render as idle shells rather than being replaced.
 
   // While variants load we fall through to the real analysis layout below; it is
   // null-safe and every panel shows its own loading overlay until revealed, so the
@@ -2498,7 +2278,9 @@ function AnalysisTab() {
           body={marketVariantsError}
           actionLabel={t('common.retry')}
           onAction={() => {
-            void loadQuickViewItem(selectedItem);
+            if (selectedItem) {
+              void loadQuickViewItem(selectedItem);
+            }
           }}
         />
       </div>
@@ -2520,16 +2302,9 @@ function AnalysisTab() {
   const effectiveItemDetails = itemDetails ?? analysis?.itemDetails ?? null;
   const itemImageUrl = resolveWfmAssetUrl(effectiveItemDetails?.imagePath, effectiveItemDetails?.slug);
   const itemDetailSections = buildItemDetailSections(effectiveItemDetails, t);
-  const heroState = buildAnalysisHeroState(analysis, t);
-  const liquidityMeterValue = toUnitInterval(analysis?.headline.liquidityScore);
-  const trendConfidenceValue = toUnitInterval(analysis?.trend.confidence);
-  const riskMeterValue = getRiskTone(analysis?.manipulationRisk.riskLevel) === 'red'
-    ? 0.92
-    : getRiskTone(analysis?.manipulationRisk.riskLevel) === 'amber'
-      ? 0.58
-      : getRiskTone(analysis?.manipulationRisk.riskLevel) === 'green'
-        ? 0.18
-        : 0.35;
+  // The three hero meters these fed are gone — each duplicated a panel below. Note the risk
+  // meter in particular was a HARDCODED fill (0.92 / 0.58 / 0.18) derived from a tone, not a
+  // measurement: a bar that looked like data and plotted nothing. See ELEMENTS.md on decoration.
   const timeOfDayDisplay = buildTimeOfDayDisplayModel(analysis?.timeOfDayLiquidity);
   const displayDropSources = buildDisplayDropSources(
     analysis?.supplyContext.dropSources ?? [],
@@ -2551,468 +2326,58 @@ function AnalysisTab() {
           }}
         />
       ) : null}
-      {analysis || analysisLoading || marketVariantsLoading ? (
-        <>
+      {/* Always rendered. This used to be gated on `analysis || analysisLoading ||
+          marketVariantsLoading`, so with nothing selected the whole page collapsed to one
+          sentence. Every panel below is null-safe and draws itself as an inert shell in `idle`,
+          which is what lets the interface stay visible while it waits for a selection. */}
+      <>
       {analysisDegradedMessage ? (
         <MarketInlineNotice tone="warning" message={analysisDegradedMessage} />
       ) : null}
       {itemDetailsDegradedMessage ? (
         <MarketInlineNotice tone="warning" message={itemDetailsDegradedMessage} />
       ) : null}
-      <div className="market-header-actions">
-        <div className="market-item-freshness">
-          <span>{t('mkt.fresh.snapshot')} {formatRelativeTimestamp(analysis?.sourceSnapshotAt ?? null)}</span>
-          <span>{t('mkt.fresh.stats')} {formatRelativeTimestamp(analysis?.sourceStatsFetchedAt ?? null)}</span>
-          <span>{t('mkt.fresh.computed')} {formatRelativeTimestamp(analysis?.computedAt ?? null)}</span>
-        </div>
-        <button
-          className="market-refresh-button"
-          type="button"
+      {/* One provenance stamp, matching the rest of the app (Home's "Priced 1d ago",
+          Opportunities' "Prices 1d ago" beside Refresh). This was three separate pills —
+          Snapshot / Stats / Computed — each a full absolute datetime. Three timestamps for one
+          question is two too many, and "computed" is the only one that describes what is on
+          screen: the other two are inputs to it. */}
+      <div className="flex items-center gap-3 px-4 pt-3">
+        <span className="font-mono text-[10px] text-ink-faint tabular-nums">
+          {t('mkt.fresh.computed')} {formatRelativeTimestamp(analysis?.computedAt ?? null)}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="ml-auto text-ink-dim hover:text-ink"
+          disabled={analysisLoading}
           aria-label={t('market.refreshAnalysis')}
           title={t('market.refreshAnalysis')}
-          disabled={analysisLoading}
           onClick={() => {
             void loadSelectedMarketAnalysis({ force: true });
           }}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.9"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+          <RefreshIcon />
+        </Button>
       </div>
-      <div className="market-analysis-layout">
-        <div className="market-analysis-column market-analysis-column-main">
-          <div className={`market-summary-grid-shell market-hero-shell tone-${heroState.tone}`}>
-            <div className="market-hero-strip">
-              <div className="market-hero-copy">
-                <div className="market-hero-title-row">
-                  <span className="market-hero-kicker market-hero-kicker-row">
-                    <span>{t('mkt.tradePosture')}</span>
-                    <AdaptiveInfoHint text={t('mki.hero')} />
-                  </span>
-                  <div className="market-badge-stack">
-                    <span className={`market-panel-badge tone-${heroState.tone}`}>{heroState.label}</span>
-                    <ConfidenceBadge confidence={analysis?.headline.confidenceSummary} />
-                  </div>
-                </div>
-                <span className="market-hero-item-name">{resolveLocalizedName(itemNameMap, selectedItem)}</span>
-                <p className="market-hero-note">{heroState.note}</p>
-              </div>
-              <div className="market-hero-meter-grid">
-                <div className="market-meter-card">
-                  <span className="market-copy-title">{t('mkt.liquidity')}</span>
-                  <div className="market-meter-track">
-                    <div
-                      className="market-meter-fill tone-blue"
-                      style={{ '--meter-fill': `${Math.round(liquidityMeterValue * 100)}%` } as CSSProperties}
-                    />
-                  </div>
-                  <span className="market-meter-value">
-                    {formatPercent(analysis?.headline.liquidityScore)} · {tHealth(t, analysis?.headline.liquidityLabel) || '—'}
-                  </span>
-                </div>
-                <div className="market-meter-card">
-                  <span className="market-copy-title">{t('mkt.trendConfidence')}</span>
-                  <div className="market-meter-track">
-                    <div
-                      className="market-meter-fill tone-green"
-                      style={{ '--meter-fill': `${Math.round(trendConfidenceValue * 100)}%` } as CSSProperties}
-                    />
-                  </div>
-                  <span className="market-meter-value">
-                    {formatPercent(analysis?.trend.confidence)} · {tHealth(t, analysis?.trend.direction) || '—'}
-                  </span>
-                </div>
-                <div className="market-meter-card">
-                  <span className="market-copy-title">{t('mkt.riskPosture')}</span>
-                  <div className="market-meter-track">
-                    <div
-                      className={`market-meter-fill tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
-                      style={{ '--meter-fill': `${Math.round(riskMeterValue * 100)}%` } as CSSProperties}
-                    />
-                  </div>
-                  <span className="market-meter-value">{tHealth(t, analysis?.manipulationRisk.riskLevel) || '—'}</span>
-                </div>
-              </div>
-            </div>
-            <div className="market-analysis-summary-grid">
-              <div className="market-summary-card">
-                <span className="market-summary-label">{t('mkt.entryPrice')}</span>
-                <span className="market-summary-value">{formatPrice(analysis?.headline.entryPrice)}</span>
-              </div>
-              <div className="market-summary-card">
-                <span className="market-summary-label">{t('mkt.exitPriceLabel', { label: analysis?.headline.exitPercentileLabel === 'Adaptive' ? t('mkt.adaptive') : (analysis?.headline.exitPercentileLabel ?? 'P60') })}</span>
-                <span className="market-summary-value">{formatPrice(analysis?.headline.exitPrice)}</span>
-              </div>
-              <div className="market-summary-card">
-                <span className="market-summary-label">{t('mkt.netMargin')}</span>
-                <span className="market-summary-value">{formatPrice(analysis?.headline.netMargin)}</span>
-              </div>
-              <div className="market-summary-card">
-                <span className="market-summary-label">{t('mkt.liquidity')}</span>
-                <span className="market-summary-value">
-                  {formatPercent(analysis?.headline.liquidityScore)} · {tHealth(t, analysis?.headline.liquidityLabel) || '—'}
-                </span>
-              </div>
-            </div>
-            <PanelOverlay
-              loading={!revealedPanels.headline && !analysisError}
-              errorMessage={!revealedPanels.headline ? analysisError : null}
-              label={t('mkt.buildingHeadlineMetrics')}
-            />
+      {/* Top row: what am I looking at, and can I act on it.
+          Quick View sizes to its content and defines the row height; Item details is capped to it
+          and scrolls (see `.market-item-details-cell`). */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-6">
+        <ErrorBoundary label="Quick view">
+          <div className="xl:col-span-4">
+            <QuickViewCard />
           </div>
+        </ErrorBoundary>
 
-          <AnalyticsPanel
-            title={t('a11y.flipAnalysis')}
-            eyebrow={t('mkteb.executionModel')}
-            info={t('mki.flip')}
-            loading={!revealedPanels.flip && !analysisError}
-            errorMessage={!revealedPanels.flip ? analysisError : null}
-            loadingLabel={t('mkl.flip')}
-            className="market-panel-tone-blue"
-            headerAside={
-              <div className="market-badge-stack">
-                <span className="market-panel-badge tone-blue">
-                  {tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || t('trades.row.building')}
-                </span>
-                <ConfidenceBadge confidence={analysis?.flipAnalysis.confidenceSummary} />
-              </div>
-            }
-          >
-            <div className="market-metric-grid">
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.entryPrice')}</span>
-                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.entryPrice)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.exitPrice')}</span>
-                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.exitPrice)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.grossMargin')}</span>
-                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.grossMargin)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.netMargin')}</span>
-                <span className="market-metric-value">{formatPrice(analysis?.flipAnalysis.netMargin)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.efficiencyScore')}</span>
-                <span className="market-metric-value">
-                  {formatPercent(analysis?.flipAnalysis.efficiencyScore)} · {tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || '—'}
-                </span>
-              </div>
-            </div>
-            <ConfidenceNote confidence={analysis?.flipAnalysis.confidenceSummary} />
-          </AnalyticsPanel>
-
-          <AnalyticsPanel
-            title={t('a11y.liquidityDetail')}
-            eyebrow={t('mkteb.marketStructure')}
-            info={t('mki.liquidity')}
-            loading={!revealedPanels.liquidity && !analysisError}
-            errorMessage={!revealedPanels.liquidity ? analysisError : null}
-            loadingLabel={t('mkl.liquidity')}
-            className="market-panel-tone-blue"
-            headerAside={
-              <div className="market-badge-stack">
-                <span className="market-panel-badge tone-blue">
-                  {analysis?.liquidityDetail.state ?? t('mkt.profiling')}
-                </span>
-                <ConfidenceBadge confidence={analysis?.liquidityDetail.confidenceSummary} />
-              </div>
-            }
-          >
-            <div className="market-metric-grid">
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.demandRatio')}</span>
-                <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.demandRatio, 2)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.state')}</span>
-                <span className="market-metric-value">{analysis?.liquidityDetail.state ?? '—'}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.sellersWithin')}</span>
-                <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.undercutVelocity')}</span>
-                <span className="market-metric-value">{formatNumber(analysis?.liquidityDetail.undercutVelocity, 2)} / h</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.qtyWeightedDemand')}</span>
-                <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.liquidity')}</span>
-                <span className="market-metric-value">{formatPercent(analysis?.liquidityDetail.liquidityScore)}</span>
-              </div>
-            </div>
-            <ConfidenceNote confidence={analysis?.liquidityDetail.confidenceSummary} />
-            <div className="market-signal-board">
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.demandRatio')}</span>
-                <div className="market-signal-track">
-                  <div
-                    className="market-signal-fill tone-blue"
-                    style={{ '--signal-fill': `${Math.round(ratioToUnitInterval(analysis?.liquidityDetail.demandRatio) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.qtyWeightedDemand')}</span>
-                <div className="market-signal-track">
-                  <div
-                    className="market-signal-fill tone-green"
-                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.quantityWeightedDemand) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.liquidityScore')}</span>
-                <div className="market-signal-track">
-                  <div
-                    className="market-signal-fill tone-cyan"
-                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.liquidityScore) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
-            </div>
-          </AnalyticsPanel>
-
-          <AnalyticsPanel
-            title={t('trades.analysis.trend')}
-            eyebrow={t('mkteb.analyticsCarryover')}
-            info={t('mki.trendSummary')}
-            loading={!revealedPanels.trend && !analysisError}
-            errorMessage={!revealedPanels.trend ? analysisError : null}
-            loadingLabel={t('mkl.trendSummary')}
-            className={`market-panel-tone-${getTrendTone(analysis?.trend.direction)}`}
-            headerAside={
-              <div className="market-badge-stack">
-                <span className={`market-panel-badge tone-${getTrendTone(analysis?.trend.direction)}`}>
-                  {tHealth(t, analysis?.trend.direction) || t('trades.row.building')}
-                </span>
-                <ConfidenceBadge confidence={analysis?.trend.confidenceSummary} />
-              </div>
-            }
-          >
-            <div className="market-metric-grid">
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.direction')}</span>
-                <span className="market-metric-value">{tHealth(t, analysis?.trend.direction) || '—'}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.confidence')}</span>
-                <span className="market-metric-value">{formatPercent(analysis?.trend.confidence)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.slope1h')}</span>
-                <span className="market-metric-value">{formatPercent(analysis?.trend.slope1h)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.slope3h')}</span>
-                <span className="market-metric-value">{formatPercent(analysis?.trend.slope3h)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.slope6h')}</span>
-                <span className="market-metric-value">{formatPercent(analysis?.trend.slope6h)}</span>
-              </div>
-            </div>
-            <div className="market-slope-grid">
-              {[
-                { label: '1H', value: analysis?.trend.slope1h ?? null },
-                { label: '3H', value: analysis?.trend.slope3h ?? null },
-                { label: '6H', value: analysis?.trend.slope6h ?? null },
-              ].map((slope) => (
-                <div key={slope.label} className="market-slope-card">
-                  <div className="market-slope-head">
-                    <span className="market-copy-title">{slope.label} Slope</span>
-                    <span className={`market-slope-value${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}>
-                      {formatPercent(slope.value)}
-                    </span>
-                  </div>
-                  <div className="market-slope-track">
-                    <div
-                      className={`market-slope-fill${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}
-                      style={{ '--slope-fill': `${Math.round(slopeToUnitInterval(slope.value) * 100)}%` } as CSSProperties}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="market-copy-block">
-              <span className="market-copy-title">{t('mkt.summary')}</span>
-              <p>{analysis ? tTrendSummary(t, analysis.trend) : '—'}</p>
-            </div>
-            <ConfidenceNote confidence={analysis?.trend.confidenceSummary} />
-          </AnalyticsPanel>
-
-          <AnalyticsPanel
-            title={
-              analysis?.supplyContext.mode === 'set-components'
-                ? t('mkt.setComponents')
-                : analysis?.supplyContext.mode === 'drop-sources'
-                  ? t('mkt.dropSources')
-                  : t('mkt.dropSourcesOrSetComponents')
-            }
-            eyebrow={t('mkteb.supplyContext')}
-            info={t('mki.supply')}
-            loading={!revealedPanels.supply && !analysisError}
-            errorMessage={!revealedPanels.supply ? analysisError : null}
-            loadingLabel={t('mkl.supply')}
-            className="market-panel-tone-amber"
-            headerAside={
-              <div className="market-badge-stack">
-                <span className="market-panel-badge tone-amber">
-                  {analysis?.supplyContext.mode === 'set-components'
-                    ? t('mkt.setBreakdown')
-                    : analysis?.supplyContext.mode === 'drop-sources'
-                      ? t('mkt.dropIntel')
-                      : t('mkt.noSource')}
-                </span>
-                <ConfidenceBadge confidence={analysis?.supplyContext.confidenceSummary} />
-              </div>
-            }
-          >
-            {analysis?.supplyContext.mode === 'set-components' ? (
-              <div className="market-component-list">
-                {(analysis?.supplyContext.components ?? []).map((component) => {
-                  const imageUrl = resolveWfmAssetUrl(component.imagePath, component.slug);
-                  const targetValue = componentTargets[component.slug] ?? '';
-                  const watchlistItem: WfmAutocompleteItem | null =
-                    component.itemKey !== null
-                      ? {
-                          itemId: 0,
-                          wfmId: component.itemKey,
-                          name: component.name,
-                          slug: component.slug,
-                          maxRank: null,
-                          itemFamily: null,
-                          imagePath: component.imagePath,
-                          bulkTradable: false,
-                        }
-                      : null;
-
-                  return (
-                    <div key={component.slug} className="market-component-card">
-                      <div className="market-component-main">
-                        {imageUrl ? (
-                          <img
-                            className="market-component-image"
-                            src={imageUrl}
-                            alt={component.name}
-                          />
-                        ) : (
-                          <div className="market-component-image placeholder" />
-                        )}
-                        <div className="market-component-copy">
-                          <span className="market-copy-title">{resolveLocalizedName(itemNameMap, component)}</span>
-                          <span>{t('mkt.neededForSetQty', { n: component.quantityInSet })}</span>
-                          <span>{t('mkt.currentLowestPrefix', { price: formatPrice(component.currentLowestPrice) })}</span>
-                          <span>{t('mkt.recommendedEntryPrefix', { price: formatPrice(component.recommendedEntryPrice) })}</span>
-                        </div>
-                      </div>
-                      <div className="market-component-actions">
-                        <input
-                          className="price-input"
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={targetValue}
-                          onChange={(event) =>
-                            setComponentTargets((current) => ({
-                              ...current,
-                              [component.slug]: event.target.value,
-                            }))
-                          }
-                        />
-                        <div className="watchlist-add-feedback-stack">
-                          {watchlistAddFeedback[component.slug] ? (
-                            <span className="watchlist-add-success">{t('wl.addedToWatchlist')}</span>
-                          ) : null}
-                          <button
-                            className="btn-sm"
-                            type="button"
-                            disabled={!watchlistItem}
-                            onClick={() => {
-                              if (!watchlistItem) {
-                                return;
-                              }
-                              addExplicitItemToWatchlist(
-                                watchlistItem,
-                                component.variantKey,
-                                component.variantLabel,
-                                Number.parseInt(targetValue || '0', 10),
-                              );
-                              markWatchlistAddFeedback(
-                                component.slug,
-                                setWatchlistAddFeedback,
-                                watchlistAddFeedbackTimeoutsRef,
-                              );
-                            }}
-                          >
-                            {t('wl.addToWatchlist')}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : analysis?.supplyContext.mode === 'drop-sources' ? (
-              <div className="market-drop-list">
-                {displayDropSources.map((source) => {
-                  const imageUrl = resolveWfmAssetUrl(source.imagePath);
-                  return (
-                    <div key={source.key} className="market-drop-card">
-                      <div className="market-drop-card-top">
-                        {source.isRelic ? (
-                          imageUrl ? (
-                            <img className="market-drop-image" src={imageUrl} alt={source.location} loading="lazy" />
-                          ) : (
-                            <span className="market-drop-image placeholder" aria-hidden="true">
-                              {source.location.slice(0, 2)}
-                            </span>
-                          )
-                        ) : null}
-                        <span className="market-drop-title">{source.location}</span>
-                      </div>
-                      {source.isRelic ? <span>{t('mkt.rarityPrefix', { value: source.rarity ?? '—' })}</span> : null}
-                      {!source.isRelic ? <span>{t('mkt.chancePrefix', { value: formatDropChancePercent(source.chance) })}</span> : null}
-                      {!source.isRelic ? <span>{t('mkt.rarityPrefix', { value: source.rarity ?? '—' })}</span> : null}
-                      {!source.isRelic ? <span>{t('mkt.typePrefix', { value: source.sourceType ?? '—' })}</span> : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.noSupplyContext')}</span>
-                <p>{t('mkt.noSupplyBody')}</p>
-              </div>
-            )}
-            <ConfidenceNote confidence={analysis?.supplyContext.confidenceSummary} />
-          </AnalyticsPanel>
-        </div>
-
-        <div className="market-analysis-column market-analysis-column-side">
-          <div className="market-analysis-item-details">
-              <AnalyticsPanel
+        <div className="market-item-details-cell xl:col-span-2">
+<AnalyticsPanel
                 title={t('a11y.itemDetails')}
-                eyebrow={t('mkteb.reference')}
                 info={t('mki.reference')}
-                loading={itemDetailsLoading || (!revealedPanels.itemDetails && !itemDetailsError)}
+                phase={
+                  !selectedItem ? 'idle' : effectiveItemDetails ? 'ready' : 'loading'
+                }
                 errorMessage={effectiveItemDetails ? null : itemDetailsError}
-                loadingLabel={t('mkl.details')}
                 className="market-panel-tone-neutral market-item-details-panel"
                 headerAside={
                   effectiveItemDetails?.category ? (
@@ -3027,14 +2392,13 @@ function AnalysisTab() {
                     <img
                       className="market-item-detail-image"
                       src={itemImageUrl}
-                      alt={effectiveItemDetails?.name ?? selectedItem.name}
+                      alt={effectiveItemDetails?.name ?? selectedItem?.name ?? ''}
                     />
                   ) : (
                     <div className="market-item-detail-image placeholder" />
                   )}
                   <div className="market-item-detail-copy">
-                    <span className="market-item-detail-name">{effectiveItemDetails?.name ?? selectedItem.name}</span>
-                    <span className="market-item-detail-slug">{effectiveItemDetails?.slug ?? selectedItem.slug}</span>
+                    <span className="market-item-detail-name">{effectiveItemDetails?.name ?? selectedItem?.name ?? '—'}</span>
                     {effectiveItemDetails?.wikiLink ? (
                       <button
                         type="button"
@@ -3102,109 +2466,101 @@ function AnalysisTab() {
                   ))}
                 </div>
               </AnalyticsPanel>
-          </div>
+        </div>
+      </div>
 
-          <AnalyticsPanel
-            title={t('a11y.eventContext')}
-            eyebrow={t('mkteb.worldState')}
-            info={t('mki.worldstate')}
-            loading={!revealedPanels.eventContext && !analysisError}
-            errorMessage={!revealedPanels.eventContext ? analysisError : null}
-            loadingLabel={t('mkl.worldstate')}
-            className="market-panel-tone-amber"
+      {/* Two columns that pack independently, rather than one grid of paired rows.
+          In a grid, each row is as tall as its taller panel, so Flip economics and Trend were
+          padded out with dead space to match Liquidity and Risk beside them. Columns let every
+          panel size to its own content and stack flush.
+
+          Left is the opportunity — the economics, where price is going, when to trade it, and what
+          the parts cost. Right is the caveats — how easily you get out, what could distort the
+          edge, and what events are moving it. */}
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-5">
+<AnalyticsPanel
+            title={t('a11y.flipAnalysis')}
+            info={t('mki.flip')}
+            phase={analysisPhase}
+            errorMessage={analysisError}
+            className="market-panel-tone-blue"
             headerAside={
               <div className="market-badge-stack">
-                <span className="market-panel-badge tone-amber">
-                  {eventContextEntries.length} {eventContextEntries.length === 1 ? 'match' : 'matches'}
+                <span className="market-panel-badge tone-blue">
+                  {tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || t('trades.row.building')}
                 </span>
-                <ConfidenceBadge confidence={eventContextConfidence} />
+                <ConfidenceBadge confidence={analysis?.flipAnalysis.confidenceSummary} />
               </div>
             }
           >
-            {eventContextEntries.length > 0 ? (
-              <div className="market-context-list market-context-list-timeline">
-                {eventContextEntries.map((entry) => (
-                  <div key={`${entry.label}-${entry.impact}`} className="market-context-card">
-                    <span className="market-copy-title">{entry.label}</span>
-                    <p>{entry.impact}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.noActiveContext')}</span>
-                <p>{t('mkt.noActiveBody')}</p>
-              </div>
-            )}
-            <ConfidenceNote confidence={eventContextConfidence} />
+            <MetricGrid>
+              <Metric label={t('mkt.entryPrice')} value={formatPrice(analysis?.flipAnalysis.entryPrice)} />
+              <Metric label={t('mkt.exitPrice')} value={formatPrice(analysis?.flipAnalysis.exitPrice)} />
+              <Metric label={t('mkt.grossMargin')} value={formatPrice(analysis?.flipAnalysis.grossMargin)} />
+              <Metric label={t('mkt.netMargin')} value={formatPrice(analysis?.flipAnalysis.netMargin)} />
+              <Metric
+                label={t('mkt.efficiencyScore')}
+                value={`${formatPercent(analysis?.flipAnalysis.efficiencyScore)} · ${tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || '—'}`}
+              />
+            </MetricGrid>
+            <ConfidenceNote confidence={analysis?.flipAnalysis.confidenceSummary} />
           </AnalyticsPanel>
-
-          <AnalyticsPanel
-            title={t('a11y.manipulationRisk')}
-            eyebrow={t('mkteb.safety')}
-            info={t('mki.risk')}
-            loading={!revealedPanels.manipulation && !analysisError}
-            errorMessage={!revealedPanels.manipulation ? analysisError : null}
-            loadingLabel={t('mkl.risk')}
-            className={`market-panel-tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
+<AnalyticsPanel
+            title={t('trades.analysis.trend')}
+            info={t('mki.trendSummary')}
+            phase={analysisPhase}
+            errorMessage={analysisError}
+            className={`market-panel-tone-${getTrendTone(analysis?.trend.direction)}`}
             headerAside={
               <div className="market-badge-stack">
-                <span className={`market-panel-badge tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}>
-                  {tHealth(t, analysis?.manipulationRisk.riskLevel) || t('trades.row.building')}
+                <span className={`market-panel-badge tone-${getTrendTone(analysis?.trend.direction)}`}>
+                  {tHealth(t, analysis?.trend.direction) || t('trades.row.building')}
                 </span>
-                <ConfidenceBadge confidence={analysis?.manipulationRisk.confidenceSummary} />
+                <ConfidenceBadge confidence={analysis?.trend.confidenceSummary} />
               </div>
             }
           >
-            <div className="market-metric-grid">
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.riskLevel')}</span>
-                <span className="market-metric-value">{tHealth(t, analysis?.manipulationRisk.riskLevel) || '—'}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.activeSignals')}</span>
-                <span className="market-metric-value">{formatNumber(analysis?.manipulationRisk.activeSignals, 0)}</span>
-              </div>
-              <div className="market-metric-card">
-                <span className="market-metric-label">{t('mkt.efficiencyPenalty')}</span>
-                <span className="market-metric-value">{formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)}</span>
-              </div>
-            </div>
-            <div className="market-signal-board">
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.penaltyApplied')}</span>
-                <div className="market-signal-track danger">
-                  <div
-                    className="market-signal-fill tone-red"
-                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.manipulationRisk.efficiencyPenaltyPct) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
-            </div>
-            <ConfidenceNote confidence={analysis?.manipulationRisk.confidenceSummary} />
-            <div className="market-analysis-signal-list">
-              {(analysis?.manipulationRisk.signals ?? []).map((signal) => (
-                <div
-                  key={signal.key}
-                  className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
-                >
-                  <span className="market-copy-title">{tHealth(t, signal.label)}</span>
-                  <span className="market-analysis-signal-state">
-                    {signal.active ? t('mkt.signal.active') : t('mkt.signal.clear')}
-                  </span>
-                  <p>{tSignalDetail(t, signal.detail)}</p>
+            <MetricGrid>
+              <Metric label={t('mkt.direction')} value={tHealth(t, analysis?.trend.direction) || '—'} />
+              <Metric label={t('mkt.confidence')} value={formatPercent(analysis?.trend.confidence)} />
+              <Metric label={t('mkt.slope1h')} value={formatPercent(analysis?.trend.slope1h)} />
+              <Metric label={t('mkt.slope3h')} value={formatPercent(analysis?.trend.slope3h)} />
+              <Metric label={t('mkt.slope6h')} value={formatPercent(analysis?.trend.slope6h)} />
+            </MetricGrid>
+            <div className="market-slope-grid">
+              {[
+                { label: '1H', value: analysis?.trend.slope1h ?? null },
+                { label: '3H', value: analysis?.trend.slope3h ?? null },
+                { label: '6H', value: analysis?.trend.slope6h ?? null },
+              ].map((slope) => (
+                <div key={slope.label} className="market-slope-card">
+                  <div className="market-slope-head">
+                    <span className="market-copy-title">{slope.label} Slope</span>
+                    <span className={`market-slope-value${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}>
+                      {formatPercent(slope.value)}
+                    </span>
+                  </div>
+                  <div className="market-slope-track">
+                    <div
+                      className={`market-slope-fill${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}
+                      style={{ '--slope-fill': `${Math.round(slopeToUnitInterval(slope.value) * 100)}%` } as CSSProperties}
+                    />
+                  </div>
                 </div>
               ))}
             </div>
+            <div className="market-copy-block">
+              <span className="market-copy-title">{t('mkt.summary')}</span>
+              <p>{analysis ? tTrendSummary(t, analysis.trend) : '—'}</p>
+            </div>
+            <ConfidenceNote confidence={analysis?.trend.confidenceSummary} />
           </AnalyticsPanel>
-
-          <AnalyticsPanel
+<AnalyticsPanel
             title={t('a11y.timeOfDayLiquidity')}
-            eyebrow={t('mkteb.observatoryTape')}
             info={t('mki.timeOfDay')}
-            loading={!revealedPanels.timeOfDay && !analysisError}
-            errorMessage={!revealedPanels.timeOfDay ? analysisError : null}
-            loadingLabel={t('mkl.tape')}
+            phase={analysisPhase}
+            errorMessage={analysisError}
               className="market-panel-tone-blue"
               headerAside={
                 <div className="market-badge-stack">
@@ -3238,6 +2594,8 @@ function AnalysisTab() {
                 <span className="market-tod-corner" aria-hidden="true" />
                 {timeOfDayDisplay.columnLabels.map((label, index) => (
                   <span key={label} className="market-tod-coltick">
+                    {/* Axis ticks show the hour the block starts — "10", "12" — while the cell
+                        tooltip carries the full `10:00–12:00`. */}
                     {index % 2 === 0 ? label.slice(0, 2) : ''}
                   </span>
                 ))}
@@ -3269,10 +2627,358 @@ function AnalysisTab() {
             </div>
             <ConfidenceNote confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
           </AnalyticsPanel>
+<AnalyticsPanel
+            title={
+              analysis?.supplyContext.mode === 'set-components'
+                ? t('mkt.setComponents')
+                : analysis?.supplyContext.mode === 'drop-sources'
+                  ? t('mkt.dropSources')
+                  : t('mkt.dropSourcesOrSetComponents')
+            }
+            info={t('mki.supply')}
+            phase={analysisPhase}
+            errorMessage={analysisError}
+            className="market-panel-tone-amber"
+            headerAside={
+              <div className="market-badge-stack">
+                <ConfidenceBadge confidence={analysis?.supplyContext.confidenceSummary} />
+                {/* Adding a set one part at a time is six clicks through six inputs for the same
+                    decision. This takes whatever is in the boxes — which default to the
+                    recommended entry — and watches the whole set at those prices. */}
+                {analysis?.supplyContext.mode === 'set-components'
+                && (analysis?.supplyContext.components?.length ?? 0) > 0 ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-7 border-line px-2.5 text-[11px]"
+                    onClick={() => {
+                      for (const component of analysis?.supplyContext.components ?? []) {
+                        if (component.itemKey === null) {
+                          continue;
+                        }
+                        const target = Number.parseInt(
+                          componentTargets[component.slug] || '0',
+                          10,
+                        );
+                        addExplicitItemToWatchlist(
+                          {
+                            itemId: 0,
+                            wfmId: component.itemKey,
+                            name: component.name,
+                            slug: component.slug,
+                            maxRank: null,
+                            itemFamily: null,
+                            imagePath: component.imagePath,
+                            bulkTradable: false,
+                          },
+                          component.variantKey,
+                          component.variantLabel,
+                          target,
+                        );
+                        markWatchlistAddFeedback(
+                          component.slug,
+                          setWatchlistAddFeedback,
+                          watchlistAddFeedbackTimeoutsRef,
+                        );
+                      }
+                    }}
+                  >
+                    {t('wl.addAll')}
+                  </Button>
+                ) : null}
+              </div>
+            }
+          >
+            {analysis?.supplyContext.mode === 'set-components' ? (
+              <div className="market-component-list">
+                {(analysis?.supplyContext.components ?? []).map((component) => {
+                  const imageUrl = resolveWfmAssetUrl(component.imagePath, component.slug);
+                  const targetValue = componentTargets[component.slug] ?? '';
+                  const watchlistItem: WfmAutocompleteItem | null =
+                    component.itemKey !== null
+                      ? {
+                          itemId: 0,
+                          wfmId: component.itemKey,
+                          name: component.name,
+                          slug: component.slug,
+                          maxRank: null,
+                          itemFamily: null,
+                          imagePath: component.imagePath,
+                          bulkTradable: false,
+                        }
+                      : null;
+
+                  // A row, not a stacked copy block. The three numbers are the same three on
+                  // every component, so fixed columns let you compare down the list — which is
+                  // the actual question ("which part is dragging the set?"). Prose lines could
+                  // only be read one component at a time.
+                  return (
+                    <div key={component.slug} className="market-component-row">
+                      {imageUrl ? (
+                        <img className="market-component-image" src={imageUrl} alt="" />
+                      ) : (
+                        <div className="market-component-image placeholder" />
+                      )}
+
+                      {/* Wraps rather than truncating, and `pr-3` keeps the wrapped line clear
+                          of the columns to its right — component names are long enough that a
+                          single line ran straight into the numbers. */}
+                      <div className="min-w-0 flex-1 pr-3">
+                        <div className="text-xs leading-snug font-medium text-balance text-ink">
+                          {resolveLocalizedName(itemNameMap, component)}
+                        </div>
+                      </div>
+
+                      {/* Quantity reads as a count, not a suffix on the name. It is the first
+                          thing that tells you how much of the set this part is. */}
+                      <span className="market-component-qty">×{component.quantityInSet}</span>
+
+                      <Metric
+                        label={t('mkt.currentLowest')}
+                        value={formatPrice(component.currentLowestPrice)}
+                        className="w-20 shrink-0"
+                      />
+                      <Metric
+                        label={t('mkt.recommendedEntry')}
+                        value={formatPrice(component.recommendedEntryPrice)}
+                        className="w-24 shrink-0"
+                      />
+
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          aria-label={t('wl.targetPriceFor', { item: component.name })}
+                          className="h-7 w-20 tabular-nums"
+                          value={targetValue}
+                          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                            setComponentTargets((current) => ({
+                              ...current,
+                              [component.slug]: event.target.value,
+                            }))
+                          }
+                        />
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-7 shrink-0 border-line px-2 text-[11px]"
+                          disabled={!watchlistItem}
+                          onClick={() => {
+                            if (!watchlistItem) {
+                              return;
+                            }
+                            addExplicitItemToWatchlist(
+                              watchlistItem,
+                              component.variantKey,
+                              component.variantLabel,
+                              Number.parseInt(targetValue || '0', 10),
+                            );
+                            markWatchlistAddFeedback(
+                              component.slug,
+                              setWatchlistAddFeedback,
+                              watchlistAddFeedbackTimeoutsRef,
+                            );
+                          }}
+                        >
+                          {watchlistAddFeedback[component.slug] ? t('wl.added') : t('common.add')}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : analysis?.supplyContext.mode === 'drop-sources' ? (
+              <div className="market-drop-list">
+                {displayDropSources.map((source) => {
+                  const imageUrl = resolveWfmAssetUrl(source.imagePath);
+                  return (
+                    <div key={source.key} className="market-drop-row">
+                      {imageUrl ? (
+                        <img className="market-drop-image" src={imageUrl} alt="" loading="lazy" />
+                      ) : (
+                        <span className="market-drop-image placeholder" aria-hidden="true">
+                          {source.location.slice(0, 2)}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-xs text-ink">
+                        {source.location}
+                      </span>
+                      {/* Was four prefixed sentences per card — "Chance: 11.06%", "Rarity: Rare",
+                          "Type: Mission". The prefix repeated on every line of every card; as
+                          columns the label is said once at the top and the values line up. */}
+                      {!source.isRelic ? (
+                        <Metric
+                          label={t('mkt.chance')}
+                          value={formatDropChancePercent(source.chance)}
+                          className="w-16 shrink-0"
+                        />
+                      ) : null}
+                      <Metric
+                        label={t('mkt.rarity')}
+                        value={source.rarity ?? '—'}
+                        className="w-20 shrink-0"
+                      />
+                      {!source.isRelic ? (
+                        <Metric
+                          label={t('mkt.sourceType')}
+                          value={source.sourceType ?? '—'}
+                          className="w-24 shrink-0"
+                        />
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="market-copy-block">
+                <span className="market-copy-title">{t('mkt.noSupplyContext')}</span>
+                <p>{t('mkt.noSupplyBody')}</p>
+              </div>
+            )}
+            <ConfidenceNote confidence={analysis?.supplyContext.confidenceSummary} />
+          </AnalyticsPanel>
+        </div>
+        <div className="flex min-w-0 flex-col gap-5">
+<AnalyticsPanel
+            title={t('a11y.liquidityDetail')}
+            info={t('mki.liquidity')}
+            phase={analysisPhase}
+            errorMessage={analysisError}
+            className="market-panel-tone-blue"
+            headerAside={
+              <div className="market-badge-stack">
+                <span className="market-panel-badge tone-blue">
+                  {analysis?.liquidityDetail.state ?? t('mkt.profiling')}
+                </span>
+                <ConfidenceBadge confidence={analysis?.liquidityDetail.confidenceSummary} />
+              </div>
+            }
+          >
+            <MetricGrid>
+              <Metric label={t('mkt.demandRatio')} value={formatNumber(analysis?.liquidityDetail.demandRatio, 2)} />
+              <Metric label={t('mkt.state')} value={analysis?.liquidityDetail.state ?? '—'} />
+              <Metric label={t('mkt.sellersWithin')} value={formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)} />
+              <Metric
+                label={t('mkt.undercutVelocity')}
+                value={`${formatNumber(analysis?.liquidityDetail.undercutVelocity, 2)} / h`}
+              />
+              <Metric label={t('mkt.qtyWeightedDemand')} value={formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)} />
+              <Metric label={t('mkt.liquidity')} value={formatPercent(analysis?.liquidityDetail.liquidityScore)} />
+            </MetricGrid>
+            <ConfidenceNote confidence={analysis?.liquidityDetail.confidenceSummary} />
+            <div className="market-signal-board">
+              <div className="market-signal-row">
+                <span className="market-signal-label">{t('mkt.demandRatio')}</span>
+                <div className="market-signal-track">
+                  <div
+                    className="market-signal-fill tone-blue"
+                    style={{ '--signal-fill': `${Math.round(ratioToUnitInterval(analysis?.liquidityDetail.demandRatio) * 100)}%` } as CSSProperties}
+                  />
+                </div>
+              </div>
+              <div className="market-signal-row">
+                <span className="market-signal-label">{t('mkt.qtyWeightedDemand')}</span>
+                <div className="market-signal-track">
+                  <div
+                    className="market-signal-fill tone-green"
+                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.quantityWeightedDemand) * 100)}%` } as CSSProperties}
+                  />
+                </div>
+              </div>
+              <div className="market-signal-row">
+                <span className="market-signal-label">{t('mkt.liquidityScore')}</span>
+                <div className="market-signal-track">
+                  <div
+                    className="market-signal-fill tone-cyan"
+                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.liquidityScore) * 100)}%` } as CSSProperties}
+                  />
+                </div>
+              </div>
+            </div>
+          </AnalyticsPanel>
+<AnalyticsPanel
+            title={t('a11y.manipulationRisk')}
+            info={t('mki.risk')}
+            phase={analysisPhase}
+            errorMessage={analysisError}
+            className={`market-panel-tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
+            headerAside={
+              <div className="market-badge-stack">
+                <span className={`market-panel-badge tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}>
+                  {tHealth(t, analysis?.manipulationRisk.riskLevel) || t('trades.row.building')}
+                </span>
+                <ConfidenceBadge confidence={analysis?.manipulationRisk.confidenceSummary} />
+              </div>
+            }
+          >
+            <MetricGrid>
+              <Metric label={t('mkt.riskLevel')} value={tHealth(t, analysis?.manipulationRisk.riskLevel) || '—'} />
+              <Metric label={t('mkt.activeSignals')} value={formatNumber(analysis?.manipulationRisk.activeSignals, 0)} />
+              <Metric label={t('mkt.efficiencyPenalty')} value={formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)} />
+            </MetricGrid>
+            <div className="market-signal-board">
+              <div className="market-signal-row">
+                <span className="market-signal-label">{t('mkt.penaltyApplied')}</span>
+                <div className="market-signal-track danger">
+                  <div
+                    className="market-signal-fill tone-red"
+                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.manipulationRisk.efficiencyPenaltyPct) * 100)}%` } as CSSProperties}
+                  />
+                </div>
+              </div>
+            </div>
+            <ConfidenceNote confidence={analysis?.manipulationRisk.confidenceSummary} />
+            <div className="market-analysis-signal-list">
+              {(analysis?.manipulationRisk.signals ?? []).map((signal) => (
+                <div
+                  key={signal.key}
+                  className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
+                >
+                  <span className="market-copy-title">{tHealth(t, signal.label)}</span>
+                  <span className="market-analysis-signal-state">
+                    {signal.active ? t('mkt.signal.active') : t('mkt.signal.clear')}
+                  </span>
+                  <p>{tSignalDetail(t, signal.detail)}</p>
+                </div>
+              ))}
+            </div>
+          </AnalyticsPanel>
+<AnalyticsPanel
+            title={t('a11y.eventContext')}
+            info={t('mki.worldstate')}
+            phase={analysisPhase}
+            errorMessage={analysisError}
+            className="market-panel-tone-amber"
+            headerAside={
+              <div className="market-badge-stack">
+                <span className="market-panel-badge tone-amber">
+                  {eventContextEntries.length} {eventContextEntries.length === 1 ? 'match' : 'matches'}
+                </span>
+                <ConfidenceBadge confidence={eventContextConfidence} />
+              </div>
+            }
+          >
+            {eventContextEntries.length > 0 ? (
+              <div className="market-context-list market-context-list-timeline">
+                {eventContextEntries.map((entry) => (
+                  <div key={`${entry.label}-${entry.impact}`} className="market-context-card">
+                    <span className="market-copy-title">{entry.label}</span>
+                    <p>{entry.impact}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="market-copy-block">
+                <span className="market-copy-title">{t('mkt.noActiveContext')}</span>
+                <p>{t('mkt.noActiveBody')}</p>
+              </div>
+            )}
+            <ConfidenceNote confidence={eventContextConfidence} />
+          </AnalyticsPanel>
         </div>
       </div>
-        </>
-      ) : null}
+      </>
     </div>
   );
 }
@@ -3281,36 +2987,23 @@ function AnalysisTab() {
 
 export function MarketPage() {
   const marketSubTab = useAppStore((s) => s.marketSubTab);
-  const setMarketSubTab = useAppStore((s) => s.setMarketSubTab);
-  const { t } = useTranslation();
 
-  useEffect(() => {
-    setMarketSubTab('analysis');
-  }, [setMarketSubTab]);
+  // NOTE: this used to reset the sub-tab to 'analysis' on every mount. That is incompatible with
+  // sidebar-driven navigation — picking "Market › Analytics" mounts this page, which would snap
+  // straight back to Analysis. The sidebar owns the selection now.
 
   return (
     <>
-      <div className="subnav market-page-subnav">
-        <div className="subnav-left">
-          <span className="page-title">{t('market.title')}</span>
-          {([
-            ['analysis', 'market.tab.analysis'],
-            ['analytics', 'market.tab.analytics'],
-          ] as const).map(([tab, labelKey]) => (
-            <span
-              key={tab}
-              className={`subtab${marketSubTab === tab ? ' active' : ''}`}
-              onClick={() => setMarketSubTab(tab)}
-              role="tab"
-              aria-selected={marketSubTab === tab}
-              tabIndex={0}
-            >
-              {t(labelKey)}
-            </span>
-          ))}
-        </div>
-      </div>
+      <PageHeading page="market" />
 
+      {/* Quick View lives INSIDE the Summary tab, beside Item details — not here. Rendering it
+          at page level put it above both sub-views, but Charts is about price history over time
+          and has nothing to say about who is selling right now.
+
+          Analysis Preview is gone. It showed entry, exit, net margin, liquidity, risk, trend and
+          trade posture — every one of which the Summary panels render in full, further down the
+          same page. It was a preview of the page it sat on: that made sense on Home, where it
+          linked here, and is pure duplication now that it lives here. */}
       {marketSubTab === 'analytics' ? <AnalyticsTab /> : <AnalysisTab />}
     </>
   );

@@ -1,5 +1,6 @@
 export type PageId =
   | 'home'
+  | 'watchlist'
   | 'market'
   | 'events'
   | 'scanners'
@@ -10,7 +11,6 @@ export type PageId =
   | 'strategy'
   | 'guide';
 
-export type HomeSubTab = 'overview' | 'watchlist' | 'alerts';
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | '90d' | 'all';
 export type TradesSubTab = 'orders' | 'health' | 'detection';
@@ -1600,7 +1600,6 @@ export interface ItemQuickViewTarget {
 
 export interface NavigationSnapshot {
   activePage: PageId;
-  homeSubTab: HomeSubTab;
   marketSubTab: 'analysis' | 'analytics';
 }
 

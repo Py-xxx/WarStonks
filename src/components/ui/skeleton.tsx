@@ -75,7 +75,12 @@ function parseType(type: string): ParsedNode[] {
     });
 }
 
-function renderNode(node: ParsedNode, keyPrefix: string, depth: number): React.ReactNode[] {
+function renderNode(
+  node: ParsedNode,
+  keyPrefix: string,
+  depth: number,
+  leafClassName?: string,
+): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   for (let index = 0; index < node.count; index += 1) {
     const key = `${keyPrefix}-${node.name}-${index}`;
@@ -86,6 +91,7 @@ function renderNode(node: ParsedNode, keyPrefix: string, depth: number): React.R
           className={cn(
             'block animate-pulse bg-line-strong/60',
             PRIMITIVES[node.name as PrimitiveName],
+            leafClassName,
           )}
         />,
       );
@@ -97,7 +103,10 @@ function renderNode(node: ParsedNode, keyPrefix: string, depth: number): React.R
       // affordance; taking down the page because a preset name was mistyped is worse than
       // showing a slightly wrong placeholder.
       out.push(
-        <span key={key} className={cn('block animate-pulse bg-line-strong/60', PRIMITIVES.text)} />,
+        <span
+          key={key}
+          className={cn('block animate-pulse bg-line-strong/60', PRIMITIVES.text, leafClassName)}
+        />,
       );
       continue;
     }
@@ -110,7 +119,7 @@ function renderNode(node: ParsedNode, keyPrefix: string, depth: number): React.R
         )}
       >
         {parseType(preset).flatMap((child, childIndex) =>
-          renderNode(child, `${key}-${childIndex}`, depth + 1),
+          renderNode(child, `${key}-${childIndex}`, depth + 1, leafClassName),
         )}
       </span>,
     );
@@ -127,9 +136,27 @@ export interface SkeletonProps extends React.ComponentProps<'div'> {
    * lives in one place per surface.
    */
   loading?: boolean;
+  /**
+   * Classes applied to the pulsing leaf shapes themselves, rather than to the wrapper that
+   * `className` targets.
+   *
+   * A skeleton only does its job if it matches the real layout, and the presets are sized for
+   * the common case — so a 24px row thumbnail or a narrow chip button needs to override them.
+   * Callers were doing that with `[&>span]:size-[26px]` arbitrary variants, which reach through
+   * the component's internal markup and break silently if it ever changes. This is the
+   * supported way to do the same thing.
+   */
+  leafClassName?: string;
 }
 
-function Skeleton({ className, type = 'text', loading, children, ...props }: SkeletonProps) {
+function Skeleton({
+  className,
+  type = 'text',
+  loading,
+  leafClassName,
+  children,
+  ...props
+}: SkeletonProps) {
   if (loading === false) {
     return <>{children}</>;
   }
@@ -140,7 +167,7 @@ function Skeleton({ className, type = 'text', loading, children, ...props }: Ske
       className={cn('flex w-full flex-col gap-2', className)}
       {...props}
     >
-      {parseType(type).flatMap((node, index) => renderNode(node, `s${index}`, 0))}
+      {parseType(type).flatMap((node, index) => renderNode(node, `s${index}`, 0, leafClassName))}
     </div>
   );
 }

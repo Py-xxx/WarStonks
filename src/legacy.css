@@ -53,94 +53,6 @@ textarea:focus-visible,
   --text-panel-title: #C5CAD6;
   --panel-shadow: 0 6px 20px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
-
-.opportunities-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 200px;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
-/* ── Underpriced-listings radar (Opportunities → Opportunities) ── */
-.radar-layout {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
-/* Main area: the opportunity board. The radar lives in the slim side panel. */
-.radar-main {
-  flex: 1;
-  min-width: 0;
-  min-height: 200px;
-}
-
-/* --- Opportunity board (What To Do Now) --- */
-.opp-board {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.opp-board-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-.opp-board-sub {
-  margin-top: 6px;
-  max-width: 60ch;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-.opp-refresh {
-  flex: 0 0 auto;
-}
-.opp-board-error {
-  padding: 10px 12px;
-  border: 1px solid var(--accent-red);
-  border-radius: 8px;
-  background: rgba(240, 79, 88, 0.08);
-  color: var(--text-primary);
-  font-size: 12px;
-}
-.opp-board-empty {
-  padding: 32px 20px;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-muted);
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-}
-.opp-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 12px;
-}
-.opp-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent-purple);
-  border-radius: 10px;
-}
-.opp-card-sellInventory {
-  border-left-color: var(--accent-amber);
-}
-.opp-card-flip {
-  border-left-color: var(--accent-blue);
-}
-.opp-card.is-pinned {
-  border-color: var(--accent-green);
-  box-shadow: 0 0 0 1px rgba(61, 214, 140, 0.35);
-  background: linear-gradient(180deg, rgba(61, 214, 140, 0.06), transparent 60%), var(--bg-surface);
-}
 .subtab-beta-badge {
   margin-left: 6px;
   padding: 1px 6px;
@@ -152,169 +64,6 @@ textarea:focus-visible,
   background: rgba(139, 111, 255, 0.14);
   border-radius: 999px;
   vertical-align: middle;
-}
-
-.opp-board-header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 0 0 auto;
-}
-.opp-freshness {
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.opp-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.opp-budget {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  flex: 0 0 auto;
-}
-.opp-budget-input {
-  width: 88px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-.opp-budget-unit {
-  color: var(--text-muted);
-}
-.opp-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.opp-filter-pill {
-  padding: 4px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  cursor: pointer;
-}
-.opp-filter-pill:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-purple);
-}
-.opp-filter-pill.is-active {
-  color: var(--bg-base);
-  background: var(--accent-purple);
-  border-color: var(--accent-purple);
-}
-.opp-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.opp-section-label {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-.opp-pin {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.opp-pin:hover {
-  border-color: var(--accent-green);
-  color: var(--text-primary);
-}
-.opp-pin.is-pinned {
-  color: var(--accent-green);
-  border-color: var(--accent-green);
-}
-.opp-dismiss {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  color: var(--text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-}
-.opp-dismiss:hover {
-  color: var(--accent-red);
-  background: var(--bg-elevated);
-}
-.opp-card.is-urgent {
-  border-left-color: var(--accent-amber);
-  border-color: var(--accent-amber);
-  box-shadow: 0 0 0 1px rgba(240, 160, 48, 0.3);
-}
-.opp-urgent-tag {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 6px;
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--bg-base);
-  background: var(--accent-amber);
-  border-radius: 999px;
-  vertical-align: middle;
-}
-.opp-card-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.opp-card-cost {
-  font-size: 10px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  color: var(--accent-amber);
-}
-.opp-card-priced {
-  font-size: 10px;
-  color: var(--text-muted);
-}
-.opp-restore {
-  align-self: flex-start;
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.opp-restore:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-purple);
-}
-.opp-card-snipe {
-  border-left-color: var(--accent-amber);
-}
-.opp-card-reprice {
-  border-left-color: var(--accent-red);
 }
 
 .farm-now-search {
@@ -386,303 +135,6 @@ textarea:focus-visible,
   font-size: 10px;
   color: var(--text-muted);
 }
-.opp-card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.opp-card-icon {
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  border-radius: 6px;
-  background: var(--bg-base);
-}
-.opp-card-icon-empty {
-  border: 1px solid var(--border);
-}
-.opp-card-titles {
-  flex: 1;
-  min-width: 0;
-}
-.opp-card-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.opp-card-subtitle {
-  margin: 2px 0 0;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.opp-card-value {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.1;
-}
-.opp-card-value-num {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--accent-green);
-}
-.opp-card-value-basis {
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-.opp-reasons {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.opp-reason {
-  display: flex;
-  gap: 7px;
-  align-items: baseline;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--text-secondary);
-}
-.opp-reason-icon {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  color: var(--text-muted);
-  position: relative;
-  top: 2px;
-}
-.opp-card-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-.opp-conf {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.opp-conf-high { color: var(--accent-green); }
-.opp-conf-medium { color: var(--accent-amber); }
-.opp-conf-low { color: var(--text-muted); }
-.opp-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.opp-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.opp-action:hover {
-  border-color: var(--accent-purple);
-}
-.opp-action-static {
-  cursor: default;
-  color: var(--text-secondary);
-}
-.opp-action-static:hover {
-  border-color: var(--border);
-}
-.opp-action-price {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  color: var(--accent-green);
-}
-.radar-side {
-  flex: 0 0 320px;
-  max-width: 320px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.radar-side-header p {
-  margin-top: 6px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-.radar-stats {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-.radar-empty {
-  padding: 24px 12px;
-  text-align: center;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted);
-}
-.radar-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: calc(100vh - 220px);
-  overflow-y: auto;
-}
-.radar-card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--text-muted);
-  border-radius: 8px;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.radar-card-yellow { border-left-color: var(--accent-amber); }
-.radar-card-red { border-left-color: var(--accent-red); }
-.radar-card.is-gone { opacity: 0.5; }
-.radar-card-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-.radar-card-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.radar-card-rank { color: var(--text-muted); font-weight: 400; }
-.radar-card-timer {
-  flex-shrink: 0;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-.radar-card-seller {
-  font-size: 11px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.radar-card-completes {
-  border-color: var(--accent-purple);
-  box-shadow: 0 0 0 1px rgba(139, 111, 255, 0.35);
-}
-.radar-card-completes-badge {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--accent-purple);
-  background: rgba(139, 111, 255, 0.1);
-  border-radius: 5px;
-  padding: 3px 6px;
-  line-height: 1.3;
-}
-.radar-card-prices {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-.radar-card-listed { font-size: 14px; font-weight: 700; color: var(--accent-green); }
-.radar-card-pct { font-size: 11px; font-weight: 600; color: var(--accent-green); }
-.radar-card-red .radar-card-pct { color: var(--accent-red); }
-.radar-card-yellow .radar-card-pct { color: var(--accent-amber); }
-.radar-card-rec {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.15;
-  margin-left: auto;
-  text-align: right;
-}
-.radar-card-rec-label {
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.radar-card-rec-value {
-  font-size: 15px;
-  font-weight: 700;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  color: var(--text-primary);
-}
-.radar-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-}
-.radar-card-actions .act-btn { flex: 1; }
-.radar-card-dismiss {
-  flex: 0 0 auto;
-  width: 26px;
-  padding: 0;
-  line-height: 1;
-}
-.radar-card-gone {
-  flex: 1;
-  font-size: 11px;
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-/* Seller edited their price after we surfaced the listing. Loud on purpose: the user is one
-   click from whispering a number they were never shown. */
-.radar-card-reprice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  padding: 5px 7px;
-  border-radius: 6px;
-  border: 1px solid rgba(240, 79, 88, 0.35);
-  background: rgba(240, 79, 88, 0.1);
-}
-.radar-card-reprice-label {
-  flex: 1 0 100%;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--accent-red);
-}
-.radar-card-reprice-delta {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent-red);
-}
-/* A repriced card keeps full contrast even when it's no longer a deal — the `is-gone` fade
-   would bury the very warning the user needs to read. */
-.radar-card.is-gone.is-repriced { opacity: 0.8; }
 
 /* Domain-coded panel title dots. A card gets a colored dot before its title only when
    it carries an accent-* class, so non-panel card labels (modals etc.) stay plain. */
@@ -14349,10 +13801,6 @@ img[data-asset-failed='true'] {
 .scanners-page-subnav .subtab::after { background: var(--accent-purple); }
 .scanners-page-subnav .subtab.active::after { box-shadow: 0 0 8px rgba(139, 111, 255, 0.55); }
 
-.opp-page-subnav .subtab.active { color: var(--accent-amber); }
-.opp-page-subnav .subtab::after { background: var(--accent-amber); }
-.opp-page-subnav .subtab.active::after { box-shadow: 0 0 8px rgba(240, 160, 48, 0.5); }
-
 /* ── Events ── */
 .events-page-content > * { animation: riseIn 0.32s ease both; }
 .events-page-content > *:nth-child(2) { animation-delay: 0.05s; }
@@ -14380,17 +13828,6 @@ img[data-asset-failed='true'] {
 }
 .scanner-component-row { transition: background 0.14s ease; }
 .scanner-component-row:hover { background: rgba(139, 111, 255, 0.04); }
-
-/* ── Opportunities / Inventory ── */
-.opp-card {
-  transition: border-color 0.18s ease, transform 0.16s ease, box-shadow 0.2s ease;
-}
-.opp-card:hover {
-  border-color: rgba(240, 160, 48, 0.3);
-  transform: translateY(-2px);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
-}
-.opp-board > * { animation: riseIn 0.3s ease both; }
 .planner-set-row,
 .inventory-row {
   transition: border-color 0.16s ease, background 0.16s ease;
@@ -16004,3 +15441,204 @@ img[data-asset-failed='true'] {
 }
 .det-state { padding: 24px 12px; text-align: center; font-size: 12px; color: var(--text-secondary); }
 .det-error { color: var(--accent-red); }
+
+/* ---------------------------------------------------------------------------
+   Market — Quick View posture rail, supply rows, chart skeleton.
+
+   RECONSTRUCTED. The originals were written during the Market pass and lost to a
+   `git checkout` before they were committed; these were rewritten from the JSX that
+   uses them, so spacing and detail will differ from what shipped in the dev build.
+   Verify against `pnpm tauri dev` before trusting them.
+
+   All of this is scheduled for deletion when Market finishes migrating to Tailwind —
+   it exists so the page renders in the meantime, not as a long-term home.
+   --------------------------------------------------------------------------- */
+
+/* Quick View: summary stack on the left, posture rail on the right. The rail is what
+   fills the dead middle the panel used to waste. */
+.qv-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .qv-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The posture colour belongs to the surface that states it, so it outlines the whole card. */
+.qv-posture-shell {
+  position: relative;
+}
+.qv-posture-shell.tone-green  { box-shadow: inset 0 0 0 1px rgba(61, 214, 140, 0.22); }
+.qv-posture-shell.tone-amber  { box-shadow: inset 0 0 0 1px rgba(240, 160, 48, 0.22); }
+.qv-posture-shell.tone-red    { box-shadow: inset 0 0 0 1px rgba(240, 79, 88, 0.22); }
+.qv-posture-shell.tone-blue   { box-shadow: inset 0 0 0 1px rgba(74, 158, 255, 0.22); }
+.qv-posture-shell.tone-neutral{ box-shadow: inset 0 0 0 1px rgba(152, 170, 210, 0.12); }
+
+.qv-posture-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(9, 14, 24, 0.55);
+}
+
+.qv-posture-label {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.qv-posture-label.tone-green   { color: var(--accent-green); }
+.qv-posture-label.tone-amber   { color: var(--accent-amber); }
+.qv-posture-label.tone-red     { color: var(--accent-red); }
+.qv-posture-label.tone-blue    { color: var(--accent-blue); }
+.qv-posture-label.tone-neutral { color: var(--text-secondary); }
+
+.qv-posture-prices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.qv-posture-price {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Signal bar. The fill plots a real 0–1 value passed from the component — its predecessor
+   picked the width from a tone, which is decoration posing as data. */
+.qv-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qv-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.qv-meter-head .qv-stat-label {
+  margin-bottom: 0;
+}
+.qv-meter-value {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 700;
+}
+.qv-meter-value.tone-green   { color: var(--accent-green); }
+.qv-meter-value.tone-amber   { color: var(--accent-amber); }
+.qv-meter-value.tone-red     { color: var(--accent-red); }
+.qv-meter-value.tone-blue    { color: var(--accent-blue); }
+.qv-meter-value.tone-neutral { color: var(--text-secondary); }
+.qv-meter-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(152, 170, 210, 0.12);
+  overflow: hidden;
+}
+.qv-meter-fill {
+  height: 100%;
+  border-radius: 2px;
+  /* Width only — the value is polled, so animating it would run unprompted forever. */
+  background: var(--text-secondary);
+}
+.qv-meter-fill.tone-green   { background: var(--accent-green); }
+.qv-meter-fill.tone-amber   { background: var(--accent-amber); }
+.qv-meter-fill.tone-red     { background: var(--accent-red); }
+.qv-meter-fill.tone-blue    { background: var(--accent-blue); }
+.qv-meter-fill.tone-neutral { background: var(--text-secondary); }
+
+/* Item details is capped to Quick View's height and scrolls, so the top row cannot be
+   dragged taller by a long description. */
+.market-item-details-cell {
+  display: flex;
+  min-height: 0;
+  max-height: 100%;
+}
+.market-item-details-cell > * {
+  min-height: 0;
+  flex: 1;
+}
+
+.market-panel-tone-neutral {
+  box-shadow: inset 0 1px 0 rgba(152, 170, 210, 0.1);
+}
+
+/* The heatmap's top-left spacer, matching the row-label column. */
+.market-tod-corner {
+  display: block;
+  width: 34px;
+}
+
+/* Set components and drop sources: one row each, fixed columns, so the same three numbers
+   line up down the list and you can compare them. */
+.market-component-row,
+.market-drop-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(121, 184, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(9, 14, 24, 0.88);
+}
+.market-component-qty {
+  flex: 0 0 auto;
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.market-component-row .market-component-image {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  flex: 0 0 32px;
+}
+.market-drop-row .market-drop-image {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+
+/* Chart-shaped placeholder. Deliberately not built from the `Skeleton` primitive: that
+   composes rectangles, and no arrangement of rectangles reads as a line chart. */
+.market-chart-skeleton {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  animation: market-chart-skeleton-pulse 1.6s ease-in-out infinite;
+}
+.market-chart-skeleton-svg {
+  width: 100%;
+  height: 100%;
+}
+.market-chart-skeleton-grid {
+  stroke: rgba(152, 170, 210, 0.1);
+  stroke-width: 0.25;
+}
+.market-chart-skeleton-area {
+  fill: rgba(152, 170, 210, 0.06);
+}
+.market-chart-skeleton-line {
+  fill: none;
+  stroke: rgba(152, 170, 210, 0.22);
+  stroke-width: 0.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@keyframes market-chart-skeleton-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}

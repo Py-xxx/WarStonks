@@ -11,6 +11,7 @@ import {
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { PageHeading } from '../../components/PageHeading';
 import { useAppStore } from '../../stores/useAppStore';
 import { intlLocaleCode } from '../../lib/language';
 import { tActive, useTranslation } from '../../i18n';
@@ -1946,10 +1947,10 @@ function PnlSummaryTab({
 }
 
 export function PortfolioPage() {
-  const { t } = useTranslation();
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const tradePeriod = useAppStore((s) => s.tradePeriod);
-  const [portfolioTab, setPortfolioTab] = useState<'pnl' | 'log'>('pnl');
+  // Sub-view selection lives in the store: the sidebar renders this page's sub-navigation.
+  const portfolioTab = useAppStore((s) => s.portfolioSubTab);
 
   const handleRefreshTrades = async () => {
     if (!tradeAccount?.name) {
@@ -1962,13 +1963,7 @@ export function PortfolioPage() {
 
   return (
     <>
-      <div className="subnav portfolio-page-subnav">
-        <div className="subnav-left">
-          <span className="page-title">{t('pf.title')}</span>
-          <span className={`subtab${portfolioTab === 'pnl' ? ' active' : ''}`} onClick={() => setPortfolioTab('pnl')} role="tab" tabIndex={0}>{t('pf.pnlSummary')}</span>
-          <span className={`subtab${portfolioTab === 'log' ? ' active' : ''}`} onClick={() => setPortfolioTab('log')} role="tab" tabIndex={0}>{t('pf.tradeLog')}</span>
-        </div>
-      </div>
+      <PageHeading page="portfolio" />
       <div className="page-content portfolio-page-content">
         {portfolioTab === 'log' ? (
           <TradeLogTab username={tradeAccount?.name ?? null} />

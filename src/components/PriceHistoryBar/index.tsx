@@ -62,13 +62,22 @@ export function PriceHistoryBar() {
           : t('ph.coverage', { items: status.itemCount.toLocaleString() })}
       </span>
 
-      {!pending ? (
-        <span className="price-history-meta">
-          {t('ph.days', { days: String(status.daysStored) })}
-          {status.newestDay ? ` · ${t('ph.newest', { day: status.newestDay })}` : ''}
-          {status.lastIngestAt
-            ? ` · ${t('ph.checked', { time: formatElapsedTime(status.lastIngestAt) })}`
-            : ''}
+      {/* One freshness fact, not three. This read "33 days · to 2026-08-19 · checked 6h ago" —
+          the span and the newest day are inputs to the number beside them, not descriptions of it,
+          and the absolute date is the least useful form of "how old". "checked 6h ago" is the one
+          that answers "can I trust this right now"; the rest moved to the hover title, so nothing
+          is lost for anyone who wants it. Same reduction as Market's three timestamps. */}
+      {!pending && status.lastIngestAt ? (
+        <span
+          className="price-history-meta"
+          title={[
+            t('ph.days', { days: String(status.daysStored) }),
+            status.newestDay ? t('ph.newest', { day: status.newestDay }) : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        >
+          {t('ph.checked', { time: formatElapsedTime(status.lastIngestAt) })}
         </span>
       ) : null}
 

@@ -159,6 +159,7 @@ pub fn run() {
             market_observatory::get_item_detail_summary,
             market_observatory::get_item_analytics,
             market_observatory::get_item_analysis,
+            market_observatory::get_item_analysis_cached,
             market_observatory::grade_recommendation_outcomes,
             market_observatory::get_backtest_summary,
             market_observatory::get_arbitrage_scanner,

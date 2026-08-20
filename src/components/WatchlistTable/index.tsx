@@ -11,6 +11,7 @@ import { copyWhisperMessage } from '../../lib/marketMessages';
 import { getWatchlistVisualState } from '../../lib/watchlist';
 import type { WatchlistTone } from '../../lib/watchlist';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { EmptyState } from '@/components/ui/empty-state';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WatchlistItem } from '../../types';
 
@@ -76,7 +77,8 @@ export function WatchlistTable({
 }: {
   variant: WatchlistTableVariant;
   /** Full tab only — restricts rows to one status. `null` shows everything. */
-  toneFilter?: WatchlistTone | null;
+  /** One tone, or several. Home passes `['green','amber']` to show only rows worth acting on. */
+  toneFilter?: WatchlistTone | WatchlistTone[] | null;
 }) {
   const { t } = useTranslation();
   const watchlist = useAppStore((state) => state.watchlist);
@@ -175,25 +177,21 @@ export function WatchlistTable({
               : (item.currentPrice - item.targetPrice) / item.targetPrice;
           return distance(left) - distance(right);
         });
-        const filtered = toneFilter
-          ? ordered.filter((item) => getWatchlistVisualState(item).tone === toneFilter)
+        const wantedTones = toneFilter
+          ? new Set(Array.isArray(toneFilter) ? toneFilter : [toneFilter])
+          : null;
+        const rows = wantedTones
+          ? ordered.filter((item) => wantedTones.has(getWatchlistVisualState(item).tone))
           : ordered;
-        // The dashboard card shows everything too — it just scrolls (see `.wl-compact-list`).
-        const rows = filtered;
 
         if (watchlist.length === 0) {
           return (
-            <div className="empty-state">
-              <span className="empty-primary">{t('wl.noItems')}</span>
-              <span className="empty-sub">{t('wl.searchToAddHint')}</span>
-            </div>
+            <EmptyState icon="ti-target" title={t('wl.noItems')} detail={t('wl.searchToAddHint')} />
           );
         }
         if (rows.length === 0) {
           return (
-            <div className="empty-state">
-              <span className="empty-primary">{t('wl.noneMatchFilter')}</span>
-            </div>
+            <EmptyState icon="ti-filter" title={t('wl.noneMatchFilter')} />
           );
         }
 

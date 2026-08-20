@@ -7,8 +7,15 @@
  *   one less dependency.
  * - Colours moved onto our tokens; the arrow is dropped (a 10px rotated square on a dark
  *   popover reads as noise at our density, and it fights the collision-flipped sides).
- * - `delay` defaults to 250ms rather than 0: a zero-delay tooltip fires while the pointer
- *   is merely crossing a dense table, which is most of what this app is.
+ * - `TooltipProvider` sets `delay` to 250ms. Base UI's own default is `OPEN_DELAY` = 600ms,
+ *   which is slow enough to feel broken when you are hovering a row to check a price; 0 is
+ *   worse still, firing while the pointer merely crosses a dense table, which is most of what
+ *   this app is.
+ *
+ * **The provider must be mounted, and is — once, around `AppShell` in `App.tsx`.** In this
+ * version of Base UI, `Tooltip.Root` accepts no `delay` prop, so the provider is the ONLY place
+ * the delay can be set. Without it every tooltip silently reverts to 600ms, which is exactly
+ * what shipped in the first Home pass.
  *
  * THIS IS THE ONLY TOOLTIP. It replaces four divergent implementations that clipped under
  * panels and broke on resize (`.info-hint-tooltip`, `.world-event-tooltip`,
@@ -58,8 +65,8 @@ function TooltipContent({
           data-slot="tooltip-content"
           data-ws-overlay=""
           className={cn(
-            'max-w-xs origin-(--transform-origin) rounded-md border border-line-strong',
-            'bg-bg-elevated px-2.5 py-1.5 text-xs text-ink shadow-float',
+            'max-w-xs origin-(--transform-origin) rounded-md border border-white/12',
+            'bg-bg-overlay px-2.5 py-1.5 text-xs text-ink shadow-float',
             'text-pretty',
             className,
           )}

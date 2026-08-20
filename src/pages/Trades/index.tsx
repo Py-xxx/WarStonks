@@ -38,6 +38,7 @@ import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
 import { ModalPortal } from '../../components/ModalPortal';
+import { PageHeading } from '../../components/PageHeading';
 import { useAppStore } from '../../stores/useAppStore';
 import { TradeDetectionComparison } from '../../components/TradeDetectionComparison';
 import { useTranslation } from '../../i18n';
@@ -2937,7 +2938,6 @@ export function TradesPage() {
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
   const tradesSubTab = useAppStore((s) => s.tradesSubTab);
-  const setTradesSubTab = useAppStore((s) => s.setTradesSubTab);
   const { t } = useTranslation();
 
   useEffect(() => {
@@ -2946,47 +2946,14 @@ export function TradesPage() {
 
   return (
     <>
-      <div className="subnav trades-page-subnav">
-        <div className="subnav-left">
-          <span className="page-title">{t('trades.title')}</span>
-          <div className="subnav-tabs" role="tablist" aria-label={t('trades.sections')}>
-            <button
-              type="button"
-              className={`subtab${tradesSubTab === 'orders' ? ' active' : ''}`}
-              onClick={() => setTradesSubTab('orders')}
-              role="tab"
-              aria-selected={tradesSubTab === 'orders'}
-            >
-              {t('trades.tab.orders')}
-            </button>
-            <button
-              type="button"
-              className={`subtab${tradesSubTab === 'health' ? ' active' : ''}`}
-              onClick={() => setTradesSubTab('health')}
-              role="tab"
-              aria-selected={tradesSubTab === 'health'}
-            >
-              {t('trades.tab.health')}
-            </button>
-            {/* Shadow-mode diagnostic. Temporary — remove once EE.log becomes the only
-                trade source and WFM polling is deleted. */}
-            <button
-              type="button"
-              className={`subtab${tradesSubTab === 'detection' ? ' active' : ''}`}
-              onClick={() => setTradesSubTab('detection')}
-              role="tab"
-              aria-selected={tradesSubTab === 'detection'}
-            >
-              {t('det.tab')}
-            </button>
-          </div>
-        </div>
-        {tradeAccount && tradesSubTab === 'orders' ? (
-          <div className="subnav-right">
+      <PageHeading
+        page="trades"
+        actions={
+          tradeAccount && tradesSubTab === 'orders' ? (
             <span className="trade-subnav-hint">{t('trades.subnav.liveOrders')}</span>
-          </div>
-        ) : null}
-      </div>
+          ) : null
+        }
+      />
       <div className="page-content trades-page-content">
         {!tradeAccount ? (
           <SignInPanel />

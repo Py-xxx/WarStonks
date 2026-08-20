@@ -1,4 +1,10 @@
 import { useEffect, useState } from 'react';
+
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+
 import {
   useAppStore,
   UNDERPRICED_LISTING_TTL_MS,
@@ -7,7 +13,21 @@ import {
 import { getRadarStats, verifyMarketListing, type RadarStats } from '../../lib/tauriClient';
 import { useTranslation } from '../../i18n';
 import { copyWhisperMessage } from '../../lib/marketMessages';
-import { OpportunityBoard } from '../OpportunityBoard';
+
+/**
+ * The underpriced radar — live sell listings priced well below their recommended entry.
+ *
+ * Deliberately NOT merged into the opportunity board beside it. A board play is computed and
+ * keeps: you can come back to it in an hour. A radar listing is somebody else's order that
+ * expires from the list in five minutes and may be gone before you whisper. Same platinum,
+ * different clock, and the countdown column is what says so.
+ */
+
+const TIER_CLASS: Record<string, string> = {
+  red: 'border-l-accent-red bg-accent-red/[0.06]',
+  yellow: 'border-l-accent-amber bg-accent-amber/[0.05]',
+  normal: 'border-l-accent-blue bg-accent-blue/[0.04]',
+};
 
 function formatCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
@@ -24,6 +44,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
 
   const remainingMs = UNDERPRICED_LISTING_TTL_MS - (now - card.receivedAt);
   const buyPrice = Math.round(card.verifiedPrice ?? card.listedPrice);
+  const dead = card.status === 'gone' || card.status === 'overpriced';
 
   const copyWhisper = async () => {
     await copyWhisperMessage(
@@ -115,85 +136,124 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
   };
 
   return (
-    <div
-      className={`radar-card radar-card-${card.tier}${
-        card.status === 'gone' || card.status === 'overpriced' ? ' is-gone' : ''
-      }${card.completesSet ? ' radar-card-completes' : ''}${
-        card.repricedFrom ? ' is-repriced' : ''
-      }`}
+    <article
+      className={`flex flex-col gap-1.5 border-b border-line-subtle border-l-[3px] px-3 py-2.5 pl-2.5 last:border-b-0 ${
+        TIER_CLASS[card.tier] ?? TIER_CLASS.normal
+      } ${dead ? 'opacity-50' : ''}`}
     >
-      <div className="radar-card-top">
-        <span className="radar-card-name" title={card.itemName}>
+      <div className="flex items-baseline gap-2">
+        <span className="truncate text-xs font-semibold text-ink" title={card.itemName}>
           {card.itemName}
-          {card.rank !== null ? <span className="radar-card-rank"> · R{card.rank}</span> : null}
+          {card.rank !== null ? (
+            <span className="ml-1 font-mono text-[10px] text-ink-dim tabular-nums">
+              R{card.rank}
+            </span>
+          ) : null}
         </span>
-        <span className="radar-card-timer" aria-label={t('a11y.timeRemaining')}>
+        <span className="min-w-0 flex-1" />
+        {/* The one fact the board can't tell you: how long this listing has left on the radar. */}
+        <span
+          className="shrink-0 font-mono text-[10px] text-ink-faint tabular-nums"
+          aria-label={t('a11y.timeRemaining')}
+        >
           {formatCountdown(remainingMs)}
         </span>
       </div>
 
       {card.completesSet ? (
-        <div className="radar-card-completes-badge" title={t('up.ownParts', { owned: card.completesSet.ownedDistinct, needed: card.completesSet.neededDistinct })}>
-          ⭐ Completes your {card.completesSet.setName} ({card.completesSet.ownedDistinct}/
-          {card.completesSet.neededDistinct})
-        </div>
+        <span
+          className="w-fit rounded bg-accent-purple/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-accent-purple tabular-nums"
+          title={t('up.ownParts', {
+            owned: card.completesSet.ownedDistinct,
+            needed: card.completesSet.neededDistinct,
+          })}
+        >
+          {t('up.completesSetShort', {
+            set: card.completesSet.setName,
+            owned: card.completesSet.ownedDistinct,
+            needed: card.completesSet.neededDistinct,
+          })}
+        </span>
       ) : null}
 
-      <div className="radar-card-seller">{card.username}</div>
-
-      <div className="radar-card-prices">
-        <span className="radar-card-listed">{buyPrice}p</span>
-        <span className="radar-card-pct">−{Math.round(card.pctBelow)}%</span>
-        <span className="radar-card-rec">
-          <span className="radar-card-rec-label">{t('wl.usualEntry')}</span>
-          <span className="radar-card-rec-value">{Math.round(card.recommendedPrice)}p</span>
+      <div className="flex items-baseline gap-2">
+        <span className="font-mono text-sm font-bold text-ink tabular-nums">{buyPrice}p</span>
+        <span className="font-mono text-[11px] font-semibold text-accent-green tabular-nums">
+          −{Math.round(card.pctBelow)}%
+        </span>
+        <span className="min-w-0 flex-1" />
+        <span className="font-mono text-[10px] text-ink-faint tabular-nums">
+          {t('wl.usualEntry')} {Math.round(card.recommendedPrice)}p
         </span>
       </div>
 
-      {/* The seller edited their price after we surfaced this. Shown in red on the card
-          itself — a toast alone is too easy to miss before whispering. */}
+      <div className="truncate text-[11px] text-ink-dim">{card.username}</div>
+
+      {/* The seller edited their price after we surfaced this. Shown on the card itself — a
+          toast alone is too easy to miss before whispering. */}
       {card.repricedFrom ? (
-        <div className="radar-card-reprice" role="status">
-          <span className="radar-card-reprice-label">{t('up.priceChanged')}</span>
-          <span className="radar-card-reprice-delta">
+        <div
+          className="flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-accent-red tabular-nums"
+          role="status"
+        >
+          <span className="font-semibold">{t('up.priceChanged')}</span>
+          <span>
             {card.repricedFrom.price}p <span aria-hidden="true">→</span> {buyPrice}p
           </span>
-          <span className="radar-card-reprice-delta">
+          <span>
             −{Math.round(card.repricedFrom.pctBelow)}% <span aria-hidden="true">→</span> −
             {Math.round(card.pctBelow)}%
           </span>
         </div>
       ) : null}
 
-      <div className="radar-card-actions">
+      <div className="mt-0.5 flex items-center gap-1.5">
         {card.status === 'gone' ? (
-          <span className="radar-card-gone">{t('wl.noLongerListed')}</span>
+          <span className="text-[11px] text-ink-faint">{t('wl.noLongerListed')}</span>
         ) : card.status === 'overpriced' ? (
-          <span className="radar-card-gone">{t('up.noLongerUnderpriced')}</span>
+          <span className="text-[11px] text-ink-faint">{t('up.noLongerUnderpriced')}</span>
         ) : card.status === 'verified' ? (
-          <button className="act-btn" type="button" onClick={() => void handleCopyAgain()}>
-            Copy Message
-          </button>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 border-line px-2.5 text-[11px] font-semibold"
+            onClick={() => void handleCopyAgain()}
+          >
+            <i className="ti ti-copy" aria-hidden="true" />
+            {t('up.copyMessage')}
+          </Button>
         ) : (
-          <button
-            className="act-btn"
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 border-line px-2.5 text-[11px] font-semibold"
             disabled={card.status === 'verifying' || !card.userSlug}
             onClick={() => void handleVerify()}
           >
             {card.status === 'verifying' ? t('up.verifying') : t('up.verify')}
-          </button>
+          </Button>
         )}
-        <button
-          className="act-btn radar-card-dismiss"
-          type="button"
-          aria-label={t('a11y.dismissListing')}
-          onClick={() => removeListing(card.orderId)}
-        >
-          ×
-        </button>
+
+        <span className="min-w-0 flex-1" />
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t('a11y.dismissListing')}
+                onClick={() => removeListing(card.orderId)}
+                className="-my-1 size-10 shrink-0 text-ink-faint hover:text-ink"
+              />
+            }
+          >
+            <i className="ti ti-x text-sm" aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>{t('a11y.dismissListing')}</TooltipContent>
+        </Tooltip>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -235,37 +295,28 @@ export function UnderpricedListingsPanel() {
     .sort((a, b) => b.pctBelow - a.pctBelow || b.receivedAt - a.receivedAt);
 
   return (
-    <div className="radar-layout">
-      <div className="radar-main">
-        <OpportunityBoard />
-      </div>
-      <aside className="radar-side" aria-label={t('a11y.underpricedListings')}>
-        <div className="radar-side-header">
-          <span className="panel-title-eyebrow">
-            <span className="panel-dot panel-dot-green" aria-hidden="true" />
-            {t('up.title')}
-          </span>
-          <p>
-            Live sell listings priced well below their recommended entry. Verify before whispering
-            — listings clear after 5 minutes.
-          </p>
-          <div className="radar-stats">
-            Scanned {stats.scannedCount.toLocaleString()} listings · watching{' '}
-            {stats.trackedItems.toLocaleString()} priced items
-          </div>
+    <Panel className="gap-0" aria-label={t('a11y.underpricedListings')}>
+      <PanelHeader>
+        <PanelTitle variant="heading">{t('up.title')}</PanelTitle>
+        {/* Throughput, not decoration: it is how you tell a quiet market from a dead
+            subscription. */}
+        <span className="shrink-0 font-mono text-[10px] text-ink-faint tabular-nums">
+          {t('up.radarStats', {
+            scanned: stats.scannedCount.toLocaleString(),
+            tracked: stats.trackedItems.toLocaleString(),
+          })}
+        </span>
+      </PanelHeader>
+
+      {visible.length === 0 ? (
+        <EmptyState icon="ti-radar" title={t('up.watching')} />
+      ) : (
+        <div className="max-h-[calc(100vh-12rem)] overflow-y-auto overscroll-contain">
+          {visible.map((card) => (
+            <UnderpricedCard key={card.orderId} card={card} now={now} />
+          ))}
         </div>
-        {visible.length === 0 ? (
-          <div className="radar-empty">
-            Watching the live market… underpriced listings will appear here as they’re posted.
-          </div>
-        ) : (
-          <div className="radar-list">
-            {visible.map((card) => (
-              <UnderpricedCard key={card.orderId} card={card} now={now} />
-            ))}
-          </div>
-        )}
-      </aside>
-    </div>
+      )}
+    </Panel>
   );
 }

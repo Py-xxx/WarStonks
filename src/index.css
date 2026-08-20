@@ -54,6 +54,11 @@
   --color-bg-surface: #13161e;
   --color-bg-panel: #171b24;
   --color-bg-elevated: #1a1e2a;
+  /* Overlays only — tooltips, popovers, menus. Deliberately lighter than every in-page surface:
+     `bg-elevated` sits at 1.04:1 against `bg-panel`, so a tooltip drawn on it was invisible as a
+     surface and only its border separated it from the panel underneath. An overlay has to read as
+     ABOVE the page, not as another region of it. */
+  --color-bg-overlay: #262c3c;
 
   /* Lines. */
   --color-line-subtle: #1c1f2b;
@@ -84,7 +89,7 @@
   --color-foreground: var(--color-ink);
   --color-card: var(--color-bg-panel);
   --color-card-foreground: var(--color-ink);
-  --color-popover: var(--color-bg-elevated);
+  --color-popover: var(--color-bg-overlay);
   --color-popover-foreground: var(--color-ink);
   --color-primary: var(--color-accent-blue);
   --color-primary-foreground: var(--color-bg-base);

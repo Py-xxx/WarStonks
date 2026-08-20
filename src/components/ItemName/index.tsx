@@ -69,7 +69,9 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
   const handleOpen = (event: { stopPropagation: () => void }) => {
     stop(event);
     setMenu(null);
-    void openItemInQuickView(target, 'home');
+    // 'market', not 'home': Quick View moved to Market when Home was rebuilt, so 'home' landed
+    // you on a page that does not show the item at all.
+    void openItemInQuickView(target, 'market');
   };
 
   const handleCopy = (event: { stopPropagation: () => void }) => {

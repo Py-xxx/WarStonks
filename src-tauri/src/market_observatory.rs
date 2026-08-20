@@ -9546,6 +9546,7 @@ fn build_item_analysis_inner(
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
+    source: AnalysisSource,
 ) -> Result<ItemAnalysisResponse> {
     let variant_key = normalize_variant_key(variant_key.as_deref());
     let seller_mode = normalize_seller_mode(seller_mode.as_deref());
@@ -9557,10 +9558,16 @@ fn build_item_analysis_inner(
         Some(seller_mode.clone()),
         Some("48h".to_string()),
         Some("1h".to_string()),
+        source,
     )?;
 
-    let live_orders =
-        fetch_filtered_orders(&slug, &variant_key, &seller_mode, RequestPriority::Instant).ok();
+    // The third and last network call. Skipped entirely on a cached build; `current_snapshot`
+    // below already falls back to the analytics snapshot, which is why this is safe to drop.
+    let live_orders = if source.is_live() {
+        fetch_filtered_orders(&slug, &variant_key, &seller_mode, RequestPriority::Instant).ok()
+    } else {
+        None
+    };
     let current_snapshot = live_orders
         .as_ref()
         .map(|entry| entry.3.clone())
@@ -9988,6 +9995,29 @@ fn persist_analytics_cache(
     Ok(())
 }
 
+/// Where an analysis/analytics build is allowed to get its numbers.
+///
+/// Selecting an item used to cost THREE `RequestPriority::Instant` WFM calls
+/// (`fetch_and_cache_statistics`, `capture_tracking_snapshot_with_orders_priority`,
+/// `fetch_filtered_orders`) before a single panel could render — through a scheduler capped at
+/// 3 req/sec. That is why the page felt like one long load: everything waited on the slowest.
+///
+/// `Cached` skips all three and reads only what SQLite already holds, so the UI can paint almost
+/// immediately; `Live` is the original behaviour and upgrades the result once the network answers.
+/// This is safe to do because every consumer already tolerates missing live data — `current_snapshot`
+/// falls back to the cached snapshot and `sell_orders` defaults to empty.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AnalysisSource {
+    Cached,
+    Live,
+}
+
+impl AnalysisSource {
+    fn is_live(self) -> bool {
+        self == AnalysisSource::Live
+    }
+}
+
 fn build_item_analytics_inner(
     app: tauri::AppHandle,
     item_key: String,
@@ -9996,6 +10026,7 @@ fn build_item_analytics_inner(
     seller_mode: Option<String>,
     domain_key: Option<String>,
     bucket_size_key: Option<String>,
+    source: AnalysisSource,
 ) -> Result<ItemAnalyticsResponse> {
     let analytics_domain_key = domain_key
         .as_deref()
@@ -10012,31 +10043,43 @@ fn build_item_analytics_inner(
     let variant_label = derive_variant_label(&variant_key);
     let connection = open_market_observatory_database(&app)?;
 
-    if let Err(error) = fetch_and_cache_statistics(
-        &connection,
-        &item_key,
-        &slug,
-        &variant_key,
-        RequestPriority::Instant,
-    ) {
-        if !statistics_cache_is_usable(
+    if source.is_live() {
+        if let Err(error) = fetch_and_cache_statistics(
             &connection,
             &item_key,
+            &slug,
             &variant_key,
-            AnalyticsDomainKey::FortyEightHours,
-        )? {
-            return Err(error);
+            RequestPriority::Instant,
+        ) {
+            if !statistics_cache_is_usable(
+                &connection,
+                &item_key,
+                &variant_key,
+                AnalyticsDomainKey::FortyEightHours,
+            )? {
+                return Err(error);
+            }
         }
     }
 
-    let (live_sell_orders, _, snapshot) = capture_tracking_snapshot_with_orders_priority(
-        &connection,
-        &item_key,
-        &slug,
-        &variant_key,
-        &seller_mode,
-        RequestPriority::Instant,
-    )?;
+    let (live_sell_orders, snapshot) = if source.is_live() {
+        let (sell_orders, _, snapshot) = capture_tracking_snapshot_with_orders_priority(
+            &connection,
+            &item_key,
+            &slug,
+            &variant_key,
+            &seller_mode,
+            RequestPriority::Instant,
+        )?;
+        (sell_orders, snapshot)
+    } else {
+        // Cached build: whatever the last capture stored. No snapshot yet means this item has
+        // never been looked at, so there is genuinely nothing to paint early — the caller falls
+        // back to the live build and the UI stays in its loading state until that answers.
+        let snapshot = latest_snapshot_for_item(&connection, &item_key, &variant_key, &seller_mode)?
+            .ok_or_else(|| anyhow!("no cached market snapshot for item"))?;
+        (Vec::new(), snapshot)
+    };
     let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
         load_statistics_rows_for_domain(&connection, &item_key, &variant_key, "48hours")?;
     let trend_points = resample_rows(
@@ -10898,6 +10941,7 @@ pub async fn get_item_analytics(
             seller_mode,
             domain_key,
             bucket_size_key,
+            AnalysisSource::Live,
         )
     })
     .await
@@ -10966,7 +11010,7 @@ pub async fn get_item_analysis(
 ) -> Result<ItemAnalysisResponse, String> {
     let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analysis_inner(app_for_work, item_key, slug, variant_key, seller_mode)
+        build_item_analysis_inner(app_for_work, item_key, slug, variant_key, seller_mode, AnalysisSource::Live)
     })
     .await
     .map_err(|error| {
@@ -10992,6 +11036,38 @@ pub async fn get_item_analysis(
     })
     // On success, capture the recommended prices for the underpriced-listings radar.
     .inspect(|analysis| update_recommended_prices_from_analysis(&app, analysis))
+}
+
+/// The fast half of the Market page: everything SQLite already knows, with no WFM calls at all.
+///
+/// Returns the same `ItemAnalysisResponse` as `get_item_analysis`, so the frontend binds one shape
+/// and simply replaces it when the live build answers. Errors when the item has never been
+/// captured before — there is no cached snapshot to build from — which the caller treats as
+/// "stay in the loading state until live arrives" rather than as a failure worth surfacing.
+#[tauri::command]
+pub async fn get_item_analysis_cached(
+    app: tauri::AppHandle,
+    item_key: String,
+    slug: String,
+    variant_key: Option<String>,
+    seller_mode: Option<String>,
+) -> Result<ItemAnalysisResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        build_item_analysis_inner(
+            app,
+            item_key,
+            slug,
+            variant_key,
+            seller_mode,
+            AnalysisSource::Cached,
+        )
+    })
+    .await
+    .map_err(|error| format!("failed to join cached market analysis worker: {error}"))?
+    // Deliberately NOT routed through `log_market_error_and_build_message`: a cache miss is the
+    // normal state for an item you have never opened, and logging it as a market error would fill
+    // the error log with non-events.
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

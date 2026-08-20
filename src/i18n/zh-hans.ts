@@ -1,6 +1,7 @@
 // 简体中文 — partial. Missing keys fall back to English. See en.ts for the full key list.
 export const zhHans: Record<string, string> = {
   'nav.home': '主页',
+  'nav.watchlist': '关注列表',
   'nav.market': '市场',
   'nav.events': '活动',
   'nav.scanners': '扫描器',

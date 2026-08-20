@@ -1,5 +1,7 @@
 import { useDeferredValue, useEffect, useRef, useState, useMemo } from 'react';
 import type { KeyboardEvent } from 'react';
+import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { AlertsPanel } from '../AlertsPanel';
 import { walletIcons } from '../../assets/wallet';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
@@ -180,8 +182,6 @@ export function TopBar() {
   const [tradeMenuOpen, setTradeMenuOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const searchRef = useRef<HTMLDivElement | null>(null);
-  const notificationsRef = useRef<HTMLDivElement | null>(null);
-  const tradeMenuRef = useRef<HTMLDivElement | null>(null);
   const previousAlertCountRef = useRef(0);
   const deferredSearchValue = useDeferredValue(searchValue);
   const suggestions = rankWfmAutocompleteItems(autocompleteItems, deferredSearchValue);
@@ -249,18 +249,13 @@ export function TopBar() {
   }, [deferredSearchValue]);
 
   useEffect(() => {
+    // Only the search dropdown still needs this. The notification and presence menus are Base UI
+    // popovers now, which handle their own dismissal, Escape and focus return.
     const handlePointerDown = (event: MouseEvent) => {
       if (!searchRef.current?.contains(event.target as Node)) {
         setDropdownOpen(false);
       }
 
-      if (!notificationsRef.current?.contains(event.target as Node)) {
-        setNotificationsOpen(false);
-      }
-
-      if (!tradeMenuRef.current?.contains(event.target as Node)) {
-        setTradeMenuOpen(false);
-      }
     };
 
     window.addEventListener('mousedown', handlePointerDown);
@@ -278,9 +273,11 @@ export function TopBar() {
   const selectItem = (item: WfmAutocompleteItem) => {
     setSearchValue(item.name);
     setDropdownOpen(false);
-    // Route through the shared open action so the item lands in Quick View, is recorded in
-    // recents, and a back target is captured.
-    void openItemInQuickView(item, 'home');
+    // `'stay'` — searching selects an item, it does not navigate. It used to jump you to Home,
+    // which yanked you off whatever you were doing and (since Quick View moved to Market) did not
+    // even show the item you searched for. Selecting still loads Quick View, records the item in
+    // recents and kicks off the market refresh; the page you are on is your business.
+    void openItemInQuickView(item, 'stay');
   };
 
   useEffect(() => {
@@ -376,27 +373,35 @@ export function TopBar() {
   };
 
   return (
-    <header className="topbar">
-      <div className="logo">
-        <span className="logo-text">WarStonks</span>
-      </div>
+    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-bg-surface px-3">
+      <span className="shrink-0 font-mono text-[13px] font-bold tracking-[0.02em] text-ink">
+        WarStonks
+      </span>
 
       {navigationBack ? (
-        <button className="topbar-back-btn" type="button" onClick={goBack} title={t('a11y.goBack')}>
-          ← Back
-        </button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={goBack}
+          title={t('a11y.goBack')}
+          className="h-7 shrink-0 px-2 text-[11px]"
+        >
+          ← {t('common.back')}
+        </Button>
       ) : null}
 
-      <div className="topbar-search-group">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <div
           ref={searchRef}
-          className={`search-bar${dropdownOpen ? ' open' : ''}`}
+          className="relative flex h-8 min-w-0 max-w-[420px] flex-1 items-center gap-2 rounded-md border border-line bg-bg-base px-2.5 focus-within:border-line-strong"
           role="search"
           aria-label={t('search.placeholder')}
         >
-          <SearchIcon />
+          <span className="shrink-0 text-ink-faint" aria-hidden="true">
+            <SearchIcon />
+          </span>
           <input
-            className="search-input"
+            className="min-w-0 flex-1 border-0 bg-transparent text-xs text-ink outline-none placeholder:text-ink-faint"
             type="text"
             value={searchValue}
             placeholder={t('search.placeholder')}
@@ -410,67 +415,87 @@ export function TopBar() {
             aria-expanded={dropdownOpen}
             aria-controls="global-search-results"
           />
-          <span className="kbd">⌘K</span>
+          <span className="shrink-0 rounded border border-line-strong bg-bg-elevated px-1 font-mono text-[9px] text-ink-faint">
+            ⌘K
+          </span>
 
           {dropdownOpen ? (
-            <div className="search-dropdown" id="global-search-results" role="listbox">
+            <div
+              className="absolute top-[calc(100%+6px)] right-0 left-0 z-(--z-dropdown) max-h-96 overflow-y-auto rounded-md border border-line-strong bg-bg-elevated p-1 shadow-float"
+              id="global-search-results"
+              role="listbox"
+            >
               {searchValue.trim() === '' && recentItems.length > 0 ? (
                 <>
-                  <div className="search-section-label">{t('topbar.recent')}</div>
+                  <div className="px-2 py-1 font-mono text-[9px] tracking-[0.07em] text-ink-faint uppercase">
+                    {t('topbar.recent')}
+                  </div>
                   {recentItems.map((item) => (
-                    <button
+                    <Button
                       key={`recent-${item.slug}`}
-                      className="search-suggestion"
-                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      static
+                      className="h-auto w-full justify-start gap-2 rounded-sm px-2 py-1.5 text-left"
                       role="option"
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => selectItem(item)}
                     >
-                      <span className="search-suggestion-main">
-                        <span className="search-suggestion-thumb">
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded-sm bg-bg-panel text-[10px] text-ink-faint [&>img]:size-full [&>img]:object-cover">
                           {resolveWfmAssetUrl(item.imagePath, item.slug) ? (
                             <img src={resolveWfmAssetUrl(item.imagePath, item.slug) ?? undefined} alt="" loading="lazy" />
                           ) : (
                             <span>{item.name.slice(0, 1)}</span>
                           )}
                         </span>
-                        <span className="search-suggestion-copy">
-                          <span className="search-suggestion-name">{item.name}</span>
-                          <span className="search-suggestion-meta">{item.itemFamily ?? 'item'}</span>
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate text-xs text-ink">{item.name}</span>
+                          <span className="truncate text-[10px] text-ink-dim">
+                            {item.itemFamily ?? 'item'}
+                          </span>
                         </span>
                       </span>
-                    </button>
+                    </Button>
                   ))}
                 </>
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'loading' ? (
-                <div className="search-state">{t('topbar.loadingCatalog')}</div>
+                <div className="px-2 py-3 text-center text-[11px] text-ink-dim">
+                  {t('topbar.loadingCatalog')}
+                </div>
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'error' ? (
-                <div className="search-state error">
+                <div className="px-2 py-3 text-center text-[11px] text-accent-red">
                   {autocompleteError ?? t('topbar.catalogLoadFailed')}
                 </div>
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'ready' && suggestions.length === 0 ? (
-                <div className="search-state">{t('topbar.noItemsMatch')}</div>
+                <div className="px-2 py-3 text-center text-[11px] text-ink-dim">
+                  {t('topbar.noItemsMatch')}
+                </div>
               ) : null}
 
               {searchValue.trim() !== '' && autocompleteState === 'ready'
                 ? suggestions.map((item, index) => (
-                    <button
+                    <Button
                       key={item.slug}
-                      className={`search-suggestion${index === highlightedIndex ? ' active' : ''}`}
-                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      static
+                      className={`h-auto w-full justify-start gap-2 rounded-sm px-2 py-1.5 text-left ${
+                        index === highlightedIndex ? 'bg-white/[0.07]' : ''
+                      }`}
                       role="option"
                       aria-selected={index === highlightedIndex}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => selectItem(item)}
                     >
-                      <span className="search-suggestion-main">
-                        <span className="search-suggestion-thumb">
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded-sm bg-bg-panel text-[10px] text-ink-faint [&>img]:size-full [&>img]:object-cover">
                           {resolveWfmAssetUrl(item.imagePath, item.slug) ? (
                             <img
                               src={resolveWfmAssetUrl(item.imagePath, item.slug) ?? undefined}
@@ -481,41 +506,54 @@ export function TopBar() {
                             <span>{item.name.slice(0, 1)}</span>
                           )}
                         </span>
-                        <span className="search-suggestion-copy">
-                          <span className="search-suggestion-name">{item.name}</span>
-                          <span className="search-suggestion-meta">
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate text-xs text-ink">{item.name}</span>
+                          <span className="truncate text-[10px] text-ink-dim">
                             {item.itemFamily ?? 'item'}
                           </span>
                         </span>
                       </span>
-                    </button>
+                    </Button>
                   ))
                 : null}
             </div>
           ) : null}
         </div>
 
-        <button
-          className={`topbar-search-refresh${quickViewLoading ? ' is-loading' : ''}`}
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           onClick={() => {
             void handleRefreshSelectedItem();
           }}
           disabled={!selectedQuickViewItem || quickViewLoading}
           aria-label={t('a11y.refreshSelectedItem')}
           title={selectedQuickViewItem ? t('topbar.refreshSelectedItem') : t('topbar.searchSelectFirst')}
+          className="shrink-0 text-ink-dim hover:text-ink"
         >
           <RefreshIcon />
-        </button>
+        </Button>
 
         {showMarketVariantSelect ? (
-          <div className="topbar-market-variant">
-            <span className="topbar-market-variant-label">{t('wl.rank')}</span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="font-mono text-[9px] tracking-[0.07em] text-ink-faint uppercase">
+              {t('wl.rank')}
+            </span>
             {rankToggleVariants ? (
-              <div className="rank-toggle" role="group" aria-label={t('a11y.selectRankMarket')}>
-                <button
-                  type="button"
-                  className={`rank-toggle-option${selectedMarketVariantKey === rankToggleVariants.min.key ? ' active' : ''}`}
+              <div
+                className="flex overflow-hidden rounded-md border border-line-strong"
+                role="group"
+                aria-label={t('a11y.selectRankMarket')}
+              >
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  static
+                  className={`h-6 border-0 px-2 font-mono text-[10px] font-semibold tabular-nums ${
+                    selectedMarketVariantKey === rankToggleVariants.min.key
+                      ? 'bg-bg-elevated text-ink'
+                      : 'text-ink-dim hover:text-ink'
+                  }`}
                   aria-pressed={selectedMarketVariantKey === rankToggleVariants.min.key}
                   title={t('trades.modal.rankUnranked')}
                   onClick={() => {
@@ -523,10 +561,16 @@ export function TopBar() {
                   }}
                 >
                   R{rankToggleVariants.min.rank ?? 0}
-                </button>
-                <button
-                  type="button"
-                  className={`rank-toggle-option${selectedMarketVariantKey === rankToggleVariants.max.key ? ' active' : ''}`}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  static
+                  className={`h-6 border-0 border-l border-line-strong px-2 font-mono text-[10px] font-semibold tabular-nums ${
+                    selectedMarketVariantKey === rankToggleVariants.max.key
+                      ? 'bg-bg-elevated text-ink'
+                      : 'text-ink-dim hover:text-ink'
+                  }`}
                   aria-pressed={selectedMarketVariantKey === rankToggleVariants.max.key}
                   title={t('trades.modal.rankMax')}
                   onClick={() => {
@@ -534,11 +578,11 @@ export function TopBar() {
                   }}
                 >
                   R{rankToggleVariants.max.rank ?? 0}
-                </button>
+                </Button>
               </div>
             ) : (
               <select
-                className="topbar-market-variant-select"
+                className="h-6 rounded-md border border-line-strong bg-bg-elevated px-1.5 text-[11px] text-ink outline-none"
                 value={selectedMarketVariantKey ?? ''}
                 onChange={(event) => {
                   void setSelectedMarketVariantKey(event.target.value || null);
@@ -563,38 +607,48 @@ export function TopBar() {
           trading decision made on bad data — so mark it, using the same one-hour threshold the
           inventory tab settled on from measured push gaps. */}
       <div
-        className={`currency-strip${currencyIsStale ? ' is-stale' : ''}`}
+        className={`flex shrink-0 items-center gap-2.5 rounded-md border border-line bg-bg-base px-2.5 py-1 ${
+          currencyIsStale ? 'opacity-60' : ''
+        }`}
         role="group"
         aria-label={t('a11y.currencyBalances')}
         title={currencyIsStale ? t('bal.stale', { time: formatElapsedTime(walletSnapshot.lastUpdate) }) : undefined}
       >
-        <div className="currency-primary" title={t('bal.platinum')}>
-          <span className="currency-icon ci-platinum">
+        <div className="flex items-center gap-1.5" title={t('bal.platinum')}>
+          <span className="grid size-4 shrink-0 place-items-center [&>img]:size-full [&>img]:object-contain">
             <img src={walletIcons.platinum} alt="" />
           </span>
           <span
-            className={`currency-primary-val${walletSnapshot.balances.platinum === null ? ' no-data' : ''}`}
+            className={`font-mono text-xs font-semibold tabular-nums ${
+              walletSnapshot.balances.platinum === null ? 'text-ink-faint' : 'text-ink'
+            }`}
           >
             {formatCurrencyValue(walletSnapshot.balances.platinum, walletLoading)}
           </span>
           {/* Only present once platinum has moved — an empty reserved slot reads as a gap. */}
           {platinumDelta !== null ? (
-            <span className={`currency-delta${platinumDelta < 0 ? ' is-down' : ''}`}>
+            <span
+              className={`font-mono text-[10px] font-semibold tabular-nums ${
+                platinumDelta < 0 ? 'text-accent-red' : 'text-accent-green'
+              }`}
+            >
               {platinumDelta > 0 ? '+' : ''}
               {new Intl.NumberFormat().format(platinumDelta)}
             </span>
           ) : null}
         </div>
 
-        <span className="currency-divider" aria-hidden="true" />
+        <span className="h-3.5 w-px shrink-0 bg-line" aria-hidden="true" />
 
         {SECONDARY_CURRENCIES.map(({ key, icon, labelKey }) => (
-          <div key={key} className="currency-secondary" title={t(labelKey)}>
-            <span className={`currency-icon ci-${key}`}>
+          <div key={key} className="flex items-center gap-1.5" title={t(labelKey)}>
+            <span className="grid size-4 shrink-0 place-items-center [&>img]:size-full [&>img]:object-contain">
               <img src={icon} alt="" />
             </span>
             <span
-              className={`currency-secondary-val${walletSnapshot.balances[key] === null ? ' no-data' : ''}`}
+              className={`font-mono text-xs tabular-nums ${
+                walletSnapshot.balances[key] === null ? 'text-ink-faint' : 'text-ink-soft'
+              }`}
             >
               {formatCompactCurrencyValue(walletSnapshot.balances[key], walletLoading)}
             </span>
@@ -602,62 +656,77 @@ export function TopBar() {
         ))}
       </div>
 
-      <div className="topbar-right">
-        <div ref={notificationsRef} className="notification-wrap">
-        <button
-          className={`notification-btn${notificationsOpen ? ' open' : ''}`}
-            type="button"
-            aria-label={t('a11y.openNotifications')}
-            aria-expanded={notificationsOpen}
-            onClick={() => setNotificationsOpen((current) => !current)}
+      <div className="flex shrink-0 items-center gap-1.5">
+        {/* Was a hand-rolled absolutely-positioned panel with its own click-outside listener.
+            Base UI portals it, handles dismissal and Escape, and does real collision detection —
+            which matters here because the panel is up to 460px wide and right-aligned. */}
+        <Popover open={notificationsOpen} onOpenChange={setNotificationsOpen}>
+          <PopoverTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t('a11y.openNotifications')}
+                className="relative text-ink-dim hover:text-ink"
+              />
+            }
           >
             <BellIcon />
             {notificationCount > 0 ? (
-              <span className="notification-count">{notificationCount}</span>
+              <span className="absolute -top-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full bg-accent-red px-1 font-mono text-[9px] font-bold text-ink tabular-nums">
+                {notificationCount}
+              </span>
             ) : null}
-          </button>
-
-          {notificationsOpen ? (
-            <div className="notification-panel">
-              <div className="notification-panel-header">
-                <span className="card-label">{t('settings.section.notifications.label')}</span>
-                <span
-                  className={`badge ${notificationCount > 0 ? 'badge-green' : 'badge-muted'}`}
-                >
-                  {notificationCount}
-                </span>
-              </div>
-              <AlertsPanel />
+          </PopoverTrigger>
+          <PopoverContent side="bottom" align="end" className="w-[min(460px,calc(100vw-40px))] p-0">
+            <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+              <span className="font-mono text-xs font-semibold tracking-[0.06em] text-ink-soft uppercase">
+                {t('settings.section.notifications.label')}
+              </span>
+              <span
+                className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums ${
+                  notificationCount > 0
+                    ? 'bg-accent-green/15 text-accent-green'
+                    : 'bg-bg-elevated text-ink-faint'
+                }`}
+              >
+                {notificationCount}
+              </span>
             </div>
-          ) : null}
-        </div>
+            <AlertsPanel />
+          </PopoverContent>
+        </Popover>
         {!tradeAccount ? (
-          <button
-            className="btn-connect"
+          <Button
+            size="sm"
             aria-label={t('a11y.openTrades')}
             onClick={handleOpenTrades}
+            className="h-7 gap-1.5 px-2.5 text-[11px]"
           >
             <ArrowIcon />
             {tradeAccountLoading ? t('common.loading') : t('common.connect')}
-          </button>
+          </Button>
         ) : (
-          <div ref={tradeMenuRef} className="trade-menu-wrap">
-            <button
-              className="btn-connect trade-connected"
-              aria-label={t('a11y.openTradeMenu')}
-              aria-expanded={tradeMenuOpen}
-              onClick={() => setTradeMenuOpen((value) => !value)}
+          <Popover open={tradeMenuOpen} onOpenChange={setTradeMenuOpen}>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={t('a11y.openTradeMenu')}
+                  className="h-7 gap-1.5 border-line-strong px-2 text-[11px]"
+                />
+              }
             >
-              <span>{tradeAccount.name}</span>
-              <span className="trade-connected-separator">·</span>
-              <span className={`trade-connected-status ${getTradeStatusToneClass(tradeAccount.status)}`}>
+              <span className="max-w-32 truncate">{tradeAccount.name}</span>
+              <span className="text-ink-faint">·</span>
+              <span className={getTradeStatusToneClass(tradeAccount.status)}>
                 {formatTradeStatusLabel(tradeAccount.status)}
               </span>
               <ChevronDownIcon />
-            </button>
-
-            {tradeMenuOpen ? (
-              <div className="trade-menu-dropdown" role="listbox" aria-label={t('a11y.presence')}>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="end" className="w-44">
+              <div role="listbox" aria-label={t('a11y.presence')} className="flex flex-col gap-0.5">
                 {([
                   { value: 'online', label: t('status.online') },
                   { value: 'ingame', label: t('home.seller.ingame') },
@@ -666,36 +735,44 @@ export function TopBar() {
                   const isActive =
                     (tradeAccount.status === 'offline' ? 'invisible' : tradeAccount.status) === option.value;
                   return (
-                    <button
+                    <Button
                       key={option.value}
-                      className={`trade-menu-option${isActive ? ' active' : ''}`}
-                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      static
                       role="option"
                       aria-selected={isActive}
                       disabled={tradeAccountLoading}
                       onClick={() => void handleSetPresence(option.value)}
+                      className={`h-7 w-full justify-start gap-2 px-2 text-[12px] ${
+                        isActive ? 'bg-white/[0.05] text-ink' : 'text-ink-dim hover:text-ink'
+                      }`}
                     >
-                      <span className={`trade-menu-option-dot ${getTradeStatusToneClass(option.value)}`} />
+                      <span
+                        className={`size-1.5 shrink-0 rounded-full ${getTradeStatusToneClass(option.value)}`}
+                      />
                       {option.label}
-                    </button>
+                    </Button>
                   );
                 })}
 
                 {tradeAccountError ? (
-                  <div className="trade-menu-error">{tradeAccountError}</div>
+                  <div className="px-2 py-1 text-[11px] text-accent-red">{tradeAccountError}</div>
                 ) : null}
               </div>
-            ) : null}
-          </div>
+            </PopoverContent>
+          </Popover>
         )}
-        <button
-          className="settings-btn"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           title={t('settings.title')}
           aria-label={t('a11y.openSettings')}
           onClick={() => openSettingsSidebar('alecaframe')}
+          className="text-ink-dim hover:text-ink"
         >
           <GearIcon />
-        </button>
+        </Button>
       </div>
     </header>
   );

@@ -23,6 +23,12 @@ import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
 } from '../../lib/watchlistAddFeedback';
+import { PageHeading } from '../../components/PageHeading';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Metric, MetricGrid } from '@/components/ui/metric';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useAppStore } from '../../stores/useAppStore';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import type {
@@ -37,7 +43,6 @@ import type {
   WfmAutocompleteItem,
 } from '../../types';
 
-type ScannerTab = 'arbitrage' | 'relic-roi';
 
 const ScanChevron = ({ up }: { up?: boolean }) => (
   <svg className="sp-set-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -175,16 +180,49 @@ function getRelicRefinementSummary(
 }
 
 
+/**
+ * Placeholder rows for the scanner lists.
+ *
+ * Shown ONLY while the first `getArbitrageScannerState()` call is in flight — a real wait, however
+ * short. Once it returns, either results or the genuine empty state takes over; there is no timed
+ * delay and nothing that keeps pulsing over data that has already arrived.
+ *
+ * Shaped like the collapsed set row (rank, thumb, title, trailing figures) so nothing reflows when
+ * the real rows land.
+ */
+function ScannerRowsSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div aria-hidden="true">
+      {Array.from({ length: rows }, (_, index) => (
+        <div
+          key={index}
+          className="flex items-center gap-3 border-b border-line-subtle px-3 py-3 last:border-b-0"
+        >
+          <Skeleton type="text" className="w-4 shrink-0" leafClassName="h-3" />
+          <Skeleton type="avatar" className="w-auto shrink-0" leafClassName="size-8 rounded-md" />
+          <Skeleton type="text" className="w-48 shrink-0" />
+          <span className="min-w-0 flex-1" />
+          <Skeleton type="text" className="w-16 shrink-0" />
+          <Skeleton type="text" className="w-16 shrink-0" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ArbitrageComponentRow({
   component,
   targetValue,
   recentlyAdded,
+  owned,
   onTargetChange,
   onAdd,
 }: {
   component: ArbitrageScannerComponentEntry;
   targetValue: string;
   recentlyAdded: boolean;
+  /** From the AlecaFrame inventory cache. 0 when no inventory is loaded. */
+  owned: number;
   onTargetChange: (value: string) => void;
   onAdd: () => void;
 }) {
@@ -213,38 +251,44 @@ function ArbitrageComponentRow({
               {tConfidence(t, component.confidenceSummary)}
             </span>
           </div>
-          <div className="scanner-component-pill-row">
-            <span className="scanner-stat-pill scanner-stat-pill-highlight">
-              <span className="scanner-stat-pill-label">{t('scan.entryZone')}</span>
-              <span className="scanner-stat-pill-value">
-                {formatPlat(component.recommendedEntryLow)} - {formatPlat(component.recommendedEntryHigh)}
-              </span>
-            </span>
-          </div>
+          <MetricGrid columns={3} className="mt-1">
+            <Metric
+              label={t('scan.entryZone')}
+              value={`${formatPlat(component.recommendedEntryLow)} - ${formatPlat(component.recommendedEntryHigh)}`}
+            />
+          </MetricGrid>
         </div>
       </div>
       <div className="scanner-component-actions">
-        <input
-          className="price-input scanner-component-input"
+        {/* Owned vs needed, never a binary "owned" tick. Half a set is the common case and the
+            useful number is the SHORTFALL — 1/3 and 3/3 are different decisions, and a tick would
+            collapse them. Reads 0 when no inventory is loaded, which is honest: we do not know
+            that you own none, we know we have not been told. */}
+        <span
+          className="shrink-0 font-mono text-[11px] tabular-nums"
+          title={t('scan.ownedOfNeeded', { owned, needed: component.quantityInSet })}
+        >
+          <span className={owned > 0 ? 'text-accent-green' : 'text-ink-faint'}>{owned}</span>
+          <span className="text-ink-faint">/{component.quantityInSet}</span>
+        </span>
+        <Input
           type="number"
           min="0"
           step="1"
+          aria-label={t('wl.targetPriceFor', { item: component.name })}
+          className="h-7 w-20 tabular-nums"
           value={targetValue}
-          onChange={(event) => onTargetChange(event.target.value)}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) => onTargetChange(event.target.value)}
         />
-        <div className="watchlist-add-feedback-stack">
-          {recentlyAdded ? (
-            <span className="watchlist-add-success">{t('wl.addedToWatchlist')}</span>
-          ) : null}
-          <button
-            className="btn-sm scanner-component-watch-button"
-            type="button"
-            disabled={isDisabled}
-            onClick={onAdd}
-          >
-            {t('wl.addToWatchlist')}
-          </button>
-        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-7 shrink-0 border-line px-2 text-[11px]"
+          disabled={isDisabled}
+          onClick={onAdd}
+        >
+          {recentlyAdded ? t('wl.added') : t('common.add')}
+        </Button>
       </div>
     </div>
   );
@@ -259,6 +303,8 @@ function ArbitrageRow({
   recentlyAddedKeys,
   onTargetChange,
   onAddToWatchlist,
+  ownedQuantities,
+  onAddMany,
 }: {
   entry: ArbitrageScannerSetEntry;
   index: number;
@@ -268,9 +314,16 @@ function ArbitrageRow({
   recentlyAddedKeys: Record<string, boolean>;
   onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
   onAddToWatchlist: (component: ArbitrageScannerComponentEntry) => void;
+  /** Owned counts from the inventory cache, keyed by component slug. */
+  ownedQuantities: Map<string, number>;
+  onAddMany: (components: ArbitrageScannerComponentEntry[]) => void;
 }) {
   const { t } = useTranslation();
   const imageUrl = resolveWfmAssetUrl(entry.imagePath, entry.slug);
+  // Short of the set requirement, not "not owned at all" — holding 1 of 3 still leaves 2 to buy.
+  const unownedComponents = entry.components.filter(
+    (component) => (ownedQuantities.get(component.slug) ?? 0) < (component.quantityInSet ?? 1),
+  );
 
   return (
     <article className={`sp-set${expanded ? ' is-expanded' : ''}`}>
@@ -326,8 +379,34 @@ function ArbitrageRow({
             <span>{t('scan.liquidity')} <strong>{Math.round(entry.liquidityScore)}%</strong></span>
           </div>
 
-          <div className="sp-part-group-label missing">
-            {t('scan.partsToBuy', { n: entry.componentCount })}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="sp-part-group-label missing">
+              {t('scan.partsToBuy', { n: entry.componentCount })}
+            </div>
+            <div className="ml-auto flex items-center gap-1.5">
+              {/* Two buttons, because they answer different questions. "Add all" watches the whole
+                  set. "Add unowned" watches only what you are short of — which is what you
+                  actually want once you already hold half the parts, and is the reason the owned
+                  counts are on screen at all. */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-[11px] text-ink-dim hover:text-ink"
+                disabled={unownedComponents.length === 0}
+                title={unownedComponents.length === 0 ? t('scan.allOwned') : t('scan.addUnownedHint')}
+                onClick={() => onAddMany(unownedComponents)}
+              >
+                {t('scan.addUnowned')}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-7 border-line px-2.5 text-[11px]"
+                onClick={() => onAddMany(entry.components)}
+              >
+                {t('scan.addAll')}
+              </Button>
+            </div>
           </div>
           <div className="sp-part-list">
               {entry.components.map((component) => (
@@ -336,6 +415,7 @@ function ArbitrageRow({
                   component={component}
                   targetValue={targetInputs[component.slug] ?? getDefaultComponentTarget(component)}
                   recentlyAdded={Boolean(recentlyAddedKeys[component.slug])}
+                  owned={ownedQuantities.get(component.slug) ?? 0}
                   onTargetChange={(value) => onTargetChange(component, value)}
                   onAdd={() => onAddToWatchlist(component)}
                 />
@@ -383,22 +463,14 @@ function RelicDropRow({
               {tConfidence(t, drop.confidenceSummary)}
             </span>
           </div>
-          <div className="scanner-component-pill-row">
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">{t('scan.chance')}</span>
-              <span className="scanner-stat-pill-value">{formatChance(chance)}</span>
-            </span>
-            <span className="scanner-stat-pill scanner-stat-pill-highlight">
-              <span className="scanner-stat-pill-label">{t('scan.optimalExit')}</span>
-              <span className="scanner-stat-pill-value">
-                {formatPlat(drop.recommendedExitLow)} - {formatPlat(drop.recommendedExitHigh)}
-              </span>
-            </span>
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">EV</span>
-              <span className="scanner-stat-pill-value">{formatPlat(expectedContribution)}</span>
-            </span>
-          </div>
+          <MetricGrid columns={3} className="mt-1">
+            <Metric label={t('scan.chance')} value={formatChance(chance)} />
+            <Metric
+              label={t('scan.optimalExit')}
+              value={`${formatPlat(drop.recommendedExitLow)} - ${formatPlat(drop.recommendedExitHigh)}`}
+            />
+            <Metric label={"EV"} value={formatPlat(expectedContribution)} />
+          </MetricGrid>
         </div>
       </div>
     </div>
@@ -475,24 +547,12 @@ function RelicRoiRow({
 
       {expanded ? (
         <div className="sp-set-body">
-          <div className="scanner-inline-summary">
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">{t('scan.refinement')}</span>
-              <span className="scanner-stat-pill-value">{tHealth(t, summary?.refinementLabel) || '—'}</span>
-            </span>
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">{t('scan.runValue')}</span>
-              <span className="scanner-stat-pill-value">{formatPlatPrecise(summary?.runValue ?? null)}</span>
-            </span>
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">{t('scan.liquidity')}</span>
-              <span className="scanner-stat-pill-value">{Math.round(summary?.liquidityScore ?? 0)}%</span>
-            </span>
-            <span className="scanner-stat-pill">
-              <span className="scanner-stat-pill-label">{t('scan.drops')}</span>
-              <span className="scanner-stat-pill-value">{entry.dropCount}</span>
-            </span>
-          </div>
+          <MetricGrid columns={4}>
+            <Metric label={t('scan.refinement')} value={tHealth(t, summary?.refinementLabel) || '—'} />
+            <Metric label={t('scan.runValue')} value={formatPlatPrecise(summary?.runValue ?? null)} />
+            <Metric label={t('scan.liquidity')} value={<>{Math.round(summary?.liquidityScore ?? 0)}%</>} />
+            <Metric label={t('scan.drops')} value={entry.dropCount} />
+          </MetricGrid>
 
           <div className="scanner-components-panel">
             <div className="scanner-components-header">
@@ -519,13 +579,22 @@ function RelicRoiRow({
 
 export function ScannersPage() {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<ScannerTab>('arbitrage');
+  // Sub-view selection lives in the store: the sidebar renders this page's sub-navigation.
+  const activeTab = useAppStore((s) => s.scannersSubTab);
   const [arbitrage, setArbitrage] = useState<ArbitrageScannerResponse | null>(null);
   /** Owned prime-part counts, so "add to watchlist" can want only the shortfall. Best-effort:
    *  an empty map simply means "own nothing", which watches the full requirement. */
   const [ownedPartQuantities, setOwnedPartQuantities] = useState<Map<string, number>>(new Map());
   const [progress, setProgress] = useState<ArbitrageScannerProgress | null>(null);
   const [scannerError, setScannerError] = useState<ScannerErrorState | null>(null);
+  /**
+   * Whether the first `getArbitrageScannerState()` call has come back — success OR failure.
+   *
+   * Needed because `arbitrage === null` means two different things: "we have not asked yet" and
+   * "there is genuinely no saved scan". Skeletoning on the second would be a fake loading state
+   * that never resolves. This flips exactly once, on a real response.
+   */
+  const [scannerStateLoaded, setScannerStateLoaded] = useState(false);
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
   const [expandedRelicSlug, setExpandedRelicSlug] = useState<string | null>(null);
   const [componentTargets, setComponentTargets] = useState<Record<string, string>>({});
@@ -593,6 +662,12 @@ export function ScannersPage() {
         lastCompletedAt,
         tone: lastCompletedAt ? 'warning' : 'error',
       });
+    } finally {
+      // `finally`, not the success branch: a failed load has still finished loading, and leaving
+      // the skeleton up would hide the error the catch block just set.
+      if (scannerEffectActiveRef.current) {
+        setScannerStateLoaded(true);
+      }
     }
   }, [setScannerErrorFrom, syncScannerStaleAlert]);
 
@@ -852,6 +927,20 @@ export function ScannersPage() {
     markWatchlistAddFeedback(component.slug, setWatchlistAddFeedback, watchlistAddFeedbackTimeoutsRef);
   };
 
+  /**
+   * "Add all" / "Add unowned" — the same single-component path in a loop, deliberately.
+   *
+   * Reusing it means the shortfall maths, the target-price parsing and the per-row "added"
+   * feedback stay in one place; a separate bulk implementation would drift from the single one
+   * the first time either changed. Components with no `itemKey` or an unusable target are skipped
+   * by that path already, so a partial set adds what it can rather than failing wholesale.
+   */
+  const addComponentsToWatchlist = (components: ArbitrageScannerComponentEntry[]) => {
+    for (const component of components) {
+      addComponentToWatchlist(component);
+    }
+  };
+
   // While a scan runs the stamp shows live progress; otherwise it's the elapsed time since the
   // last finished scan, with the full timestamp on hover.
   const lastScanAt = arbitrage?.scanFinishedAt ?? progress?.lastCompletedAt ?? null;
@@ -890,27 +979,9 @@ export function ScannersPage() {
 
   return (
     <>
-      <div className="subnav scanners-page-subnav">
-        <div className="subnav-left">
-          <span className="page-title">{t('scan.title')}</span>
-          <span
-            className={`subtab${activeTab === 'arbitrage' ? ' active' : ''}`}
-            onClick={() => setActiveTab('arbitrage')}
-            role="tab"
-            tabIndex={0}
-          >
-            {t('scan.arbitrage')}
-          </span>
-          <span
-            className={`subtab${activeTab === 'relic-roi' ? ' active' : ''}`}
-            onClick={() => setActiveTab('relic-roi')}
-            role="tab"
-            tabIndex={0}
-          >
-            {t('scan.tab.relicRoi')}
-          </span>
-        </div>
-        {(activeTab === 'arbitrage' || activeTab === 'relic-roi') ? (
+      <PageHeading
+        page="scanners"
+        actions={
           <div className="subnav-right scanner-subnav-right">
             <label className="scanner-topbar-toggle" title={t('scan.autoScanHelp')}>
               <span>{t('scan.autoScan')}</span>
@@ -940,8 +1011,8 @@ export function ScannersPage() {
               {isRunning ? t('scan.stopScan') : actionLabel}
             </button>
           </div>
-        ) : null}
-      </div>
+        }
+      />
 
       <div className="page-content scanners-page-content">
         <div className="scanners-shell">
@@ -996,7 +1067,10 @@ export function ScannersPage() {
               </div>
             ) : null}
 
-            {activeTab === 'arbitrage' && arbitrage ? (
+            {/* `|| !scannerStateLoaded` so the list shell (and its skeleton) renders while the
+                first state call is still out. Gating on `arbitrage` alone made the skeleton
+                unreachable — `arbitrage` is null for exactly the period the skeleton is for. */}
+            {activeTab === 'arbitrage' && (arbitrage || !scannerStateLoaded) ? (
               <div className="scanner-results-list">
                 <div className="sp-summary">
                   <div className="sp-summary-lead">
@@ -1037,7 +1111,9 @@ export function ScannersPage() {
                     </div>
                   </div>
                 </div>
-                {arbitrageResults.length > 0 ? (
+                {!scannerStateLoaded ? (
+                  <ScannerRowsSkeleton />
+                ) : arbitrageResults.length > 0 ? (
                   arbitrageResults.map((entry, index) => (
                     <ArbitrageRow
                       key={entry.slug}
@@ -1051,6 +1127,8 @@ export function ScannersPage() {
                       recentlyAddedKeys={watchlistAddFeedback}
                       onTargetChange={updateComponentTarget}
                       onAddToWatchlist={addComponentToWatchlist}
+                  ownedQuantities={ownedPartQuantities}
+                  onAddMany={addComponentsToWatchlist}
                     />
                   ))
                 ) : (
@@ -1062,9 +1140,12 @@ export function ScannersPage() {
                   </div>
                 )}
               </div>
-            ) : activeTab === 'relic-roi' && arbitrage ? (
-              relicResults.length > 0 ? (
-                <div className="scanner-results-list">
+            ) : activeTab === 'relic-roi' && (arbitrage || !scannerStateLoaded) ? (
+              /* The search and filters render whatever the result count is. They used to sit
+                 INSIDE `relicResults.length > 0`, so searching something with no matches removed
+                 the search box along with the rows — leaving no way to change or clear the query
+                 that caused it. Only the ROWS swap for the empty state now. */
+              <div className="scanner-results-list">
                   <div className="sp-summary">
                     <div className="sp-summary-lead">
                       <span className="sp-summary-lead-icon"><i className="ti ti-flame" aria-hidden="true" /></span>
@@ -1079,9 +1160,11 @@ export function ScannersPage() {
                       <div className="sp-summary-stat sp-summary-stat-profit">
                         <span className="sp-summary-stat-label">{t('scan.bestRun')}</span>
                         <span className="sp-summary-stat-value">
-                          {formatPlatPrecise(
-                            getRelicRefinementSummary(relicResults[0], relicRefinement)?.runValue ?? null,
-                          )}
+                          {relicResults.length > 0
+                            ? formatPlatPrecise(
+                                getRelicRefinementSummary(relicResults[0], relicRefinement)?.runValue ?? null,
+                              )
+                            : '—'}
                         </span>
                       </div>
                     </div>
@@ -1125,37 +1208,34 @@ export function ScannersPage() {
                       </div>
                     </div>
                   </div>
-                  {relicResults.map((entry, index) => (
-                    <RelicRoiRow
-                      key={entry.slug}
-                      entry={entry}
-                      index={index}
-                      refinementKey={relicRefinement}
-                      expanded={expandedRelicSlug === entry.slug}
-                      onToggle={() =>
-                        setExpandedRelicSlug((current) => (current === entry.slug ? null : entry.slug))
+                  {!scannerStateLoaded ? (
+                    <ScannerRowsSkeleton rows={5} />
+                  ) : relicResults.length > 0 ? (
+                    relicResults.map((entry, index) => (
+                      <RelicRoiRow
+                        key={entry.slug}
+                        entry={entry}
+                        index={index}
+                        refinementKey={relicRefinement}
+                        expanded={expandedRelicSlug === entry.slug}
+                        onToggle={() =>
+                          setExpandedRelicSlug((current) => (current === entry.slug ? null : entry.slug))
+                        }
+                      />
+                    ))
+                  ) : (
+                    <EmptyState
+                      icon={normalizedRelicSearch ? 'ti-search' : 'ti-diamond'}
+                      title={
+                        normalizedRelicSearch
+                          ? t('scan.noRelicsMatchSearch')
+                          : showOnlyUnvaulted
+                            ? t('scan.noUnvaultedResults')
+                            : t('scan.noRelicRoiRows')
                       }
                     />
-                  ))}
+                  )}
                 </div>
-              ) : (
-                <div className="empty-state scanners-empty-state">
-                  <span className="empty-primary">
-                    {normalizedRelicSearch
-                      ? t('scan.noRelicsMatchSearch')
-                      : showOnlyUnvaulted
-                        ? t('scan.noUnvaultedResults')
-                        : t('scan.noRelicRoiRows')}
-                  </span>
-                  <span className="empty-sub">
-                    {normalizedRelicSearch
-                      ? t('scan.tryAnotherRelicSearch')
-                      : showOnlyUnvaulted
-                        ? t('scan.unvaultedHint')
-                        : t('scan.runFreshRelicScan')}
-                  </span>
-                </div>
-              )
             ) : showBlockingScannerEmptyState && scannerError ? (
               <div className="empty-state scanners-empty-state">
                 <span className="empty-primary">{t('scan.dataCouldNotLoad')}</span>

@@ -1,6 +1,7 @@
 // Português (BR) — partial. Missing keys fall back to English. See en.ts for the full key list.
 export const pt: Record<string, string> = {
   'nav.home': 'Início',
+  'nav.watchlist': 'Lista de acompanhamento',
   'nav.market': 'Mercado',
   'nav.events': 'Eventos',
   'nav.scanners': 'Scanners',

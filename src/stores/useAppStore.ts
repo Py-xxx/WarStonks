@@ -20,6 +20,7 @@ import {
   getAppSettings,
   getItemAnalytics,
   getItemAnalysis,
+  getItemAnalysisCached,
   refreshWalletFromAppdata,
   getItemVariantsForMarket,
   getWfmTradeOverview,
@@ -109,11 +110,16 @@ import { formatHomeErrorMessage } from '../lib/homeErrorHandling';
 import { formatMarketErrorMessage } from '../lib/marketErrorHandling';
 import { formatSettingsErrorMessage } from '../lib/settingsErrorHandling';
 import type {
+  OpportunitiesSubTab,
+  InventorySubTab,
+  ScannersSubTab,
+  PortfolioSubTab,
+} from '../lib/navigation';
+import type {
   AppToast,
   ItemQuickViewTarget,
   OwnedRelicEntry,
   NavigationSnapshot,
-  HomeSubTab,
   PageId,
   QuickViewSelection,
   SellerMode,
@@ -1534,8 +1540,6 @@ interface AppStore {
   activePage: PageId;
   setActivePage: (page: PageId) => void;
 
-  homeSubTab: HomeSubTab;
-  setHomeSubTab: (tab: HomeSubTab) => void;
 
   // Quality-of-life: clickable item names, back navigation, toasts, recents, ⌘K.
   /**
@@ -1829,6 +1833,9 @@ interface AppStore {
   } | null;
   selectedMarketAnalysis: ItemAnalysisResponse | null;
   selectedMarketAnalysisLoading: boolean;
+  /** True while the analysis on screen came from the cache-only build and the live one is still
+   *  in flight. The numbers are real but pre-network, so any surface asserting them says so. */
+  selectedMarketAnalysisFromCache: boolean;
   selectedMarketAnalysisError: string | null;
   marketAnalysisCache: Record<string, ItemAnalysisResponse>;
   loadQuickViewItem: (item: WfmAutocompleteItem) => Promise<void>;
@@ -1859,6 +1866,29 @@ interface AppStore {
 
   eventsSubTab: EventsSubTab;
   setEventsSubTab: (tab: EventsSubTab) => void;
+
+  /* Sub-view selection for the pages that used to hold it in component `useState`. It lives here
+     now because the sidebar owns sub-navigation, and the sidebar cannot read a page's local
+     state. See `src/lib/navigation.ts` for the definitions these ids come from. */
+  opportunitiesSubTab: OpportunitiesSubTab;
+  setOpportunitiesSubTab: (tab: OpportunitiesSubTab) => void;
+
+  inventorySubTab: InventorySubTab;
+  setInventorySubTab: (tab: InventorySubTab) => void;
+
+  scannersSubTab: ScannersSubTab;
+  setScannersSubTab: (tab: ScannersSubTab) => void;
+
+  portfolioSubTab: PortfolioSubTab;
+  setPortfolioSubTab: (tab: PortfolioSubTab) => void;
+
+  /* Whether AlecaFrame's inventory file is on disk. Probed once at app start rather than on the
+     Inventory page's mount, because the sidebar now renders that page's sub-navigation and has
+     to know which sub-items exist before the page is ever opened. Pair it with the
+     `alecaframe.enabled` setting via `selectAlecaframeInventoryAvailable` — availability is both
+     halves, and gating on the probe alone leaves dead tabs in place. */
+  alecaframeFilePresent: boolean;
+  setAlecaframeFilePresent: (present: boolean) => void;
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -1867,8 +1897,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   // directly, bypassing this, so its back target survives the redirect).
   setActivePage: (page) => set({ activePage: page, navigationBack: null }),
 
-  homeSubTab: 'overview',
-  setHomeSubTab: (tab) => set({ homeSubTab: tab }),
 
   navigationBack: null,
   recentItems: readPersistedRecentItems(),
@@ -1916,7 +1944,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     set({
       activePage: target.activePage,
-      homeSubTab: target.homeSubTab,
       marketSubTab: target.marketSubTab,
       navigationBack: null,
     });
@@ -1970,10 +1997,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({
       navigationBack: {
         activePage: state.activePage,
-        homeSubTab: state.homeSubTab,
         marketSubTab: state.marketSubTab,
       } satisfies NavigationSnapshot,
-      ...(destination === 'home' ? { activePage: 'home' as const, homeSubTab: 'overview' as const } : {}),
+      ...(destination === 'home' ? { activePage: 'home' as const } : {}),
       ...(destination === 'market' ? { activePage: 'market' as const } : {}),
     });
 
@@ -4512,6 +4538,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   searchTrackingSource: null,
   selectedMarketAnalysis: null,
   selectedMarketAnalysisLoading: false,
+  selectedMarketAnalysisFromCache: false,
   selectedMarketAnalysisError: null,
   marketAnalysisCache: {},
   loadQuickViewItem: async (item) => {
@@ -4806,6 +4833,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         selectedMarketAnalysis: null,
         selectedMarketAnalysisLoading: false,
+        selectedMarketAnalysisFromCache: false,
         selectedMarketAnalysisError: null,
       });
       return null;
@@ -4845,6 +4873,30 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     let loadPromise: Promise<ItemAnalysisResponse | null> | null = null;
     loadPromise = (async () => {
+      // Paint from the cache-only build first. It does no WFM calls, so it answers in
+      // milliseconds, while the live build below waits on up to three rate-limited requests.
+      // Deliberately not awaited — it is a head start, never a dependency.
+      void getItemAnalysisCached(itemKey, selectedItem.slug, selectedVariantKey, sellerMode)
+        .then((cachedAnalysis) => {
+          set((currentState) => {
+            // Drop it if the selection moved on, if this request was superseded, or if the live
+            // result already landed — cached data must never overwrite fresher data.
+            const stillCurrent =
+              requestId === marketAnalysisRequestSequence
+              && currentState.quickView.selectedItem?.itemId === selectedItem.itemId
+              && currentState.selectedMarketVariantKey === selectedVariantKey;
+            if (!stillCurrent || !currentState.selectedMarketAnalysisLoading) {
+              return {};
+            }
+            return {
+              selectedMarketAnalysis: cachedAnalysis,
+              selectedMarketAnalysisFromCache: true,
+            };
+          });
+        })
+        // A cache miss is the normal state for an item that has never been opened. Not an error.
+        .catch(() => undefined);
+
       try {
         const analysis = await getItemAnalysis(
           itemKey,
@@ -4866,6 +4918,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
                   ? analysis
                   : currentState.selectedMarketAnalysis,
               selectedMarketAnalysisLoading: false,
+              selectedMarketAnalysisFromCache: false,
               selectedMarketAnalysisError: null,
             };
           });
@@ -5086,4 +5139,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   eventsSubTab: 'vendors',
   setEventsSubTab: (tab) => set({ eventsSubTab: tab }),
+
+  opportunitiesSubTab: 'opportunities',
+  setOpportunitiesSubTab: (tab) => set({ opportunitiesSubTab: tab }),
+
+  inventorySubTab: 'set-planner',
+  setInventorySubTab: (tab) => set({ inventorySubTab: tab }),
+
+  scannersSubTab: 'arbitrage',
+  setScannersSubTab: (tab) => set({ scannersSubTab: tab }),
+
+  portfolioSubTab: 'pnl',
+  setPortfolioSubTab: (tab) => set({ portfolioSubTab: tab }),
+
+  alecaframeFilePresent: false,
+  setAlecaframeFilePresent: (present) => set({ alecaframeFilePresent: present }),
 }));
+
+/** Availability is BOTH halves: the file exists AND the setting is on. The backend refuses to
+ *  read AlecaFrame when the setting is off, so a probe-only check leaves Parts / Mods / Arcanes
+ *  showing while rendering nothing, with the manual Inventory view unreachable. */
+export function selectAlecaframeInventoryAvailable(state: AppStore): boolean {
+  return state.alecaframeFilePresent && state.appSettings.alecaframe.enabled;
+}

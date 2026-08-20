@@ -1136,6 +1136,8 @@ export function formatWorldStateDateTime(value: string | null): string {
   return formatShortLocalDateTime(value);
 }
 
+export { isWorldStateEntryOpen } from './worldStateExpiry';
+
 export function formatWorldStateCountdown(expiry: string | null, nowMs: number): string {
   if (!expiry) {
     return 'No expiry';
