@@ -48,7 +48,9 @@ import { useRankedOpportunities } from './useRankedOpportunities';
  * the board, and Home is a read-and-go surface.
  */
 function LeadPlay({ opportunity }: { opportunity: Opportunity }) {
-  return <OpportunityCard opportunity={opportunity} />;
+  // The card carries its own border and ground now, so it needs margin rather than sitting flush
+  // against the panel edge the way the rows below it do.
+  return <OpportunityCard opportunity={opportunity} className="m-3" />;
 }
 
 function OpportunityRow({ opportunity }: { opportunity: Opportunity }) {

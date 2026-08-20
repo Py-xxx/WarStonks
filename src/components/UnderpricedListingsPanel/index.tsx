@@ -23,10 +23,12 @@ import { copyWhisperMessage } from '../../lib/marketMessages';
  * different clock, and the countdown column is what says so.
  */
 
+/** Ported from `.radar-card-*`: the tier colours the left edge, the frame stays neutral. `normal`
+ *  is muted ink rather than an accent — an ordinary listing is not a signal. */
 const TIER_CLASS: Record<string, string> = {
-  red: 'border-l-accent-red bg-accent-red/[0.06]',
-  yellow: 'border-l-accent-amber bg-accent-amber/[0.05]',
-  normal: 'border-l-accent-blue bg-accent-blue/[0.04]',
+  red: 'border-l-accent-red',
+  yellow: 'border-l-accent-amber',
+  normal: 'border-l-ink-faint',
 };
 
 function formatCountdown(remainingMs: number): string {
@@ -137,7 +139,7 @@ function UnderpricedCard({ card, now }: { card: UnderpricedListingCard; now: num
 
   return (
     <article
-      className={`flex flex-col gap-1.5 border-b border-line-subtle border-l-[3px] px-3 py-2.5 pl-2.5 last:border-b-0 ${
+      className={`flex flex-col gap-1.5 rounded-md border border-l-[3px] border-line-strong bg-bg-elevated px-2.5 py-2 ${
         TIER_CLASS[card.tier] ?? TIER_CLASS.normal
       } ${dead ? 'opacity-50' : ''}`}
     >
@@ -311,7 +313,7 @@ export function UnderpricedListingsPanel() {
       {visible.length === 0 ? (
         <EmptyState icon="ti-radar" title={t('up.watching')} />
       ) : (
-        <div className="max-h-[calc(100vh-12rem)] overflow-y-auto overscroll-contain">
+        <div className="flex max-h-[calc(100vh-12rem)] flex-col gap-2 overflow-y-auto overscroll-contain p-3">
           {visible.map((card) => (
             <UnderpricedCard key={card.orderId} card={card} now={now} />
           ))}

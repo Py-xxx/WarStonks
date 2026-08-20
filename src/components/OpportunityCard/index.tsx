@@ -52,6 +52,22 @@ export const TONE_CLASS: Record<OpportunityTone, string> = {
   blue: 'border-l-accent-blue bg-accent-blue/[0.05]',
 };
 
+/**
+ * Card tone: the 3px left border only, ported from `.opp-card-*`.
+ *
+ * Deliberately NOT `TONE_CLASS`. A row is a stripe on the panel ground, so it needs a tint to read
+ * as its own object; a card already has a border and a lighter ground, and a tint on top of both
+ * makes the accent compete with the border for the same job. The shipped card spent the colour on
+ * the left edge alone, and it was right.
+ */
+export const CARD_TONE_CLASS: Record<OpportunityTone, string> = {
+  red: 'border-l-accent-red',
+  green: 'border-l-accent-green',
+  amber: 'border-l-accent-amber',
+  purple: 'border-l-accent-purple',
+  blue: 'border-l-accent-blue',
+};
+
 export const BADGE_CLASS: Record<OpportunityTone, string> = {
   red: 'bg-accent-red/15 text-accent-red',
   green: 'bg-accent-green/15 text-accent-green',
@@ -356,9 +372,22 @@ export function OpportunityCard({
 
   return (
     <article
-      className={`flex flex-col gap-3 border-b border-line-subtle border-l-[3px] p-3 pl-2.5 last:border-b-0 ${TONE_CLASS[tone]} ${
-        pinned ? 'bg-bg-elevated' : ''
-      } ${className ?? ''}`}
+      className={[
+        // A real card, not a stripe in a list. `line-strong` because `line`/`line-subtle` sit at
+        // ~1.1:1 against the panel ground — invisible in practice, which made it impossible to
+        // tell which buttons belonged to which play.
+        'flex h-full flex-col gap-3 rounded-lg border border-l-[3px] bg-bg-elevated p-3.5',
+        'transition-[border-color,box-shadow] duration-150 ease-out',
+        CARD_TONE_CLASS[tone],
+        // Accepted and expiring override the frame colour, the way the shipped board did — both
+        // are states of the whole card, not of one field in it.
+        pinned
+          ? 'border-accent-green/60 ring-1 ring-accent-green/25'
+          : urgent
+            ? 'border-accent-amber/55 ring-1 ring-accent-amber/20'
+            : 'border-line-strong hover:border-ink-faint hover:shadow-float',
+        className ?? '',
+      ].join(' ')}
     >
       <div className="flex items-start gap-3">
         {/* Real item art, at a size where you can actually recognise the item. This is a
@@ -413,7 +442,10 @@ export function OpportunityCard({
         </ul>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
+      {/* `mt-auto` pins the action row to the card's bottom edge. In a grid every card is as
+          tall as the tallest in its row, so without this the buttons sit at a different height on
+          every card and stop reading as a row of controls. */}
+      <div className="mt-auto flex flex-wrap items-center gap-2 pt-0.5">
         <OpportunityConfidence opportunity={opportunity} />
         {opportunity.cost > 0 ? (
           <span className="shrink-0 font-mono text-[10px] text-ink-dim tabular-nums">

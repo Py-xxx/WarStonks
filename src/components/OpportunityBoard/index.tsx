@@ -16,6 +16,16 @@ import { useAppStore } from '../../stores/useAppStore';
 
 const REFRESH_INTERVAL_MS = 30_000;
 
+/**
+ * The board is a grid of cards, as it shipped: `repeat(auto-fill, minmax(320px, 1fr))`.
+ *
+ * A stacked list reads more densely, but a play is a self-contained decision with its own reasons
+ * and its own buttons — the grid is what makes each one a unit you can take in at a glance, and it
+ * uses the width a desktop window actually has. 320px is the floor at which a title, a value and
+ * two action chips still fit on their own lines.
+ */
+const GRID_CLASS = 'grid gap-3 p-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]';
+
 // Intent-based filters (not strictly category — "Farm" is any play with a farm action).
 const BOARD_FILTERS: { id: string; match: (opp: Opportunity) => boolean }[] = [
   { id: 'all', match: () => true },
@@ -31,11 +41,11 @@ const BOARD_FILTERS: { id: string; match: (opp: Opportunity) => boolean }[] = [
  *  two reason rows, a footer — so nothing shifts when the real board lands. */
 function BoardSkeleton() {
   return (
-    <div>
+    <div className={GRID_CLASS}>
       {Array.from({ length: 4 }, (_, index) => (
         <div
           key={index}
-          className="flex flex-col gap-3 border-b border-line-subtle border-l-[3px] border-l-line-strong p-3 pl-2.5 last:border-b-0"
+          className="flex flex-col gap-3 rounded-lg border border-l-[3px] border-line-strong bg-bg-elevated p-3.5"
         >
           <div className="flex items-start gap-3">
             <Skeleton type="avatar" className="w-auto shrink-0" leafClassName="size-12 rounded-md" />
@@ -220,29 +230,33 @@ export function OpportunityBoard() {
           {pinnedList.length > 0 ? (
             <>
               <SectionLabel>{t('wl.accepted')}</SectionLabel>
-              {pinnedList.map((opp) => (
-                <OpportunityCard
-                  key={opp.id}
-                  opportunity={opp}
-                  pinned
-                  onPin={() => unpin(opp.subjectKey)}
-                  onDismiss={() => dismiss(opp.subjectKey)}
-                />
-              ))}
+              <div className={GRID_CLASS}>
+                {pinnedList.map((opp) => (
+                  <OpportunityCard
+                    key={opp.id}
+                    opportunity={opp}
+                    pinned
+                    onPin={() => unpin(opp.subjectKey)}
+                    onDismiss={() => dismiss(opp.subjectKey)}
+                  />
+                ))}
+              </div>
             </>
           ) : null}
 
           {unpinnedList.length > 0 ? (
             <>
               {pinnedList.length > 0 ? <SectionLabel>{t('wl.more')}</SectionLabel> : null}
-              {unpinnedList.map((opp) => (
-                <OpportunityCard
-                  key={opp.id}
-                  opportunity={opp}
-                  onPin={() => pin(opp)}
-                  onDismiss={() => dismiss(opp.subjectKey)}
-                />
-              ))}
+              <div className={GRID_CLASS}>
+                {unpinnedList.map((opp) => (
+                  <OpportunityCard
+                    key={opp.id}
+                    opportunity={opp}
+                    onPin={() => pin(opp)}
+                    onDismiss={() => dismiss(opp.subjectKey)}
+                  />
+                ))}
+              </div>
             </>
           ) : null}
         </>
@@ -261,7 +275,7 @@ export function OpportunityBoard() {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span className="border-b border-line-subtle bg-bg-surface px-3 py-1.5 font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+    <span className="px-3 pt-3 font-mono text-[10px] font-bold tracking-[0.08em] text-ink-dim uppercase">
       {children}
     </span>
   );
