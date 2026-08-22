@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import { useModalA11y } from '../../hooks/useModalA11y';
 import { createPortal } from 'react-dom';
 import {
   cacheOrderHealth,
@@ -36,9 +35,20 @@ import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue, formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { InfoHint } from '../../components/InfoHint';
 import { ItemName } from '../../components/ItemName';
-import { ModalPortal } from '../../components/ModalPortal';
 import { PageHeading } from '../../components/PageHeading';
+import { HealthTab } from './HealthTab';
 import { useAppStore } from '../../stores/useAppStore';
 import { TradeDetectionComparison } from '../../components/TradeDetectionComparison';
 import { useTranslation } from '../../i18n';
@@ -83,17 +93,6 @@ const BoltIcon = () => (
     <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
   </svg>
 );
-
-function InfoHint({ text }: { text: string }) {
-  return (
-    <span className="info-hint trade-info-hint" tabIndex={0} aria-label={text}>
-      <span className="info-hint-glyph" aria-hidden="true">i</span>
-      <span className="info-hint-tooltip left">
-        {text}
-      </span>
-    </span>
-  );
-}
 
 interface ListingModalState {
   mode: ListingModalMode;
@@ -929,7 +928,6 @@ function ListingModal({
   onSelectItem: (item: WfmAutocompleteItem) => void;
 }) {
   const { t } = useTranslation();
-  const modalRef = useModalA11y<HTMLDivElement>({ onClose });
   const rankApplicable = isRankApplicable(form.selectedItem);
   const bulkApplicable = isBulkTradable(form.selectedItem);
   const quantityNumber = Number.parseInt(form.quantity, 10);
@@ -1150,30 +1148,25 @@ function ListingModal({
   );
 
   return (
-    <ModalPortal>
-    <div className="modal-backdrop" role="presentation">
-      {/* Backdrop intentionally does NOT close on click — an accidental outside click would
-          discard a half-typed listing. Use Cancel, the × button, or Escape to close. */}
-      <div
-        ref={modalRef}
-        className={`settings-modal trade-listing-modal${showAnalysis ? ' has-analysis' : ''}`}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="trade-listing-modal-title"
-      >
-        <div className="settings-modal-header">
-          <div className="settings-modal-title">
-            <span className="card-label">{t('trades.title')}</span>
-            <h3 id="trade-listing-modal-title">
-              {form.mode === 'create'
-                ? t(form.orderType === 'sell' ? 'trades.modal.createSell' : 'trades.modal.createBuy')
-                : t(form.orderType === 'sell' ? 'trades.modal.editSell' : 'trades.modal.editBuy')}
-            </h3>
-          </div>
-          <button className="settings-close-btn" type="button" onClick={onClose} aria-label={t('trades.modal.closeAria')}>
-            ×
-          </button>
-        </div>
+    // Outside clicks deliberately do NOT close this: an accidental one would discard a half-typed
+    // listing. Cancel, the × and Escape all still close it — the same three ways as before.
+    // Base UI has no `dismissible` prop; it reports *why* the dialog wants to close instead.
+    <Dialog
+      open
+      onOpenChange={(open, details) => {
+        if (!open && details.reason !== 'outside-press') {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className={showAnalysis ? 'max-w-4xl' : 'max-w-lg'}>
+        <DialogHeader>
+          <DialogTitle>
+            {form.mode === 'create'
+              ? t(form.orderType === 'sell' ? 'trades.modal.createSell' : 'trades.modal.createBuy')
+              : t(form.orderType === 'sell' ? 'trades.modal.editSell' : 'trades.modal.editBuy')}
+          </DialogTitle>
+        </DialogHeader>
 
         {showAnalysis ? (
           <div className="trade-listing-modal-columns">
@@ -1198,19 +1191,20 @@ function ListingModal({
           </div>
         )}
 
-        <div className="settings-modal-actions">
-          <button className="act-btn" type="button" onClick={onClose}>{t('trades.modal.cancel')}</button>
-          <button className="btn-primary" type="button" onClick={onSubmit} disabled={submitting}>
+        <DialogFooter>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            {t('trades.modal.cancel')}
+          </Button>
+          <Button size="sm" onClick={onSubmit} disabled={submitting}>
             {submitting
               ? t('common.saving')
               : form.mode === 'create'
                 ? t(form.orderType === 'sell' ? 'trades.modal.postSell' : 'trades.modal.postBuy')
                 : t('trades.modal.saveChanges')}
-          </button>
-        </div>
-      </div>
-    </div>
-    </ModalPortal>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1316,243 +1310,7 @@ function SignInPanel() {
 
 // Circumference of the score-gauge ring (r=19) — used to convert a 0-100 score into a
 // stroke-dashoffset so the arc fills proportionally.
-const HEALTH_GAUGE_CIRCUMFERENCE = 2 * Math.PI * 19;
-
-function healthGaugeOffset(score: number): number {
-  const clamped = Math.max(0, Math.min(100, score));
-  return HEALTH_GAUGE_CIRCUMFERENCE * (1 - clamped / 100);
-}
-
-// Two ETA bars comparing time-to-sell at your price vs at market. The slower wait renders as the
-// longer bar so the speed/price trade-off is visual. Only shown when we have a usable estimate.
-function HealthEtaBars({
-  atPriceHours,
-  atMarketHours,
-  yourPrice,
-  marketPrice,
-  gapToneClass,
-  t,
-}: {
-  atPriceHours: number;
-  atMarketHours: number | null;
-  yourPrice: number;
-  marketPrice: number | null;
-  gapToneClass: string;
-  t: ReturnType<typeof useTranslation>['t'];
-}) {
-  const maxHours = Math.max(atPriceHours, atMarketHours ?? 0, 1);
-  const widthPct = (hours: number) => Math.max(6, Math.min(100, (hours / maxHours) * 100));
-  const showMarket =
-    atMarketHours !== null && marketPrice !== null && atMarketHours < atPriceHours;
-  return (
-    <div className="trade-hc-eta">
-      <div className="trade-hc-eta-head">
-        <span>{t('trades.health.timeToSell')}</span>
-        <span>{t('trades.health.faster')}</span>
-      </div>
-      <div className="trade-hc-eta-row">
-        <span className="trade-hc-eta-label">{t('trades.health.atPrice', { price: formatPlatinumValue(yourPrice) })}</span>
-        <span className="trade-hc-eta-track">
-          <span className={`trade-hc-eta-fill ${gapToneClass}`} style={{ width: `${widthPct(atPriceHours)}%` }} />
-        </span>
-        <span className={`trade-hc-eta-val ${gapToneClass}`}>{formatEtaHours(atPriceHours)}</span>
-      </div>
-      {showMarket ? (
-        <div className="trade-hc-eta-row">
-          <span className="trade-hc-eta-label">{t('trades.health.atPrice', { price: formatPlatinumValue(marketPrice as number) })}</span>
-          <span className="trade-hc-eta-track">
-            <span className="trade-hc-eta-fill good" style={{ width: `${widthPct(atMarketHours as number)}%` }} />
-          </span>
-          <span className="trade-hc-eta-val good">{formatEtaHours(atMarketHours as number)}</span>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function HealthCard({
-  order,
-  applyPending,
-  onApply,
-  onEdit,
-  t,
-}: {
-  order: TradeSellOrder;
-  applyPending: boolean;
-  onApply: (order: TradeSellOrder) => void;
-  onEdit: (order: TradeSellOrder) => void;
-  t: ReturnType<typeof useTranslation>['t'];
-}) {
-  const health = order.health;
-  const toneClass = getTradeHealthToneClass(health?.tone ?? 'amber');
-  const gapToneClass = getGapClassName(order.priceGap);
-  const marketPrice = health?.marketLow ?? order.marketLow ?? null;
-  const canApply =
-    health?.recommendedPrice != null
-    && health.recommendedPrice > 0
-    && health.recommendedPrice !== order.yourPrice;
-  const label = health?.label ?? '';
-  const urgent = label === 'Action Needed' || label === 'Weak' || Boolean(health?.isPriceWar);
-  const expanded = urgent;
-
-  const rankBit =
-    order.maxRank != null && order.maxRank > 0 ? `${order.rank ?? 0}/${order.maxRank} · ` : '';
-  const meta = `${rankBit}×${order.quantity}`;
-
-  const badges = health ? (
-    <>
-      {health.isPriceWar ? (
-        <span className="trade-hc-chip war" title={t('trades.health.priceWarHint')}>
-          <i className="ti ti-flame" aria-hidden="true" /> {t('trades.health.priceWar')}
-        </span>
-      ) : null}
-      {health.isOnlyVariantSeller ? (
-        <span className="trade-hc-chip only">{t('trades.health.onlySeller')}</span>
-      ) : null}
-      {health.confidenceLevel !== 'high' ? (
-        <span
-          className={`trade-hc-chip ${health.confidenceLevel === 'low' ? 'warn' : 'info'}`}
-          title={t('trades.health.confidenceHint')}
-        >
-          {health.confidenceLabel}
-        </span>
-      ) : null}
-    </>
-  ) : null;
-
-  const applyBtn = canApply ? (
-    <button
-      type="button"
-      className={`trade-hc-apply ${toneClass}`}
-      disabled={applyPending}
-      onClick={() => onApply(order)}
-    >
-      <i className="ti ti-bolt" aria-hidden="true" />
-      {applyPending
-        ? t('trades.row.working')
-        : `${tHealth(t, health?.actionLabel) || t('trades.health.apply')} ${formatPlatinumValue(health?.recommendedPrice ?? 0)}`}
-    </button>
-  ) : null;
-
-  // The recommended action, always shown: the one-click apply button when it's a price change,
-  // otherwise a labeled pill for a hold/wait recommendation — so no listing ever looks like it
-  // has "no recommendation" when the engine is deliberately telling you to hold.
-  const actionToneClass = getTradeHealthToneClass(health?.actionTone ?? 'blue');
-  const actionEl =
-    applyBtn ??
-    (health ? (
-      <span className={`trade-hc-rec ${actionToneClass}`}>
-        <i className="ti ti-player-pause" aria-hidden="true" />
-        {tHealth(t, health.actionLabel) || t('trades.health.noAction')}
-      </span>
-    ) : null);
-
-  return (
-    <div className={`trade-hc ${toneClass}${expanded ? ' expanded' : ''}`}>
-      <span className="trade-hc-accent" />
-      <div className="trade-hc-gauge">
-        <svg viewBox="0 0 44 44" width="52" height="52" aria-hidden="true">
-          <circle cx="22" cy="22" r="19" fill="none" stroke="#242A38" strokeWidth="4" />
-          {health ? (
-            <circle
-              cx="22"
-              cy="22"
-              r="19"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="4"
-              strokeLinecap="round"
-              strokeDasharray={HEALTH_GAUGE_CIRCUMFERENCE}
-              strokeDashoffset={healthGaugeOffset(health.score)}
-              transform="rotate(-90 22 22)"
-            />
-          ) : null}
-        </svg>
-        <span className="trade-hc-gauge-num">{health ? health.score : '—'}</span>
-      </div>
-
-      <div className="trade-hc-body">
-        <div className="trade-hc-title-row">
-          <ItemName
-            className="item-name trade-hc-name"
-            name={order.name}
-            slug={order.slug}
-            itemId={order.itemId}
-            imagePath={order.imagePath}
-          />
-          <span className={`trade-hc-label ${toneClass}`}>
-            {tHealth(t, health?.label) || t('trades.row.building')}
-          </span>
-          {badges}
-        </div>
-        <div className="trade-hc-reason">
-          {meta}
-          {health?.reason ? ` · ${health.reason}` : ` · ${t('trades.refreshingLiveHealth')}`}
-        </div>
-
-        {expanded && health ? (
-          <>
-            <div className="trade-hc-metrics">
-              <div><span>{t('trades.health.yourPrice')}</span><strong>{formatPlatinumValue(order.yourPrice)}</strong></div>
-              <div><span>{t('trades.health.marketLow')}</span><strong className="muted">{formatPlatinumValue(marketPrice)}</strong></div>
-              <div><span>{t('trades.col.priceGap')}</span><strong className={gapToneClass}>{marketPrice != null ? formatGap(order.priceGap) : '—'}</strong></div>
-              <div><span>{t('trades.health.demand')}</span><strong>{t('trades.health.buyersCount', { count: String(health.buyDemand) })}</strong></div>
-              <div title={health.wouldRealizeLoss ? t('trades.health.wouldLose') : undefined}><span>{t('trades.health.costBasis')}</span><strong className={health.wouldRealizeLoss ? 'trade-health-loss' : undefined}>{health.costBasis != null ? formatPlatinumValue(health.costBasis) : '—'}</strong></div>
-            </div>
-
-            {health.estSellHoursAtPrice != null ? (
-              <HealthEtaBars
-                atPriceHours={health.estSellHoursAtPrice}
-                atMarketHours={health.estSellHoursAtMarket}
-                yourPrice={order.yourPrice}
-                marketPrice={health.recommendedPrice ?? marketPrice}
-                gapToneClass={gapToneClass}
-                t={t}
-              />
-            ) : null}
-
-            <div className="trade-hc-actions">
-              {actionEl}
-              <button type="button" className="trade-hc-edit" onClick={() => onEdit(order)}>
-                {t('trades.row.edit')}
-              </button>
-              {health.wouldRealizeLoss && health.costBasis != null ? (
-                <span className="trade-hc-loss-note">
-                  <i className="ti ti-alert-triangle" aria-hidden="true" />
-                  {t('trades.health.lossVsCost', { plat: formatPlatinumValue(Math.abs((health.recommendedPrice ?? marketPrice ?? 0) - health.costBasis)) })}
-                </span>
-              ) : null}
-            </div>
-
-            {health.scoreFactors.length > 0 ? (
-              <details className="trade-hc-breakdown">
-                <summary>{t('trades.health.scoreBreakdown')} — {health.score}/100 · {health.confidenceLabel.toLowerCase()}</summary>
-                <div className="trade-hc-factors">
-                  {health.scoreFactors.map((factor, index) => (
-                    <span key={`${factor.label}-${index}`} className={`trade-hc-factor ${factor.delta >= 0 ? 'pos' : 'neg'}`}>
-                      {factor.label} {factor.delta >= 0 ? '+' : ''}{factor.delta}
-                    </span>
-                  ))}
-                </div>
-              </details>
-            ) : null}
-          </>
-        ) : (
-          <div className="trade-hc-compact-foot">
-            {actionEl}
-            {!applyBtn ? (
-              <button type="button" className="trade-hc-edit" onClick={() => onEdit(order)}>
-                {t('trades.row.edit')}
-              </button>
-            ) : null}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function HealthTab() {
+function HealthTabContainer() {
   const { t } = useTranslation();
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
@@ -1698,9 +1456,6 @@ function HealthTab() {
     if (fixAllRunning || fixableOrders.length === 0) {
       return;
     }
-    if (!window.confirm(t('trades.health.fixAllConfirm', { count: String(fixableOrders.length) }))) {
-      return;
-    }
     setFixAllRunning(true);
     try {
       // Sequential so we don't fire a burst of WFM writes at once.
@@ -1723,69 +1478,23 @@ function HealthTab() {
   const likelySoonCount = sellOrders.filter((order) => order.health?.outlookLabel === 'Likely soon').length;
 
   return (
-    <div className="trade-health-page">
-      <div className="trade-health-summary-grid">
-        <div className="info-card trade-health-summary-card">
-          <div className="info-card-label">{t('trades.health.needsAction')}</div>
-          <div className="info-card-val neutral">{actionNeededCount}</div>
-        </div>
-        <div className="info-card trade-health-summary-card">
-          <div className="info-card-label">{t('trades.health.competitive')}</div>
-          <div className="info-card-val neutral">{competitiveCount}</div>
-        </div>
-        <div className="info-card trade-health-summary-card">
-          <div className="info-card-label">{t('trades.health.likelySoon')}</div>
-          <div className="info-card-val neutral">{likelySoonCount}</div>
-        </div>
-      </div>
-
-      {error ? <div className="trade-inline-error">{error}</div> : null}
-
-      {fixableOrders.length > 0 ? (
-        <div className="trade-health-fixall-bar">
-          <span className="trade-health-fixall-copy">
-            {t('trades.health.fixAllConfirm', { count: String(fixableOrders.length) })}
-          </span>
-          <button
-            className="btn-primary trade-health-fixall-btn"
-            type="button"
-            disabled={fixAllRunning}
-            onClick={() => void handleFixAll()}
-          >
-            {fixAllRunning ? t('trades.row.working') : t('trades.health.fixAll', { count: String(fixableOrders.length) })}
-          </button>
-        </div>
-      ) : null}
-
-      <div className="trade-health-list">
-        {loading && !overview ? (
-          <div className="trade-placeholder-card">
-            <span className="card-label">{t('trades.title')}</span>
-            <h3>{t('trades.col.listingHealth')}</h3>
-            <p>{t('trades.health.building')}</p>
-          </div>
-        ) : null}
-
-        {!loading && sellOrders.length === 0 ? (
-          <div className="trade-placeholder-card">
-            <span className="card-label">{t('trades.title')}</span>
-            <h3>{t('trades.health.noListings')}</h3>
-            <p>{t('trades.health.noListingsHint')}</p>
-          </div>
-        ) : null}
-
-        {sellOrders.map((order) => (
-          <HealthCard
-            key={order.orderId}
-            order={order}
-            applyPending={isHealthActionPending(order.orderId)}
-            onApply={(target) => void applyHealthPrice(target)}
-            onEdit={() => setTradesSubTab('orders')}
-            t={t}
-          />
-        ))}
-      </div>
-    </div>
+    <HealthTab
+      orders={sellOrders}
+      fixableOrders={fixableOrders}
+      loading={loading}
+      hasOverview={Boolean(overview)}
+      errorMessage={error}
+      counts={{
+        actionNeeded: actionNeededCount,
+        competitive: competitiveCount,
+        likelySoon: likelySoonCount,
+      }}
+      isApplyPending={isHealthActionPending}
+      fixAllRunning={fixAllRunning}
+      onApply={(order) => void applyHealthPrice(order)}
+      onFixAll={() => void handleFixAll()}
+      onEdit={() => setTradesSubTab('orders')}
+    />
   );
 }
 
@@ -1838,14 +1547,6 @@ function ListingsTab() {
   // Quantity popup for closing part of a stacked order (quantity > 1).
   const [closeQtyTarget, setCloseQtyTarget] = useState<TradeSellOrder | null>(null);
   const [closeQtyValue, setCloseQtyValue] = useState('1');
-  const sessionExpiredRef = useModalA11y<HTMLDivElement>({
-    onClose: () => setSessionExpiredPopupOpen(false),
-    active: sessionExpiredPopupOpen,
-  });
-  const closeQtyRef = useModalA11y<HTMLDivElement>({
-    onClose: () => setCloseQtyTarget(null),
-    active: closeQtyTarget !== null,
-  });
   // Analysis preview for the create-listing modal (cleared on modal close).
   const [listingAnalysis, setListingAnalysis] = useState<ListingAnalysisState | null>(null);
   // Display-layer state: epoch ms when each order's market_low was last fetched.
@@ -2745,91 +2446,89 @@ function ListingsTab() {
         </div>
       )}
 
-      {closeQtyTarget ? (
-        <ModalPortal>
-          <div className="modal-backdrop" role="presentation">
-            <div
-              ref={closeQtyRef}
-              className="settings-modal trade-close-qty-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="trade-close-qty-title"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="settings-modal-header">
-                <div className="settings-modal-title">
-                  <span className="card-label">{closeQtyTarget.name}</span>
-                  <h3 id="trade-close-qty-title">
-                    {t(closeQtyTarget.orderType === 'sell' ? 'trades.row.markSold' : 'trades.row.markBought')}
-                  </h3>
-                </div>
-                <button
-                  className="settings-close-btn"
-                  type="button"
-                  onClick={() => setCloseQtyTarget(null)}
-                  aria-label={t('a11y.dismiss')}
-                >
-                  ×
-                </button>
-              </div>
-              <div className="settings-modal-body">
-                <p className="trade-close-qty-prompt">
+      <Dialog
+        open={closeQtyTarget !== null}
+        onOpenChange={(open) => !open && setCloseQtyTarget(null)}
+      >
+        <DialogContent className="max-w-sm">
+          {closeQtyTarget ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {t(
+                    closeQtyTarget.orderType === 'sell'
+                      ? 'trades.row.markSold'
+                      : 'trades.row.markBought',
+                  )}
+                </DialogTitle>
+                <DialogDescription>
+                  {closeQtyTarget.name} ·{' '}
                   {t(
                     closeQtyTarget.orderType === 'sell'
                       ? 'trades.closeQty.promptSold'
                       : 'trades.closeQty.promptBought',
                     { count: String(closeQtyTarget.quantity) },
                   )}
-                </p>
-                <div className="trade-close-qty-controls">
-                  <input
-                    className="qty-input trade-close-qty-input"
-                    type="number"
-                    min={1}
-                    max={closeQtyTarget.quantity}
-                    autoFocus
-                    value={closeQtyValue}
-                    onChange={(event) => setCloseQtyValue(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        const parsed = Number.parseInt(closeQtyValue, 10);
-                        if (Number.isInteger(parsed) && parsed >= 1) {
-                          const target = closeQtyTarget;
-                          setCloseQtyTarget(null);
-                          void handleCloseOrder(target, Math.min(parsed, target.quantity));
-                        }
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  type="number"
+                  min={1}
+                  max={closeQtyTarget.quantity}
+                  autoFocus
+                  className="w-20 text-right tabular-nums"
+                  value={closeQtyValue}
+                  onChange={(event) => setCloseQtyValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      const parsed = Number.parseInt(closeQtyValue, 10);
+                      if (Number.isInteger(parsed) && parsed >= 1) {
+                        const target = closeQtyTarget;
+                        setCloseQtyTarget(null);
+                        void handleCloseOrder(target, Math.min(parsed, target.quantity));
                       }
-                    }}
-                    aria-label={t('trades.closeQty.inputAria')}
-                  />
-                  <div className="trade-close-qty-chips">
-                    {[1, Math.ceil(closeQtyTarget.quantity / 2), closeQtyTarget.quantity]
-                      .filter((value, index, all) => value >= 1 && all.indexOf(value) === index)
-                      .map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={`act-btn${Number.parseInt(closeQtyValue, 10) === value ? ' active' : ''}`}
-                          onClick={() => setCloseQtyValue(String(value))}
-                        >
-                          {value === closeQtyTarget.quantity
-                            ? t('trades.closeQty.all', { count: String(value) })
-                            : value}
-                        </button>
-                      ))}
-                  </div>
-                </div>
+                    }
+                  }}
+                  aria-label={t('trades.closeQty.inputAria')}
+                />
+                {/* 1 / half / all — the three quantities anyone actually picks. */}
+                {[1, Math.ceil(closeQtyTarget.quantity / 2), closeQtyTarget.quantity]
+                  .filter((value, index, all) => value >= 1 && all.indexOf(value) === index)
+                  .map((value) => {
+                    const active = Number.parseInt(closeQtyValue, 10) === value;
+                    return (
+                      <Button
+                        key={value}
+                        variant="ghost"
+                        size="sm"
+                        static
+                        aria-pressed={active}
+                        onClick={() => setCloseQtyValue(String(value))}
+                        className={`h-7 rounded-md px-2.5 text-[11px] font-medium ${
+                          active
+                            ? 'bg-bg-elevated text-ink'
+                            : 'text-ink-dim hover:bg-white/[0.04] hover:text-ink'
+                        }`}
+                      >
+                        {value === closeQtyTarget.quantity
+                          ? t('trades.closeQty.all', { count: String(value) })
+                          : value}
+                      </Button>
+                    );
+                  })}
               </div>
-              <div className="settings-modal-actions">
-                <button className="btn-secondary" type="button" onClick={() => setCloseQtyTarget(null)}>
+
+              <DialogFooter>
+                <Button variant="ghost" size="sm" onClick={() => setCloseQtyTarget(null)}>
                   {t('a11y.dismiss')}
-                </button>
-                <button
-                  className="btn-primary"
-                  type="button"
+                </Button>
+                <Button
+                  size="sm"
                   disabled={
-                    !Number.isInteger(Number.parseInt(closeQtyValue, 10))
-                    || Number.parseInt(closeQtyValue, 10) < 1
+                    !Number.isInteger(Number.parseInt(closeQtyValue, 10)) ||
+                    Number.parseInt(closeQtyValue, 10) < 1
                   }
                   onClick={() => {
                     const parsed = Number.parseInt(closeQtyValue, 10);
@@ -2838,68 +2537,41 @@ function ListingsTab() {
                     void handleCloseOrder(target, Math.min(parsed, target.quantity));
                   }}
                 >
-                  {t(closeQtyTarget.orderType === 'sell' ? 'trades.row.markSold' : 'trades.row.markBought')}
-                </button>
-              </div>
-            </div>
-          </div>
-        </ModalPortal>
-      ) : null}
+                  {t(
+                    closeQtyTarget.orderType === 'sell'
+                      ? 'trades.row.markSold'
+                      : 'trades.row.markBought',
+                  )}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
-      {sessionExpiredPopupOpen ? (
-        <ModalPortal>
-        <div className="modal-backdrop" role="presentation">
-          <div
-            ref={sessionExpiredRef}
-            className="settings-modal trade-session-expired-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="trade-session-expired-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-modal-header">
-              <div className="settings-modal-title">
-                <span className="card-label">{t('trades.title')}</span>
-                <h3 id="trade-session-expired-title">{t('trades.sessionExpired')}</h3>
-              </div>
-              <button
-                className="settings-close-btn"
-                type="button"
-                onClick={() => setSessionExpiredPopupOpen(false)}
-                aria-label={t('a11y.closeSessionExpired')}
-              >
-                ×
-              </button>
-            </div>
-            <div className="settings-modal-body">
-              <p className="trade-session-expired-copy">
-                {t('trades.sessionExpiredCopy')}
-              </p>
-            </div>
-            <div className="settings-modal-actions">
-              <button
-                className="btn-secondary"
-                type="button"
-                onClick={() => setSessionExpiredPopupOpen(false)}
-              >
-                {t('a11y.dismiss')}
-              </button>
-              <button
-                className="btn-primary"
-                type="button"
-                onClick={() => {
-                  setSessionExpiredPopupOpen(false);
-                  // Clear the dead session so the sign-in panel takes over immediately.
-                  void signOutTradeAccount().catch(() => undefined);
-                }}
-              >
-                {t('trades.signInAgain')}
-              </button>
-            </div>
-          </div>
-        </div>
-        </ModalPortal>
-      ) : null}
+      <Dialog open={sessionExpiredPopupOpen} onOpenChange={setSessionExpiredPopupOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t('trades.sessionExpired')}</DialogTitle>
+            <DialogDescription>{t('trades.sessionExpiredCopy')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setSessionExpiredPopupOpen(false)}>
+              {t('a11y.dismiss')}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setSessionExpiredPopupOpen(false);
+                // Clear the dead session so the sign-in panel takes over immediately.
+                void signOutTradeAccount().catch(() => undefined);
+              }}
+            >
+              {t('trades.signInAgain')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {listingModal ? (
         <ListingModal
@@ -2960,7 +2632,7 @@ export function TradesPage() {
         ) : (
           <>
             {tradesSubTab === 'orders' && <ListingsTab />}
-            {tradesSubTab === 'health' && <HealthTab />}
+            {tradesSubTab === 'health' && <HealthTabContainer />}
             {tradesSubTab === 'detection' && <TradeDetectionComparison />}
           </>
         )}

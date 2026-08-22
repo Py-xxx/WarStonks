@@ -1,82 +1,49 @@
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-
-export type InfoHintPlacement = 'auto' | 'bottom' | 'left';
-
-const INFO_TOOLTIP_WIDTH_PX = 260;
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 /**
- * Portal-based tooltip: rendered into document.body with fixed, viewport-clamped
- * coordinates, so it can never be clipped by card overflow, out-paint sibling panels,
- * or flicker when a hover-lift transform moves the trigger under the cursor.
+ * The `i` beside a metric — **the app's only info hint**.
+ *
+ * There were three. This file used to hold a portal with 60-odd lines of
+ * `getBoundingClientRect` clamping; Market's page held a second, already rebuilt on the `Tooltip`
+ * primitive; Trades held a third that was pure CSS (`info-hint-tooltip left`) and so could not
+ * flip, clamp, or escape a panel's overflow. Market's was the good one, so it moved here and the
+ * other two were deleted.
+ *
+ * How that happened is worth remembering: `ELEMENTS.md` recorded the migrated hint as living in
+ * `pages/Market/index.tsx`, so a later pass that reached for `components/InfoHint` — the obvious
+ * name — silently picked up the old implementation. **A migrated element belongs at the obvious
+ * import path**, not only in the register.
+ *
+ * The trigger is the padded wrapper, not the glyph. The dot is 16px, but a 16px hover target is a
+ * coin-flip with a mouse — a 14px one read as "the tooltips don't work", because you mostly missed
+ * it. `p-1.5 -m-1.5` gives a 28px target and cancels its own layout impact, so nothing shifts.
+ * Still under the skill's 40×40 for standalone controls: 40px next to a 13px panel title would
+ * swamp it. The density exception, applied honestly.
+ *
+ * Colour is `ink-dim` (~5:1), not `ink-faint` (~2:1, under the 3:1 non-text floor).
  */
-export function InfoHint({
-  text,
-  placement = 'auto',
-}: {
-  text: string;
-  placement?: InfoHintPlacement;
-}) {
-  const hintRef = useRef<HTMLSpanElement | null>(null);
-  const [pos, setPos] = useState<{ x: number; y: number; below: boolean } | null>(null);
 
-  const show = () => {
-    const rect = hintRef.current?.getBoundingClientRect();
-    if (!rect) {
-      return;
-    }
-    const below = placement === 'bottom' ? true : rect.top < 150;
-    const x = Math.min(
-      Math.max(8, rect.left + rect.width / 2 - INFO_TOOLTIP_WIDTH_PX / 2),
-      window.innerWidth - INFO_TOOLTIP_WIDTH_PX - 8,
-    );
-    const y = below ? rect.bottom + 8 : rect.top - 8;
-    setPos({ x, y, below });
-  };
-  const hide = () => setPos(null);
+/** Kept so existing call sites type-check. Base UI does real collision detection, so the hint no
+ *  longer needs to be told where to go — the value is accepted and ignored. */
+export type InfoHintPlacement = 'auto' | 'bottom' | 'left';
 
-  // Any scroll/resize invalidates the fixed coordinates — just dismiss.
-  useEffect(() => {
-    if (!pos) {
-      return undefined;
-    }
-    const close = () => setPos(null);
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => {
-      window.removeEventListener('scroll', close, true);
-      window.removeEventListener('resize', close);
-    };
-  }, [pos]);
-
+export function InfoHint({ text }: { text: string; placement?: InfoHintPlacement }) {
   return (
-    <span
-      ref={hintRef}
-      className="info-hint"
-      tabIndex={0}
-      aria-label={text}
-      onMouseEnter={show}
-      onMouseLeave={hide}
-      onFocus={show}
-      onBlur={hide}
-    >
-      <span className="info-hint-glyph" aria-hidden="true">i</span>
-      {pos
-        ? createPortal(
-            <span
-              className={`info-hint-tooltip info-hint-tooltip-floating${pos.below ? ' is-below' : ''}`}
-              role="tooltip"
-              style={
-                pos.below
-                  ? { left: pos.x, top: pos.y }
-                  : { left: pos.x, bottom: window.innerHeight - pos.y }
-              }
-            >
-              {text}
-            </span>,
-            document.body,
-          )
-        : null}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            aria-label={text}
+            className="-m-1.5 inline-flex cursor-help p-1.5 text-ink-dim outline-none transition-colors duration-150 ease-out hover:text-ink focus-visible:text-ink"
+          />
+        }
+      >
+        <span className="grid size-4 place-items-center rounded-full border border-current text-[10px] leading-none font-bold">
+          i
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{text}</TooltipContent>
+    </Tooltip>
   );
 }

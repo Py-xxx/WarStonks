@@ -1244,9 +1244,6 @@ textarea:focus-visible,
 .sp-part-group-label.muted { color: var(--text-muted); margin-top: 16px; }
 .fn-row-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fn-row-sub { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
-/* Info hints sit inline with these small labels rather than top-aligned. */
-.fn-odds-stat .info-hint,
-.fn-odds-pct-label .info-hint { align-self: center; }
 /* Session still resolving: the shell paints instantly so "Farm this" never feels dead. */
 .farm-panel-loading {
   display: flex; align-items: center; gap: 10px;
@@ -6213,19 +6210,6 @@ body {
   color: var(--text-muted);
   font-family: 'Inter', 'Noto Sans SC', sans-serif;
 }
-.trade-health-stack {
-  display: grid;
-  gap: 6px;
-}
-.trade-listing-modal {
-  width: min(720px, calc(100vw - 32px));
-}
-.trade-listing-modal.has-analysis {
-  width: min(580px, calc(100vw - 32px));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 .trade-listing-modal.has-analysis .settings-modal-header {
   flex-shrink: 0;
 }
@@ -6706,19 +6690,6 @@ body {
   right: 8px;
   z-index: 1;
 }
-.trade-info-hint {
-  width: 16px;
-  height: 16px;
-  padding-top: 2px;
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-secondary);
-}
-.trade-info-hint:hover,
-.trade-info-hint:focus-visible {
-  color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.22);
-}
 .trade-listing-autocomplete {
   min-height: 0;
 }
@@ -6790,119 +6761,6 @@ body {
   padding: 18px;
   display: grid;
   gap: 10px;
-}
-.trade-health-page {
-  display: grid;
-  gap: 14px;
-}
-.trade-health-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-.trade-health-summary-card {
-  padding: 14px 16px;
-}
-.trade-health-list {
-  display: grid;
-  gap: 12px;
-}
-.trade-health-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
-}
-.trade-health-card-main {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-.trade-health-thumb {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-}
-.trade-health-copy {
-  min-width: 0;
-  flex: 1;
-  display: grid;
-  gap: 10px;
-}
-.trade-health-copy-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.trade-health-item-name {
-  font-size: 14px;
-}
-.trade-health-item-meta {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.trade-health-badges {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
-}
-.trade-health-metrics {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-}
-.trade-health-metric {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-.trade-health-metric-label {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.trade-health-metric strong {
-  font-size: 13px;
-  color: var(--text-primary);
-}
-.trade-health-reason {
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.trade-session-expired-modal {
-  width: min(420px, calc(100vw - 32px));
-}
-.trade-session-expired-copy {
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.6;
-}
-@media (max-width: 1100px) {
-  .trade-health-metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-@media (max-width: 760px) {
-  .trade-health-summary-grid,
-  .trade-health-metrics {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .trade-health-card-main,
-  .trade-health-copy-top {
-    flex-direction: column;
-  }
-  .trade-health-badges {
-    justify-content: flex-start;
-  }
 }
 
 /* ── PORTFOLIO ── */
@@ -7183,38 +7041,6 @@ body {
 }
 .portfolio-summary-body .chart-card {
   overflow: visible;
-}
-.info-hint {
-  position: relative;
-  display: inline-flex;
-  align-items: flex-start;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  padding-top: 1px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1;
-  font-family: inherit;
-  text-transform: none;
-  cursor: help;
-  flex: 0 0 auto;
-  align-self: flex-start;
-}
-/* Hardened against ancestor text/flex styles: the hint is dropped into labels that may be
-   uppercase, letter-spaced, or flex containers, and any of those can distort the "i". */
-.info-hint-glyph {
-  display: inline-block;
-  font-family: system-ui, sans-serif;
-  font-size: 11px;
-  line-height: 1;
-  font-weight: 500;
-  text-transform: none;
-  letter-spacing: normal;
-  text-indent: 0;
-  justify-content: center;
 }
 .info-hint-tooltip {
   position: absolute;
@@ -12107,11 +11933,6 @@ img[data-asset-failed='true'] {
   from { opacity: 0; transform: translateY(-3px); }
   to   { opacity: 1; transform: none; }
 }
-.info-hint:hover,
-.info-hint:focus-visible {
-  color: var(--text-primary);
-  border-color: rgba(139, 111, 255, 0.5);
-}
 
 /* ── Language settings: Beta pill + translation disclaimer ── */
 .settings-beta-badge {
@@ -12367,19 +12188,6 @@ img[data-asset-failed='true'] {
   padding: 18px 22px 20px;
   justify-content: flex-end;
 }
-.trade-close-qty-prompt {
-  margin: 0 0 14px;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--text-secondary);
-}
-.trade-close-qty-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.trade-close-qty-input { width: 82px; }
-.trade-close-qty-chips { display: flex; gap: 6px; }
 .trade-close-qty-chips .act-btn.active {
   border-color: rgba(74, 158, 255, 0.5);
   color: var(--color-blue);
@@ -12388,310 +12196,16 @@ img[data-asset-failed='true'] {
 /* Trades: health enrichments (velocity, cost, age, breakdown, apply) */
 .trade-split-eta { color: var(--color-blue); }
 .trade-split-loss { color: var(--color-red); }
-.trade-health-metric-alt { color: var(--color-green); font-weight: 400; }
-.trade-health-loss { color: var(--color-red); }
-.trade-health-fixall-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
-  background: rgba(240, 160, 48, 0.08);
-  border: 1px solid rgba(240, 160, 48, 0.3);
-  border-radius: 8px;
-}
-.trade-health-fixall-copy { font-size: 12px; color: var(--text-secondary); }
-.trade-health-fixall-btn { margin-left: auto; }
-.trade-health-apply-btn {
-  border-color: rgba(74, 158, 255, 0.5);
-  color: var(--color-blue);
-}
-.trade-health-breakdown {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-.trade-health-breakdown-label {
-  display: block;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-.trade-health-breakdown-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.trade-health-factor {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  padding: 2px 7px;
-  border-radius: 5px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-}
-.trade-health-factor.pos { color: var(--color-green); }
-.trade-health-factor.neg { color: var(--color-red); }
-
-/* Trades: health score chip inside the label badge */
-.trade-health-score {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.14);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Trades: health confidence / demand extras */
-.trade-health-summary-card[title] { cursor: help; }
-
-/* ============ Trade Health redesign (HealthCard) ============ */
-.trade-hc {
-  position: relative;
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px;
-  overflow: hidden;
-}
-.trade-hc.expanded { align-items: flex-start; }
-.trade-hc.tone-red { border-color: rgba(240, 79, 88, 0.4); color: var(--color-red); }
-.trade-hc.tone-amber { color: var(--color-amber); }
-.trade-hc.tone-blue { color: var(--color-blue); }
-.trade-hc.tone-green { color: var(--color-green); }
-.trade-hc-accent {
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 3px;
-  background: currentColor;
-}
-.trade-hc-gauge {
-  position: relative;
-  flex-shrink: 0;
-  width: 52px;
-  height: 52px;
-}
-.trade-hc-gauge-num {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 15px;
-  font-weight: 600;
-  color: currentColor;
-}
-.trade-hc-body { flex: 1; min-width: 0; color: var(--text-primary); }
-.trade-hc-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.trade-hc-name { font-size: 14px; font-weight: 600; }
-.trade-hc-label {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  border-radius: 4px;
-  padding: 1px 6px;
-  color: currentColor;
-  background: color-mix(in srgb, currentColor 16%, transparent);
-}
-.trade-hc-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  border-radius: 4px;
-  padding: 1px 6px;
-  border: 1px solid;
-}
-.trade-hc-chip.war { color: var(--color-red); border-color: rgba(240, 79, 88, 0.4); }
-.trade-hc-chip.only { color: var(--color-purple); border-color: rgba(139, 111, 255, 0.4); }
-.trade-hc-chip.warn { color: var(--color-amber); border-color: rgba(240, 160, 48, 0.4); }
-.trade-hc-chip.info { color: var(--color-blue); border-color: rgba(74, 158, 255, 0.4); }
 .trade-hc-chip .ti { font-size: 10px; }
-.trade-hc-reason {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 3px;
-  line-height: 1.45;
-}
-.trade-hc-metrics {
-  display: flex;
-  gap: 16px;
-  margin-top: 11px;
-  flex-wrap: wrap;
-}
-.trade-hc-metrics > div span {
-  display: block;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-.trade-hc-metrics > div strong {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-.trade-hc-metrics strong.muted { color: var(--text-muted); }
-.trade-hc-metrics strong.good { color: var(--color-green); }
 .trade-hc-metrics strong.bad { color: var(--color-red); }
 .trade-hc-metrics strong.neutral { color: var(--text-muted); }
-.trade-hc-metrics strong.trade-health-loss { color: var(--color-red); }
-.trade-hc-eta {
-  margin-top: 12px;
-  background: var(--bg-base);
-  border-radius: 8px;
-  padding: 9px 11px;
-}
-.trade-hc-eta-head {
-  display: flex;
-  justify-content: space-between;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  color: var(--text-muted);
-  margin-bottom: 5px;
-}
-.trade-hc-eta-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 5px;
-}
-.trade-hc-eta-label { width: 74px; font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
-.trade-hc-eta-track {
-  flex: 1;
-  height: 7px;
-  background: var(--bg-elevated);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.trade-hc-eta-fill { display: block; height: 100%; background: var(--text-muted); }
-.trade-hc-eta-fill.good { background: var(--color-green); }
 .trade-hc-eta-fill.bad { background: var(--color-red); }
 .trade-hc-eta-fill.neutral { background: var(--color-blue); }
-.trade-hc-eta-val {
-  width: 36px;
-  text-align: right;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-}
-.trade-hc-eta-val.good { color: var(--color-green); }
 .trade-hc-eta-val.bad { color: var(--color-red); }
 .trade-hc-eta-val.neutral { color: var(--text-secondary); }
-.trade-hc-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 11px;
-  flex-wrap: wrap;
-}
-.trade-hc-compact-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-.trade-hc-apply {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: none;
-  border-radius: 7px;
-  padding: 7px 13px;
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  color: #04182f;
-  background: var(--color-blue);
-}
-.trade-hc-apply.tone-red { background: var(--color-red); color: #2a0a0d; }
-.trade-hc-apply.tone-amber { background: var(--color-amber); color: #1a1305; }
-.trade-hc-apply.tone-green { background: var(--color-green); color: #05231a; }
-.trade-hc-apply:disabled { opacity: 0.6; cursor: default; }
 .trade-hc-apply .ti { font-size: 13px; }
-.trade-hc-edit {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  padding: 6px 12px;
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 12px;
-  cursor: pointer;
-}
-.trade-hc-ok {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: currentColor;
-}
 .trade-hc-ok .ti { font-size: 13px; }
-.trade-hc-loss-note {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  color: var(--color-amber);
-}
 .trade-hc-loss-note .ti { font-size: 11px; }
-.trade-hc-breakdown { margin-top: 10px; }
-.trade-hc-breakdown summary {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  cursor: pointer;
-  list-style: none;
-}
-.trade-hc-breakdown summary::-webkit-details-marker { display: none; }
-.trade-hc-factors { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
-.trade-hc-factor {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  padding: 2px 7px;
-  border-radius: 5px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-}
-.trade-hc-factor.pos { color: var(--color-green); }
-.trade-hc-factor.neg { color: var(--color-red); }
-
-/* Recommended-action pill (shown when the recommendation is a hold/wait, not a price change) */
-.trade-hc-rec {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 6px 11px;
-  border-radius: 7px;
-  color: var(--color-blue);
-  border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
-  background: color-mix(in srgb, currentColor 10%, transparent);
-}
-.trade-hc-rec.tone-green { color: var(--color-green); }
-.trade-hc-rec.tone-blue { color: var(--color-blue); }
-.trade-hc-rec.tone-amber { color: var(--color-amber); }
-.trade-hc-rec.tone-red { color: var(--color-red); }
 .trade-hc-rec .ti { font-size: 12px; }
 
 /* ============ Smart Manage (Strategy page) ============ */

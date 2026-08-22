@@ -29,7 +29,7 @@ import {
 import { Metric, MetricGrid } from '@/components/ui/metric';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { InfoHint } from '../../components/InfoHint';
 import { PageHeading } from '../../components/PageHeading';
 import { tActive, useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
@@ -140,50 +140,6 @@ function buildMarketSelectionIdentity(
 
   return `${itemId}:${variantKey}:${sellerMode}`;
 }
-
-/**
- * The little "i" that explains a metric.
- *
- * This WAS `AdaptiveInfoHint`: 68 lines of `getBoundingClientRect`, hand-computed flip/shift
- * logic and inline `style` positioning. The tooltip primitive's own header lists
- * `.market-info-hint-tooltip` as one of the four implementations it replaced — it was written to
- * kill this one, and then this one survived. Base UI's Portal + Positioner does the same
- * collision work correctly, and without an ancestor's `overflow` being able to clip it.
- *
- * `preferredPlacement` is gone: the primitive flips automatically, so "below" was only ever a
- * workaround for the hand-rolled version guessing wrong near the top of the viewport.
- */
-function InfoHint({ text }: { text: string }) {
-  return (
-    <Tooltip>
-      {/* The TRIGGER is the padded wrapper, not the glyph. The visible dot is 16px, but a 16px
-          hover target is a coin-flip with a mouse — the previous 14px one read as "the tooltips
-          do not work", because you mostly missed it. `p-1.5 -m-1.5` gives a 28px target and
-          cancels its own layout impact, so nothing around it shifts.
-
-          Still under the skill's 40×40 for standalone controls: 40px next to a 13px panel title
-          would swamp it. This is the density exception applied honestly — bigger than the glyph,
-          smaller than a toolbar button. */}
-      <TooltipTrigger
-        render={
-          <span
-            tabIndex={0}
-            aria-label={text}
-            className="-m-1.5 inline-flex cursor-help p-1.5 text-ink-dim outline-none transition-colors duration-150 ease-out hover:text-ink focus-visible:text-ink"
-          />
-        }
-      >
-        {/* `ink-dim` on `bg-panel` is ~5:1; the old `ink-faint` was ~2:1, under the skill's 3:1
-            floor for meaningful icons and control boundaries. */}
-        <span className="grid size-4 place-items-center rounded-full border border-current text-[10px] leading-none font-bold">
-          i
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>{text}</TooltipContent>
-    </Tooltip>
-  );
-}
-
 
 const DOMAIN_OPTIONS: Array<{ key: ChartDomainKey; label: TranslationKey; hours: number }> = [
   { key: '48h', label: 'mkt.domain48h', hours: 48 },
