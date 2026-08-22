@@ -491,7 +491,7 @@ function RelicRoiRow({
   onToggle: () => void;
 }) {
   const { t } = useTranslation();
-  const imageUrl = resolveWfmAssetUrl(entry.imagePath, entry.slug);
+  const imageUrl = resolveWfmAssetUrl(entry.imagePath, entry.slug, entry.name);
   const summary = getRelicRefinementSummary(entry, refinementKey);
 
   // Highest-value drop at the active refinement — the single most useful fact about a relic,

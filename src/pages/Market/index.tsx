@@ -14,7 +14,7 @@ import {
   markWatchlistAddFeedback,
 } from '../../lib/watchlistAddFeedback';
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
-import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -2791,7 +2791,10 @@ function AnalysisTab() {
             ) : analysis?.supplyContext.mode === 'drop-sources' ? (
               <div className="market-drop-list">
                 {displayDropSources.map((source) => {
-                  const imageUrl = resolveWfmAssetUrl(source.imagePath);
+                  // Relic sources carry the relic's name in `location`; era art replaces WFM's.
+                  const imageUrl = source.isRelic
+                    ? resolveRelicAssetUrl({ name: source.location }) ?? resolveWfmAssetUrl(source.imagePath)
+                    : resolveWfmAssetUrl(source.imagePath);
                   return (
                     <div key={source.key} className="market-drop-row">
                       {imageUrl ? (

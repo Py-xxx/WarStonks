@@ -22,7 +22,7 @@ import {
   type SetCompletionTraceSettings,
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
-import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
 import { OpportunitiesOverview } from './Overview';
 import { FarmNow, type FarmNowSuggestion } from './FarmNow';
@@ -2942,7 +2942,7 @@ export function OpportunitiesPage({
                   <div>
                     <span className="panel-title-eyebrow">{t('opp.noRelicsFound')}</span>
                     <h3>{t('opp.inventoryEmpty')}</h3>
-                    <p>{t('opp.alecaframeNoRelicsDetail')}</p>
+                    <p>{t('opp.relicsAlecaframeEmpty')}</p>
                   </div>
                 </div>
               ) : (
@@ -2950,7 +2950,7 @@ export function OpportunitiesPage({
                   {ownedRelics.map((relic) => {
                     const relicKey = `${relic.tier}:${relic.code}`;
                     const expanded = expandedRelicKey === relicKey;
-                    const imageUrl = resolveWfmAssetUrl(relic.imagePath);
+                    const imageUrl = resolveRelicAssetUrl(relic) ?? resolveWfmAssetUrl(relic.imagePath);
                     return (
                       <article
                         key={relicKey}

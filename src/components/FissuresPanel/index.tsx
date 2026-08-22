@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from '../../i18n';
 import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/worldState';
 import { getRelicTierIcons } from '../../lib/tauriClient';
-import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
 import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
 import type { RelicTierIcon, WfstatFissure } from '../../types';
@@ -93,7 +93,7 @@ function SteelPathModeIcon() {
 }
 
 function FissureTierIcon({ tier, imagePath }: { tier: string; imagePath: string | null }) {
-  const imageUrl = resolveWfmAssetUrl(imagePath);
+  const imageUrl = resolveRelicAssetUrl({ tier }) ?? resolveWfmAssetUrl(imagePath);
 
   return (
     <span className="fissure-tier-icon" aria-hidden="true">

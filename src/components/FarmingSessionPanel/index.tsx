@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
-import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { atLeastOneChance } from '../../lib/relicDropOdds';
 import type { FarmingSessionDrop } from '../../types';
 
@@ -88,6 +88,11 @@ export function FarmingSessionPanel() {
   }
 
   const active = session.cycle[session.activeIndex];
+  // Era art, not WFM's per-item relic picture: a relic's era is its whole visual identity, and
+  // the four refinements would otherwise be four near-identical images.
+  const activeRelicImage = active
+    ? resolveRelicAssetUrl(active) ?? resolveWfmAssetUrl(active.relicImagePath)
+    : null;
   // Per-relic count: cycling back to a relic keeps its history (session totals stay global).
   const runCount = active
     ? session.runs.filter((run) => run.relicSlug === active.relicSlug).length
@@ -223,8 +228,8 @@ export function FarmingSessionPanel() {
           </button>
           <div className="farm-cycle-card">
             <span className="farm-cycle-thumb" aria-hidden="true">
-              {resolveWfmAssetUrl(active?.relicImagePath ?? null) ? (
-                <img src={resolveWfmAssetUrl(active?.relicImagePath ?? null) ?? undefined} alt="" />
+              {activeRelicImage ? (
+                <img src={activeRelicImage} alt="" />
               ) : (
                 <span>{(active?.relicName ?? '?').slice(0, 2)}</span>
               )}

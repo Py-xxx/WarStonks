@@ -415,7 +415,7 @@ export function FarmNow(props: FarmNowProps) {
           <EmptyState
             icon="ti-alert-triangle"
             title={gate.message}
-            detail={t('opp.alecaframeSetupHint')}
+            detail={t('opp.relicsNeedAlecaframe')}
             action={
               <Button variant="secondary" size="sm" onClick={props.onRetryRelics}>
                 {t('opp.retry')}
@@ -441,7 +441,7 @@ export function FarmNow(props: FarmNowProps) {
           <EmptyState
             icon="ti-diamond"
             title={t('opp.noOwnedRelicsDetected')}
-            detail={t('opp.alecaframeEmptyInventory')}
+            detail={t('opp.relicsAlecaframeEmpty')}
           />
         );
       case 'noInventory':
@@ -590,7 +590,7 @@ export function FarmNow(props: FarmNowProps) {
             {props.suggestOpen && props.suggestions.length > 0 ? (
               <div
                 role="listbox"
-                className="absolute top-full right-0 left-0 z-dropdown mt-1 overflow-hidden rounded-md border border-white/12 bg-bg-overlay shadow-float"
+                className="absolute top-full right-0 left-0 z-(--z-dropdown) mt-1 overflow-hidden rounded-md border border-white/12 bg-bg-overlay shadow-float"
               >
                 {props.suggestions.map((suggestion) => (
                   <Button
@@ -909,7 +909,7 @@ function PartProfitRow({
       head={
         <>
           <RelicThumb
-            src={resolveWfmAssetUrl(row.relic.imagePath)}
+            src={resolveWfmAssetUrl(row.relic.imagePath, row.relic.slug, row.relic.name)}
             fallback={row.relic.name.slice(0, 2)}
             size="size-9"
           />
@@ -1022,7 +1022,7 @@ function SetCompletionRow({
       head={
         <>
           <RelicThumb
-            src={resolveWfmAssetUrl(row.relic.imagePath)}
+            src={resolveWfmAssetUrl(row.relic.imagePath, row.relic.slug, row.relic.name)}
             fallback={row.relic.name.slice(0, 2)}
             size="size-9"
           />

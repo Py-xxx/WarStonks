@@ -109,6 +109,35 @@ test('migrated files do not hand-roll a pulsing skeleton', () => {
   );
 });
 
+/**
+ * A layering class that names a token but is not written as one generates **nothing** — the
+ * element ends up with `z-index: auto` and silently loses to whatever paints after it.
+ *
+ * `z-dropdown` looks exactly like the rule the other guard asks for, reviews clean, and produced
+ * a real bug: Farm Now's search suggestions rendered *under* the panel below them, so a tooltip
+ * from that panel covered the list. Tailwind v4's form is `z-(--z-dropdown)`.
+ *
+ * Checked across ALL of `src`, not just migrated files: the failure is invisible everywhere, and
+ * nothing legitimately writes a bare word after `z-`.
+ */
+test('layering tokens are written in the form Tailwind actually generates', () => {
+  const offenders: string[] = [];
+  for (const file of collectTsx('src')) {
+    const code = stripComments(readFileSync(file, 'utf8'));
+    // `z-auto` is real Tailwind; `z-(--x)` and `z-[…]` are the arbitrary forms. A bare word is not.
+    // The lookbehind is load-bearing: `z-(--z-dropdown)` contains `z-dropdown` as a substring.
+    for (const match of code.match(/(?<![\w-])z-(?!auto\b)[a-z][a-z-]*/g) ?? []) {
+      offenders.push(`${file} :: ${match}`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    'A z-index utility naming a token directly generates no CSS. Write it as z-(--z-dropdown), ' +
+      'z-(--z-modal), z-(--z-tooltip)… — see the Layering block in src/index.css.',
+  );
+});
+
 test('migrated files never hardcode a z-index', () => {
   const offenders: string[] = [];
   for (const file of migratedFiles()) {

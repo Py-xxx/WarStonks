@@ -1912,17 +1912,25 @@ export const en = {
   'opp.usePrimeComponentsTab': 'Use one or more screenshots from the in-game {tab} tab. Each screenshot is prepared independently and then merged into one review list.',
   'opp.screenshotWorkflowHint': 'Workflow: choose the screenshots and the detector will immediately extract the fixed palette and isolate the OCR crops for each one. Then press {scan} to OCR each screenshot separately, match the rows against the set map, review any flagged rows, and confirm them into the planner.',
   'opp.loadingRelicInventory': 'Loading relic inventory…',
-  'opp.alecaframeNoRelicsDetail': 'Alecaframe did not report any relics for this account. Double-check your public link in Settings and try again.',
   'opp.runScan': 'Run Scan',
+
+  // ── AlecaFrame relic source ─────────────────────────────────────────────────────────────
+  // EDIT HERE when the relic source changes. Relics are read from AlecaFrame's local
+  // `lastData.dat` (see `src-tauri/src/local_sources.rs`) — NOT from an API, and not from a
+  // public profile link, both of which earlier copy claimed long after we stopped using them.
+  // AlecaFrame has to be installed and running alongside the app for any relic data to exist.
+  // These two strings are the only place that requirement is stated to the user.
+  'opp.relicsNeedAlecaframe': 'Relic data comes from AlecaFrame. Install it and run it alongside WarStonks.',
+  'opp.relicsAlecaframeEmpty': 'AlecaFrame has no relics recorded yet. Play a mission with it running, then refresh.',
+  // ────────────────────────────────────────────────────────────────────────────────────────
+
   'opp.clear': 'Clear',
   'opp.loadingSetCompletionCoverage': 'Loading set completion relic coverage…',
   'opp.relicRoiSetCompletionHint': 'This view uses the cached Relic ROI data from the Arbitrage scanner. Run a scan in Scanners, then return here to rank relics for set completion.',
   'opp.loadingOwnedRelicInventory': 'Loading owned relic inventory…',
   'opp.couldNotLoadRelics': 'Couldn\'t load relics',
-  'opp.alecaframeSetupHint': 'Relics load from AlecaFrame. Enable the AlecaFrame API in Settings and save your public link, then retry.',
   'opp.retry': 'Retry',
   'opp.ownedRelicsSetCompletionHint': 'This view only ranks relics you already own. Open Owned Relics and press Refresh to load your inventory, then return here.',
-  'opp.alecaframeEmptyInventory': 'Alecaframe returned an empty relic inventory. Make sure your public link is correct, then refresh in Owned Relics.',
   'opp.setPlannerInventoryHint': 'This view needs your Set Completion Planner inventory so it can see which components are still missing from partial sets.',
   'opp.loadingRelicProfitability': 'Loading relic profitability…',
   'opp.relicRoiProfitHint': 'This view uses the cached Relic ROI data from the Arbitrage scanner. Run a scan in Scanners, then return here to see refinement-level profit.',
