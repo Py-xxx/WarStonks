@@ -4140,175 +4140,11 @@ body {
   align-items: center;
   gap: 10px;
 }
-
-.alerts-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.alert-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.alerts-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.alerts-section-card {
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(8, 13, 22, 0.5);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
-.alerts-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.alerts-section-title-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.alerts-section-title {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-.alerts-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 10px;
-}
-.alert-item {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(12, 17, 27, 0.88);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-}
-.alert-main {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  grid-column: 1 / -1;
-}
-.alert-item-thumb {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(17, 24, 36, 0.92);
-  color: var(--text-secondary);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 12px;
-  text-transform: uppercase;
-}
-.alert-item-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.alert-item-thumb-system {
-  background: rgba(255, 193, 92, 0.14);
-  border-color: rgba(255, 193, 92, 0.32);
-  color: var(--accent-amber);
-  font-weight: 700;
-}
-.alert-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding-right: 32px;
-}
-.alert-item-system .alert-meta {
-  display: grid;
-  gap: 4px;
-}
-.alert-system-notes {
-  margin-top: 4px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.45;
-}
-.alert-topline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-.alert-item-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.alert-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.alert-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-  align-items: center;
-  grid-column: 2;
-  justify-self: end;
-  align-self: end;
-  margin-top: 8px;
-  margin-left: 10px;
-}
 .alert-actions > .act-btn {
   width: auto;
   min-height: 28px;
   padding: 0 10px;
   margin: 2px 0;
-}
-.alert-clear-btn {
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(12, 17, 27, 0.72);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.alert-clear-btn-floating {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 26px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
-}
-.alert-clear-btn:hover {
-  color: var(--text-primary);
-  background: rgba(23, 31, 45, 0.98);
 }
 .alerts-panel.compact .alerts-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8217,24 +8053,10 @@ body {
     flex-direction: column;
   }
 
-  .alert-item {
-    grid-template-columns: 1fr;
-  }
-
-  .alert-actions {
-    width: 100%;
-    flex-wrap: wrap;
-  }
-
   .portfolio-log-header,
   .portfolio-log-row {
     grid-template-columns: minmax(180px, 1.5fr) 58px 92px 100px 108px 120px 104px;
     gap: 10px;
-  }
-
-  .alert-actions {
-    grid-column: 1;
-    justify-self: stretch;
   }
 
   .alerts-list,

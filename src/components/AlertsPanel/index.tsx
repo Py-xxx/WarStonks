@@ -1,4 +1,10 @@
 import { useState } from 'react';
+
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+
+import { ItemThumb } from '../ListRow';
+import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
 import { useTranslation } from '../../i18n';
 import { formatElapsedTime } from '../../lib/dateTime';
 import { formatHomeErrorMessage } from '../../lib/homeErrorHandling';
@@ -6,13 +12,162 @@ import { copyWhisperMessage } from '../../lib/marketMessages';
 import { WORLDSTATE_ENDPOINT_LABELS } from '../../lib/worldState';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import { WatchlistPurchaseModal } from '../WatchlistPurchaseModal';
 
-interface AlertsPanelProps {
-  compact?: boolean;
+/**
+ * The bell popup: everything waiting for the user, in one list.
+ *
+ * Three kinds of alert live here — a live underpriced listing, system notices (stale scanner,
+ * offline worldstate feeds, an app update) and watchlist hits — and they used to be three
+ * near-identical blocks of markup that had drifted apart in spacing, badge colour and button
+ * treatment. They are one `AlertRow` now; only the badge, the meta facts and the actions differ,
+ * which is the only thing that actually differs about them.
+ *
+ * The panel is rendered inside the TopBar's `Popover`, which supplies the surface, the heading and
+ * the count — so this file draws no chrome of its own.
+ */
+
+type Tone = 'green' | 'amber' | 'red' | 'blue' | 'neutral';
+
+const BADGE_CLASS: Record<Tone, string> = {
+  green: 'bg-accent-green/15 text-accent-green',
+  amber: 'bg-accent-amber/15 text-accent-amber',
+  red: 'bg-accent-red/15 text-accent-red',
+  blue: 'bg-accent-blue/15 text-accent-blue',
+  neutral: 'bg-bg-elevated text-ink-dim',
+};
+
+/** A section of alerts: a label, how many, and the control that clears them all. */
+function AlertSection({
+  title,
+  count,
+  onClear,
+  clearLabel,
+  children,
+}: {
+  title: string;
+  count: number;
+  onClear?: () => void;
+  clearLabel?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-1.5 border-b border-line px-3 py-2.5 last:border-b-0">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[9px] font-bold tracking-[0.07em] text-ink-dim uppercase">
+          {title}
+        </span>
+        <span className="font-mono text-[10px] text-ink-faint tabular-nums">{count}</span>
+        {onClear && clearLabel ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            static
+            onClick={onClear}
+            className="ml-auto h-6 px-1.5 text-[11px] text-ink-dim hover:text-ink"
+          >
+            {clearLabel}
+          </Button>
+        ) : null}
+      </div>
+      <div className="flex flex-col gap-1">{children}</div>
+    </section>
+  );
 }
 
-export function AlertsPanel({ compact = false }: AlertsPanelProps) {
+/**
+ * One alert. Art, what happened, the facts behind it, and what you can do about it.
+ *
+ * `onDismiss` is optional because an app update deliberately has no `×`: its two buttons are
+ * "Update now" and "Later", and a third way to make it disappear made "Later" ambiguous.
+ */
+function AlertRow({
+  imageUrl,
+  fallback,
+  title,
+  badge,
+  meta,
+  detail,
+  actions,
+  onDismiss,
+  dismissLabel,
+}: {
+  imageUrl?: string | null;
+  fallback: string;
+  title: string;
+  badge?: { text: string; tone: Tone };
+  meta: (string | null | undefined)[];
+  detail?: string | null;
+  actions?: React.ReactNode;
+  onDismiss?: () => void;
+  dismissLabel?: string;
+}) {
+  return (
+    <div className="flex gap-2.5 rounded-md border border-line-subtle bg-bg-panel p-2">
+      <ItemThumb src={imageUrl ?? null} fallback={fallback} size="size-8" />
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{title}</span>
+          {badge ? (
+            <span
+              className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums ${BADGE_CLASS[badge.tone]}`}
+            >
+              {badge.text}
+            </span>
+          ) : null}
+          {onDismiss && dismissLabel ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={dismissLabel}
+              onClick={onDismiss}
+              className="-my-1 -mr-1 size-7 shrink-0 text-ink-faint hover:text-ink"
+            >
+              <i className="ti ti-x text-[13px]" aria-hidden="true" />
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-2 font-mono text-[10px] text-ink-faint tabular-nums">
+          {meta
+            .filter((entry): entry is string => Boolean(entry))
+            .map((entry, index) => (
+              <span key={index}>{entry}</span>
+            ))}
+        </div>
+
+        {detail ? <p className="text-[11px] text-ink-dim">{detail}</p> : null}
+
+        {actions ? <div className="mt-0.5 flex flex-wrap items-center gap-1">{actions}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Actions inside an alert are all the same weight — none of them is the obvious one. */
+function AlertAction({
+  onClick,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      disabled={disabled}
+      onClick={onClick}
+      className="h-6 border-line px-2 text-[11px]"
+    >
+      {children}
+    </Button>
+  );
+}
+
+export function AlertsPanel() {
   const { t } = useTranslation();
   const alerts = useAppStore((state) => state.alerts);
   const watchlist = useAppStore((state) => state.watchlist);
@@ -27,6 +182,7 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
   const retryWorldStateSystemAlert = useAppStore((state) => state.retryWorldStateSystemAlert);
   const underpricedAlert = useAppStore((state) => state.underpricedAlert);
   const dismissUnderpricedAlert = useAppStore((state) => state.dismissUnderpricedAlert);
+
   const [purchaseModal, setPurchaseModal] = useState<{
     watchlistId: string;
     itemName: string;
@@ -40,309 +196,241 @@ export function AlertsPanel({ compact = false }: AlertsPanelProps) {
 
   const totalAlerts = alerts.length + systemAlerts.length + (underpricedAlert ? 1 : 0);
 
+  const notices = (
+    <>
+      {purchaseSuccess ? (
+        <div className="border-b border-line bg-accent-green/[0.08] px-3 py-2 text-[11px] text-accent-green">
+          {purchaseSuccess}
+        </div>
+      ) : null}
+      {actionError ? (
+        <div className="border-b border-line bg-accent-red/[0.06] px-3 py-2 text-[11px] text-accent-red">
+          {actionError}
+        </div>
+      ) : null}
+    </>
+  );
+
   if (totalAlerts === 0) {
     return (
       <div>
-        {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
-        {actionError ? <div className="settings-inline-error">{actionError}</div> : null}
-        <div className="empty-state">
-          <span className="empty-primary">{t('al.noActiveAlerts')}</span>
-          <span className="empty-sub">
-            {t('al.emptyHint')}
-          </span>
-        </div>
+        {notices}
+        {/* Positive tone: an empty bell means nothing needs you, not that something is missing. */}
+        <EmptyState
+          icon="ti-bell-check"
+          tone="positive"
+          title={t('al.noActiveAlerts')}
+          detail={t('al.emptyHint')}
+        />
       </div>
     );
   }
 
-  const visibleAlerts = compact ? alerts.slice(0, 3) : alerts;
-  const visibleSystemAlerts = compact ? systemAlerts.slice(0, 3) : systemAlerts;
-
   return (
-    <div className={`alerts-panel${compact ? ' compact' : ''}`}>
-      {purchaseSuccess ? <div className="settings-inline-success">{purchaseSuccess}</div> : null}
-      {actionError ? <div className="settings-inline-error">{actionError}</div> : null}
+    <div className="max-h-[min(70vh,32rem)] overflow-y-auto overscroll-contain">
+      {notices}
 
       {underpricedAlert ? (
-        <div className="alerts-section alerts-section-card">
-          <div className="alerts-section-header">
-            <div className="alerts-section-title-wrap">
-              <span className="alerts-section-title">{t('al.underpricedRadar')}</span>
-              <span className={`badge badge-${underpricedAlert.listing.tier === 'red' ? 'red' : underpricedAlert.listing.tier === 'yellow' ? 'amber' : 'green'}`}>
-                {t('al.pctBelow', { pct: Math.round(underpricedAlert.listing.pctBelow) })}
-              </span>
-            </div>
-            <button className="text-btn" type="button" onClick={dismissUnderpricedAlert}>
-              {t('al.dismiss')}
-            </button>
-          </div>
-          <div className="alerts-list">
-            <div className="alert-item">
-              <div className="alert-main">
-                <span className="alert-item-thumb">
-                  <span>{underpricedAlert.listing.itemName.slice(0, 1)}</span>
-                </span>
-                <div className="alert-copy">
-                  <div className="alert-topline">
-                    <span className="alert-item-name">{underpricedAlert.listing.itemName}</span>
-                    <span className="badge badge-green">{underpricedAlert.listing.listedPrice} pt</span>
-                  </div>
-                  <div className="alert-meta">
-                    <span>{underpricedAlert.listing.username}</span>
-                    <span>{t('wl.qty')} {underpricedAlert.listing.quantity}</span>
-                    <span>{t('al.rec')} {underpricedAlert.listing.recommendedPrice} pt</span>
-                    {underpricedAlert.listing.rank !== null && underpricedAlert.listing.rank !== undefined ? (
-                      <span>{t('wl.rank')} {underpricedAlert.listing.rank}</span>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-              <div className="alert-actions">
-                <button
-                  className="act-btn"
-                  type="button"
-                  onClick={() => {
-                    void copyWhisperMessage(
-                      {
-                        username: underpricedAlert.listing.username,
-                        platinum: underpricedAlert.listing.listedPrice,
-                        rank: underpricedAlert.listing.rank,
-                      },
-                      underpricedAlert.listing.itemName,
-                    ).catch(() => undefined);
-                  }}
-                >
-                  {t('al.copyMessage')}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertSection title={t('al.underpricedRadar')} count={1}>
+          <AlertRow
+            fallback={underpricedAlert.listing.itemName.charAt(0)}
+            title={underpricedAlert.listing.itemName}
+            badge={{
+              text: t('al.pctBelow', { pct: Math.round(underpricedAlert.listing.pctBelow) }),
+              tone:
+                underpricedAlert.listing.tier === 'red'
+                  ? 'red'
+                  : underpricedAlert.listing.tier === 'yellow'
+                    ? 'amber'
+                    : 'green',
+            }}
+            meta={[
+              `${underpricedAlert.listing.listedPrice}p`,
+              underpricedAlert.listing.username,
+              t('wl.qty') + ' ' + underpricedAlert.listing.quantity,
+              `${t('al.rec')} ${underpricedAlert.listing.recommendedPrice}p`,
+              underpricedAlert.listing.rank !== null && underpricedAlert.listing.rank !== undefined
+                ? `${t('wl.rank')} ${underpricedAlert.listing.rank}`
+                : null,
+            ]}
+            onDismiss={dismissUnderpricedAlert}
+            dismissLabel={t('al.dismiss')}
+            actions={
+              <AlertAction
+                onClick={() => {
+                  void copyWhisperMessage(
+                    {
+                      username: underpricedAlert.listing.username,
+                      platinum: underpricedAlert.listing.listedPrice,
+                      rank: underpricedAlert.listing.rank,
+                    },
+                    underpricedAlert.listing.itemName,
+                  ).catch(() => undefined);
+                }}
+              >
+                <i className="ti ti-copy" aria-hidden="true" />
+                {t('al.copyMessage')}
+              </AlertAction>
+            }
+          />
+        </AlertSection>
       ) : null}
 
-      {visibleSystemAlerts.length > 0 ? (
-        <div className="alerts-section alerts-section-card">
-          <div className="alerts-section-header">
-            <div className="alerts-section-title-wrap">
-              <span className="alerts-section-title">{t('al.system')}</span>
-              <span className="badge badge-amber">{visibleSystemAlerts.length}</span>
-            </div>
-            {!compact ? (
-              <div className="alert-header-actions">
-                <button className="text-btn" type="button" onClick={clearAllSystemAlerts}>
-                  {t('al.clearSystem')}
-                </button>
-              </div>
-            ) : null}
-          </div>
-          <div className="alerts-list">
-            {visibleSystemAlerts.map((alert) => (
-              <div key={alert.id} className="alert-item alert-item-system">
-                {alert.kind !== 'app-update' ? (
-                  <button
-                    className="alert-clear-btn alert-clear-btn-floating"
-                    type="button"
-                    aria-label={t('al.clearSystemAria', { title: alert.title })}
-                    onClick={() => dismissSystemAlert(alert.id)}
-                  >
-                    ×
-                  </button>
-                ) : null}
-                <div className="alert-main">
-                  <span className="alert-item-thumb alert-item-thumb-system">!</span>
-                  <div className="alert-copy">
-                    <div className="alert-topline">
-                      <span className="alert-item-name">{alert.title}</span>
-                      {alert.kind === 'worldstate-offline' ? (
-                        <span className="badge badge-amber">{t('al.feeds', { count: alert.sourceKeys?.length ?? 0 })}</span>
-                      ) : alert.kind === 'app-update' ? (
-                        <span className={`badge ${
-                          alert.installState === 'error'
-                            ? 'badge-amber'
-                            : alert.installState === 'available'
-                              ? 'badge-blue'
-                              : 'badge-green'
-                        }`}>
-                          {alert.updateVersion ?? t('al.update')}
-                        </span>
-                      ) : (
-                        <span className="badge badge-amber">{t('al.stale')}</span>
-                      )}
-                    </div>
-                    <div className="alert-meta">
-                      <span>{alert.message}</span>
-                      {alert.kind === 'worldstate-offline' && alert.sourceKeys?.length ? (
-                        <span>
-                          {alert.sourceKeys
-                            .map((sourceKey) => WORLDSTATE_ENDPOINT_LABELS[sourceKey])
-                            .join(', ')}
-                        </span>
-                      ) : null}
-                      <span>{formatElapsedTime(alert.createdAt)}</span>
-                    </div>
-                    {alert.kind === 'app-update' && alert.releaseNotes ? (
-                      <div className="alert-system-notes">
-                        {alert.releaseNotes.split('\n').find((line) => line.trim().length > 0) ?? alert.releaseNotes}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
+      {systemAlerts.length > 0 ? (
+        <AlertSection
+          title={t('al.system')}
+          count={systemAlerts.length}
+          onClear={clearAllSystemAlerts}
+          clearLabel={t('al.clearAll')}
+        >
+          {systemAlerts.map((alert) => {
+            const isUpdate = alert.kind === 'app-update';
+            const busy = alert.installState === 'downloading' || alert.installState === 'installing';
 
-                {alert.kind === 'worldstate-offline' && alert.sourceKeys?.length ? (
-                  <div className="alert-actions">
-                    <button
-                      className="act-btn"
-                      type="button"
-                      onClick={() => {
-                        void retryWorldStateSystemAlert(alert.sourceKeys ?? []);
-                      }}
-                    >
+            return (
+              <AlertRow
+                key={alert.id}
+                fallback={isUpdate ? '↑' : '!'}
+                title={alert.title}
+                badge={
+                  alert.kind === 'worldstate-offline'
+                    ? { text: t('al.feeds', { count: alert.sourceKeys?.length ?? 0 }), tone: 'amber' }
+                    : isUpdate
+                      ? {
+                          text: alert.updateVersion ?? t('al.update'),
+                          tone:
+                            alert.installState === 'error'
+                              ? 'amber'
+                              : alert.installState === 'available'
+                                ? 'blue'
+                                : 'green',
+                        }
+                      : { text: t('al.stale'), tone: 'amber' }
+                }
+                meta={[
+                  formatElapsedTime(alert.createdAt),
+                  alert.kind === 'worldstate-offline' && alert.sourceKeys?.length
+                    ? alert.sourceKeys
+                        .map((sourceKey) => WORLDSTATE_ENDPOINT_LABELS[sourceKey])
+                        .join(', ')
+                    : null,
+                ]}
+                detail={
+                  isUpdate && alert.releaseNotes
+                    ? // First non-empty line only: the full notes belong in the release, not a popup.
+                      (alert.releaseNotes.split('\n').find((line) => line.trim().length > 0) ??
+                      alert.message)
+                    : alert.message
+                }
+                // An app update has "Later"; a second dismissal would make that ambiguous.
+                onDismiss={isUpdate ? undefined : () => dismissSystemAlert(alert.id)}
+                dismissLabel={t('al.clearSystemAria', { title: alert.title })}
+                actions={
+                  alert.kind === 'worldstate-offline' && alert.sourceKeys?.length ? (
+                    <AlertAction onClick={() => void retryWorldStateSystemAlert(alert.sourceKeys ?? [])}>
+                      <i className="ti ti-refresh" aria-hidden="true" />
                       {t('al.retry')}
-                    </button>
-                  </div>
-                ) : null}
-
-                {alert.kind === 'app-update' ? (
-                  <div className="alert-actions">
-                    <button
-                      className="act-btn"
-                      type="button"
-                      disabled={alert.installState === 'downloading' || alert.installState === 'installing'}
-                      onClick={() => {
-                        void installAppUpdate().catch((error) => {
-                          console.error('[updater] failed to install app update', error);
-                        });
-                      }}
-                    >
-                      {alert.installState === 'downloading'
-                        ? `${t('al.downloading')}${alert.progressPercent !== null && alert.progressPercent !== undefined ? ` ${alert.progressPercent}%` : ''}`
-                        : alert.installState === 'installing'
-                          ? t('al.installing')
-                          : t('al.updateNow')}
-                    </button>
-                    <button
-                      className="act-btn"
-                      type="button"
-                      disabled={alert.installState === 'downloading' || alert.installState === 'installing'}
-                      onClick={() => dismissSystemAlert(alert.id)}
-                    >
-                      {t('al.later')}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </div>
+                    </AlertAction>
+                  ) : isUpdate ? (
+                    <>
+                      <AlertAction
+                        disabled={busy}
+                        onClick={() => {
+                          void installAppUpdate().catch((error) => {
+                            console.error('[updater] failed to install app update', error);
+                          });
+                        }}
+                      >
+                        {alert.installState === 'downloading'
+                          ? `${t('al.downloading')}${
+                              alert.progressPercent !== null && alert.progressPercent !== undefined
+                                ? ` ${alert.progressPercent}%`
+                                : ''
+                            }`
+                          : alert.installState === 'installing'
+                            ? t('al.installing')
+                            : t('al.updateNow')}
+                      </AlertAction>
+                      <AlertAction disabled={busy} onClick={() => dismissSystemAlert(alert.id)}>
+                        {t('al.later')}
+                      </AlertAction>
+                    </>
+                  ) : null
+                }
+              />
+            );
+          })}
+        </AlertSection>
       ) : null}
 
-      {visibleAlerts.length > 0 ? (
-        <div className="alerts-section alerts-section-card">
-          <div className="alerts-section-header">
-            <div className="alerts-section-title-wrap">
-              <span className="alerts-section-title">{t('nav.market')}</span>
-              <span className="badge badge-green">{visibleAlerts.length}</span>
-            </div>
-            {!compact ? (
-              <div className="alert-header-actions">
-                <button className="text-btn" type="button" onClick={clearAllAlerts}>
-                  {t('al.clearMarket')}
-                </button>
-              </div>
-            ) : null}
-          </div>
-          <div className="alerts-list">
-            {visibleAlerts.map((alert) => {
-              const imageUrl = resolveWfmAssetUrl(alert.itemImagePath, alert.itemSlug);
-
-              return (
-                <div key={alert.id} className="alert-item">
-                  <button
-                    className="alert-clear-btn alert-clear-btn-floating"
-                    type="button"
-                    aria-label={t('al.clearAria', { name: alert.itemName })}
-                    onClick={() => dismissAlert(alert.id)}
+      {alerts.length > 0 ? (
+        <AlertSection
+          title={t('al.watchlistHits')}
+          count={alerts.length}
+          onClear={clearAllAlerts}
+          clearLabel={t('al.clearAll')}
+        >
+          {alerts.map((alert) => (
+            <AlertRow
+              key={alert.id}
+              imageUrl={resolveWfmAssetUrl(alert.itemImagePath, alert.itemSlug)}
+              fallback={alert.itemName.charAt(0)}
+              title={alert.itemName}
+              badge={{ text: `${alert.price}p`, tone: 'green' }}
+              meta={[
+                alert.username,
+                t('pf.qtyValue', { n: alert.quantity }),
+                alert.rank !== null && alert.rank !== undefined
+                  ? `${t('pf.rank')} ${alert.rank}`
+                  : null,
+                formatElapsedTime(alert.createdAt),
+              ]}
+              onDismiss={() => dismissAlert(alert.id)}
+              dismissLabel={t('al.clearAria', { name: alert.itemName })}
+              actions={
+                <>
+                  <AlertAction
+                    onClick={() => {
+                      setActionError(null);
+                      const watchlistItem = watchlist.find((item) => item.id === alert.watchlistId);
+                      setPurchaseError(null);
+                      setPurchaseSuccess(null);
+                      setPurchaseModal({
+                        watchlistId: alert.watchlistId,
+                        itemName: alert.itemName,
+                        defaultPrice: watchlistItem?.targetPrice ?? alert.price,
+                        maxQuantity: watchlistItem?.quantity ?? 1,
+                      });
+                    }}
                   >
-                    ×
-                  </button>
-                  <div className="alert-main">
-                    <span className="alert-item-thumb">
-                      {imageUrl ? (
-                        <img src={imageUrl} alt="" loading="lazy" />
-                      ) : (
-                        <span>{alert.itemName.slice(0, 1)}</span>
-                      )}
-                    </span>
-
-                    <div className="alert-copy">
-                      <div className="alert-topline">
-                        <span className="alert-item-name">{alert.itemName}</span>
-                        <span className="badge badge-green">{alert.price} pt</span>
-                      </div>
-                      <div className="alert-meta">
-                        <span>{alert.username}</span>
-                        <span>{t('pf.qtyValue', { n: alert.quantity })}</span>
-                        {alert.rank !== null && alert.rank !== undefined ? (
-                          <span>{t('pf.rank')} {alert.rank}</span>
-                        ) : null}
-                        <span>{formatElapsedTime(alert.createdAt)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="alert-actions">
-                    <button
-                      className="act-btn"
-                      type="button"
-                      onClick={() => {
-                        setActionError(null);
-                        const watchlistItem = watchlist.find(
-                          (item) => item.id === alert.watchlistId,
-                        );
-                        setPurchaseError(null);
-                        setPurchaseSuccess(null);
-                        setPurchaseModal({
-                          watchlistId: alert.watchlistId,
-                          itemName: alert.itemName,
-                          defaultPrice: watchlistItem?.targetPrice ?? alert.price,
-                          maxQuantity: watchlistItem?.quantity ?? 1,
-                        });
-                      }}
-                    >
-                      {t('wl.markAsBought')}
-                    </button>
-                    <button className="act-btn" type="button" onClick={() => markAlertNoResponse(alert.id)}>
-                      {t('al.noResponse')}
-                    </button>
-                    <button
-                      className="act-btn"
-                      type="button"
-                      onClick={() =>
-                        void copyWhisperMessage(
-                          { username: alert.username, platinum: alert.price, rank: alert.rank },
-                          alert.itemName,
+                    <i className="ti ti-check" aria-hidden="true" />
+                    {t('wl.markAsBought')}
+                  </AlertAction>
+                  <AlertAction
+                    onClick={() =>
+                      void copyWhisperMessage(
+                        { username: alert.username, platinum: alert.price, rank: alert.rank },
+                        alert.itemName,
+                      )
+                        .then(() => setActionError(null))
+                        .catch(() =>
+                          setActionError(
+                            formatHomeErrorMessage('alerts-copy', new Error('copy failed')),
+                          ),
                         )
-                          .then(() => {
-                            setActionError(null);
-                          })
-                          .catch(() => {
-                            setActionError(
-                              formatHomeErrorMessage(
-                                'alerts-copy',
-                                new Error('copy failed'),
-                              ),
-                            );
-                          })
-                      }
-                    >
-                      {t('al.copyMessage')}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+                    }
+                  >
+                    <i className="ti ti-copy" aria-hidden="true" />
+                    {t('al.copyMessage')}
+                  </AlertAction>
+                  <AlertAction onClick={() => markAlertNoResponse(alert.id)}>
+                    {t('al.noResponse')}
+                  </AlertAction>
+                </>
+              }
+            />
+          ))}
+        </AlertSection>
       ) : null}
 
       {purchaseModal ? (
