@@ -22,8 +22,8 @@ import {
   type SetCompletionTraceSettings,
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
-import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { OpportunitiesOverview } from './Overview';
+import { ManualInventory } from './ManualInventory';
 import { SetPlanner } from './SetPlanner';
 import {
   PLANNER_SUMMARY_THRESHOLD,
@@ -35,8 +35,6 @@ import { FarmNow, type FarmNowSuggestion } from './FarmNow';
 import {
   formatChance,
   formatPlat,
-  relicRarityTone,
-  relicRefinementTone,
   type FarmNowGate,
   type FarmNowRelicRow,
   type FarmNowSetCompletionDrop,
@@ -44,7 +42,6 @@ import {
   type RefinementGuidance,
   type RefinementMetric,
 } from './farmNowModel';
-import { formatShortLocalDateTime } from '../../lib/dateTime';
 import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
@@ -63,7 +60,6 @@ import {
   type ChanceProfile,
   type RelicOddsInput,
 } from '../../lib/relicDropOdds';
-import type { TranslationKey } from '../../i18n/en';
 import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerResponse,
@@ -84,13 +80,6 @@ type OppTab =
   | 'mods'
   | 'arcanes';
 type FarmNowTab = 'part-profit' | 'set-completion';
-
-const RELIC_REFINEMENT_COLUMNS = [
-  { key: 'intact', labelKey: 'refine.intact' },
-  { key: 'exceptional', labelKey: 'refine.exceptional' },
-  { key: 'flawless', labelKey: 'refine.flawless' },
-  { key: 'radiant', labelKey: 'refine.radiant' },
-] as const satisfies readonly { key: string; labelKey: TranslationKey }[];
 
 /** A set counts as "meaningfully underway" for the summary strip when it's at least half owned
  *  by part count, OR the parts already owned are worth at least half the set's total part value
@@ -865,7 +854,15 @@ export function OpportunitiesPage({
   // leaving them on a tab that renders nothing.
   useEffect(() => {
     setActiveTab((current) => {
-      if (!alecaframeInventoryAvailable && (current === 'prime-parts' || current === 'mods' || current === 'arcanes')) {
+      // `owned-relics` is in this list now: it is AlecaFrame-only, so losing AlecaFrame while it
+      // is open would otherwise leave you on a tab with no branch to render.
+      if (
+        !alecaframeInventoryAvailable &&
+        (current === 'prime-parts' ||
+          current === 'mods' ||
+          current === 'arcanes' ||
+          current === 'owned-relics')
+      ) {
         return 'inventory';
       }
       if (alecaframeInventoryAvailable && current === 'inventory') {
@@ -917,7 +914,6 @@ export function OpportunitiesPage({
   const ownedRelicsUpdatedAt = useAppStore((state) => state.ownedRelicsUpdatedAt);
   const loadOwnedRelicsCache = useAppStore((state) => state.loadOwnedRelicsCache);
   const refreshOwnedRelics = useAppStore((state) => state.refreshOwnedRelics);
-  const [expandedRelicKey, setExpandedRelicKey] = useState<string | null>(null);
   const [expandedSetSlug, setExpandedSetSlug] = useState<string | null>(null);
   const [componentQuery, setComponentQuery] = useState('');
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
@@ -2276,378 +2272,36 @@ export function OpportunitiesPage({
             localizeName={localizeName}
           />
         ) : activeTab === 'inventory' ? (
-          <div className="inventory-manager">
-            <div className="inventory-manager-searchbar">
-              <div className="inventory-search-field">
-                <span className="inventory-search-icon" aria-hidden="true">⌕</span>
-                <input
-                  className="inventory-search-input"
-                  type="text"
-                  placeholder={plannerCatalog.length ? t('opp.searchPrimeParts') : t('opp.loadingComponentCatalog')}
-                  value={componentQuery}
-                  onChange={(event) => setComponentQuery(event.target.value)}
-                  disabled={!plannerCatalog.length}
-                />
-                {componentQuery ? (
-                  <button
-                    type="button"
-                    className="inventory-search-clear"
-                    onClick={() => setComponentQuery('')}
-                    aria-label={t('a11y.clearSearch')}
-                  >
-                    ✕
-                  </button>
-                ) : null}
-              </div>
-            </div>
-
-            {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
-
-            <div className="inventory-manager-grid">
-              <section className="market-panel inventory-catalog-panel">
-                <div className="inventory-panel-header">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.primeParts')}</span>
-                    <h3>{t('opp.addToInventory')}</h3>
-                  </div>
-                </div>
-
-                {!plannerCatalog.length ? (
-                  <div className="inventory-empty">{t('opp.catalogLoading')}</div>
-                ) : filteredCatalog.length === 0 ? (
-                  <div className="inventory-empty">No prime parts match “{componentQuery.trim()}”.</div>
-                ) : (
-                  <div className="inventory-list">
-                    {filteredCatalog.map((item) => {
-                      const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
-                      const ownedQty = ownedMap.get(item.slug) ?? 0;
-                      return (
-                        <div key={item.slug} className={`inventory-row${ownedQty > 0 ? ' is-owned' : ''}`}>
-                          <span className="inventory-thumb">
-                            {imageUrl ? (
-                              <img src={imageUrl} alt="" loading="lazy" />
-                            ) : (
-                              <span>{item.name.slice(0, 1)}</span>
-                            )}
-                          </span>
-                          <span className="inventory-row-name" title={localizeName(item)}>{localizeName(item)}</span>
-                          {ownedQty > 0 ? (
-                            <div className="inventory-stepper">
-                              <button
-                                type="button"
-                                className="inventory-qty-button"
-                                disabled={savingSlug === item.slug}
-                                onClick={() => adjustOwnedQuantity(item, ownedQty, -1)}
-                                aria-label={t('opp.removeOne', { name: item.name })}
-                              >
-                                −
-                              </button>
-                              <span className="inventory-qty-value">{ownedQty}</span>
-                              <button
-                                type="button"
-                                className="inventory-qty-button"
-                                disabled={savingSlug === item.slug}
-                                onClick={() => adjustOwnedQuantity(item, ownedQty, 1)}
-                                aria-label={t('opp.addOne', { name: item.name })}
-                              >
-                                +
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              className="inventory-add-button"
-                              disabled={savingSlug === item.slug}
-                              onClick={() => adjustOwnedQuantity(item, 0, 1)}
-                            >
-                              {t('common.add')}
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-
-              <section className="market-panel inventory-owned-panel">
-                <div className="inventory-panel-header">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.ownedInventory')}</span>
-                    <h3>
-                      {t('opp.partsCount', { n: ownedItems.length })}
-                      {componentQuery.trim() ? ` · ${t('opp.shownCount', { n: filteredOwnedItems.length })}` : ''}
-                    </h3>
-                  </div>
-                  {confirmingClear ? (
-                    <div className="inventory-clear-confirm" role="alertdialog">
-                      <span className="inventory-clear-confirm-msg">
-                        {componentQuery.trim()
-                          ? t('opp.deleteConfirmVisible', { n: filteredOwnedItems.length })
-                          : t('opp.deleteConfirmAll', { n: filteredOwnedItems.length })}
-                      </span>
-                      <div className="inventory-clear-confirm-actions">
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => setConfirmingClear(false)}
-                        >
-                          {t('opp.cancel')}
-                        </button>
-                        <button
-                          type="button"
-                          className="inventory-clear-confirm-delete"
-                          disabled={clearingInventory}
-                          onClick={() => { void clearFilteredOwnedItems(); }}
-                        >
-                          {clearingInventory ? t('opp.deleting') : t('opp.delete')}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn-secondary inventory-clear-button"
-                      disabled={clearingInventory || filteredOwnedItems.length === 0}
-                      onClick={() => setConfirmingClear(true)}
-                    >
-                      {t('opp.clearFiltered')}
-                    </button>
-                  )}
-                </div>
-
-                {ownedItems.length > 0 ? (
-                  <div className="inventory-owned-toolbar">
-                    <span className="inventory-sort-label">{t('opp.sortBy')}</span>
-                    <div className="inventory-sort-group">
-                      <button
-                        type="button"
-                        className={`inventory-sort-btn${ownedSort === 'name' ? ' active' : ''}`}
-                        onClick={() => setOwnedSort('name')}
-                      >
-                        {t('opp.sortName')}
-                      </button>
-                      <button
-                        type="button"
-                        className={`inventory-sort-btn${ownedSort === 'price' ? ' active' : ''}`}
-                        onClick={() => setOwnedSort('price')}
-                      >
-                        {t('opp.sortValue')}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {ownedItems.length === 0 ? (
-                  <div className="inventory-empty">{t('opp.noOwnedParts')}</div>
-                ) : filteredOwnedItems.length === 0 ? (
-                  <div className="inventory-empty">No owned parts match “{componentQuery.trim()}”.</div>
-                ) : (
-                  <div className="inventory-list">
-                    {filteredOwnedItems.map((item) => {
-                      const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
-                      return (
-                        <div key={item.slug} className="inventory-row is-owned">
-                          <span className="inventory-thumb">
-                            {imageUrl ? (
-                              <img src={imageUrl} alt="" loading="lazy" />
-                            ) : (
-                              <span>{item.name.slice(0, 1)}</span>
-                            )}
-                          </span>
-                          <span className="inventory-row-name" title={localizeName(item)}>{localizeName(item)}</span>
-                          <span
-                            className={`inventory-row-value${ownedItemPrices[item.slug] == null ? ' unpriced' : ''}`}
-                            title={t('a11y.recommendedExitPerUnit')}
-                          >
-                            {ownedItemPrices[item.slug] != null
-                              ? `${Math.round(ownedItemPrices[item.slug] as number)} pt`
-                              : '—'}
-                          </span>
-                          <div className="inventory-stepper">
-                            <button
-                              type="button"
-                              className="inventory-qty-button"
-                              disabled={savingSlug === item.slug}
-                              onClick={() => adjustOwnedQuantity(item, item.quantity, -1)}
-                              aria-label={t('opp.removeOne', { name: item.name })}
-                            >
-                              −
-                            </button>
-                            <span className="inventory-qty-value">{item.quantity}</span>
-                            <button
-                              type="button"
-                              className="inventory-qty-button"
-                              disabled={savingSlug === item.slug}
-                              onClick={() => adjustOwnedQuantity(item, item.quantity, 1)}
-                              aria-label={t('opp.addOne', { name: item.name })}
-                            >
-                              +
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            </div>
-
-            <button
-              type="button"
-              className="inventory-import-fab"
-              onClick={() => setScreenshotImportGuidanceOpen(true)}
-              disabled={!plannerCatalog.length}
-              title={t('a11y.importFromScreenshot')}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <path d="m21 15-5-5L5 21" />
-              </svg>
-              <span>{t('opp.importScreenshot')}</span>
-              <span className="scanner-run-pill scanner-run-pill-warning inventory-import-fab-pill">{t('opp.beta')}</span>
-            </button>
-          </div>
+          <ManualInventory
+            query={componentQuery}
+            onQueryChange={setComponentQuery}
+            catalogLoaded={plannerCatalog.length > 0}
+            catalog={plannerCatalog}
+            filteredCatalog={filteredCatalog}
+            ownedItems={ownedItems}
+            filteredOwnedItems={filteredOwnedItems}
+            ownedQuantityFor={(slug) => ownedMap.get(slug) ?? 0}
+            ownedPrices={ownedItemPrices}
+            sort={ownedSort}
+            onSortChange={setOwnedSort}
+            savingSlug={savingSlug}
+            onAdjustQuantity={adjustOwnedQuantity}
+            confirmingClear={confirmingClear}
+            clearing={clearingInventory}
+            onRequestClear={() => setConfirmingClear(true)}
+            onCancelClear={() => setConfirmingClear(false)}
+            onConfirmClear={() => { void clearFilteredOwnedItems(); }}
+            onImportScreenshot={() => setScreenshotImportGuidanceOpen(true)}
+            errorMessage={errorMessage}
+            localizeName={localizeName}
+          />
         ) : activeTab === 'prime-parts' || activeTab === 'mods' || activeTab === 'arcanes' ? (
           <AlecaframeInventoryPanel tab={activeTab} />
-        ) : activeTab === 'owned-relics' && alecaframeInventoryAvailable ? (
-          // AlecaFrame knows the real relic counts per refinement, so it supersedes the
-          // manually-imported view rather than sitting beside it.
-          <AlecaframeInventoryPanel tab="relics" />
         ) : activeTab === 'owned-relics' ? (
-          <div className="owned-relics-layout">
-            <section className="market-panel owned-relics-panel">
-              <div className="owned-relics-header">
-                <div>
-                  <span className="panel-title-eyebrow">{t('opp.ownedRelicsTitle')}</span>
-                  <h3>{t('opp.relicInventory')}</h3>
-                  <p>{t('opp.pullsAlecaframeDesc')}</p>
-                </div>
-                <div className="owned-relics-actions">
-                  {ownedRelicsUpdatedAt ? (
-                    <span className="owned-relics-updated">
-                      {t('common.updatedAt', { time: formatShortLocalDateTime(ownedRelicsUpdatedAt) })}
-                    </span>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="market-refresh-button"
-                    onClick={() => { void refreshOwnedRelics(true); }}
-                    disabled={ownedRelicsLoading}
-                    aria-label={t('a11y.refreshRelicInventory')}
-                  >
-                    ↻
-                  </button>
-                </div>
-              </div>
-
-              {ownedRelicsError ? <div className="scanner-inline-error">{ownedRelicsError}</div> : null}
-
-              {/* Only show the blocking placeholder when there's nothing cached yet — otherwise
-                  the cached relics stay on screen while a background refresh runs. */}
-              {ownedRelicsLoading && ownedRelics.length === 0 ? (
-                <div className="opportunities-placeholder">{t('opp.loadingRelicInventory')}</div>
-              ) : ownedRelics.length === 0 ? (
-                <div className="set-planner-empty">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.noRelicsFound')}</span>
-                    <h3>{t('opp.inventoryEmpty')}</h3>
-                    <p>{t('opp.relicsAlecaframeEmpty')}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="owned-relics-list">
-                  {ownedRelics.map((relic) => {
-                    const relicKey = `${relic.tier}:${relic.code}`;
-                    const expanded = expandedRelicKey === relicKey;
-                    const imageUrl = resolveRelicAssetUrl(relic) ?? resolveWfmAssetUrl(relic.imagePath);
-                    return (
-                      <article
-                        key={relicKey}
-                        className={`farm-now-row owned-relics-row${expanded ? ' is-expanded' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          className="farm-now-row-button owned-relics-row-button"
-                          onClick={() => setExpandedRelicKey((current) => (current === relicKey ? null : relicKey))}
-                        >
-                          <div className="farm-now-row-main owned-relics-row-main">
-                            <div className="farm-now-cell farm-now-cell-name owned-relics-cell-name">
-                              <span className="farm-now-thumb owned-relics-thumb relic-art">
-                                {imageUrl ? (
-                                  <img src={imageUrl} alt="" loading="lazy" />
-                                ) : (
-                                  <span>{relic.name.slice(0, 1)}</span>
-                                )}
-                              </span>
-                              <div className="farm-now-copy owned-relics-copy">
-                                <strong>{localizeName(relic)}</strong>
-                                <span className="farm-now-subtitle owned-relics-subtitle">
-                                  {relic.tier} {relic.code}
-                                </span>
-                              </div>
-                            </div>
-                            <span className="farm-now-cell owned-relics-cell-total">
-                              <span className="owned-relics-total-label">{t('opp.total')}</span>
-                              <strong>{relic.counts.total}</strong>
-                            </span>
-                            <div className="farm-now-cell owned-relics-refinement-pills">
-                              {RELIC_REFINEMENT_COLUMNS.filter(
-                                (column) => relic.counts[column.key] > 0,
-                              ).map((column) => (
-                                <span
-                                  key={`${relicKey}-${column.key}`}
-                                  className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(column.key)}`}
-                                >
-                                  {t(column.labelKey)} · {relic.counts[column.key]}
-                                </span>
-                              ))}
-                            </div>
-                            <span className="farm-now-cell farm-now-cell-action owned-relics-action">
-                              {expanded ? '−' : '+'}
-                            </span>
-                          </div>
-                        </button>
-
-                        {expanded ? (
-                          <div className="owned-relics-row-body">
-                            {relic.drops.length === 0 ? (
-                              <div className="owned-relics-empty">{t('opp.noDropData')}</div>
-                            ) : (
-                              <div className="owned-relics-drop-grid">
-                                {relic.drops.map((drop) => {
-                                  const dropImage = resolveWfmAssetUrl(drop.imagePath, drop.slug);
-                                  const tone = relicRarityTone(drop.rarity);
-                                  return (
-                                    <div key={`${relicKey}-${drop.slug}`} className="owned-relics-drop-card">
-                                      <span className="owned-relics-drop-thumb">
-                                        {dropImage ? (
-                                          <img src={dropImage} alt="" loading="lazy" />
-                                        ) : (
-                                          <span>{drop.name.slice(0, 1)}</span>
-                                        )}
-                                      </span>
-                                      <div className="owned-relics-drop-copy">
-                                        <span className="owned-relics-drop-name">{localizeName(drop)}</span>
-                                        <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
-                                          {drop.rarity ?? t('opp.unknown')}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        ) : null}
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-          </div>
+          // Relics come from AlecaFrame's app data and nowhere else, so this tab only exists when
+          // AlecaFrame does — `inventorySubItems` gates it, and the effect below moves you off it
+          // if AlecaFrame goes away while you are here.
+          <AlecaframeInventoryPanel tab="relics" />
         ) : activeTab === 'farm-now' ? (
           <FarmNow
             mode={farmNowTab}

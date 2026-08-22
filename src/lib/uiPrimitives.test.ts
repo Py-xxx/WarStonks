@@ -29,6 +29,8 @@ const MIGRATED_GLOBS = [
   join('src', 'components', 'OpportunityCard'),
   join('src', 'components', 'OpportunityBoard'),
   join('src', 'components', 'UnderpricedListingsPanel'),
+  join('src', 'components', 'ListRow'),
+  join('src', 'components', 'AlecaframeInventory'),
 ];
 
 function collectTsx(dir: string): string[] {

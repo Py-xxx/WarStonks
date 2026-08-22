@@ -74,7 +74,17 @@ export const NAV_SUB_ITEMS: Partial<Record<PageId, NavSubItem[]>> = {
   ],
 };
 
-/** Inventory's sub-items, which depend on whether AlecaFrame is connected. */
+/**
+ * Inventory's sub-items, which depend on whether AlecaFrame is connected.
+ *
+ * **Owned Relics is AlecaFrame-only.** Relic counts per refinement exist nowhere else — there is no
+ * manual entry for them and no WFM source — so without AlecaFrame the tab had nothing to show. It
+ * used to render a legacy view whose own copy told you to check a "public link in Settings", from
+ * the retired API era; that view is deleted rather than kept as an empty shell.
+ *
+ * The AlecaFrame group is therefore the three item tabs **plus relics**, and the manual inventory
+ * is the whole of the alternative.
+ */
 export function inventorySubItems(alecaframeAvailable: boolean): NavSubItem[] {
   return [
     { id: 'set-planner', labelKey: 'opp.tabSetCompletionPlanner' },
@@ -83,9 +93,9 @@ export function inventorySubItems(alecaframeAvailable: boolean): NavSubItem[] {
           { id: 'prime-parts', labelKey: 'inv.tabPrimeParts' as TranslationKey },
           { id: 'mods', labelKey: 'inv.tabMods' as TranslationKey },
           { id: 'arcanes', labelKey: 'inv.tabArcanes' as TranslationKey },
+          { id: 'owned-relics', labelKey: 'opp.tabOwnedRelics' as TranslationKey },
         ]
       : [{ id: 'inventory', labelKey: 'opp.tabInventory' as TranslationKey }]),
-    { id: 'owned-relics', labelKey: 'opp.tabOwnedRelics' },
   ];
 }
 
