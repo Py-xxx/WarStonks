@@ -503,7 +503,7 @@ function RelicRoiRow({
     <article className={`sp-set${expanded ? ' is-expanded' : ''}`}>
       <button className="sp-set-head" type="button" onClick={onToggle} aria-expanded={expanded}>
         <span className="scan-rank">{index + 1}</span>
-        <span className="sp-set-thumb">
+        <span className="sp-set-thumb relic-art">
           {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 2)}</span>}
         </span>
         <div className="sp-set-copy">

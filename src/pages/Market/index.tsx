@@ -2798,7 +2798,12 @@ function AnalysisTab() {
                   return (
                     <div key={source.key} className="market-drop-row">
                       {imageUrl ? (
-                        <img className="market-drop-image" src={imageUrl} alt="" loading="lazy" />
+                        <img
+                          className={`market-drop-image${source.isRelic ? ' relic-art' : ''}`}
+                          src={imageUrl}
+                          alt=""
+                          loading="lazy"
+                        />
                       ) : (
                         <span className="market-drop-image placeholder" aria-hidden="true">
                           {source.location.slice(0, 2)}

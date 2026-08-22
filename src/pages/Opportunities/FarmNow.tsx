@@ -5,6 +5,7 @@ import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { Select } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 
+import { DetailGroup, ItemThumb, ListRow, RowMetric } from '../../components/ListRow';
 import { InfoHint } from '../../components/InfoHint';
 import { useTranslation } from '../../i18n';
 import { formatElapsedTime } from '../../lib/dateTime';
@@ -104,19 +105,6 @@ export type FarmNowProps = {
 
 /* ------------------------------------------------------------------ pieces */
 
-/** Relic art, or the first two characters of its name. A relic's picture is how you recognise it
- *  at a glance; the initials fallback keeps the column aligned when art is missing. */
-function RelicThumb({ src, fallback, size }: { src: string | null; fallback: string; size: string }) {
-  return (
-    <span
-      className={`grid ${size} shrink-0 place-items-center overflow-hidden rounded-md bg-bg-base font-mono text-[10px] text-ink-faint outline outline-1 -outline-offset-1 outline-white/10`}
-      aria-hidden="true"
-    >
-      {src ? <img src={src} alt="" loading="lazy" className="size-full object-cover" /> : fallback}
-    </span>
-  );
-}
-
 /** `×3` when you hold some, "none owned" when you don't. Owned count is a shortfall, not a tick —
  *  a relic you own none of is still worth showing, because the answer may be "go get one". */
 function OwnedPill({ count }: { count: number }) {
@@ -128,24 +116,6 @@ function OwnedPill({ count }: { count: number }) {
       }`}
     >
       {count > 0 ? t('opp.ownedTimes', { n: count }) : t('opp.noneOwned')}
-    </span>
-  );
-}
-
-/** One right-aligned figure with its label above, for the collapsed row's metrics. */
-function RowMetric({ label, value, tone }: { label: string; value: string; tone?: 'positive' }) {
-  return (
-    <span className="flex w-20 shrink-0 flex-col items-end gap-0.5">
-      <span className="font-mono text-[9px] tracking-[0.07em] text-ink-faint uppercase">
-        {label}
-      </span>
-      <span
-        className={`font-mono text-[13px] font-bold tabular-nums ${
-          tone === 'positive' ? 'text-accent-green' : 'text-ink'
-        }`}
-      >
-        {value}
-      </span>
     </span>
   );
 }
@@ -243,7 +213,7 @@ function DropRow({
   const tone = relicRarityTone(rarity);
   return (
     <div className="flex items-center gap-2.5 rounded-sm border border-line-subtle bg-bg-panel px-2 py-1.5">
-      <RelicThumb src={imageUrl} fallback={name.slice(0, 1)} size="size-7" />
+      <ItemThumb src={imageUrl} fallback={name.slice(0, 1)} size="size-7" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-[11px] font-medium text-ink">{name}</span>
@@ -278,82 +248,43 @@ function DropRow({
   );
 }
 
-/** A labelled group of drops. The split is the point: the drops worth farming have to stand apart
- *  from the Forma-tier filler, or every drop looks equally important. */
-function DropGroup({
-  label,
-  tone,
-  children,
-}: {
-  label: string;
-  tone: 'primary' | 'muted';
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span
-        className={`font-mono text-[9px] font-bold tracking-[0.07em] uppercase ${
-          tone === 'primary' ? 'text-accent-amber' : 'text-ink-faint'
-        }`}
-      >
-        {label}
-      </span>
-      <div className={`flex flex-col gap-1 ${tone === 'muted' ? 'opacity-60' : ''}`}>{children}</div>
-    </div>
-  );
-}
-
-/** The accordion shell both modes share: head is the button, body is the detail. One open at a
- *  time — keeping the list scannable is why the collapsed row carries the numbers you sort on. */
-function RelicRow({
-  expanded,
-  onToggle,
-  head,
-  children,
-}: {
-  expanded: boolean;
-  onToggle: () => void;
-  head: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <article
-      className={`overflow-hidden rounded-lg border bg-bg-elevated transition-[border-color] duration-150 ease-out ${
-        expanded ? 'border-line-strong' : 'border-line hover:border-line-strong'
-      }`}
-    >
-      <Button
-        variant="ghost"
-        static
-        aria-expanded={expanded}
-        onClick={onToggle}
-        className="h-auto w-full justify-start gap-3 rounded-none px-3 py-2.5 text-left hover:bg-white/[0.03]"
-      >
-        {head}
-        <i
-          className={`ti ${expanded ? 'ti-chevron-up' : 'ti-chevron-down'} shrink-0 text-ink-dim`}
-          aria-hidden="true"
-        />
-      </Button>
-      {expanded ? (
-        <div className="flex flex-col gap-3 border-t border-line p-3">{children}</div>
-      ) : null}
-    </article>
-  );
-}
-
+/**
+ * Starting a farming run — the one action this whole tab exists to lead you to.
+ *
+ * **Amber, and a pill.** This is not an accent spent for decoration: amber is the farming
+ * session's colour throughout the app — the floating session panel this button opens is
+ * amber-bordered with an amber eyebrow — and the shipped `.fn-farm-this-btn` was an amber pill for
+ * exactly that reason. An earlier pass ported it as a plain `secondary` chip, which made the
+ * page's primary action look identical to "Copy" and easy to read straight past.
+ *
+ * The ring is the Expressive tier's one indulgence on this view: it gives the button presence
+ * without motion, on a page where everything else is deliberately quiet.
+ */
 function FarmThisButton({
   active,
   onClick,
+  label,
+  size = 'default',
 }: {
   active: boolean;
   onClick: () => void;
+  label: string;
+  size?: 'sm' | 'default';
 }) {
-  const { t } = useTranslation();
   return (
-    <Button variant="secondary" size="sm" disabled={active} onClick={onClick} className="w-fit">
+    <Button
+      size={size}
+      disabled={active}
+      onClick={onClick}
+      className={
+        'w-fit rounded-full border-accent-amber/40 bg-accent-amber/15 font-semibold text-accent-amber ' +
+        'ring-1 ring-accent-amber/10 ' +
+        'hover:bg-accent-amber/25 hover:ring-accent-amber/25 ' +
+        'disabled:ring-0'
+      }
+    >
       <i className="ti ti-flame" aria-hidden="true" />
-      {active ? t('farm.nowFarming') : t('farm.farmThis')}
+      {label}
     </Button>
   );
 }
@@ -762,14 +693,11 @@ function DropOddsPanel({
               : ''}
           </span>
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
+        <FarmThisButton
+          active={false}
           onClick={() => onFarmItem(odds.targetSlug, odds.targetName)}
-        >
-          <i className="ti ti-flame" aria-hidden="true" />
-          {t('farm.farmItem')}
-        </Button>
+          label={t('farm.farmItem')}
+        />
       </div>
 
       <div className="mt-3 flex flex-wrap items-end gap-x-6 gap-y-3">
@@ -903,15 +831,17 @@ function PartProfitRow({
   const low = ranked.filter((entry) => !worth.includes(entry));
 
   return (
-    <RelicRow
+    <ListRow
       expanded={expanded}
       onToggle={onToggle}
+      toggleLabel={expanded ? t('opp.collapseSet') : t('opp.expandSet')}
       head={
         <>
-          <RelicThumb
+          <ItemThumb
             src={resolveWfmAssetUrl(row.relic.imagePath, row.relic.slug, row.relic.name)}
             fallback={row.relic.name.slice(0, 2)}
             size="size-9"
+            chrome={false}
           />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex min-w-0 items-center gap-2">
@@ -947,7 +877,12 @@ function PartProfitRow({
         </>
       }
     >
-      <FarmThisButton active={farming} onClick={onFarm} />
+      <FarmThisButton
+        active={farming}
+        onClick={onFarm}
+        size="sm"
+        label={farming ? t('farm.nowFarming') : t('farm.farmThis')}
+      />
       <RefinementGuidancePanel
         guidance={row.guidance}
         unit={row.targetedDropName ? 'pct' : 'plat'}
@@ -956,7 +891,7 @@ function PartProfitRow({
         }
       />
       {worth.length > 0 ? (
-        <DropGroup label={t('opp.worthKeeping')} tone="primary">
+        <DetailGroup label={t('opp.worthKeeping')} tone="primary">
           {worth.map((entry) => (
             <DropRow
               key={entry.drop.slug}
@@ -975,10 +910,10 @@ function PartProfitRow({
               valueLabel={t('opp.value')}
             />
           ))}
-        </DropGroup>
+        </DetailGroup>
       ) : null}
       {low.length > 0 ? (
-        <DropGroup label={t('opp.lowValue', { n: low.length })} tone="muted">
+        <DetailGroup label={t('opp.lowValue', { n: low.length })} tone="muted">
           {low.map((entry) => (
             <DropRow
               key={entry.drop.slug}
@@ -990,9 +925,9 @@ function PartProfitRow({
               valueLabel={t('opp.value')}
             />
           ))}
-        </DropGroup>
+        </DetailGroup>
       ) : null}
-    </RelicRow>
+    </ListRow>
   );
 }
 
@@ -1016,15 +951,17 @@ function SetCompletionRow({
   const others = row.drops.filter((entry) => !entry.isNeeded);
 
   return (
-    <RelicRow
+    <ListRow
       expanded={expanded}
       onToggle={onToggle}
+      toggleLabel={expanded ? t('opp.collapseSet') : t('opp.expandSet')}
       head={
         <>
-          <RelicThumb
+          <ItemThumb
             src={resolveWfmAssetUrl(row.relic.imagePath, row.relic.slug, row.relic.name)}
             fallback={row.relic.name.slice(0, 2)}
             size="size-9"
+            chrome={false}
           />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex min-w-0 items-center gap-2">
@@ -1052,10 +989,15 @@ function SetCompletionRow({
         </>
       }
     >
-      <FarmThisButton active={farming} onClick={onFarm} />
+      <FarmThisButton
+        active={farming}
+        onClick={onFarm}
+        size="sm"
+        label={farming ? t('farm.nowFarming') : t('farm.farmThis')}
+      />
       <RefinementGuidancePanel guidance={row.guidance} unit="pct" />
       {needed.length > 0 ? (
-        <DropGroup label={t('opp.neededForSets')} tone="primary">
+        <DetailGroup label={t('opp.neededForSets')} tone="primary">
           {needed.map((entry) => (
             <DropRow
               key={entry.drop.slug}
@@ -1072,10 +1014,10 @@ function SetCompletionRow({
               }
             />
           ))}
-        </DropGroup>
+        </DetailGroup>
       ) : null}
       {others.length > 0 ? (
-        <DropGroup label={t('opp.notNeeded', { n: others.length })} tone="muted">
+        <DetailGroup label={t('opp.notNeeded', { n: others.length })} tone="muted">
           {others.map((entry) => (
             <DropRow
               key={entry.drop.slug}
@@ -1084,8 +1026,8 @@ function SetCompletionRow({
               rarity={entry.drop.rarity}
             />
           ))}
-        </DropGroup>
+        </DetailGroup>
       ) : null}
-    </RelicRow>
+    </ListRow>
   );
 }

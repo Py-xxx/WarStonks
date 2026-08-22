@@ -23,8 +23,14 @@ import {
 } from '../../lib/setCompletionScreenshotImport';
 import setCompletionImportExample from '../../assets/set-completion-import-example.png';
 import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
-import { ItemName } from '../../components/ItemName';
 import { OpportunitiesOverview } from './Overview';
+import { SetPlanner } from './SetPlanner';
+import {
+  PLANNER_SUMMARY_THRESHOLD,
+  type PlannerOwnedRelicHint,
+  type PlannerSetEntry,
+  type SetPlannerGate,
+} from './setPlannerModel';
 import { FarmNow, type FarmNowSuggestion } from './FarmNow';
 import {
   formatChance,
@@ -50,7 +56,6 @@ import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { useItemQueryMatcher } from '../../hooks/useItemSearch';
 import { tActive, useTranslation } from '../../i18n';
-import { tConfidence } from '../../lib/healthLabels';
 import { buildFarmingRelic, parseRelicTierCode } from '../../lib/farmingSession';
 import {
   REFINEMENT_KEYS,
@@ -63,7 +68,6 @@ import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerResponse,
   ArbitrageScannerState,
-  ArbitrageScannerSetEntry,
   OwnedRelicEntry,
   RelicRefinementChanceProfile,
   SetCompletionOwnedItem,
@@ -88,37 +92,9 @@ const RELIC_REFINEMENT_COLUMNS = [
   { key: 'radiant', labelKey: 'refine.radiant' },
 ] as const satisfies readonly { key: string; labelKey: TranslationKey }[];
 
-type PlannerComponentState = {
-  component: ArbitrageScannerComponentEntry;
-  ownedQuantity: number;
-  coveredQuantity: number;
-  missingQuantity: number;
-  isOwned: boolean;
-};
-
-type PlannerSetEntry = {
-  entry: ArbitrageScannerSetEntry;
-  /** Distinct components fully owned / total distinct components. */
-  ownedComponentCount: number;
-  totalComponentCount: number;
-  /** Quantity-weighted: total individual parts needed (Σ quantityInSet) and how many are owned.
-   *  A set needing 2× of two of its three parts totals 5 parts, not 3. */
-  totalPartsNeeded: number;
-  ownedPartsCount: number;
-  remainingInvestment: number | null;
-  completionProfit: number | null;
-  completionRoiPct: number | null;
-  /** Fraction of individual parts owned by quantity (0..1). */
-  partCountRatio: number;
-  /** Fraction of the set's total part value that the owned parts represent (0..1). */
-  ownedValueRatio: number;
-  components: PlannerComponentState[];
-};
-
 /** A set counts as "meaningfully underway" for the summary strip when it's at least half owned
  *  by part count, OR the parts already owned are worth at least half the set's total part value
  *  (so owning one expensive part of a cheap-remainder set still qualifies). */
-const PLANNER_SUMMARY_THRESHOLD = 0.5;
 
 /** How many relics the odds panel lists inline before collapsing the rest into "+N more" —
  *  the full inventory is already in the relic rows below. */
@@ -128,13 +104,6 @@ type PlannerCatalogItem = {
   slug: string;
   name: string;
   imagePath: string | null;
-};
-
-type PlannerOwnedRelicHint = {
-  key: string;
-  label: string;
-  fullName: string;
-  totalCount: number;
 };
 
 function isLikelyPrimeComponentItem(item: WfmAutocompleteItem): boolean {
@@ -359,14 +328,6 @@ function resolveScreenshotImportRow(
   };
 }
 
-function formatPercent(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return '—';
-  }
-
-  return `${Math.round(value)}%`;
-}
-
 function chanceForRefinement(
   chanceProfile: RelicRefinementChanceProfile,
   refinementKey: string,
@@ -479,286 +440,6 @@ function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): s
   }
 
   return '';
-}
-
-// The app ships no icon font, so these small inline SVGs are used instead of `ti ti-*` glyphs
-// (which render blank). currentColor lets them inherit the surrounding text color.
-const SpChevron = ({ up }: { up?: boolean }) => (
-  <svg className="sp-set-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d={up ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'} />
-  </svg>
-);
-const SpCheck = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M5 12.5 10 17.5 19.5 7" />
-  </svg>
-);
-const SpPlus = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-    <path d="M12 5v14M5 12h14" />
-  </svg>
-);
-const SpArrowRight = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M5 12h13M13 6l6 6-6 6" />
-  </svg>
-);
-const SpTarget = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
-  </svg>
-);
-
-function SetPlannerRow({
-  planner,
-  expanded,
-  onToggle,
-  targetInputs,
-  ownedRelicHints,
-  recentlyAddedKeys,
-  onTargetChange,
-  onAddToWatchlist,
-  onFarmComponent,
-  onSellSet,
-}: {
-  planner: PlannerSetEntry;
-  expanded: boolean;
-  onToggle: () => void;
-  onSellSet: () => void;
-  targetInputs: Record<string, string>;
-  ownedRelicHints: Map<string, PlannerOwnedRelicHint[]>;
-  recentlyAddedKeys: Record<string, boolean>;
-  onTargetChange: (component: ArbitrageScannerComponentEntry, value: string) => void;
-  onAddToWatchlist: (component: ArbitrageScannerComponentEntry, missingQuantity: number) => void;
-  onFarmComponent: (component: ArbitrageScannerComponentEntry) => void;
-}) {
-  const localizeName = useLocalizedName();
-  const { t } = useTranslation();
-  const imageUrl = resolveWfmAssetUrl(planner.entry.imagePath, planner.entry.slug);
-  const isComplete =
-    planner.totalPartsNeeded > 0 && planner.ownedPartsCount >= planner.totalPartsNeeded;
-
-  const progressPct = planner.totalPartsNeeded
-    ? Math.round((planner.ownedPartsCount / planner.totalPartsNeeded) * 100)
-    : 0;
-  const progressTone = isComplete ? 'complete' : progressPct >= 50 ? 'high' : 'low';
-
-  const missingComponents = planner.components.filter((c) => c.missingQuantity > 0);
-  const ownedComponents = planner.components.filter((c) => c.missingQuantity === 0);
-
-  const renderMissingRow = (componentState: PlannerComponentState) => {
-    const { component } = componentState;
-    const targetKey = `${planner.entry.slug}:${component.slug}`;
-    const effectiveTarget = targetInputs[targetKey] ?? buildPlannerDefaultTarget(component);
-    const relicHints =
-      (component.itemKey !== null ? ownedRelicHints.get(`item:${component.itemKey}`) : undefined) ??
-      ownedRelicHints.get(`slug:${component.slug}`) ??
-      [];
-    const partImage = resolveWfmAssetUrl(component.imagePath, component.slug);
-    return (
-      <div key={`${planner.entry.slug}-${component.slug}`} className="sp-part sp-part-missing">
-        <span className="sp-part-thumb" aria-hidden="true">
-          {partImage ? <img src={partImage} alt="" loading="lazy" /> : <span>{component.name.slice(0, 1)}</span>}
-        </span>
-        <div className="sp-part-copy">
-          <span className="sp-part-name-row">
-            <span className="sp-part-name">
-              <ItemName
-                name={component.name}
-                slug={component.slug}
-                wfmId={component.itemKey ?? undefined}
-                imagePath={component.imagePath}
-              />
-            </span>
-            {component.quantityInSet > 1 ? (
-              <span className="sp-part-qty-badge">{t('opp.needQty', { n: component.quantityInSet })}</span>
-            ) : null}
-          </span>
-          <span className="sp-part-meta">
-            {t('opp.buyZone')} {formatPlat(component.recommendedEntryLow)}–{formatPlat(component.recommendedEntryHigh)}
-            {' · '}
-            {component.quantityInSet > 1
-              ? t('opp.haveOfNeed', { have: componentState.coveredQuantity, need: component.quantityInSet })
-              : t('opp.ownedOfTotal', { owned: componentState.coveredQuantity, total: component.quantityInSet })}
-            {relicHints.length > 0 ? (
-              <>
-                {' · '}
-                <button
-                  type="button"
-                  className="sp-part-relics"
-                  title={t('opp.farmThisItemHint', { item: component.name })}
-                  onClick={() => onFarmComponent(component)}
-                >
-                  {t('opp.relicsOwnedShort', { n: relicHints.reduce((sum, r) => sum + r.totalCount, 0) })}
-                </button>
-              </>
-            ) : null}
-          </span>
-        </div>
-        <input
-          className="sp-part-input"
-          type="number"
-          min="1"
-          step="1"
-          value={effectiveTarget}
-          onChange={(event) => onTargetChange(component, event.target.value)}
-        />
-        <div className="sp-part-watch">
-          {recentlyAddedKeys[targetKey] ? (
-            <span className="watchlist-add-success">{t('wl.addedToWatchlist')}</span>
-          ) : (
-            <button
-              type="button"
-              className="btn-sm sp-part-watch-btn"
-              disabled={!effectiveTarget.trim() || !component.itemKey}
-              onClick={() => onAddToWatchlist(component, componentState.missingQuantity)}
-            >
-              <SpPlus /> {t('wl.addToWatchlist')}
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <article
-      className={`sp-set${expanded ? ' is-expanded' : ''}${isComplete ? ' is-complete' : ''}`}
-    >
-      {/* The head is a row, not a single button: a completed set carries its own "Sell Now"
-          control, and an interactive element can't legally nest inside a <button>. Both the
-          main area and the chevron toggle, so keyboard access is unchanged. */}
-      <div className="sp-set-head">
-      <button
-        type="button"
-        className="sp-set-head-main"
-        onClick={onToggle}
-        aria-expanded={expanded}
-      >
-        <span className="sp-set-thumb">
-          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{planner.entry.name.slice(0, 2)}</span>}
-        </span>
-        <div className="sp-set-copy">
-          <span className="sp-set-name">{localizeName(planner.entry)}</span>
-          <span className="sp-set-progress">
-            <span className={`sp-set-progress-track tone-${progressTone}`}>
-              <span className="sp-set-progress-fill" style={{ width: `${progressPct}%` }} />
-            </span>
-            <span className="sp-set-progress-label">
-              {t('opp.partsOwned', { owned: planner.ownedPartsCount, total: planner.totalPartsNeeded })}
-            </span>
-          </span>
-        </div>
-        <div className="sp-set-metrics">
-          <div className="sp-set-metric">
-            <span className="sp-set-metric-label">{t('opp.investment')}</span>
-            <span className="sp-set-metric-value">{formatPlat(planner.remainingInvestment)}</span>
-          </div>
-          <div className="sp-set-metric">
-            <span className="sp-set-metric-label">{t('opp.profit')}</span>
-            <span className="sp-set-metric-value pos">
-              {planner.completionProfit !== null && planner.completionProfit >= 0 ? '+' : ''}
-              {formatPlat(planner.completionProfit)}
-            </span>
-          </div>
-        </div>
-      </button>
-
-      {/* Completed sets swap their status pill for the action it implies. Both labels occupy
-          the same grid cell so the pill keeps one width and nothing shifts on hover. */}
-      {isComplete ? (
-        <button
-          type="button"
-          className="sp-set-sell"
-          onClick={onSellSet}
-          title={t('opp.sellNowHint', { item: planner.entry.name })}
-        >
-          <span className="sp-set-sell-idle">
-            <SpCheck /> {t('opp.complete')}
-          </span>
-          <span className="sp-set-sell-active">{t('opp.sellNow')}</span>
-        </button>
-      ) : (
-        <span className="sp-set-roi">{formatPercent(planner.completionRoiPct)} ROI</span>
-      )}
-
-      <button
-        type="button"
-        className="sp-set-head-chevron"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-label={expanded ? t('opp.collapseSet') : t('opp.expandSet')}
-      >
-        <SpChevron up={expanded} />
-      </button>
-      </div>
-
-      {expanded ? (
-        <div className="sp-set-body">
-          <div className="sp-set-detail-stats">
-            <span>{t('mkt.exit')} <strong>{formatPlat(planner.entry.recommendedSetExitPrice)}</strong></span>
-            <span>{t('opp.liquidity')} <strong>{Math.round(planner.entry.liquidityScore)}%</strong></span>
-            <span>{t('opp.confidence')} <strong>{tConfidence(t, planner.entry.confidenceSummary)}</strong></span>
-          </div>
-
-          {missingComponents.length > 0 ? (
-            <>
-              <div className="sp-part-group-label missing">
-                {t('opp.missingToBuy', { n: missingComponents.length })}
-              </div>
-              <div className="sp-part-list">{missingComponents.map(renderMissingRow)}</div>
-            </>
-          ) : null}
-
-          {ownedComponents.length > 0 ? (
-            <>
-              <div className="sp-part-group-label owned">
-                {t('opp.ownedCount', { n: ownedComponents.length })}
-              </div>
-              <div className="sp-part-list">
-                {ownedComponents.map((componentState) => {
-                  const ownedImage = resolveWfmAssetUrl(componentState.component.imagePath, componentState.component.slug);
-                  return (
-                    <div
-                      key={`${planner.entry.slug}-${componentState.component.slug}`}
-                      className="sp-part sp-part-owned"
-                    >
-                      <span className="sp-part-thumb" aria-hidden="true">
-                        {ownedImage ? (
-                          <img src={ownedImage} alt="" loading="lazy" />
-                        ) : (
-                          <span>{componentState.component.name.slice(0, 1)}</span>
-                        )}
-                      </span>
-                      <span className="sp-part-name-row">
-                        <span className="sp-part-name">
-                          <ItemName
-                            name={componentState.component.name}
-                            slug={componentState.component.slug}
-                            wfmId={componentState.component.itemKey ?? undefined}
-                            imagePath={componentState.component.imagePath}
-                          />
-                        </span>
-                        {componentState.component.quantityInSet > 1 ? (
-                          <span className="sp-part-qty-badge owned">
-                            {t('opp.needQty', { n: componentState.component.quantityInSet })}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="sp-part-owned-count">
-                        <span className="sp-part-owned-check" aria-hidden="true"><SpCheck /></span>
-                        {componentState.coveredQuantity} / {componentState.component.quantityInSet}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-    </article>
-  );
 }
 
 function SetCompletionScreenshotImportModal({
@@ -2523,6 +2204,15 @@ export function OpportunitiesPage({
   };
 
   const noScanAvailable = !loading && !(scannerResponse?.results?.length);
+
+  /** The planner's gate, resolved once — same pattern as `farmNowGate`. Order is the shipped one:
+   *  you cannot judge "no owned parts" before the scan that lists the sets exists. */
+  const setPlannerGate = useMemo<SetPlannerGate>(() => {
+    if (loading) return { kind: 'loading' };
+    if (noScanAvailable) return { kind: 'noScan' };
+    if (plannerEntries.length === 0) return { kind: 'noOwnedParts' };
+    return { kind: 'ready' };
+  }, [loading, noScanAvailable, plannerEntries.length]);
   const noFarmScan = !farmNowLoading && !(farmNowScan?.relicRoiResults?.length);
 
   /**
@@ -2561,109 +2251,30 @@ export function OpportunitiesPage({
 
       <div className="page-content">
         {activeTab === 'set-planner' ? (
-          <div className="set-planner-layout inventory-detached">
-            <section className="market-panel set-planner-main-panel">
-              <div className="set-planner-header">
-                <div>
-                  <span className="panel-title-eyebrow">{t('opp.completionOpportunities')}</span>
-                  <h3>{t('opp.setCompletionPlanner')}</h3>
-                  <p>{t('opp.setCompletionEstimateDesc')}</p>
-                </div>
-              </div>
-
-              {plannerPositiveSummary.profitableSetCount > 0 ? (
-                <div className="sp-summary">
-                  <div className="sp-summary-lead">
-                    <span className="sp-summary-lead-icon"><SpTarget /></span>
-                    <div>
-                      <span className="sp-summary-title">
-                        {t('opp.profitableSetsCount', { n: plannerPositiveSummary.profitableSetCount })}
-                      </span>
-                      <span className="sp-summary-sub">{t('opp.summaryStripSub')}</span>
-                    </div>
-                  </div>
-                  <div className="sp-summary-flow">
-                    <div className="sp-summary-stat">
-                      <span className="sp-summary-stat-label">{t('opp.investment')}</span>
-                      <span className="sp-summary-stat-value">{formatPlat(plannerPositiveSummary.expectedInvestment)}</span>
-                    </div>
-                    <span className="sp-summary-arrow"><SpArrowRight /></span>
-                    <div className="sp-summary-stat">
-                      <span className="sp-summary-stat-label">{t('mkt.exit')}</span>
-                      <span className="sp-summary-stat-value">{formatPlat(plannerPositiveSummary.expectedValue)}</span>
-                    </div>
-                    <div className="sp-summary-stat sp-summary-stat-profit">
-                      <span className="sp-summary-stat-label">{t('opp.profit')}</span>
-                      <span className="sp-summary-stat-value">+{formatPlat(plannerPositiveSummary.expectedProfit)}</span>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
-
-              {loading ? (
-                <div className="opportunities-placeholder">{t('opp.loadingPlannerData')}</div>
-              ) : noScanAvailable ? (
-                <div className="set-planner-empty">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.scannerCacheRequired')}</span>
-                    <h3>{t('opp.runArbitrageFirst')}</h3>
-                    <p>{t('opp.setCompletionReusesDesc')}</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => setActivePage('scanners')}
-                  >
-                    {t('opp.openScanners')}
-                  </button>
-                </div>
-              ) : plannerEntries.length === 0 ? (
-                <div className="set-planner-empty">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.ownedPartsNeeded')}</span>
-                    <h3>{t('opp.addOwnedParts')}</h3>
-                    <p>{t('opp.ownedPartsDrawerDesc')}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="set-planner-results">
-                  {plannerEntries.map((planner) => (
-                    <SetPlannerRow
-                      key={planner.entry.slug}
-                      planner={planner}
-                      expanded={expandedSetSlug === planner.entry.slug}
-                      onToggle={() =>
-                        setExpandedSetSlug((current) =>
-                          current === planner.entry.slug ? null : planner.entry.slug,
-                        )
-                      }
-                      targetInputs={plannerTargetInputs}
-                      ownedRelicHints={plannerOwnedRelicHints}
-                      recentlyAddedKeys={watchlistAddFeedback}
-                      onTargetChange={(component, value) =>
-                        handlePlannerTargetChange(component, value, planner.entry.slug)
-                      }
-                      onAddToWatchlist={(component, missingQuantity) =>
-                        handleAddMissingComponentToWatchlist(
-                          component,
-                          planner.entry.slug,
-                          missingQuantity,
-                        )
-                      }
-                      onFarmComponent={(component) =>
-                        // Jump to Opportunities → What to farm now with this part searched, so the
-                        // odds panel immediately shows what your relics give you for it.
-                        requestOpportunitiesTab('farm-now', component.name)
-                      }
-                      onSellSet={() => handleSellCompletedSet(planner)}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
+          <SetPlanner
+            gate={setPlannerGate}
+            errorMessage={errorMessage}
+            entries={plannerEntries}
+            expandedSlug={expandedSetSlug}
+            onToggle={(slug) =>
+              setExpandedSetSlug((current) => (current === slug ? null : slug))
+            }
+            summary={plannerPositiveSummary}
+            targetInputs={plannerTargetInputs}
+            ownedRelicHints={plannerOwnedRelicHints}
+            recentlyAddedKeys={watchlistAddFeedback}
+            onTargetChange={handlePlannerTargetChange}
+            onAddToWatchlist={(component, setSlug, missingQuantity) =>
+              handleAddMissingComponentToWatchlist(component, setSlug, missingQuantity)
+            }
+            // Jump to What to farm now with this part searched, so the odds panel immediately
+            // shows what your relics give you for it.
+            onFarmComponent={(component) => requestOpportunitiesTab('farm-now', component.name)}
+            onSellSet={handleSellCompletedSet}
+            onOpenScanners={() => setActivePage('scanners')}
+            defaultTargetFor={buildPlannerDefaultTarget}
+            localizeName={localizeName}
+          />
         ) : activeTab === 'inventory' ? (
           <div className="inventory-manager">
             <div className="inventory-manager-searchbar">
@@ -2963,7 +2574,7 @@ export function OpportunitiesPage({
                         >
                           <div className="farm-now-row-main owned-relics-row-main">
                             <div className="farm-now-cell farm-now-cell-name owned-relics-cell-name">
-                              <span className="farm-now-thumb owned-relics-thumb">
+                              <span className="farm-now-thumb owned-relics-thumb relic-art">
                                 {imageUrl ? (
                                   <img src={imageUrl} alt="" loading="lazy" />
                                 ) : (

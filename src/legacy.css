@@ -250,24 +250,6 @@ textarea:focus-visible,
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
 }
 
-.set-planner-layout {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 200px;
-  gap: 16px;
-  align-items: start;
-}
-
-.set-planner-layout.drawer-open {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* The Set Completion Planner no longer carries the owned-parts drawer, so it
-   renders as a single full-width column. */
-.set-planner-layout.inventory-detached {
-  grid-template-columns: minmax(0, 1fr);
-}
-
 /* ---------- Inventory subtab ---------- */
 .inventory-manager {
   display: flex;
@@ -836,25 +818,6 @@ textarea:focus-visible,
   }
 }
 
-.set-planner-main-panel {
-  min-height: 420px;
-}
-
-.set-planner-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.set-planner-drawer-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .set-planner-header h3,
 .set-planner-empty h3 {
   margin: 4px 0 6px;
@@ -867,110 +830,6 @@ textarea:focus-visible,
   color: var(--text-dim);
   line-height: 1.5;
   max-width: 720px;
-}
-
-/* Collapsed: sticky narrow sidebar */
-.set-planner-drawer {
-  position: sticky;
-  top: 88px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--bg-surface);
-  padding: 14px 16px;
-}
-
-/* Open: absolute overlay over main panel */
-.set-planner-drawer.is-open {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 92%;
-  max-height: calc(100vh - 130px);
-  display: flex;
-  flex-direction: column;
-  z-index: 20;
-  background: var(--bg-elevated);
-  border-color: rgba(108, 174, 255, 0.18);
-  border-radius: 16px;
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(64, 123, 255, 0.14);
-  overflow: hidden;
-  padding: 16px 18px;
-}
-
-/* Body fills remaining height of the overlay */
-.set-planner-drawer.is-open > .set-planner-drawer-body {
-  flex: 1;
-  min-height: 0;
-  align-items: stretch;
-}
-
-/* Owned col clips overflow so grid can scroll */
-.set-planner-drawer.is-open .set-planner-drawer-owned-col {
-  overflow: hidden;
-}
-
-/* Owned grid fills remaining col height and scrolls */
-.set-planner-drawer.is-open .set-planner-owned-grid {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-}
-
-.set-planner-drawer-header h3 {
-  margin: 4px 0 0;
-  font-size: 16px;
-}
-
-.set-planner-drawer-count {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-top: 2px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-
-.set-planner-drawer-icon {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-  border: 1px solid rgba(108, 174, 255, 0.18);
-  background: rgba(14, 20, 32, 0.88);
-  color: var(--text-primary);
-  font-size: 15px;
-  line-height: 1;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
-}
-
-.set-planner-drawer-icon:hover {
-  border-color: rgba(108, 174, 255, 0.34);
-  background: rgba(18, 28, 44, 0.96);
-  color: #d8ebff;
-}
-
-/* Drawer body: 2-column layout (search | owned) */
-.set-planner-drawer-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
-  gap: 0 18px;
-  align-items: start;
-  margin-top: 14px;
-}
-
-.set-planner-drawer-divider {
-  background: rgba(255, 255, 255, 0.07);
-  align-self: stretch;
-}
-
-.set-planner-drawer-search-col {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
 }
 
 .screenshot-import-launch {
@@ -1664,21 +1523,6 @@ textarea:focus-visible,
   gap: 10px;
 }
 
-.set-planner-drawer-owned-col {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  min-height: 0;
-}
-
-/* Search input wrap (positions the × clear button) */
-.set-planner-search-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
 .set-planner-search-input {
   width: 100%;
   height: 42px;
@@ -1707,183 +1551,6 @@ textarea:focus-visible,
   cursor: not-allowed;
 }
 
-.set-planner-search-clear {
-  position: absolute;
-  right: 10px;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-secondary);
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  border-radius: 7px;
-  transition: 120ms ease;
-  z-index: 2;
-}
-
-.set-planner-search-clear:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.18);
-}
-
-.set-planner-suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  max-height: 420px;
-  overflow-y: auto;
-}
-
-.set-planner-suggestion {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  padding: 8px 11px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(10, 16, 30, 0.82);
-  color: var(--text);
-  text-align: left;
-}
-
-.set-planner-suggestion:hover {
-  border-color: rgba(64, 123, 255, 0.24);
-  background: rgba(12, 21, 40, 0.92);
-}
-
-.set-planner-suggestion-name {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.set-planner-suggestion-action {
-  color: var(--accent);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  flex: 0 0 auto;
-}
-
-/* Owned items grid (in overlay) */
-.set-planner-owned-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  max-height: 520px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.set-planner-owned-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 9px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(8, 14, 28, 0.55);
-}
-
-.set-planner-owned-card-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.set-planner-owned-card-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-/* Mini-grid (collapsed sidebar) */
-.set-planner-mini-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  padding-top: 4px;
-  max-height: 480px;
-  overflow-y: auto;
-}
-
-.set-planner-mini-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 6px 4px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(8, 14, 28, 0.42);
-  min-width: 0;
-}
-
-.set-planner-mini-thumb {
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  overflow: hidden;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(16, 24, 44, 0.86);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.set-planner-mini-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.set-planner-mini-name {
-  font-size: 9px;
-  color: var(--text-secondary);
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  width: 100%;
-  padding: 0 2px;
-}
-
-.set-planner-mini-qty {
-  font-size: 10px;
-  font-weight: 700;
-  color: #6de0aa;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-
-.set-planner-mini-empty {
-  color: var(--text-muted);
-  font-size: 11px;
-  grid-column: 1 / -1;
-  padding: 4px 0;
-}
-
-.set-planner-results,
-.planner-component-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 /* ═══ Set Completion Planner — redesigned (sp-*) ═══════════════════════════ */
 /* Summary strip: a quiet invest → sell → profit bar, not floating badges. */
 .sp-summary {
@@ -1896,7 +1563,6 @@ textarea:focus-visible,
 .sp-summary-title { display: block; font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .sp-summary-sub { display: block; font-size: 12px; color: var(--text-muted); margin-top: 1px; }
 .sp-summary-flow { display: flex; align-items: center; gap: 20px; }
-.sp-summary-arrow { display: inline-flex; color: var(--text-muted); }
 .sp-summary-stat { text-align: right; }
 .sp-summary-stat-label {
   display: block; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted);
@@ -1921,61 +1587,9 @@ textarea:focus-visible,
   padding: 13px 16px; background: transparent; border: none; cursor: pointer; text-align: left;
   color: inherit; font: inherit;
 }
-/* The toggle area inside the planner's div variant. Split out of the head so a completed set's
-   "Sell Now" control can sit beside it — nesting a button inside a button isn't valid, and made
-   the pill unclickable. */
-.sp-set-head-main {
-  display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0;
-  padding: 0; background: transparent; border: none; cursor: pointer; text-align: left;
-  color: inherit; font: inherit;
-}
-.sp-set-head-chevron {
-  display: flex; align-items: center; flex-shrink: 0;
-  padding: 0; background: transparent; border: none; cursor: pointer; color: inherit;
-}
 .sp-set-head:hover { background: rgba(255, 255, 255, 0.02); }
-
-/* Completed-set pill that becomes its own action on hover. Both labels share one grid cell,
-   so the pill is sized to the wider of the two and nothing reflows mid-hover. */
-.sp-set-sell {
-  display: grid;
-  align-items: center;
-  justify-items: center;
-  flex-shrink: 0;
-  padding: 3px 9px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-  color: var(--color-green);
-  background: rgba(61, 214, 140, 0.14);
-  transition: background 120ms ease, border-color 120ms ease;
-}
-.sp-set-sell > span {
-  grid-area: 1 / 1;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  transition: opacity 120ms ease;
-}
-.sp-set-sell-active { opacity: 0; }
-.sp-set-sell:hover,
-.sp-set-sell:focus-visible {
-  background: rgba(61, 214, 140, 0.24);
-  border-color: rgba(61, 214, 140, 0.5);
-}
-.sp-set-sell:hover .sp-set-sell-idle,
-.sp-set-sell:focus-visible .sp-set-sell-idle { opacity: 0; }
-.sp-set-sell:hover .sp-set-sell-active,
-.sp-set-sell:focus-visible .sp-set-sell-active { opacity: 1; }
 /* Touch/coarse pointers never hover, so the action would be permanently hidden behind a
    state they can't enter — show the actionable label outright there. */
-@media (hover: none) {
-  .sp-set-sell-idle { opacity: 0; }
-  .sp-set-sell-active { opacity: 1; }
-}
 .sp-set-thumb {
   width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0; overflow: hidden;
   background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
@@ -1984,15 +1598,6 @@ textarea:focus-visible,
 .sp-set-thumb img { width: 100%; height: 100%; object-fit: contain; }
 .sp-set-copy { flex: 1; min-width: 0; }
 .sp-set-name { display: block; font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.sp-set-progress { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
-.sp-set-progress-track {
-  flex: 0 1 120px; height: 5px; border-radius: 3px; background: var(--bg-base); overflow: hidden;
-}
-.sp-set-progress-fill { display: block; height: 100%; border-radius: 3px; background: var(--color-blue); }
-.sp-set-progress-track.tone-high .sp-set-progress-fill,
-.sp-set-progress-track.tone-complete .sp-set-progress-fill { background: var(--color-green); }
-.sp-set-progress-track.tone-low .sp-set-progress-fill { background: var(--color-amber); }
-.sp-set-progress-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .sp-set-metrics { display: flex; align-items: center; gap: 18px; flex-shrink: 0; }
 .sp-set-metric { text-align: right; }
 .sp-set-metric-label {
@@ -2023,59 +1628,7 @@ textarea:focus-visible,
 .sp-part-group-label.missing { color: var(--color-amber); }
 .sp-part-group-label.owned { color: var(--color-green); margin-top: 16px; }
 .sp-part-list { display: flex; flex-direction: column; gap: 8px; }
-.sp-part { display: flex; align-items: center; gap: 12px; }
-.sp-part-missing {
-  background: var(--bg-surface); border: 1px solid var(--border);
-  border-left: 3px solid var(--color-amber); border-radius: 0 10px 10px 0; padding: 10px 12px;
-}
-.sp-part-thumb {
-  width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; overflow: hidden;
-  background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
-  color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: uppercase;
-}
-.sp-part-thumb img { width: 100%; height: 100%; object-fit: contain; }
-.sp-part-copy { flex: 1; min-width: 0; }
-.sp-part-name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.sp-part-name { display: block; font-size: 14px; color: var(--text-primary); min-width: 0; }
-/* Prominent "Need ×2" flag so multi-quantity parts are obvious at a glance. */
-.sp-part-qty-badge {
-  flex-shrink: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
-  color: var(--color-amber); background: rgba(240, 160, 48, 0.16);
-  padding: 2px 8px; border-radius: 999px;
-}
 .sp-part-qty-badge.owned { color: var(--color-green); background: rgba(61, 214, 140, 0.16); }
-.sp-part-meta { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-/* Actionable: jumps to "What to farm now" with this part searched. Button reset + link styling
-   so it reads as a link inside the meta line rather than a control. */
-.sp-part-relics {
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: var(--color-blue);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.sp-part-relics:hover { color: var(--text-primary); }
-.sp-part-relics:focus-visible { outline: 1px solid var(--color-blue); outline-offset: 2px; border-radius: 3px; }
-.sp-part-input {
-  width: 66px; height: 32px; flex-shrink: 0; text-align: right;
-  background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text-primary); font-family: 'JetBrains Mono', monospace; padding: 0 8px;
-}
-.sp-part-input:focus { outline: none; border-color: var(--color-blue); }
-.sp-part-watch { flex-shrink: 0; }
-.sp-part-watch-btn { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.sp-part-owned { padding: 7px 12px; opacity: 0.72; }
-.sp-part-owned .sp-part-name-row { flex: 1; }
-.sp-part-owned .sp-part-name { font-size: 13px; }
-.sp-part-owned-count {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; white-space: nowrap;
-}
-.sp-part-owned-check { color: var(--color-green); display: inline-flex; }
 @media (max-width: 720px) {
   /* The metrics moved inside .sp-set-head-main, so that's the box that has to wrap now. */
   .sp-set-head,
@@ -2340,75 +1893,6 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
 .fn-filter select:focus { outline: none; border-color: var(--color-blue); }
 @media (max-width: 720px) {
   .fn-search { flex-basis: 100%; order: -1; }
-}
-
-.set-planner-owned-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.set-planner-owned-thumb,
-.planner-set-thumb,
-.planner-component-thumb {
-  flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  overflow: hidden;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(16, 24, 44, 0.86);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: var(--text-dim);
-}
-
-.set-planner-owned-thumb img,
-.planner-set-thumb img,
-.planner-component-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.set-planner-owned-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.set-planner-owned-copy strong {
-  font-size: 13px;
-}
-
-.set-planner-owned-copy span {
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.set-planner-owned-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.set-planner-qty-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(10, 18, 32, 0.88);
-  color: var(--text);
-  font-size: 16px;
-  line-height: 1;
-}
-
-.set-planner-qty-value {
-  min-width: 24px;
-  text-align: center;
-  font-weight: 700;
 }
 
 .set-planner-empty {
@@ -2987,38 +2471,7 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
   flex: 0 0 auto;
 }
 
-@media (max-width: 1280px) {
-  .set-planner-layout,
-  .set-planner-layout.drawer-open {
-    grid-template-columns: 1fr;
-  }
-
-  .set-planner-drawer {
-    position: static;
-  }
-
-  .set-planner-drawer.is-open {
-    position: static;
-    width: 100%;
-    box-shadow: none;
-  }
-
-  .set-planner-drawer-body {
-    grid-template-columns: 1fr;
-  }
-
-  .set-planner-drawer-divider {
-    height: 1px;
-    width: auto;
-    align-self: auto;
-  }
-}
-
 @media (max-width: 920px) {
-  .set-planner-main-panel,
-  .set-planner-drawer {
-    min-height: 0;
-  }
 
   .set-planner-header,
   .set-planner-empty,
@@ -3043,14 +2496,6 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
     min-width: 0;
     max-width: none;
     flex: 1 1 auto;
-  }
-
-  .set-planner-owned-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .set-planner-mini-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .farm-now-row-main,
@@ -15160,4 +14605,25 @@ img[data-asset-failed='true'] {
 @keyframes market-chart-skeleton-pulse {
   0%, 100% { opacity: 0.55; }
   50% { opacity: 1; }
+}
+
+/* Relic art carries its own silhouette on transparency, so the thumbnail chrome every other item
+   icon needs — a filled square with a border — reads as a chip drawn around a picture rather than
+   as the picture itself. One rule, applied at each surface that renders a relic; it is deliberately
+   last in the file so it wins on equal specificity against the five container classes it overrides
+   (`farm-now-thumb`, `sp-set-thumb`, `farm-cycle-thumb`, `fissure-tier-icon`, `market-drop-image`),
+   each of which is also used for non-relic items and must keep its chrome there.
+
+   Goes when those pages migrate; the Tailwind surfaces (Farm Now) express the same thing by simply
+   not drawing the chrome. */
+.relic-art,
+.relic-art img {
+  background: none;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+
+.relic-art img {
+  object-fit: contain;
 }

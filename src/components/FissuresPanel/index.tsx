@@ -96,7 +96,7 @@ function FissureTierIcon({ tier, imagePath }: { tier: string; imagePath: string 
   const imageUrl = resolveRelicAssetUrl({ tier }) ?? resolveWfmAssetUrl(imagePath);
 
   return (
-    <span className="fissure-tier-icon" aria-hidden="true">
+    <span className="fissure-tier-icon relic-art" aria-hidden="true">
       {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : tier.slice(0, 1)}
     </span>
   );

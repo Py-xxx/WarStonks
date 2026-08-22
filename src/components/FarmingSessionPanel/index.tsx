@@ -227,7 +227,7 @@ export function FarmingSessionPanel() {
             <i className="ti ti-chevron-left" aria-hidden="true" />
           </button>
           <div className="farm-cycle-card">
-            <span className="farm-cycle-thumb" aria-hidden="true">
+            <span className="farm-cycle-thumb relic-art" aria-hidden="true">
               {activeRelicImage ? (
                 <img src={activeRelicImage} alt="" />
               ) : (
