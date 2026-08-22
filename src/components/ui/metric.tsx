@@ -66,13 +66,17 @@ function MetricGrid({
   className,
   columns = 2,
   ...props
-}: React.ComponentProps<'div'> & { columns?: 2 | 3 | 4 }) {
+}: React.ComponentProps<'div'> & { columns?: 2 | 3 | 4 | 5 }) {
+  // Always 2 up on narrow widths — five metrics side by side at 400px is unreadable, and a
+  // metric that wraps mid-label is worse than one on its own row.
   const columnClass =
-    columns === 4
-      ? 'grid-cols-2 lg:grid-cols-4'
-      : columns === 3
-        ? 'grid-cols-2 lg:grid-cols-3'
-        : 'grid-cols-2';
+    columns === 5
+      ? 'grid-cols-2 lg:grid-cols-5'
+      : columns === 4
+        ? 'grid-cols-2 lg:grid-cols-4'
+        : columns === 3
+          ? 'grid-cols-2 lg:grid-cols-3'
+          : 'grid-cols-2';
   return (
     <div
       data-slot="metric-grid"

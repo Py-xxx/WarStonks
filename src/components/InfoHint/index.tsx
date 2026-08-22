@@ -39,9 +39,13 @@ export function InfoHint({ text }: { text: string; placement?: InfoHintPlacement
           />
         }
       >
-        <span className="grid size-4 place-items-center rounded-full border border-current text-[10px] leading-none font-bold">
-          i
-        </span>
+        {/* An icon, not the letter `i` in a bordered circle.
+            The letter version had two bugs that the glyph cannot have: it inherited
+            `text-transform: uppercase` from the labels it sits inside — every `Metric` and panel
+            eyebrow is uppercase — so it rendered as a capital **I**; and a lowercase `i` optically
+            centred in a circle needs a nudge its metrics don't provide, so it sat slightly low and
+            left. The icon font centres itself and has no case. */}
+        <i className="ti ti-info-circle text-[15px] leading-none" aria-hidden="true" />
       </TooltipTrigger>
       <TooltipContent>{text}</TooltipContent>
     </Tooltip>

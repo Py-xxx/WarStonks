@@ -7261,9 +7261,15 @@ fn build_portfolio_pnl_summary_inner(
                 let estimated_total = maybe_estimate
                     .map(|unit_price| unit_price.saturating_mul(remaining_quantity))
                     .unwrap_or(remaining_cost);
-                unrealized_value += estimated_total;
-                unrealized_pnl += estimated_total - remaining_cost;
-                if derived_entry.status.as_deref() == Some("Kept") {
+                // Same rule as `open_exposure` above: an item marked "Kept" has been pulled out
+                // of trading, so it is inventory rather than an open position and must not move
+                // the unrealized figures. Its value is reported separately as
+                // `kept_inventory_value`, and the Portfolio table lists only open positions, so
+                // the headline number and the rows under it now describe the same set.
+                if is_open {
+                    unrealized_value += estimated_total;
+                    unrealized_pnl += estimated_total - remaining_cost;
+                } else {
                     kept_inventory_value += estimated_total;
                 }
 

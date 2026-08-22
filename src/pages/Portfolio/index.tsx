@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Metric, MetricGrid } from '@/components/ui/metric';
+import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { ItemThumb } from '../../components/ListRow';
 import { InfoHint, type InfoHintPlacement } from '../../components/InfoHint';
 import {
   getCachedWfmProfileTradeLog,
@@ -189,6 +194,88 @@ function buildLineChartGeometry(
   return { polyline, area, guides, points };
 }
 
+/**
+ * The value under the cursor, floated over the plot.
+ *
+ * It used to be a bordered card sitting permanently above each chart, which meant a box that
+ * mostly restated the last point and cost the plot ~70px of height. Now it appears on hover and
+ * gets out of the way otherwise — the same crosshair-readout behaviour Market's chart uses.
+ */
+function ChartReadout({
+  value,
+  meta,
+  tone,
+}: {
+  value: string;
+  meta: string;
+  tone?: 'negative';
+}) {
+  return (
+    <div className="pointer-events-none absolute top-2 left-2 z-(--z-raised) rounded-md border border-white/12 bg-bg-overlay px-2 py-1 shadow-float">
+      <div
+        className={`font-mono text-sm leading-tight font-bold tabular-nums ${
+          tone === 'negative' ? 'text-accent-red' : 'text-accent-green'
+        }`}
+      >
+        {value}
+      </div>
+      <div className="font-mono text-[10px] text-ink-dim tabular-nums">{meta}</div>
+    </div>
+  );
+}
+
+/**
+ * One row of a profit breakdown: what it is, how many trades, the signed value, and a bar.
+ *
+ * The three breakdown panels — by trade source, by category, by item — rendered this markup three
+ * times over. The bar plots `|value| / max`, a real proportion, so it is a chart rather than
+ * decoration.
+ */
+function BreakdownList({
+  rows,
+  max,
+  emptyLabel,
+}: {
+  rows: { label: string; value: number; tradeCount: number }[];
+  max: number;
+  emptyLabel: string;
+}) {
+  const { t } = useTranslation();
+  if (rows.length === 0) {
+    return <EmptyState icon="ti-chart-bar" title={emptyLabel} />;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((row) => {
+        const positive = row.value >= 0;
+        return (
+          <div key={row.label} className="flex flex-col gap-1">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <span className="min-w-0 flex-1 truncate text-[11px] text-ink">{row.label}</span>
+              <span className="shrink-0 font-mono text-[10px] text-ink-faint tabular-nums">
+                {t('pf.tradesCount', { count: row.tradeCount })}
+              </span>
+              <span
+                className={`shrink-0 font-mono text-[11px] font-bold tabular-nums ${
+                  positive ? 'text-accent-green' : 'text-accent-red'
+                }`}
+              >
+                {formatSignedPlatinumValue(row.value)}
+              </span>
+            </div>
+            <span className="h-1 overflow-hidden rounded-full bg-bg-base" aria-hidden="true">
+              <span
+                className={`block h-full rounded-full ${positive ? 'bg-accent-green' : 'bg-accent-red'}`}
+                style={{ width: `${Math.max(4, Math.round((Math.abs(row.value) / max) * 100))}%` }}
+              />
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
   const { t } = useTranslation();
   const language = useAppStore((s) => s.language);
@@ -212,25 +299,23 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
       : width - padding.left - padding.right;
 
   return (
-    <div className="chart-card">
-      <PortfolioPanelHeader
-        title={t('a11y.cumulativeProfit')}
-        info={t('pf.cumulativeProfitInfo')}
-      />
+    <Panel className="gap-0">
+      <PanelHeader>
+        <PanelTitle variant="heading">{t('a11y.cumulativeProfit')}</PanelTitle>
+        <InfoHint text={t('pf.cumulativeProfitInfo')} />
+      </PanelHeader>
       <div className="chart-body portfolio-chart-body">
         {summary.cumulativeProfitPoints.length === 0 ? (
           <div className="portfolio-chart-empty">{t('pf.noClosedTrades')}</div>
         ) : (
-          <div className="portfolio-chart-shell">
-            <div className="portfolio-chart-callout">
-              <span className="portfolio-chart-callout-label">{t('pf.activePoint')}</span>
-              <div className="portfolio-chart-callout-value">
-                {activeData ? formatSignedPlatinumValue(activeData.cumulativeProfit) : '—'}
-              </div>
-              <span className="portfolio-chart-callout-meta">
-                {activeData ? formatChartDateLabel(activeData.bucketAt) : t('pf.moveAcrossCurve')}
-              </span>
-            </div>
+          <div className="portfolio-chart-shell relative">
+            {hoverIndex !== null && activeData ? (
+              <ChartReadout
+                value={formatSignedPlatinumValue(activeData.cumulativeProfit)}
+                meta={formatChartDateLabel(activeData.bucketAt)}
+                tone={activeData.cumulativeProfit < 0 ? 'negative' : undefined}
+              />
+            ) : null}
             <svg width="100%" height="220" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
               <rect
                 x={padding.left}
@@ -341,7 +426,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
           </div>
         )}
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -359,33 +444,31 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
   const barSlotWidth = points.length > 0 ? (width - padding.left - padding.right) / points.length : 0;
   const barWidth = points.length > 0 ? Math.max(12, barSlotWidth - 8) : 0;
   const guides = buildLinearGuides(maxAbs, -maxAbs, 5);
-  const activeIndex = hoverIndex ?? Math.max(points.length - 1, 0);
-  const activeTrade = points[activeIndex] ?? null;
+  // Derived straight from the hover, with no last-point fallback: the old `hoverIndex ?? last`
+  // meant a pointer in a dead zone highlighted the final bar as though it were selected.
+  const activeTrade = hoverIndex === null ? null : (points[hoverIndex] ?? null);
   const xLabelIndices = new Set(
     points.length <= 4 ? points.map((_, index) => index) : [0, Math.floor(points.length / 2), points.length - 1],
   );
 
   return (
-    <div className="chart-card">
-      <PortfolioPanelHeader
-        title={t('a11y.profitPerTrade')}
-        info={t('pf.profitPerTradeInfo')}
-        infoPlacement="left"
-      />
+    <Panel className="gap-0">
+      <PanelHeader>
+        <PanelTitle variant="heading">{t('a11y.profitPerTrade')}</PanelTitle>
+        <InfoHint text={t('pf.profitPerTradeInfo')} />
+      </PanelHeader>
       <div className="chart-body portfolio-chart-body">
         {points.length === 0 ? (
           <div className="portfolio-chart-empty">{t('pf.profitBarsHint')}</div>
         ) : (
-          <div className="portfolio-chart-shell">
-            <div className="portfolio-chart-callout">
-              <span className="portfolio-chart-callout-label">{t('pf.activeTrade')}</span>
-              <div className={`portfolio-chart-callout-value${activeTrade && activeTrade.profit < 0 ? ' negative' : ''}`}>
-                {activeTrade ? formatSignedPlatinumValue(activeTrade.profit) : '—'}
-              </div>
-              <span className="portfolio-chart-callout-meta">
-                {activeTrade ? `${activeTrade.itemName} · ${formatChartDateLabel(activeTrade.closedAt)}` : t('pf.hoverABar')}
-              </span>
-            </div>
+          <div className="portfolio-chart-shell relative">
+            {hoverIndex !== null && activeTrade ? (
+              <ChartReadout
+                value={formatSignedPlatinumValue(activeTrade.profit)}
+                meta={`${activeTrade.itemName} · ${formatChartDateLabel(activeTrade.closedAt)}`}
+                tone={activeTrade.profit < 0 ? 'negative' : undefined}
+              />
+            ) : null}
             <svg width="100%" height="220" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
               <rect
                 x={padding.left}
@@ -435,25 +518,30 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
                 const normalizedHeight = (Math.abs(point.profit) / maxAbs) * (innerHeight / 2 - 8);
                 const isPositive = point.profit >= 0;
                 const y = isPositive ? baseline - normalizedHeight : baseline;
-                const isActive = activeIndex === index;
+                const isActive = hoverIndex === index;
                 return (
                   <g key={point.id}>
                     <rect
-                      x={x}
+                      x={padding.left + index * barSlotWidth}
                       y={padding.top}
-                      width={Math.max(barSlotWidth, 16)}
+                      width={barSlotWidth}
                       height={height - padding.top - padding.bottom}
                       fill="transparent"
                       onMouseEnter={() => setHoverIndex(index)}
                       onMouseMove={() => setHoverIndex(index)}
                       onMouseLeave={() => setHoverIndex(null)}
                     />
+                    {/* The bar is painted AFTER its hit zone, so without this it sits on top and
+                        swallows the pointer — hovering a bar fired `mouseleave` on the zone
+                        underneath and cleared the selection. That was the whole bug: with the old
+                        `?? last` fallback it showed the final bar, and without it, nothing. */}
                     <rect
                       x={x}
                       y={y}
                       width={barWidth}
                       height={Math.max(normalizedHeight, 3)}
                       rx="4"
+                      pointerEvents="none"
                       fill={isPositive ? 'rgba(61,214,140,0.7)' : 'rgba(240,79,88,0.7)'}
                       stroke={isActive ? (isPositive ? 'rgba(61,214,140,1)' : 'rgba(240,79,88,1)') : 'transparent'}
                       strokeWidth="1.1"
@@ -463,6 +551,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
                         x={x + barWidth / 2}
                         y={height - 10}
                         textAnchor="middle"
+                        pointerEvents="none"
                         fill="var(--text-muted)"
                         fontSize="9"
                         fontFamily="JetBrains Mono"
@@ -480,7 +569,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
           </div>
         )}
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -1596,7 +1685,13 @@ function PnlSummaryTab({
   const sourceBarMax = Math.max(1, ...bodySummary.sourceBreakdown.map((row) => Math.abs(row.value)));
   const categoryBarMax = Math.max(1, ...bodySummary.categoryBreakdown.map((row) => Math.abs(row.value)));
   const itemBarMax = Math.max(1, ...bodySummary.itemBreakdown.map((row) => Math.abs(row.value)));
-  const openPositions = [...bodySummary.inventoryRows].sort((a, b) => b.unrealizedPnl - a.unrealizedPnl);
+  // "Kept" means you decided to hold it, so it is inventory rather than an open position.
+  // The backend excludes kept rows from `unrealizedPnl` too (`trades.rs`, same rule as
+  // `open_exposure`), so the hero figure and these rows describe the same set.
+  const openPositions = bodySummary.inventoryRows
+    .filter((row) => row.status !== 'kept')
+    .sort((a, b) => b.unrealizedPnl - a.unrealizedPnl);
+  const keptCount = bodySummary.inventoryRows.length - openPositions.length;
   const previousDelta =
     bodySummary.previousRealizedProfit === null || bodySummary.previousRealizedProfit === undefined
       ? null
@@ -1604,341 +1699,363 @@ function PnlSummaryTab({
 
   return (
     <>
-      {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
+      {errorMessage ? (
+        <div className="mx-4 mt-4 rounded-md border border-accent-red/30 bg-accent-red/[0.06] px-3 py-2 text-[11px] text-accent-red">
+          {errorMessage}
+        </div>
+      ) : null}
 
       {!username ? (
-        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">{t('pf.connectFirst')}</span>
-          <span className="empty-sub">
-            P&amp;L Summary uses your permanent local trade ledger and cached market history.
-          </span>
+        <div className="p-4">
+          <EmptyState
+            icon="ti-plug-connected-x"
+            title={t('pf.connectFirst')}
+            detail={t('pf.connectFirstDetail')}
+          />
         </div>
       ) : (
-        <div className="portfolio-summary-body portfolio-summary-loadable">
+        <div className="relative flex flex-col gap-4 p-4">
           {!summary ? <PortfolioLoadingOverlay label={t('pf.loadingPortfolioSummary')} /> : null}
 
-          <div className={`card pf-hero ${bodySummary.realizedProfit >= 0 ? 'tone-pos' : 'tone-neg'}`}>
-            <div className="pf-hero-top">
-              <span className="pf-hero-kicker">{t('pf.netPosition')}</span>
-              <div className="pf-period-group" role="tablist" aria-label={t('pf.period')}>
-                {(['7d', '30d', '90d', 'all'] as const).map((nextPeriod) => (
-                  <button
-                    key={nextPeriod}
-                    className={`pf-period-btn${period === nextPeriod ? ' active' : ''}`}
-                    role="tab"
-                    aria-selected={period === nextPeriod}
-                    onClick={() => {
-                      // Clear any stale error from the previous period before switching.
-                      setErrorMessage(null);
-                      setTradePeriod(nextPeriod);
-                    }}
-                  >
-                    {nextPeriod === 'all' ? t('pf.allTime') : nextPeriod}
-                  </button>
-                ))}
+          {/* One frame, not four. The hero was a bordered card containing three more bordered
+              cards; the three secondary figures are `Metric`s now, separated by space. */}
+          <Panel className="gap-0">
+            <PanelHeader className="flex-wrap gap-3">
+              <PanelTitle>{t('pf.netPosition')}</PanelTitle>
+
+              <div className="flex items-center gap-0.5 rounded-md bg-bg-base p-0.5" role="group" aria-label={t('pf.period')}>
+                {(['7d', '30d', '90d', 'all'] as const).map((nextPeriod) => {
+                  const active = period === nextPeriod;
+                  return (
+                    <Button
+                      key={nextPeriod}
+                      variant="ghost"
+                      size="sm"
+                      static
+                      aria-pressed={active}
+                      onClick={() => {
+                        // Clear any stale error from the previous period before switching.
+                        setErrorMessage(null);
+                        setTradePeriod(nextPeriod);
+                      }}
+                      className={`h-6 rounded-sm px-2 text-[11px] font-medium tabular-nums ${
+                        active ? 'bg-bg-elevated text-ink' : 'text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {nextPeriod === 'all' ? t('pf.allTime') : nextPeriod}
+                    </Button>
+                  );
+                })}
               </div>
-              <div className="pf-hero-toolbar">
+
+              <span className="ml-auto flex items-center gap-3">
                 {summary?.lastUpdatedAt ? (
-                  <span className="portfolio-log-updated">
+                  <span className="font-mono text-[10px] text-ink-faint tabular-nums">
                     {t('pf.lastUpdated')} {formatShortLocalDateTime(summary.lastUpdatedAt)}
                   </span>
                 ) : null}
-                <button
-                  className="act-btn portfolio-refresh-btn"
-                  type="button"
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => void handleRefresh()}
                   disabled={loading || refreshingTrades || !username}
                 >
-                  <RefreshIcon />
+                  <i className="ti ti-refresh" aria-hidden="true" />
                   {refreshingTrades ? t('pf.refreshing') : t('pf.refreshTrades')}
-                </button>
-              </div>
-            </div>
-            <div className="pf-hero-body">
-              <div className="pf-hero-main">
-                <div className="info-card-label pf-hero-label">
+                </Button>
+              </span>
+            </PanelHeader>
+
+            <div className="flex flex-wrap items-end gap-x-10 gap-y-4 p-4">
+              <div className="flex flex-col gap-1.5">
+                <span className="flex items-center gap-1 font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
                   {t('pf.realizedProfit')}
-                  <InfoHint
-                    text={t('pf.realizedProfitInfo')}
-                    placement="bottom"
-                  />
-                </div>
-                <div className={`pf-hero-value${bodySummary.realizedProfit >= 0 ? '' : ' negative'}`}>
+                  <InfoHint text={t('pf.realizedProfitInfo')} placement="bottom" />
+                </span>
+                {/* The page's one focal point: platinum actually banked. */}
+                <span
+                  className={`font-mono text-[42px] leading-none font-bold tracking-tight tabular-nums ${
+                    bodySummary.realizedProfit >= 0 ? 'text-accent-green' : 'text-accent-red'
+                  }`}
+                >
                   {formatSignedPlatinumValue(bodySummary.realizedProfit)}
-                </div>
+                </span>
                 {previousDelta !== null ? (
-                  <span className={`pf-hero-delta ${previousDelta > 0 ? 'pos' : previousDelta < 0 ? 'neg' : 'flat'}`}>
-                    {previousDelta > 0 ? '▲' : previousDelta < 0 ? '▼' : '•'}{' '}
+                  <span
+                    className={`w-fit rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums ${
+                      previousDelta > 0
+                        ? 'bg-accent-green/15 text-accent-green'
+                        : previousDelta < 0
+                          ? 'bg-accent-red/15 text-accent-red'
+                          : 'bg-bg-elevated text-ink-dim'
+                    }`}
+                  >
+                    <i
+                      className={`ti ${previousDelta > 0 ? 'ti-trending-up' : previousDelta < 0 ? 'ti-trending-down' : 'ti-minus'}`}
+                      aria-hidden="true"
+                    />{' '}
                     {formatSignedPlatinumValue(previousDelta)} {t('pf.vsPrior', { period })}
                   </span>
                 ) : null}
               </div>
-              <div className="pf-hero-substats">
-                <div className="pf-substat">
-                  <div className="info-card-label">
-                    {t('pf.totalPnl')}
-                    <InfoHint
-                      text={t('pf.totalPnlInfo')}
-                      placement="bottom"
-                    />
-                  </div>
-                  <div className={`info-card-val${bodySummary.totalPnl >= 0 ? '' : ' negative'}`}>
-                    {formatSignedPlatinumValue(bodySummary.totalPnl)}
-                  </div>
-                </div>
-                <div className="pf-substat">
-                  <div className="info-card-label">
-                    {t('pf.unrealizedPnl')}
-                    <InfoHint
-                      text={t('pf.unrealizedPnlInfo')}
-                      placement="bottom"
-                    />
-                  </div>
-                  <div className={`info-card-val${bodySummary.unrealizedPnl >= 0 ? '' : ' negative'}`}>
-                    {formatSignedPlatinumValue(bodySummary.unrealizedPnl)}
-                  </div>
-                </div>
-                <div className="pf-substat">
-                  <div className="info-card-label">
-                    {t('pf.openBuys')}
-                    <InfoHint
-                      text={t('pf.openBuysInfo')}
-                      placement="bottom"
-                    />
-                  </div>
-                  <div className="info-card-val neutral">{formatPlatinumValue(bodySummary.openExposure)}</div>
-                </div>
-              </div>
-            </div>
-          </div>
 
-          <div className="card pf-perf-strip">
-            <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.closedTrades')} <InfoHint text={t('pf.closedTradesInfo')} /></div>
-              <div className="perf-val">{bodySummary.closedTrades}</div>
+              <MetricGrid columns={3} className="flex-1">
+                <Metric
+                  label={t('pf.totalPnl')}
+                  value={formatSignedPlatinumValue(bodySummary.totalPnl)}
+                  tone={bodySummary.totalPnl >= 0 ? 'green' : 'red'}
+                  hint={<InfoHint text={t('pf.totalPnlInfo')} />}
+                />
+                <Metric
+                  label={t('pf.unrealizedPnl')}
+                  value={formatSignedPlatinumValue(bodySummary.unrealizedPnl)}
+                  tone={bodySummary.unrealizedPnl >= 0 ? 'green' : 'red'}
+                  hint={<InfoHint text={t('pf.unrealizedPnlInfo')} />}
+                />
+                <Metric
+                  label={t('pf.openBuys')}
+                  value={formatPlatinumValue(bodySummary.openExposure)}
+                  hint={<InfoHint text={t('pf.openBuysInfo')} />}
+                />
+              </MetricGrid>
             </div>
-            <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.winRate')} <InfoHint text={t('pf.winRateInfo')} /></div>
-              <div className={`perf-val ${bodySummary.winRate >= 50 ? 'green' : bodySummary.winRate >= 35 ? 'blue' : 'red'}`}>{formatPercentValue(bodySummary.winRate)}</div>
-            </div>
-            <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.avgMargin')} <InfoHint text={t('pf.avgMarginInfo')} /></div>
-              <div className="perf-val blue">{formatPercentValue(bodySummary.averageMargin)}</div>
-            </div>
-            <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.avgHold')} <InfoHint text={t('pf.avgHoldInfo')} /></div>
-              <div className="perf-val">{formatHoursValue(bodySummary.averageHoldHours)}</div>
-            </div>
-            <div className="pf-perf-cell">
-              <div className="perf-label">{t('pf.avgProfitTrade')} <InfoHint text={t('pf.avgProfitTradeInfo')} /></div>
-              <div className="perf-val green">{formatPlatinumValue(Math.round(bodySummary.averageProfitPerTrade))}</div>
-            </div>
-          </div>
+          </Panel>
 
-          <div className="chart-grid portfolio-chart-grid">
+          {/* Five bordered cells became a borderless `MetricGrid` — this is what that primitive
+              was extracted for. Space separates them; the numbers keep their tone. */}
+          <MetricGrid columns={5} className="px-1">
+            <Metric
+              label={t('pf.closedTrades')}
+              value={String(bodySummary.closedTrades)}
+              hint={<InfoHint text={t('pf.closedTradesInfo')} />}
+            />
+            <Metric
+              label={t('pf.winRate')}
+              value={formatPercentValue(bodySummary.winRate)}
+              tone={bodySummary.winRate >= 50 ? 'green' : bodySummary.winRate >= 35 ? 'blue' : 'red'}
+              hint={<InfoHint text={t('pf.winRateInfo')} />}
+            />
+            <Metric
+              label={t('pf.avgMargin')}
+              value={formatPercentValue(bodySummary.averageMargin)}
+              tone="blue"
+              hint={<InfoHint text={t('pf.avgMarginInfo')} />}
+            />
+            <Metric
+              label={t('pf.avgHold')}
+              value={formatHoursValue(bodySummary.averageHoldHours)}
+              hint={<InfoHint text={t('pf.avgHoldInfo')} />}
+            />
+            <Metric
+              label={t('pf.avgProfitTrade')}
+              value={formatPlatinumValue(Math.round(bodySummary.averageProfitPerTrade))}
+              tone="green"
+              hint={<InfoHint text={t('pf.avgProfitTradeInfo')} />}
+            />
+          </MetricGrid>
+
+          <div className="grid gap-4 lg:grid-cols-2">
             <CumulativeProfitChart summary={bodySummary} />
             <ProfitPerTradeChart summary={bodySummary} />
           </div>
 
-          <div className="chart-card pf-positions-card">
-            <PortfolioPanelHeader
-              title={t('pf.positionsTitle')}
-              info="Every tracked buy you still hold (Open or Kept): what you paid, what it's worth at the latest cached market estimate, and the unrealized gain/loss. Sorted by biggest winner first."
-            />
-            {openPositions.length === 0 ? (
-              <div className="portfolio-breakdown-empty">{t('pf.noPositions')}</div>
-            ) : (
-              <div className="pf-positions-table-wrap">
-                <table className="pf-positions-table">
-                  <thead>
-                    <tr>
-                      <th>{t('wl.item')}</th>
-                      <th>{t('wl.qty')}</th>
-                      <th>{t('pf.cost')}</th>
-                      <th>{t('pf.currentValue')}</th>
-                      <th>{t('pf.unrealizedPnl')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {openPositions.map((row) => (
-                      <tr key={row.id}>
-                        <td>
-                          <div className="pf-position-item">
-                            <span className="pf-position-thumb">
-                              {resolveWfmAssetUrl(row.imagePath, row.slug) ? (
-                                <img src={resolveWfmAssetUrl(row.imagePath, row.slug) ?? undefined} alt="" loading="lazy" />
-                              ) : (
-                                <span>{row.itemName.slice(0, 1)}</span>
-                              )}
-                            </span>
-                            <div className="pf-position-copy">
-                              <ItemName name={row.itemName} slug={row.slug} imagePath={row.imagePath} />
-                              <span className="pf-position-meta">
-                                {row.status === 'kept' ? t('pf.kept') : t('pf.open')}
-                                {row.rank !== null ? ` · R${row.rank}` : ''}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
-                        <td>{row.quantity}</td>
-                        <td>{formatPlatinumValue(row.costBasis)}</td>
-                        <td>{formatPlatinumValue(row.estimatedValue)}</td>
-                        <td className={row.unrealizedPnl >= 0 ? 'pf-pos' : 'pf-neg'}>
-                          {formatSignedPlatinumValue(row.unrealizedPnl)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <div className="portfolio-breakdown-grid">
-            <div className="chart-card">
-              <PortfolioPanelHeader
-                title={t('a11y.tradeBreakdown')}
-                info="Breakdown of realized profit by trade closure style: direct flip, sold as set, or unmatched sell."
-              />
-              <div className="portfolio-breakdown-list">
-                {bodySummary.sourceBreakdown.length === 0 ? (
-                  <div className="portfolio-breakdown-empty">{t('pf.noClosedSell')}</div>
-                ) : (
-                  bodySummary.sourceBreakdown.map((row) => (
-                    <div key={row.label} className="portfolio-breakdown-row">
-                      <div className="portfolio-breakdown-copy">
-                        <span className="portfolio-breakdown-name">{row.label}</span>
-                        <span className="portfolio-breakdown-meta">{t('pf.tradesCount', { count: row.tradeCount })}</span>
-                      </div>
-                      <span className={`portfolio-breakdown-value ${row.value >= 0 ? 'pos' : 'neg'}`}>{formatSignedPlatinumValue(row.value)}</span>
-                      <div className="pf-bar-track" aria-hidden="true">
-                        <div
-                          className={`pf-bar-fill ${row.value >= 0 ? 'pos' : 'neg'}`}
-                          style={{ width: `${Math.max(4, Math.round((Math.abs(row.value) / sourceBarMax) * 100))}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-            <div className="chart-card">
-              <PortfolioPanelHeader
-                title={t('a11y.categoryBreakdown')}
-                info={t('pf.categoryBreakdownInfo')}
-                infoPlacement="left"
-              />
-              <div className="portfolio-breakdown-list">
-                {bodySummary.categoryBreakdown.length === 0 ? (
-                  <div className="portfolio-breakdown-empty">{t('pf.noCategoryProfit')}</div>
-                ) : (
-                  bodySummary.categoryBreakdown.map((row) => (
-                    <div key={row.label} className="portfolio-breakdown-row">
-                      <div className="portfolio-breakdown-copy">
-                        <span className="portfolio-breakdown-name">{row.label}</span>
-                        <span className="portfolio-breakdown-meta">{t('pf.tradesCount', { count: row.tradeCount })}</span>
-                      </div>
-                      <span className={`portfolio-breakdown-value ${row.value >= 0 ? 'pos' : 'neg'}`}>{formatSignedPlatinumValue(row.value)}</span>
-                      <div className="pf-bar-track" aria-hidden="true">
-                        <div
-                          className={`pf-bar-fill ${row.value >= 0 ? 'pos' : 'neg'}`}
-                          style={{ width: `${Math.max(4, Math.round((Math.abs(row.value) / categoryBarMax) * 100))}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="chart-card pf-top-items-card">
-            <PortfolioPanelHeader
-              title={t('pf.topItems')}
-              info={t('pf.topItemsInfo')}
-            />
-            <div className="portfolio-breakdown-list">
-              {bodySummary.itemBreakdown.length === 0 ? (
-                <div className="portfolio-breakdown-empty">{t('pf.noItemProfit')}</div>
+          <Panel className="gap-0">
+            <PanelHeader>
+              <PanelTitle variant="heading">{t('pf.positionsTitle')}</PanelTitle>
+              <InfoHint text={t('pf.positionsInfo')} />
+              {keptCount > 0 ? (
+                <span className="ml-auto font-mono text-[10px] text-ink-faint tabular-nums">
+                  {t('pf.keptExcluded', { n: keptCount })}
+                </span>
+              ) : null}
+            </PanelHeader>
+            <div className="p-3">
+              {openPositions.length === 0 ? (
+                <EmptyState icon="ti-package" title={t('pf.noPositions')} />
               ) : (
-                bodySummary.itemBreakdown.map((row) => (
-                  <div key={row.label} className="portfolio-breakdown-row">
-                    <div className="portfolio-breakdown-copy">
-                      <span className="portfolio-breakdown-name">{row.label}</span>
-                      <span className="portfolio-breakdown-meta">{t('pf.tradesCount', { count: row.tradeCount })}</span>
-                    </div>
-                    <span className={`portfolio-breakdown-value ${row.value >= 0 ? 'pos' : 'neg'}`}>{formatSignedPlatinumValue(row.value)}</span>
-                    <div className="pf-bar-track" aria-hidden="true">
-                      <div
-                        className={`pf-bar-fill ${row.value >= 0 ? 'pos' : 'neg'}`}
-                        style={{ width: `${Math.max(4, Math.round((Math.abs(row.value) / itemBarMax) * 100))}%` }}
-                      />
-                    </div>
-                  </div>
-                ))
+                // Capped and scrolled: the list grows with every kept item, and an unbounded
+                // table pushed the breakdown panels off the page. `max-h` rather than a fixed
+                // height so a two-position list doesn't sit in a pane of dead space.
+                <div className="max-h-80 overflow-auto overscroll-contain">
+                  <table className="w-full border-collapse">
+                    {/* Sticky header — a scrolling table whose column labels scroll away is
+                        worse than one that doesn't scroll at all. `bg-bg-panel` is opaque so
+                        rows don't show through it. */}
+                    <thead className="sticky top-0 z-(--z-raised) bg-bg-panel">
+                      <tr className="border-b border-line">
+                        {[t('wl.item'), t('wl.qty'), t('pf.cost'), t('pf.currentValue'), t('pf.unrealizedPnl')].map(
+                          (heading, index) => (
+                            <th
+                              key={heading}
+                              className={`py-1.5 font-mono text-[9px] font-bold tracking-[0.07em] text-ink-faint uppercase ${
+                                index === 0 ? 'text-left' : 'text-right'
+                              }`}
+                            >
+                              {heading}
+                            </th>
+                          ),
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {openPositions.map((row) => (
+                        <tr key={row.id} className="border-b border-line-subtle last:border-b-0">
+                          <td className="py-1.5">
+                            <div className="flex items-center gap-2.5">
+                              <ItemThumb
+                                src={resolveWfmAssetUrl(row.imagePath, row.slug)}
+                                fallback={row.itemName.charAt(0)}
+                                size="size-7"
+                              />
+                              <div className="flex min-w-0 flex-col">
+                                <ItemName
+                                  name={row.itemName}
+                                  slug={row.slug}
+                                  imagePath={row.imagePath}
+                                  className="truncate text-[11px] font-medium text-ink"
+                                />
+                                {row.rank !== null ? (
+                                  <span className="font-mono text-[9px] tracking-[0.06em] text-ink-faint uppercase">
+                                    R{row.rank}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-1.5 text-right font-mono text-[11px] text-ink-soft tabular-nums">
+                            {row.quantity}
+                          </td>
+                          <td className="py-1.5 text-right font-mono text-[11px] text-ink-soft tabular-nums">
+                            {formatPlatinumValue(row.costBasis)}
+                          </td>
+                          <td className="py-1.5 text-right font-mono text-[11px] text-ink tabular-nums">
+                            {formatPlatinumValue(row.estimatedValue)}
+                          </td>
+                          <td
+                            className={`py-1.5 text-right font-mono text-[11px] font-bold tabular-nums ${
+                              row.unrealizedPnl >= 0 ? 'text-accent-green' : 'text-accent-red'
+                            }`}
+                          >
+                            {formatSignedPlatinumValue(row.unrealizedPnl)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
+          </Panel>
+
+          {/* Three breakdowns of the same shape — where the profit came from, by three cuts. */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel className="gap-0">
+              <PanelHeader>
+                <PanelTitle variant="heading">{t('a11y.tradeBreakdown')}</PanelTitle>
+                <InfoHint text={t('pf.tradeBreakdownInfo')} />
+              </PanelHeader>
+              <div className="p-3">
+                <BreakdownList
+                  rows={bodySummary.sourceBreakdown}
+                  max={sourceBarMax}
+                  emptyLabel={t('pf.noClosedSell')}
+                />
+              </div>
+            </Panel>
+
+            <Panel className="gap-0">
+              <PanelHeader>
+                <PanelTitle variant="heading">{t('a11y.categoryBreakdown')}</PanelTitle>
+                <InfoHint text={t('pf.categoryBreakdownInfo')} />
+              </PanelHeader>
+              <div className="p-3">
+                <BreakdownList
+                  rows={bodySummary.categoryBreakdown}
+                  max={categoryBarMax}
+                  emptyLabel={t('pf.noCategoryProfit')}
+                />
+              </div>
+            </Panel>
           </div>
 
-          <div className="pf-footer-grid">
-          <div className="chart-card portfolio-notes-card">
-            <PortfolioPanelHeader
-              title={t('a11y.dataConfidence')}
-              info={t('pf.dataConfidenceInfo')}
-              infoPlacement="left"
-            />
-            <div className="portfolio-confidence-row">
-              <span className="portfolio-confidence-stat">
-                <span className="portfolio-confidence-stat-label">{t('pf.profitBasis')}</span>
-                <span className={`market-panel-badge tone-${portfolioCoverageTone(bodySummary.costBasisCoveragePct)}`}>
-                  {formatPercentValue(bodySummary.costBasisCoveragePct)}
-                </span>
-              </span>
-              <span className="portfolio-confidence-stat">
-                <span className="portfolio-confidence-stat-label">{t('pf.inventoryValue')}</span>
-                <span className={`market-panel-badge tone-${portfolioCoverageTone(bodySummary.currentValueCoveragePct)}`}>
-                  {formatPercentValue(bodySummary.currentValueCoveragePct)}
-                </span>
-              </span>
+          <Panel className="gap-0">
+            <PanelHeader>
+              <PanelTitle variant="heading">{t('pf.topItems')}</PanelTitle>
+              <InfoHint text={t('pf.topItemsInfo')} />
+            </PanelHeader>
+            <div className="p-3">
+              <BreakdownList
+                rows={bodySummary.itemBreakdown}
+                max={itemBarMax}
+                emptyLabel={t('pf.noItemProfit')}
+              />
             </div>
-            {bodySummary.notes.length > 0 ? (
-              <div className="portfolio-notes-list">
-                {bodySummary.notes.map((note) => (
-                  <span key={note} className="portfolio-note-pill">
-                    {note}
-                  </span>
-                ))}
+          </Panel>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel className="gap-0">
+              <PanelHeader>
+                <PanelTitle variant="heading">{t('a11y.dataConfidence')}</PanelTitle>
+                <InfoHint text={t('pf.dataConfidenceInfo')} />
+              </PanelHeader>
+              <div className="flex flex-col gap-2 p-3">
+                <MetricGrid>
+                  <Metric
+                    label={t('pf.profitBasis')}
+                    value={formatPercentValue(bodySummary.costBasisCoveragePct)}
+                    tone={portfolioCoverageTone(bodySummary.costBasisCoveragePct)}
+                  />
+                  <Metric
+                    label={t('pf.inventoryValue')}
+                    value={formatPercentValue(bodySummary.currentValueCoveragePct)}
+                    tone={portfolioCoverageTone(bodySummary.currentValueCoveragePct)}
+                  />
+                </MetricGrid>
+                {bodySummary.notes.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {bodySummary.notes.map((note) => (
+                      <span
+                        key={note}
+                        className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-ink-dim"
+                      >
+                        {note}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-          <div className="chart-card pf-planner-card portfolio-summary-loadable">
-            {(inventoryLoading || !inventory) && !inventoryError ? <PortfolioLoadingOverlay /> : null}
-            <PortfolioPanelHeader
-              title={t('pf.plannerInventory')}
-              info={t('pf.plannerInventoryInfo')}
-              infoPlacement="left"
-            />
-            <div className="pf-planner-body">
-              <div className="info-card-val neutral">{formatPlatinumValue(inventory?.totalValue ?? 0)}</div>
-              {inventoryError ? (
-                <div className="info-card-subnote portfolio-inventory-error">
-                  <span>{inventoryError}</span>
-                  <button
-                    type="button"
-                    className="act-btn"
-                    onClick={() => void reloadInventory()}
-                    disabled={inventoryLoading}
-                  >
-                    {inventoryLoading ? t('pf.retrying') : t('common.retry')}
-                  </button>
-                </div>
-              ) : inventory && inventory.unpricedCount > 0 ? (
-                <div className="info-card-subnote">
-                  {t('pf.partsNotYetPriced', { n: inventory.unpricedCount })}
-                </div>
-              ) : null}
-            </div>
-          </div>
+            </Panel>
+
+            <Panel className="relative gap-0">
+              {(inventoryLoading || !inventory) && !inventoryError ? <PortfolioLoadingOverlay /> : null}
+              <PanelHeader>
+                <PanelTitle variant="heading">{t('pf.plannerInventory')}</PanelTitle>
+                <InfoHint text={t('pf.plannerInventoryInfo')} />
+              </PanelHeader>
+              <div className="flex flex-col gap-2 p-3">
+                <span className="font-mono text-2xl leading-none font-bold text-ink tabular-nums">
+                  {formatPlatinumValue(inventory?.totalValue ?? 0)}
+                </span>
+                {inventoryError ? (
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-accent-red">
+                    <span>{inventoryError}</span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void reloadInventory()}
+                      disabled={inventoryLoading}
+                      className="h-6 text-[11px]"
+                    >
+                      {inventoryLoading ? t('pf.retrying') : t('common.retry')}
+                    </Button>
+                  </div>
+                ) : inventory && inventory.unpricedCount > 0 ? (
+                  <span className="text-[11px] text-ink-dim">
+                    {t('pf.partsNotYetPriced', { n: inventory.unpricedCount })}
+                  </span>
+                ) : null}
+              </div>
+            </Panel>
           </div>
         </div>
       )}
