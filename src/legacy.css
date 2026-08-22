@@ -66,76 +66,6 @@ textarea:focus-visible,
   vertical-align: middle;
 }
 
-.farm-now-search {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 12px;
-}
-.farm-now-search-input {
-  flex: 1;
-  min-width: 0;
-}
-.farm-now-search {
-  flex-wrap: wrap;
-}
-.farm-now-select {
-  flex: 0 0 auto;
-  width: auto;
-  padding: 6px 8px;
-  font-size: 12px;
-}
-.farm-now-refine {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  background: rgba(74, 158, 255, 0.06);
-  border: 1px solid rgba(74, 158, 255, 0.2);
-  border-radius: 10px;
-}
-.farm-now-refine-hint {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-.farm-now-refine-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-.farm-now-refine-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-}
-.farm-now-refine-cell.is-best {
-  border-color: var(--accent-green);
-  box-shadow: 0 0 0 1px rgba(61, 214, 140, 0.3);
-}
-.farm-now-refine-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-}
-.farm-now-refine-value {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.farm-now-refine-cell.is-best .farm-now-refine-value {
-  color: var(--accent-green);
-}
-.farm-now-refine-owned {
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
 /* Domain-coded panel title dots. A card gets a colored dot before its title only when
    it carries an accent-* class, so non-panel card labels (modals etc.) stay plain. */
 .card.accent-blue   { --panel-accent: var(--accent-blue);   --panel-accent-glow: rgba(74, 158, 255, 0.45); }
@@ -2157,78 +2087,9 @@ textarea:focus-visible,
 .sp-part-group-label.muted { color: var(--text-muted); margin-top: 16px; }
 .fn-row-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fn-row-sub { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
-.fn-owned-pill {
-  flex-shrink: 0; font-size: 11px; font-weight: 600;
-  color: var(--color-blue); background: rgba(74, 158, 255, 0.14);
-  padding: 2px 8px; border-radius: 999px;
-}
-.fn-owned-pill.is-none { color: var(--text-muted); background: rgba(255, 255, 255, 0.06); }
-.fn-drop { padding: 8px 12px; }
-.fn-drop-value { text-align: right; flex-shrink: 0; }
-.fn-drop-value strong {
-  display: block; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 14px; font-weight: 600; color: var(--color-green);
-}
-.fn-drop-list-low { opacity: 0.66; }
-.fn-drop-list-low .fn-drop-value strong { color: var(--text-secondary); }
-
-/* "Your odds at X" — the payoff panel when the search targets a specific drop. */
-.fn-odds {
-  background: var(--bg-surface); border: 1px solid rgba(74, 158, 255, 0.35);
-  border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;
-}
-.fn-odds-head { margin-bottom: 14px; }
-.fn-odds-title { display: block; font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.fn-odds-sub { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-.fn-odds-main { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; margin-bottom: 14px; }
-.fn-odds-gauge { flex: 1; min-width: 200px; }
-.fn-odds-pct {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 34px; font-weight: 700; color: var(--color-green); line-height: 1;
-}
-.fn-odds-pct-label { font-size: 12px; color: var(--text-secondary); margin-left: 8px; }
-.fn-odds-bar {
-  display: block; height: 8px; border-radius: 4px; margin-top: 10px;
-  background: var(--bg-base); overflow: hidden;
-}
-.fn-odds-bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--color-green); }
-.fn-odds-side { display: flex; gap: 22px; }
-.fn-odds-stat { text-align: right; }
-/* Direct child only — a descendant selector here also hit .info-hint-glyph, turning the "i" into
-   a flex item pinned to the right edge of its circle. */
-.fn-odds-stat > span {
-  display: flex; align-items: center; justify-content: flex-end; gap: 5px;
-  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
-}
 /* Info hints sit inline with these small labels rather than top-aligned. */
 .fn-odds-stat .info-hint,
 .fn-odds-pct-label .info-hint { align-self: center; }
-.fn-odds-pct-label { display: inline-flex; align-items: center; gap: 5px; }
-.fn-odds-stat strong {
-  display: block; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 18px; font-weight: 600; color: var(--text-primary);
-}
-.fn-odds-relics {
-  display: flex; flex-direction: column; gap: 6px;
-  border-top: 1px solid var(--border); padding-top: 12px;
-}
-.fn-odds-relic { display: flex; align-items: center; gap: 12px; }
-.fn-odds-relic-name {
-  flex: 0 0 92px; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 12px; font-weight: 600; color: var(--text-primary);
-}
-.fn-odds-relic-breakdown { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
-.fn-odds-chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px; color: var(--text-secondary);
-  background: var(--bg-base); border-radius: 999px; padding: 3px 9px;
-}
-.fn-odds-chip-count { font-weight: 700; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; }
-.fn-odds-chip-chance { color: var(--text-muted); }
-.fn-odds-relic-total {
-  flex-shrink: 0; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 13px; font-weight: 600; color: var(--color-green);
-}
 /* Session still resolving: the shell paints instantly so "Farm this" never feels dead. */
 .farm-panel-loading {
   display: flex; align-items: center; gap: 10px;
@@ -2272,7 +2133,6 @@ textarea:focus-visible,
   flex-shrink: 0; font-family: 'JetBrains Mono', monospace;
   font-size: 10px; color: var(--text-muted);
 }
-.fn-odds-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* Context-menu price header + inline watchlist price prompt. */
 .item-context-menu-header {
@@ -2325,19 +2185,6 @@ textarea:focus-visible,
   font-size: 11px; color: var(--text-secondary); white-space: nowrap;
 }
 .scanner-results-list { display: flex; flex-direction: column; gap: 10px; }
-
-/* ═══ "Now farming" session ══════════════════════════════════════════════ */
-.fn-farm-this-row { display: flex; margin-bottom: 12px; }
-.fn-farm-this-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 14px; border-radius: 999px; cursor: pointer;
-  font-size: 12px; font-weight: 600;
-  color: var(--color-amber); background: rgba(240, 160, 48, 0.14);
-  border: 1px solid rgba(240, 160, 48, 0.4);
-  transition: background 0.12s, color 0.12s;
-}
-.fn-farm-this-btn:hover:not(:disabled) { background: rgba(240, 160, 48, 0.24); }
-.fn-farm-this-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* Floating session panel — above page content, below modals (which sit at 350). */
 .farm-panel {
@@ -2457,9 +2304,6 @@ textarea:focus-visible,
    content (a sibling combinator can't reach backwards). */
 body:has(.farm-panel) .inventory-import-fab { bottom: 96px; }
 body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
-
-.fn-odds-more { font-size: 11px; color: var(--text-muted); padding: 2px 0 0 104px; }
-.fn-odds-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin: 12px 0 0; }
 /* Control bar: mode → search → filters on one line, scan status quietly beneath. */
 .fn-controls { margin-bottom: 14px; }
 .fn-controls-row {
@@ -2467,48 +2311,13 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
   background: var(--bg-surface); border: 1px solid var(--border);
   border-radius: 12px; padding: 10px 12px;
 }
-.fn-segmented {
-  display: inline-flex; flex-shrink: 0; gap: 2px;
-  background: var(--bg-base); border-radius: 9px; padding: 3px;
-}
-.fn-segmented-btn {
-  border: none; background: transparent; cursor: pointer;
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  padding: 6px 14px; border-radius: 7px; white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
-}
-.fn-segmented-btn:hover { color: var(--text-primary); }
-.fn-segmented-btn.is-active { background: var(--bg-elevated); color: var(--text-primary); }
 
 .fn-search { position: relative; flex: 1 1 220px; min-width: 180px; display: flex; align-items: center; }
 .fn-search-icon {
   position: absolute; left: 10px; font-size: 15px; color: var(--text-muted); pointer-events: none;
 }
-/* Autofill dropdown: relic + drop names from the live scan. */
-.fn-suggest {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
-  display: flex; flex-direction: column;
-  background: var(--bg-elevated); border: 1px solid var(--border-strong, var(--border));
-  border-radius: 10px; padding: 4px; overflow: hidden;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
-}
-.fn-suggest-item {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 7px 9px; border-radius: 7px; cursor: pointer;
-  background: transparent; border: none; color: var(--text-primary); font-size: 12.5px;
-}
-.fn-suggest-item:hover { background: rgba(255, 255, 255, 0.06); }
-.fn-suggest-kind {
-  flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  padding: 2px 6px; border-radius: 999px;
-}
 .fn-suggest-kind.drop { color: var(--color-green); background: rgba(61, 214, 140, 0.14); }
 .fn-suggest-kind.relic { color: var(--color-blue); background: rgba(74, 158, 255, 0.14); }
-.fn-suggest-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fn-suggest-detail {
-  flex-shrink: 0; font-size: 11px; color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
 
 .fn-search-input {
   width: 100%; height: 34px; padding: 0 32px 0 32px;
@@ -2517,12 +2326,6 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
 }
 .fn-search-input:focus { outline: none; border-color: var(--color-blue); }
 .fn-search-input::-webkit-search-cancel-button { display: none; }
-.fn-search-clear {
-  position: absolute; right: 6px; display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; border-radius: 6px; border: none; cursor: pointer;
-  background: transparent; color: var(--text-muted); font-size: 14px;
-}
-.fn-search-clear:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-primary); }
 
 .fn-filters { display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
 .fn-filter { display: inline-flex; align-items: center; gap: 6px; }
@@ -2535,12 +2338,6 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
   color: var(--text-primary); font-size: 12.5px; cursor: pointer;
 }
 .fn-filter select:focus { outline: none; border-color: var(--color-blue); }
-
-.fn-controls-meta {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 8px 4px 0; font-size: 11px; color: var(--text-muted);
-}
-.fn-rescan-btn { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; }
 @media (max-width: 720px) {
   .fn-search { flex-basis: 100%; order: -1; }
 }
@@ -2655,149 +2452,6 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
   color: var(--text-muted);
 }
 
-.farm-now-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
-}
-
-.farm-now-panel {
-  min-height: 420px;
-}
-
-.farm-now-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.farm-now-header h3 {
-  margin: 4px 0 6px;
-  font-size: 20px;
-}
-
-.farm-now-header p {
-  margin: 0;
-  color: var(--text-dim);
-  line-height: 1.5;
-  max-width: 720px;
-}
-
-.farm-now-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.farm-now-tab-button {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(108, 174, 255, 0.22);
-  background: rgba(12, 19, 33, 0.6);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: 140ms ease;
-}
-
-.farm-now-tab-button.is-active {
-  border-color: rgba(108, 174, 255, 0.5);
-  color: #d8ebff;
-  background: rgba(17, 28, 46, 0.92);
-}
-
-.farm-now-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(108, 174, 255, 0.16);
-  background: rgba(10, 16, 28, 0.6);
-  margin-bottom: 16px;
-}
-
-.farm-now-summary-main {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.farm-now-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.farm-now-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.farm-now-refresh-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-}
-
-.farm-now-refresh-spinner {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  border: 1.5px solid rgba(121, 184, 255, 0.2);
-  border-top-color: #79b8ff;
-  animation: market-panel-spin 0.85s linear infinite;
-}
-
-.farm-now-summary-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.farm-now-toplist {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.farm-now-top-card {
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(11, 18, 32, 0.8);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.farm-now-top-card strong {
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.farm-now-top-meta {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.farm-now-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .farm-now-list-set-completion .farm-now-header-row,
 .farm-now-list-set-completion .farm-now-row-main {
   grid-template-columns: minmax(260px, 1.8fr) minmax(110px, 0.55fr) minmax(110px, 0.55fr) minmax(90px, 0.45fr) 24px;
@@ -2809,18 +2463,6 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
   grid-template-columns: minmax(240px, 1.5fr) minmax(140px, 0.6fr) minmax(90px, 0.4fr) minmax(120px, 0.5fr) minmax(120px, 0.5fr) 24px;
   align-items: center;
   gap: 12px;
-}
-
-.farm-now-header-row {
-  padding: 0 14px 4px;
-  color: var(--text-muted);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.farm-now-header-value {
-  justify-self: end;
 }
 
 .farm-now-row {
@@ -2899,116 +2541,10 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
   font-size: 12px;
 }
 
-.farm-now-cell-refinement {
-  justify-content: flex-start;
-}
-
-.farm-now-cell-profit {
-  justify-content: flex-end;
-  font-weight: 700;
-  color: var(--text-primary);
-  text-align: right;
-}
-
-.farm-now-cell-owned {
-  justify-content: flex-start;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
 .farm-now-cell-action {
   justify-content: flex-end;
   font-size: 16px;
   color: var(--text-muted);
-}
-
-.farm-now-row-body {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(12, 16, 24, 0.7);
-  padding: 14px 16px 18px;
-}
-
-.farm-now-drop-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
-}
-
-.farm-now-drop-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(10, 14, 21, 0.8);
-}
-
-.farm-now-drop-card.is-best {
-  border-color: rgba(61, 214, 140, 0.35);
-  box-shadow: inset 0 0 0 1px rgba(61, 214, 140, 0.12);
-}
-
-.farm-now-drop-card.is-needed {
-  border-color: rgba(61, 214, 140, 0.38);
-  background: linear-gradient(180deg, rgba(13, 26, 20, 0.92), rgba(8, 16, 12, 0.88));
-  box-shadow: inset 0 0 0 1px rgba(61, 214, 140, 0.1);
-}
-
-.farm-now-drop-thumb {
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: rgba(22, 28, 38, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.farm-now-drop-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 9px;
-}
-
-.farm-now-drop-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.farm-now-drop-name {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.farm-now-drop-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.farm-now-drop-stat {
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(8, 14, 24, 0.65);
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.farm-now-drop-needed-sets {
-  color: rgba(144, 234, 185, 0.92);
-  font-size: 11px;
-  line-height: 1.4;
 }
 
 .relic-refinement-pill {
@@ -3515,10 +3051,6 @@ body:has(.farm-fab) .inventory-import-fab { bottom: 88px; }
 
   .set-planner-mini-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .farm-now-header-row {
-    display: none;
   }
 
   .farm-now-row-main,
@@ -14047,19 +13579,6 @@ img[data-asset-failed='true'] {
 .info-hint:focus-visible {
   color: var(--text-primary);
   border-color: rgba(139, 111, 255, 0.5);
-}
-
-/* Farm Now: owned-refinement awareness note under the guidance hint */
-.farm-now-refine-owned-note {
-  margin: -2px 0 4px;
-  padding: 4px 10px;
-  border-radius: 7px;
-  width: fit-content;
-  border: 1px solid rgba(240, 160, 48, 0.28);
-  background: rgba(240, 160, 48, 0.08);
-  color: var(--accent-amber);
-  font-size: 11px;
-  font-weight: 500;
 }
 
 /* ── Language settings: Beta pill + translation disclaimer ── */

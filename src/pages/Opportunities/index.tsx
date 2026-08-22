@@ -25,6 +25,19 @@ import setCompletionImportExample from '../../assets/set-completion-import-examp
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { ItemName } from '../../components/ItemName';
 import { OpportunitiesOverview } from './Overview';
+import { FarmNow, type FarmNowSuggestion } from './FarmNow';
+import {
+  formatChance,
+  formatPlat,
+  relicRarityTone,
+  relicRefinementTone,
+  type FarmNowGate,
+  type FarmNowRelicRow,
+  type FarmNowSetCompletionDrop,
+  type FarmNowSetCompletionRow,
+  type RefinementGuidance,
+  type RefinementMetric,
+} from './farmNowModel';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import {
   clearWatchlistAddFeedbackTimeouts,
@@ -37,8 +50,7 @@ import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { useItemQueryMatcher } from '../../hooks/useItemSearch';
 import { tActive, useTranslation } from '../../i18n';
-import { tConfidence, tHealth } from '../../lib/healthLabels';
-import { InfoHint } from '../../components/InfoHint';
+import { tConfidence } from '../../lib/healthLabels';
 import { buildFarmingRelic, parseRelicTierCode } from '../../lib/farmingSession';
 import {
   REFINEMENT_KEYS,
@@ -54,8 +66,6 @@ import type {
   ArbitrageScannerSetEntry,
   OwnedRelicEntry,
   RelicRefinementChanceProfile,
-  RelicRoiDropEntry,
-  RelicRoiEntry,
   SetCompletionOwnedItem,
   WfmAutocompleteItem,
 } from '../../types';
@@ -112,62 +122,6 @@ const PLANNER_SUMMARY_THRESHOLD = 0.5;
 
 /** How many relics the odds panel lists inline before collapsing the rest into "+N more" —
  *  the full inventory is already in the relic rows below. */
-const ODDS_RELIC_PREVIEW_COUNT = 3;
-
-type RefinementMetric = { key: string; label: string; value: number | null; owned: number };
-type RefinementGuidance = {
-  metrics: RefinementMetric[];
-  bestKey: string;
-  bestLabel: string;
-  hint: string;
-  /** Set when the user owns none of the recommended refinement but some of another. */
-  ownedNote: { count: number; label: string } | null;
-};
-
-type FarmNowRelicRow = {
-  relic: RelicRoiEntry;
-  tier: string;
-  ownedCount: number;
-  expectedProfit: number | null; // EV/run at the recommended refinement
-  platPerHour: number | null;
-  guidance: RefinementGuidance;
-  bestDropSlug: string | null;
-  /** Set when the search query targeted a specific drop item (item-targeted refinement mode). */
-  targetedDropName?: string;
-  drops: Array<{
-    drop: RelicRoiDropEntry;
-    chance: number | null;
-    expectedValue: number | null;
-  }>;
-};
-
-type FarmNowSetCompletionDrop = {
-  drop: RelicRoiDropEntry;
-  isNeeded: boolean;
-  missingQuantity: number;
-  coveredSetCount: number;
-  setNames: string[];
-  /** Best (closest-to-complete) set this drop helps: owned/total parts. */
-  bestSetProgress: { owned: number; total: number } | null;
-};
-
-type FarmNowSetCompletionRow = {
-  relic: RelicRoiEntry;
-  tier: string;
-  ownedCount: number;
-  neededDropCount: number;
-  totalMissingQuantity: number;
-  coveredSetCount: number;
-  coveredSetNames: string[];
-  /** Progress-weighted priority: completes near-finished sets first. */
-  completionScore: number;
-  /** The closest-to-complete set this relic helps. */
-  bestSetProgress: { owned: number; total: number; name: string } | null;
-  /** Which refinement to run for the best shot at the NEEDED parts. */
-  guidance: RefinementGuidance;
-  drops: FarmNowSetCompletionDrop[];
-};
-
 type PlannerCatalogItem = {
   itemId: number | null;
   itemKey: string | null;
@@ -405,22 +359,6 @@ function resolveScreenshotImportRow(
   };
 }
 
-function formatPlat(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return '—';
-  }
-
-  return `${Math.round(value)}p`;
-}
-
-function formatPlatDecimal(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return '—';
-  }
-
-  return `${(Math.round(value * 10) / 10).toFixed(1)}p`;
-}
-
 function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return '—';
@@ -521,88 +459,6 @@ function buildRefinementGuidance(
     hint,
     ownedNote,
   };
-}
-
-function formatChance(value: number | null): string {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return '—';
-  }
-
-  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded}%`;
-}
-
-function RefinementGuidancePanel({
-  guidance,
-  unit,
-  heading,
-}: {
-  guidance: RefinementGuidance;
-  unit: 'plat' | 'pct';
-  heading?: string;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="farm-now-refine">
-      <div className="farm-now-refine-hint">
-        {heading ?? (unit === 'plat' ? t('opp.bestPlatPerRun') : t('opp.chanceAtNeededPart'))} — {guidance.hint}
-      </div>
-      {guidance.ownedNote ? (
-        <div className="farm-now-refine-owned-note">
-          {t('opp.youOwnRefine', { count: guidance.ownedNote.count, label: guidance.ownedNote.label })}
-        </div>
-      ) : null}
-      <div className="farm-now-refine-grid">
-        {guidance.metrics.map((metric) => (
-          <div
-            key={metric.key}
-            className={`farm-now-refine-cell${
-              metric.key === guidance.bestKey ? ' is-best' : ''
-            }`}
-          >
-            <span className="farm-now-refine-label">{metric.label}</span>
-            <span className="farm-now-refine-value">
-              {metric.value === null
-                ? '—'
-                : unit === 'plat'
-                  ? `${metric.value}p/run`
-                  : formatChance(metric.value)}
-            </span>
-            <span className="farm-now-refine-owned">×{metric.owned} owned</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function relicRarityTone(rarity: string | null): string {
-  const normalized = rarity?.toLowerCase() ?? '';
-  if (normalized.includes('rare')) {
-    return 'rare';
-  }
-  if (normalized.includes('uncommon')) {
-    return 'uncommon';
-  }
-  if (normalized.includes('common')) {
-    return 'common';
-  }
-  return 'unknown';
-}
-
-function relicRefinementTone(refinementKey: string): string {
-  switch (refinementKey) {
-    case 'exceptional':
-      return 'exceptional';
-    case 'flawless':
-      return 'flawless';
-    case 'radiant':
-      return 'radiant';
-    case 'intact':
-      return 'intact';
-    default:
-      return 'unknown';
-  }
 }
 
 function buildPlannerDefaultTarget(component: ArbitrageScannerComponentEntry): string {
@@ -2012,7 +1868,7 @@ export function OpportunitiesPage({
    * user can find "Bronco Prime Barrel" without knowing which relic carries it. Built from the
    * same scan the list renders from, so suggestions can never point at rows that don't exist.
    */
-  const farmNowSuggestions = useMemo(() => {
+  const farmNowSuggestions = useMemo<FarmNowSuggestion[]>(() => {
     const query = farmNowSearch.trim();
     if (query.length < 2) {
       return [];
@@ -2048,10 +1904,6 @@ export function OpportunitiesPage({
     return [...drops.values(), ...relics.values()].slice(0, 8);
   }, [farmNowSearch, farmNowRelics, localizeName, t, matchesItem]);
 
-  const farmNowTopRelics = useMemo(
-    () => displayedFarmNowRelics.slice(0, 3),
-    [displayedFarmNowRelics],
-  );
   const farmNowMissingComponents = useMemo(() => {
     const byKey = new Map<
       string,
@@ -2225,10 +2077,6 @@ export function OpportunitiesPage({
     return sorted;
   }, [farmNowSetCompletionRelics, farmNowSearch, farmNowEra, farmNowSort, matchesItem]);
 
-  const farmNowSetCompletionTopRelics = useMemo(
-    () => displayedFarmNowSetCompletionRelics.slice(0, 3),
-    [displayedFarmNowSetCompletionRelics],
-  );
   const farmNowSetCompletionSetCount = useMemo(
     () => plannerEntries.filter((planner) => planner.components.some((component) => component.missingQuantity > 0))
       .length,
@@ -2676,6 +2524,36 @@ export function OpportunitiesPage({
 
   const noScanAvailable = !loading && !(scannerResponse?.results?.length);
   const noFarmScan = !farmNowLoading && !(farmNowScan?.relicRoiResults?.length);
+
+  /**
+   * Everything that can stand between the user and a list of relics, resolved to one value.
+   *
+   * Order matters and is the shipped order: you cannot judge "no relics" before the scan exists,
+   * and the inventory check is last because it only applies to set completion. This used to be a
+   * nine-deep nested ternary written out once per mode; the *states* were all real, the
+   * duplication was in rendering them.
+   */
+  const farmNowGate = useMemo<FarmNowGate>(() => {
+    if (farmNowLoading) return { kind: 'loading' };
+    if (noFarmScan) return { kind: 'noScan' };
+    if (ownedRelicsLoading) return { kind: 'relicsLoading' };
+    if (ownedRelicsError) return { kind: 'relicsError', message: ownedRelicsError };
+    if (ownedRelicsCacheLoaded && !ownedRelicsUpdatedAt) return { kind: 'needsRelicLoad' };
+    if (ownedRelics.length === 0) return { kind: 'noOwnedRelics' };
+    // Set completion joins the planner inventory; part profit does not need it.
+    if (farmNowTab === 'set-completion' && ownedItems.length === 0) return { kind: 'noInventory' };
+    return { kind: 'ready' };
+  }, [
+    farmNowLoading,
+    noFarmScan,
+    ownedRelicsLoading,
+    ownedRelicsError,
+    ownedRelicsCacheLoaded,
+    ownedRelicsUpdatedAt,
+    ownedRelics.length,
+    farmNowTab,
+    ownedItems.length,
+  ]);
 
   return (
     <>
@@ -3160,802 +3038,53 @@ export function OpportunitiesPage({
             </section>
           </div>
         ) : activeTab === 'farm-now' ? (
-          <div className="farm-now-layout">
-            <section className="market-panel farm-now-panel">
-              <div className="farm-now-header">
-                <div>
-                  <span className="panel-title-eyebrow">{t('opp.whatToFarmNow')}</span>
-                  <h3>
-                    {farmNowTab === 'set-completion'
-                      ? t('opp.relicsForSetCompletion')
-                      : t('opp.relicProfitPlanner')}
-                  </h3>
-                  <p>
-                    {farmNowTab === 'set-completion'
-                      ? t('opp.setCompletionRelicsDesc')
-                      : t('opp.relicProfitPlannerDesc')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="sp-summary">
-                <div className="sp-summary-lead">
-                  <span className="sp-summary-lead-icon"><i className="ti ti-flame" aria-hidden="true" /></span>
-                  <div>
-                    <span className="sp-summary-title">
-                      {farmNowTab === 'set-completion'
-                        ? t('opp.setsInProgress', { n: farmNowSetCompletionSetCount })
-                        : t('opp.relicsWorthRunning', { n: farmNowRelics.length })}
-                    </span>
-                    <span className="sp-summary-sub">
-                      {farmNowTab === 'set-completion'
-                        ? t('opp.missingComponents', { n: farmNowSetCompletionMissingCount })
-                        : t('opp.rankedByPlat')}
-                    </span>
-                  </div>
-                </div>
-                <div className="sp-summary-flow">
-                  <div className="sp-summary-stat">
-                    <span className="sp-summary-stat-label">{t('opp.youOwn')}</span>
-                    <span className="sp-summary-stat-value">{ownedRelicTotal}</span>
-                  </div>
-                  <div className="sp-summary-stat sp-summary-stat-profit">
-                    <span className="sp-summary-stat-label">
-                      {farmNowTab === 'set-completion' ? t('opp.relic') : t('opp.bestRun')}
-                    </span>
-                    <span className="sp-summary-stat-value">
-                      {farmNowTab === 'set-completion'
-                        ? farmNowSetCompletionRelics.length
-                        : formatPlatDecimal(farmNowRelics[0]?.expectedProfit ?? null)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {farmNowDropOdds ? (
-                <div className="fn-odds">
-                  <div className="fn-odds-head">
-                    <div className="fn-odds-head-row">
-                      <span className="fn-odds-title">
-                        {t('opp.oddsTitle', { item: farmNowDropOdds.targetName })}
-                      </span>
-                      <button
-                        type="button"
-                        className="fn-farm-this-btn"
-                        onClick={() =>
-                          void startFarmingForItem(
-                            farmNowDropOdds.targetSlug,
-                            farmNowDropOdds.targetName,
-                          )
-                        }
-                      >
-                        <i className="ti ti-flame" aria-hidden="true" />
-                        {t('farm.farmItem')}
-                      </button>
-                    </div>
-                    <span className="fn-odds-sub">
-                      {t('opp.oddsRunAll', { n: farmNowDropOdds.totalRelics })}
-                      {farmNowDropOdds.exitPrice !== null
-                        ? ` · ${t('opp.oddsSellsFor', { price: formatPlat(farmNowDropOdds.exitPrice) })}`
-                        : ''}
-                    </span>
-                  </div>
-
-                  <div className="fn-odds-main">
-                    <div className="fn-odds-gauge">
-                      <span className="fn-odds-pct">{Math.round(farmNowDropOdds.atLeastOne * 100)}%</span>
-                      <span className="fn-odds-pct-label">
-                        {t('opp.oddsAtLeastOne')}
-                        <InfoHint text={t('opp.oddsAtLeastOneInfo')} placement="bottom" />
-                      </span>
-                      <span className="fn-odds-bar" aria-hidden="true">
-                        <span
-                          className="fn-odds-bar-fill"
-                          style={{ width: `${Math.round(farmNowDropOdds.atLeastOne * 100)}%` }}
-                        />
-                      </span>
-                    </div>
-                    <div className="fn-odds-side">
-                      <div className="fn-odds-stat">
-                        <span>
-                          {t('opp.oddsExpected')}
-                          <InfoHint text={t('opp.oddsExpectedInfo')} placement="bottom" />
-                        </span>
-                        <strong>{farmNowDropOdds.expectedDrops.toFixed(2)}</strong>
-                      </div>
-                      <div className="fn-odds-stat">
-                        <span>
-                          {t('opp.oddsRelicsOwned')}
-                          <InfoHint text={t('opp.oddsRelicsOwnedInfo')} placement="bottom" />
-                        </span>
-                        <strong>{farmNowDropOdds.totalRelics}</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Only the few relics that actually move your odds — the full list is in the
-                      relic rows below, so repeating a long inventory here is just noise. */}
-                  <div className="fn-odds-relics">
-                    {farmNowDropOdds.relics.slice(0, ODDS_RELIC_PREVIEW_COUNT).map((relic) => (
-                      <div key={relic.label} className="fn-odds-relic">
-                        <span className="fn-odds-relic-name">{relic.label}</span>
-                        <span className="fn-odds-relic-breakdown">
-                          {relic.breakdown.map((entry) => (
-                            <span key={entry.refinement} className="fn-odds-chip">
-                              <span className="fn-odds-chip-count">×{entry.count}</span>
-                              {tHealth(t, entry.refinement.charAt(0).toUpperCase() + entry.refinement.slice(1))}
-                              <span className="fn-odds-chip-chance">
-                                {Math.round(entry.chance * 100)}% {t('opp.oddsPerRun')}
-                              </span>
-                            </span>
-                          ))}
-                        </span>
-                        <span className="fn-odds-relic-total">
-                          {Math.round(relic.atLeastOne * 100)}%
-                        </span>
-                      </div>
-                    ))}
-                    {farmNowDropOdds.relics.length > ODDS_RELIC_PREVIEW_COUNT ? (
-                      <span className="fn-odds-more">
-                        {t('opp.oddsMoreRelics', {
-                          n: farmNowDropOdds.relics.length - ODDS_RELIC_PREVIEW_COUNT,
-                        })}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <p className="fn-odds-hint">
-                    {farmNowDropOdds.relics[0]?.bestRefinement ? (
-                      <>
-                        {t('opp.oddsBestHint', {
-                          refinement: farmNowDropOdds.relics[0].bestRefinement,
-                          chance: `${Math.round((farmNowDropOdds.relics[0].bestChance ?? 0) * 100)}%`,
-                        })}
-                        {farmNowDropOdds.relics[0].missingBest
-                          ? ` ${t('opp.oddsUpgradeHint', { refinement: farmNowDropOdds.relics[0].bestRefinement })}`
-                          : ''}
-                        {farmNowDropOdds.runsForTargetOdds !== null
-                          ? ` ${t('opp.oddsTargetRuns', { n: farmNowDropOdds.runsForTargetOdds, refinement: farmNowDropOdds.relics[0].bestRefinement })}`
-                          : ''}
-                      </>
-                    ) : null}
-                  </p>
-                </div>
-              ) : null}
-
-              {/* One control bar: what you're viewing (mode) → find (search) → narrow (era) →
-                  order (sort), with scan status on its own quiet line beneath. */}
-              <div className="fn-controls">
-                <div className="fn-controls-row">
-                  <div className="fn-segmented" role="tablist" aria-label={t('opp.whatToFarmNow')}>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={farmNowTab === 'part-profit'}
-                      className={`fn-segmented-btn${farmNowTab === 'part-profit' ? ' is-active' : ''}`}
-                      onClick={() => setFarmNowTab('part-profit')}
-                    >
-                      {t('opp.forPartProfit')}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={farmNowTab === 'set-completion'}
-                      className={`fn-segmented-btn${farmNowTab === 'set-completion' ? ' is-active' : ''}`}
-                      onClick={() => setFarmNowTab('set-completion')}
-                    >
-                      {t('opp.forSetCompletion')}
-                    </button>
-                  </div>
-
-                  <div className="fn-search">
-                    <i className="ti ti-search fn-search-icon" aria-hidden="true" />
-                    <input
-                      type="search"
-                      className="fn-search-input"
-                      placeholder={t('opp.searchRelicsPlaceholder')}
-                      value={farmNowSearch}
-                      onChange={(event) => {
-                        setFarmNowSearch(event.target.value);
-                        setFarmNowSuggestOpen(true);
-                      }}
-                      onFocus={() => setFarmNowSuggestOpen(true)}
-                      // Delay so a suggestion click lands before the list unmounts.
-                      onBlur={() => window.setTimeout(() => setFarmNowSuggestOpen(false), 120)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Escape') setFarmNowSuggestOpen(false);
-                      }}
-                      spellCheck={false}
-                    />
-                    {farmNowSearch ? (
-                      <button
-                        type="button"
-                        className="fn-search-clear"
-                        aria-label={t('opp.clear')}
-                        onClick={() => {
-                          setFarmNowSearch('');
-                          setFarmNowSuggestOpen(false);
-                        }}
-                      >
-                        <i className="ti ti-x" aria-hidden="true" />
-                      </button>
-                    ) : null}
-                    {farmNowSuggestOpen && farmNowSuggestions.length > 0 ? (
-                      <div className="fn-suggest" role="listbox">
-                        {farmNowSuggestions.map((suggestion) => (
-                          <button
-                            key={`${suggestion.kind}-${suggestion.label}`}
-                            type="button"
-                            role="option"
-                            aria-selected={false}
-                            className="fn-suggest-item"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => {
-                              setFarmNowSearch(suggestion.label);
-                              setFarmNowSuggestOpen(false);
-                            }}
-                          >
-                            <span className={`fn-suggest-kind ${suggestion.kind}`}>
-                              {suggestion.kind === 'relic' ? t('opp.relic') : t('opp.drop')}
-                            </span>
-                            <span className="fn-suggest-label">{suggestion.label}</span>
-                            {suggestion.detail ? (
-                              <span className="fn-suggest-detail">{suggestion.detail}</span>
-                            ) : null}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="fn-filters">
-                    <label className="fn-filter">
-                      <span>{t('opp.era')}</span>
-                      <select
-                        value={farmNowEra}
-                        onChange={(event) => setFarmNowEra(event.target.value)}
-                        aria-label={t('a11y.filterByEra')}
-                      >
-                        <option value="all">{t('opp.allEras')}</option>
-                        <option value="Lith">Lith</option>
-                        <option value="Meso">Meso</option>
-                        <option value="Neo">Neo</option>
-                        <option value="Axi">Axi</option>
-                      </select>
-                    </label>
-                    <label className="fn-filter">
-                      <span>{t('opp.sortBy')}</span>
-                      <select
-                        value={farmNowSort}
-                        onChange={(event) => setFarmNowSort(event.target.value)}
-                        aria-label={t('a11y.sortRelics')}
-                      >
-                        {farmNowTab === 'set-completion' ? (
-                          <>
-                            <option value="default">{t('opp.sortCompletion')}</option>
-                            <option value="coverage">{t('opp.sortSetsHelped')}</option>
-                            <option value="owned">{t('opp.sortOwned')}</option>
-                          </>
-                        ) : (
-                          <>
-                            <option value="default">{t('opp.sortPlatHour')}</option>
-                            <option value="owned">{t('opp.sortOwned')}</option>
-                          </>
-                        )}
-                      </select>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="fn-controls-meta">
-                  <span>
-                    {farmNowLastScan
-                      ? t('opp.lastScanLabel', { when: formatShortLocalDateTime(farmNowLastScan) })
-                      : t('opp.noScanData')}
-                  </span>
-                  {ownedRelicsRefreshing ? (
-                    <span className="farm-now-refresh-indicator" title={t('a11y.refreshingRelicCache')}>
-                      <span className="farm-now-refresh-spinner" aria-hidden="true" />
-                      {t('opp.refreshingRelics')}
-                    </span>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="act-btn fn-rescan-btn"
-                    onClick={() => setActivePage('scanners')}
-                  >
-                    <i className="ti ti-refresh" aria-hidden="true" /> {t('opp.runScan')}
-                  </button>
-                </div>
-              </div>
-
-              {(farmNowTab === 'set-completion'
-                ? farmNowSetCompletionTopRelics.length > 0
-                : farmNowTopRelics.length > 0) ? (
-                <div className="farm-now-toplist">
-                  {farmNowTab === 'set-completion'
-                    ? farmNowSetCompletionTopRelics.map((row) => (
-                        <div key={row.relic.slug} className="farm-now-top-card">
-                          <span className="panel-title-eyebrow">{t('opp.bestCoverage')}</span>
-                          <strong>{localizeName(row.relic)}</strong>
-                          <span className="farm-now-top-meta">
-                            {row.neededDropCount} needed drops · {row.coveredSetCount} sets helped · x
-                            {row.ownedCount} owned
-                          </span>
-                        </div>
-                      ))
-                    : farmNowTopRelics.map((row) => (
-                        <div key={row.relic.slug} className="farm-now-top-card">
-                          <span className="panel-title-eyebrow">{t('opp.topPick')}</span>
-                          <strong>{localizeName(row.relic)}</strong>
-                          <span className="farm-now-top-meta">
-                            Run {row.guidance.bestLabel} · {formatPlatDecimal(row.platPerHour)}/hr ·
-                            x{row.ownedCount}
-                          </span>
-                        </div>
-                      ))}
-                </div>
-              ) : null}
-
-              {farmNowError ? <div className="scanner-inline-error">{farmNowError}</div> : null}
-
-              {farmNowTab === 'set-completion' ? (
-                farmNowLoading ? (
-                  <div className="opportunities-placeholder">{t('opp.loadingSetCompletionCoverage')}</div>
-                ) : noFarmScan ? (
-                  <div className="set-planner-empty">
-                    <div>
-                      <span className="panel-title-eyebrow">{t('opp.scannerCacheRequired')}</span>
-                      <h3>{t('opp.runRelicScanFirst')}</h3>
-                      <p>{t('opp.relicRoiSetCompletionHint')}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => setActivePage('scanners')}
-                    >
-                      {t('opp.openScanners')}
-                    </button>
-                  </div>
-                ) : ownedRelicsLoading ? (
-                  <div className="opportunities-placeholder">{t('opp.loadingOwnedRelicInventory')}</div>
-                ) : ownedRelicsError ? (
-                  <div className="set-planner-empty">
-                    <div>
-                      <span className="panel-title-eyebrow">{t('opp.couldNotLoadRelics')}</span>
-                      <h3>{ownedRelicsError}</h3>
-                      <p>{t('opp.alecaframeSetupHint')}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => void refreshOwnedRelics(true)}
-                    >
-                      {t('opp.retry')}
-                    </button>
-                  </div>
-                ) : ownedRelicsCacheLoaded && !ownedRelicsUpdatedAt ? (
-                  <div className="set-planner-empty">
-                    <div>
-                      <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
-                      <h3>{t('opp.loadRelicFirst')}</h3>
-                      <p>{t('opp.ownedRelicsSetCompletionHint')}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => setActiveTab('owned-relics')}
-                    >
-                      {t('opp.openOwnedRelics')}
-                    </button>
-                  </div>
-                ) : ownedRelics.length === 0 ? (
-                  <div className="set-planner-empty">
-                    <div>
-                      <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
-                      <h3>{t('opp.noOwnedRelicsDetected')}</h3>
-                      <p>{t('opp.alecaframeEmptyInventory')}</p>
-                    </div>
-                  </div>
-                ) : ownedItems.length === 0 ? (
-                  <div className="set-planner-empty">
-                    <div>
-                      <span className="panel-title-eyebrow">{t('opp.ownedInventoryRequired')}</span>
-                      <h3>{t('opp.addComponentsFirst')}</h3>
-                      <p>{t('opp.setPlannerInventoryHint')}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => setActivePage('inventory')}
-                    >
-                      {t('opp.openSetPlanner')}
-                    </button>
-                  </div>
-                ) : farmNowSetCompletionRelics.length === 0 ? (
-                  <div className="opportunities-placeholder">
-                    {t('opp.noRelicsCover')}
-                  </div>
-                ) : (
-                  <div className="farm-now-list farm-now-list-set-completion">
-                    {displayedFarmNowSetCompletionRelics.length === 0 ? (
-                      <div className="opportunities-placeholder">
-                        No relics or item drops match “{farmNowSearch}”.
-                      </div>
-                    ) : null}
-                    {displayedFarmNowSetCompletionRelics.map((row) => {
-                      const relicKey = `${row.relic.slug}:set-completion`;
-                      const expanded = expandedFarmRelicKey === relicKey;
-                      const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
-                      return (
-                        <article key={relicKey} className={`sp-set${expanded ? ' is-expanded' : ''}`}>
-                          <button
-                            type="button"
-                            className="sp-set-head"
-                            aria-expanded={expanded}
-                            onClick={() =>
-                              setExpandedFarmRelicKey((current) =>
-                                current === relicKey ? null : relicKey,
-                              )
-                            }
-                          >
-                            <span className="sp-set-thumb">
-                              {imageUrl ? (
-                                <img src={imageUrl} alt="" loading="lazy" />
-                              ) : (
-                                <span>{row.relic.name.slice(0, 2)}</span>
-                              )}
-                            </span>
-                            <div className="sp-set-copy">
-                              <span className="fn-row-title">
-                                <span className="sp-set-name">{localizeName(row.relic)}</span>
-                                <span className={`fn-owned-pill${row.ownedCount > 0 ? '' : ' is-none'}`}>
-                                  {row.ownedCount > 0
-                                    ? t('opp.ownedTimes', { n: row.ownedCount })
-                                    : t('opp.noneOwned')}
-                                </span>
-                              </span>
-                              <span className="fn-row-sub">
-                                {row.bestSetProgress
-                                  ? t('opp.closestSetProgress', { name: row.bestSetProgress.name, owned: row.bestSetProgress.owned, total: row.bestSetProgress.total })
-                                  : t('opp.missingPartsCovered', { n: row.totalMissingQuantity })}
-                              </span>
-                            </div>
-                            <div className="sp-set-metrics">
-                              <div className="sp-set-metric">
-                                <span className="sp-set-metric-label">{t('opp.neededDrops')}</span>
-                                <span className="sp-set-metric-value pos">{row.neededDropCount}</span>
-                              </div>
-                              <div className="sp-set-metric">
-                                <span className="sp-set-metric-label">{t('opp.setsHelped')}</span>
-                                <span className="sp-set-metric-value">{row.coveredSetCount}</span>
-                              </div>
-                            </div>
-                            <SpChevron up={expanded} />
-                          </button>
-
-                          {expanded ? (
-                            <div className="sp-set-body">
-                              <div className="fn-farm-this-row">
-                                <button
-                                  type="button"
-                                  className="fn-farm-this-btn"
-                                  disabled={activeFarmingRelicSlug === row.relic.slug}
-                                  onClick={() => beginFarmingRelic(row, displayedFarmNowSetCompletionRelics)}
-                                >
-                                  <i className="ti ti-flame" aria-hidden="true" />
-                                  {activeFarmingRelicSlug === row.relic.slug
-                                    ? t('farm.nowFarming')
-                                    : t('farm.farmThis')}
-                                </button>
-                              </div>
-                              <RefinementGuidancePanel guidance={row.guidance} unit="pct" />
-                              {(() => {
-                                const needed = row.drops.filter((entry) => entry.isNeeded);
-                                const others = row.drops.filter((entry) => !entry.isNeeded);
-                                const renderDrop = (
-                                  entry: (typeof row.drops)[number],
-                                  isNeeded: boolean,
-                                ) => {
-                                  const dropImage = resolveWfmAssetUrl(entry.drop.imagePath, entry.drop.slug);
-                                  const tone = relicRarityTone(entry.drop.rarity);
-                                  return (
-                                    <div
-                                      key={`${relicKey}-${entry.drop.slug}`}
-                                      className={`sp-part ${isNeeded ? 'sp-part-missing' : 'fn-drop'}`}
-                                    >
-                                      <span className="sp-part-thumb" aria-hidden="true">
-                                        {dropImage ? (
-                                          <img src={dropImage} alt="" loading="lazy" />
-                                        ) : (
-                                          <span>{entry.drop.name.slice(0, 1)}</span>
-                                        )}
-                                      </span>
-                                      <div className="sp-part-copy">
-                                        <span className="sp-part-name-row">
-                                          <span className="sp-part-name">{localizeName(entry.drop)}</span>
-                                          {isNeeded && entry.missingQuantity > 0 ? (
-                                            <span className="sp-part-qty-badge">
-                                              {t('opp.missingCount', { n: entry.missingQuantity })}
-                                            </span>
-                                          ) : null}
-                                        </span>
-                                        <span className="sp-part-meta">
-                                          <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
-                                            {entry.drop.rarity ?? t('opp.unknown')}
-                                          </span>
-                                          {isNeeded ? (
-                                            <>
-                                              {' · '}
-                                              {t('opp.setsCoveredCount', { n: entry.coveredSetCount })}
-                                              {entry.setNames.length ? ` · ${entry.setNames.join(' · ')}` : ''}
-                                            </>
-                                          ) : null}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  );
-                                };
-                                return (
-                                  <>
-                                    {needed.length > 0 ? (
-                                      <>
-                                        <div className="sp-part-group-label missing">
-                                          {t('opp.neededForSets')}
-                                        </div>
-                                        <div className="sp-part-list">
-                                          {needed.map((entry) => renderDrop(entry, true))}
-                                        </div>
-                                      </>
-                                    ) : null}
-                                    {others.length > 0 ? (
-                                      <>
-                                        <div className="sp-part-group-label muted">
-                                          {t('opp.notNeeded', { n: others.length })}
-                                        </div>
-                                        <div className="sp-part-list fn-drop-list-low">
-                                          {others.map((entry) => renderDrop(entry, false))}
-                                        </div>
-                                      </>
-                                    ) : null}
-                                  </>
-                                );
-                              })()}
-                            </div>
-                          ) : null}
-                        </article>
-                      );
-                    })}
-                  </div>
-                )
-              ) : farmNowLoading ? (
-                <div className="opportunities-placeholder">{t('opp.loadingRelicProfitability')}</div>
-              ) : noFarmScan ? (
-                <div className="set-planner-empty">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.scannerCacheRequired')}</span>
-                    <h3>{t('opp.runRelicScanFirst')}</h3>
-                    <p>{t('opp.relicRoiProfitHint')}</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => setActivePage('scanners')}
-                  >
-                    {t('opp.openScanners')}
-                  </button>
-                </div>
-              ) : ownedRelicsLoading ? (
-                <div className="opportunities-placeholder">{t('opp.loadingOwnedRelicInventory')}</div>
-              ) : ownedRelicsError ? (
-                <div className="set-planner-empty">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.couldNotLoadRelics')}</span>
-                    <h3>{ownedRelicsError}</h3>
-                    <p>{t('opp.alecaframeSetupHint')}</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => void refreshOwnedRelics(true)}
-                  >
-                    {t('opp.retry')}
-                  </button>
-                </div>
-              ) : ownedRelicsCacheLoaded && !ownedRelicsUpdatedAt ? (
-                <div className="set-planner-empty">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
-                    <h3>{t('opp.loadRelicFirst')}</h3>
-                    <p>{t('opp.ownedRelicsProfitHint')}</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => setActiveTab('owned-relics')}
-                  >
-                    {t('opp.openOwnedRelics')}
-                  </button>
-                </div>
-              ) : ownedRelics.length === 0 ? (
-                <div className="set-planner-empty">
-                  <div>
-                    <span className="panel-title-eyebrow">{t('opp.ownedRelicsRequired')}</span>
-                    <h3>{t('opp.noOwnedRelicsDetected')}</h3>
-                    <p>{t('opp.alecaframeEmptyInventory')}</p>
-                  </div>
-                </div>
-              ) : farmNowRelics.length === 0 ? (
-                <div className="opportunities-placeholder">{t('opp.noOwnedRefinements')}</div>
-              ) : (
-                <div className="farm-now-list">
-                  {displayedFarmNowRelics.length === 0 ? (
-                    <div className="opportunities-placeholder">
-                      No relics or item drops match “{farmNowSearch}”.
-                    </div>
-                  ) : null}
-                  {displayedFarmNowRelics.map((row) => {
-                    const relicKey = `${row.relic.slug}:part-profit`;
-                    const expanded = expandedFarmRelicKey === relicKey;
-                    const imageUrl = resolveWfmAssetUrl(row.relic.imagePath);
-                    const bestDrop = row.drops.find((entry) => entry.drop.slug === row.bestDropSlug);
-                    return (
-                      <article key={relicKey} className={`sp-set${expanded ? ' is-expanded' : ''}`}>
-                        <button
-                          type="button"
-                          className="sp-set-head"
-                          aria-expanded={expanded}
-                          onClick={() =>
-                            setExpandedFarmRelicKey((current) =>
-                              current === relicKey ? null : relicKey,
-                            )
-                          }
-                        >
-                          <span className="sp-set-thumb">
-                            {imageUrl ? (
-                              <img src={imageUrl} alt="" loading="lazy" />
-                            ) : (
-                              <span>{row.relic.name.slice(0, 2)}</span>
-                            )}
-                          </span>
-                          <div className="sp-set-copy">
-                            <span className="fn-row-title">
-                              <span className="sp-set-name">{localizeName(row.relic)}</span>
-                              <span className={`fn-owned-pill${row.ownedCount > 0 ? '' : ' is-none'}`}>
-                                {row.ownedCount > 0
-                                  ? t('opp.ownedTimes', { n: row.ownedCount })
-                                  : t('opp.noneOwned')}
-                              </span>
-                            </span>
-                            <span className="fn-row-sub">
-                              {bestDrop
-                                ? t('opp.dropsBest', {
-                                    n: row.relic.dropCount,
-                                    name: localizeName(bestDrop.drop),
-                                    price: formatPlat(bestDrop.drop.recommendedExitPrice),
-                                  })
-                                : `${row.relic.dropCount} drops`}
-                            </span>
-                          </div>
-                          <div className="sp-set-metrics">
-                            <span
-                              className={`relic-refinement-pill relic-refinement-pill-${relicRefinementTone(row.guidance.bestKey)}`}
-                              title={t('a11y.bestRefinement')}
-                            >
-                              {t('opp.runRefinement', { refinement: row.guidance.bestLabel })}
-                            </span>
-                            <div className="sp-set-metric">
-                              <span className="sp-set-metric-label">{t('opp.perRun')}</span>
-                              <span className="sp-set-metric-value pos">{formatPlatDecimal(row.expectedProfit)}</span>
-                            </div>
-                            <div className="sp-set-metric">
-                              <span className="sp-set-metric-label">{t('opp.perHour')}</span>
-                              <span className="sp-set-metric-value">{formatPlatDecimal(row.platPerHour)}</span>
-                            </div>
-                          </div>
-                          <SpChevron up={expanded} />
-                        </button>
-
-                        {expanded ? (
-                          <div className="sp-set-body">
-                            <div className="fn-farm-this-row">
-                              <button
-                                type="button"
-                                className="fn-farm-this-btn"
-                                disabled={activeFarmingRelicSlug === row.relic.slug}
-                                onClick={() => beginFarmingRelic(row, displayedFarmNowRelics)}
-                              >
-                                <i className="ti ti-flame" aria-hidden="true" />
-                                {activeFarmingRelicSlug === row.relic.slug
-                                  ? t('farm.nowFarming')
-                                  : t('farm.farmThis')}
-                              </button>
-                            </div>
-                            <RefinementGuidancePanel
-                              guidance={row.guidance}
-                              unit={row.targetedDropName ? 'pct' : 'plat'}
-                              heading={
-                                row.targetedDropName
-                                  ? t('opp.chanceAt', { item: row.targetedDropName })
-                                  : undefined
-                              }
-                            />
-                            {(() => {
-                              // Split by expected value so the drops worth farming stand apart from
-                              // the Forma-tier filler, instead of every drop looking equally important.
-                              const ranked = [...row.drops].sort(
-                                (a, b) => (b.expectedValue ?? 0) - (a.expectedValue ?? 0),
-                              );
-                              const worth = ranked.filter(
-                                (entry) => (entry.expectedValue ?? 0) >= 1 || entry.drop.slug === row.bestDropSlug,
-                              );
-                              const low = ranked.filter((entry) => !worth.includes(entry));
-                              const renderDrop = (entry: (typeof ranked)[number]) => {
-                                const drop = entry.drop;
-                                const dropImage = resolveWfmAssetUrl(drop.imagePath, drop.slug);
-                                const tone = relicRarityTone(drop.rarity);
-                                const isBest = row.bestDropSlug === drop.slug;
-                                return (
-                                  <div key={`${relicKey}-${drop.slug}`} className="sp-part fn-drop">
-                                    <span className="sp-part-thumb" aria-hidden="true">
-                                      {dropImage ? (
-                                        <img src={dropImage} alt="" loading="lazy" />
-                                      ) : (
-                                        <span>{drop.name.slice(0, 1)}</span>
-                                      )}
-                                    </span>
-                                    <div className="sp-part-copy">
-                                      <span className="sp-part-name-row">
-                                        <span className="sp-part-name">{localizeName(drop)}</span>
-                                        {isBest ? (
-                                          <span className="sp-part-qty-badge owned">{t('opp.topPick')}</span>
-                                        ) : null}
-                                      </span>
-                                      <span className="sp-part-meta">
-                                        <span className={`owned-relics-rarity owned-relics-rarity-${tone}`}>
-                                          {drop.rarity ?? t('opp.unknown')}
-                                        </span>
-                                        {' · '}
-                                        {formatChance(entry.chance)}
-                                        {' · '}
-                                        {t('opp.exitValue', { price: formatPlat(drop.recommendedExitPrice) })}
-                                      </span>
-                                    </div>
-                                    <span className="fn-drop-value">
-                                      <span className="sp-set-metric-label">{t('opp.value')}</span>
-                                      <strong>{formatPlatDecimal(entry.expectedValue)}</strong>
-                                    </span>
-                                  </div>
-                                );
-                              };
-                              return (
-                                <>
-                                  {worth.length > 0 ? (
-                                    <>
-                                      <div className="sp-part-group-label owned">{t('opp.worthKeeping')}</div>
-                                      <div className="sp-part-list">{worth.map(renderDrop)}</div>
-                                    </>
-                                  ) : null}
-                                  {low.length > 0 ? (
-                                    <>
-                                      <div className="sp-part-group-label muted">
-                                        {t('opp.lowValue', { n: low.length })}
-                                      </div>
-                                      <div className="sp-part-list fn-drop-list-low">{low.map(renderDrop)}</div>
-                                    </>
-                                  ) : null}
-                                </>
-                              );
-                            })()}
-                          </div>
-                        ) : null}
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-          </div>
+          <FarmNow
+            mode={farmNowTab}
+            onModeChange={(next) => {
+              setFarmNowTab(next);
+              // Sort options differ per mode, so a sort carried across leaves the control
+              // showing an order the list is not using (`coverage` has no meaning for part
+              // profit and silently fell through to the default).
+              setFarmNowSort('default');
+            }}
+            search={farmNowSearch}
+            onSearchChange={setFarmNowSearch}
+            suggestions={farmNowSuggestions}
+            suggestOpen={farmNowSuggestOpen}
+            onSuggestOpenChange={setFarmNowSuggestOpen}
+            era={farmNowEra}
+            onEraChange={setFarmNowEra}
+            sort={farmNowSort}
+            onSortChange={setFarmNowSort}
+            ownedRelicTotal={ownedRelicTotal}
+            setsInProgress={farmNowSetCompletionSetCount}
+            missingComponentCount={farmNowSetCompletionMissingCount}
+            relicsWorthRunning={farmNowRelics.length}
+            bestRunProfit={farmNowRelics[0]?.expectedProfit ?? null}
+            lastScan={farmNowLastScan}
+            relicsRefreshing={ownedRelicsRefreshing}
+            onRunScan={() => setActivePage('scanners')}
+            dropOdds={farmNowDropOdds}
+            onFarmItem={(slug, name) => void startFarmingForItem(slug, name)}
+            gate={farmNowGate}
+            errorMessage={farmNowError}
+            partRows={displayedFarmNowRelics}
+            setRows={displayedFarmNowSetCompletionRelics}
+            expandedKey={expandedFarmRelicKey}
+            onToggleExpanded={(key) =>
+              setExpandedFarmRelicKey((current) => (current === key ? null : key))
+            }
+            activeFarmingRelicSlug={activeFarmingRelicSlug}
+            onFarmPartRelic={(row) => beginFarmingRelic(row, displayedFarmNowRelics)}
+            onFarmSetRelic={(row) =>
+              beginFarmingRelic(row, displayedFarmNowSetCompletionRelics)
+            }
+            onOpenScanners={() => setActivePage('scanners')}
+            onRetryRelics={() => void refreshOwnedRelics(true)}
+            onOpenOwnedRelics={() => setActiveTab('owned-relics')}
+            onOpenInventory={() => setActivePage('inventory')}
+            localizeName={localizeName}
+          />
         ) : (
           /* `opportunities` is the only remaining tab, and every other branch above is
              exhaustive — the old fallback was an unreachable untranslated sentence. */

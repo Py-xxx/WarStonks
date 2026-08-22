@@ -6,6 +6,10 @@
  * the empty patterns in `ui-reference/watermelon` (MIT); the sizing is ours, because theirs are
  * built for full-page states and these sit in 276px rail panels.
  *
+ * `action` is optional and holds the one control that resolves the state — "Open Scanners" for a
+ * missing scan, "Retry" for a failed load. An empty state that names a cause without offering the
+ * fix makes the user go and find it; three of Farm Now's gates exist precisely to route somewhere.
+ *
  * The `tone` distinction is the point of the component. "Nothing on the watchlist yet" is an
  * absence the user should fix, but "No plays right now" means the board is clear and you are
  * caught up — the same treatment for both tells the user nothing. `positive` says done;
@@ -22,6 +26,7 @@ function EmptyState({
   icon,
   title,
   detail,
+  action,
   tone = 'neutral',
   className,
   ...props
@@ -30,6 +35,8 @@ function EmptyState({
   icon: string;
   title: string;
   detail?: string;
+  /** The single control that resolves this state. */
+  action?: React.ReactNode;
   tone?: keyof typeof TONE_CLASS;
 }) {
   return (
@@ -46,6 +53,7 @@ function EmptyState({
       </span>
       <span className="text-xs font-medium text-ink-soft">{title}</span>
       {detail ? <span className="text-[11px] text-ink-dim">{detail}</span> : null}
+      {action ? <span className="mt-1">{action}</span> : null}
     </div>
   );
 }
