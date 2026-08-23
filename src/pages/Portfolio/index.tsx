@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { Metric, MetricGrid } from '@/components/ui/metric';
 import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { ItemThumb } from '../../components/ListRow';
-import { InfoHint, type InfoHintPlacement } from '../../components/InfoHint';
+import { InfoHint } from '../../components/InfoHint';
 import {
   getCachedWfmProfileTradeLog,
   getPortfolioInventoryValue,
@@ -26,7 +36,6 @@ import type {
   PortfolioTradeLogEntry,
   SetCompletionInventoryValue,
 } from '../../types';
-import { ModalPortal } from '../../components/ModalPortal';
 import { ItemName } from '../../components/ItemName';
 
 // Safe error → message: never surfaces "[object Object]" from a non-Error throw, and falls
@@ -84,13 +93,6 @@ function groupNeedsPricing(
   }
   return !children.some((child) => child.allocationMode === 'manual');
 }
-
-const RefreshIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-    <path d="M21 3v6h-6" />
-  </svg>
-);
 
 function formatSignedPlatinumValue(value: number): string {
   const prefix = value > 0 ? '+' : '';
@@ -727,20 +729,14 @@ function buildTradeGroupSummary(children: PortfolioTradeLogEntry[]): string {
   return `${names.join(' • ')}${suffix}`;
 }
 
-function PortfolioPanelHeader({
-  title,
-  info,
-  infoPlacement = 'auto',
-}: {
-  title: string;
-  info: string;
-  infoPlacement?: InfoHintPlacement;
-}) {
+/** Trade Log's panel header. The P&L tab used to share this; it is the last caller, so it is a
+ *  thin wrapper over the primitives rather than a second header implementation. */
+function PortfolioPanelHeader({ title, info }: { title: string; info: string }) {
   return (
-    <div className="chart-header portfolio-panel-header">
-      <span>{title}</span>
-      <InfoHint text={info} placement={infoPlacement} />
-    </div>
+    <PanelHeader>
+      <PanelTitle variant="heading">{title}</PanelTitle>
+      <InfoHint text={info} />
+    </PanelHeader>
   );
 }
 
@@ -1171,43 +1167,47 @@ function TradeLogTab({ username }: { username: string | null }) {
               </time>
             </span>
           ) : null}
-          <button
-            className="portfolio-log-btn"
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => void handleImportFromWfm()}
             disabled={loading || importing || !username}
             title={t('pf.importFromWfmHint')}
           >
             {importing ? t('pf.importing') : t('pf.importFromWfm')}
-          </button>
-          <button
-            className="portfolio-log-btn"
-            type="button"
-            onClick={() => void handleRefresh()}
-            disabled={loading}
-          >
-            <RefreshIcon />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void handleRefresh()} disabled={loading}>
+            <i className="ti ti-refresh" aria-hidden="true" />
             {loading ? t('common.refreshing') : t('common.refresh')}
-          </button>
+          </Button>
         </div>
       </div>
 
       {needsPricingCount > 0 ? (
-        <div className="portfolio-needs-pricing-banner">
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-accent-amber/25 bg-accent-amber/[0.07] px-3 py-2 text-[11px] text-accent-amber">
           <span>{t('pf.needsPricingBanner', { count: String(needsPricingCount) })}</span>
-          <button
-            className="act-btn portfolio-secondary-btn"
-            type="button"
-            onClick={() => setOnlyNeedsPricing((current) => !current)}
+          <Button
+            variant="secondary"
+            size="sm"
             aria-pressed={onlyNeedsPricing}
+            onClick={() => setOnlyNeedsPricing((current) => !current)}
+            className="ml-auto h-6 border-line text-[11px]"
           >
             {onlyNeedsPricing ? t('pf.showAllTrades') : t('pf.showOnlyNeedsPricing')}
-          </button>
+          </Button>
         </div>
       ) : null}
 
-      {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
-      {importMessage ? <div className="settings-inline-success">{importMessage}</div> : null}
+      {errorMessage ? (
+        <div className="rounded-md border border-accent-red/30 bg-accent-red/[0.06] px-3 py-2 text-[11px] text-accent-red">
+          {errorMessage}
+        </div>
+      ) : null}
+      {importMessage ? (
+        <div className="rounded-md border border-accent-green/25 bg-accent-green/[0.07] px-3 py-2 text-[11px] text-accent-green">
+          {importMessage}
+        </div>
+      ) : null}
 
       {!username ? (
         <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
@@ -1225,38 +1225,35 @@ function TradeLogTab({ username }: { username: string | null }) {
         </div>
       ) : (
         <div className="portfolio-log-stack">
-          <div className="portfolio-log-card portfolio-filter-card">
+          <Panel className="gap-0">
             <PortfolioPanelHeader
               title={t('a11y.filters')}
               info={t('pf.filterLedgerInfo')}
             />
-            <div className="portfolio-log-filters">
-              <label className="portfolio-filter-field">
+            <div className="grid grid-cols-2 gap-2.5 p-3.5 md:grid-cols-3 lg:grid-cols-6">
+              <label className="grid min-w-0 gap-1.5 font-mono text-[11px] tracking-[0.08em] text-ink-dim uppercase">
                 <span>{t('pf.search')}</span>
-                <input
-                  className="settings-text-input"
+                <Input
                   type="text"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder={t('pf.searchPlaceholder')}
                 />
               </label>
-              <label className="portfolio-filter-field">
+              <label className="grid min-w-0 gap-1.5 font-mono text-[11px] tracking-[0.08em] text-ink-dim uppercase">
                 <span>{t('pf.type')}</span>
-                <select
-                  className="settings-text-input"
+                <Select
                   value={orderTypeFilter}
                   onChange={(event) => setOrderTypeFilter(event.target.value as 'all' | 'buy' | 'sell')}
                 >
                   <option value="all">{t('oppf.all')}</option>
                   <option value="buy">{t('pf.buy')}</option>
                   <option value="sell">{t('pf.sell')}</option>
-                </select>
+                </Select>
               </label>
-              <label className="portfolio-filter-field">
+              <label className="grid min-w-0 gap-1.5 font-mono text-[11px] tracking-[0.08em] text-ink-dim uppercase">
                 <span>{t('pf.status')}</span>
-                <select
-                  className="settings-text-input"
+                <Select
                   value={statusFilter}
                   onChange={(event) =>
                     setStatusFilter(event.target.value as 'all' | 'Flip' | 'Sold As Set' | 'Partial' | 'Open' | 'Kept' | 'none')
@@ -1269,12 +1266,11 @@ function TradeLogTab({ username }: { username: string | null }) {
                   <option value="Open">{t('pf.open')}</option>
                   <option value="Kept">{t('pf.kept')}</option>
                   <option value="none">{t('pf.noStatus')}</option>
-                </select>
+                </Select>
               </label>
-              <label className="portfolio-filter-field">
+              <label className="grid min-w-0 gap-1.5 font-mono text-[11px] tracking-[0.08em] text-ink-dim uppercase">
                 <span>{t('pf.source')}</span>
-                <select
-                  className="settings-text-input"
+                <Select
                   value={sourceFilter}
                   onChange={(event) => setSourceFilter(event.target.value as TradeSourceFilter)}
                 >
@@ -1282,20 +1278,20 @@ function TradeLogTab({ username }: { username: string | null }) {
                   <option value="eelog">{t('pf.sourceInGame')}</option>
                   <option value="wfm">{t('pf.sourceImported')}</option>
                   <option value="alecaframe">{t('pf.alecaframe')}</option>
-                </select>
+                </Select>
               </label>
-              <label className="portfolio-filter-field">
+              <label className="grid min-w-0 gap-1.5 font-mono text-[11px] tracking-[0.08em] text-ink-dim uppercase">
                 <span>{t('pf.from')}</span>
-                <input className="settings-text-input" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+                <Input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
               </label>
-              <label className="portfolio-filter-field">
+              <label className="grid min-w-0 gap-1.5 font-mono text-[11px] tracking-[0.08em] text-ink-dim uppercase">
                 <span>{t('pf.to')}</span>
-                <input className="settings-text-input" type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+                <Input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
               </label>
             </div>
-          </div>
+          </Panel>
 
-          <div className="portfolio-log-card">
+          <Panel className="gap-0">
             <PortfolioPanelHeader
               title={t('a11y.tradeLogLedger')}
               info={t('pf.tradeLedgerInfo')}
@@ -1327,14 +1323,18 @@ function TradeLogTab({ username }: { username: string | null }) {
                     <div key={row.groupId} className="portfolio-log-group">
                       <div className="portfolio-log-row portfolio-log-row-parent">
                         <div className="portfolio-log-item">
-                          <button
-                            className="portfolio-log-expand-btn"
-                            type="button"
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
                             aria-label={expandedGroupIds.includes(row.groupId) ? t('pf.collapseAriaLabel', { label: row.label }) : t('pf.expandAriaLabel', { label: row.label })}
                             onClick={() => handleToggleGroupExpanded(row.groupId)}
+                            className="size-7 shrink-0 rounded-lg border-line text-ink-soft"
                           >
-                            {expandedGroupIds.includes(row.groupId) ? '−' : '+'}
-                          </button>
+                            <i
+                              className={`ti ${expandedGroupIds.includes(row.groupId) ? 'ti-minus' : 'ti-plus'}`}
+                              aria-hidden="true"
+                            />
+                          </Button>
                           <span className="portfolio-log-thumb">
                             {row.children[0]?.imagePath ? (
                               <img src={resolveWfmAssetUrl(row.children[0].imagePath, row.children[0].slug) ?? undefined} alt="" />
@@ -1370,13 +1370,21 @@ function TradeLogTab({ username }: { username: string | null }) {
                         </span>
                         <span className="portfolio-log-date">{formatShortLocalDateTime(row.closedAt)}</span>
                         <span className="portfolio-log-actions">
-                          <button
-                            className={`act-btn ${groupNeedsPricing(row.children, row.totalPlatinum) ? 'portfolio-needs-pricing-btn' : 'portfolio-secondary-btn'}`}
-                            type="button"
+                          {/* An unpriced group is incomplete data, not a settled row, so it reads
+                              amber until it is filled in. `min-w-23` keeps the column steady as
+                              the label swaps between the two states. */}
+                          <Button
+                            variant={groupNeedsPricing(row.children, row.totalPlatinum) ? 'secondary' : 'outline'}
+                            size="sm"
                             onClick={() => handleOpenAllocationModal(row)}
+                            className={`h-7 min-w-23 text-[11px] ${
+                              groupNeedsPricing(row.children, row.totalPlatinum)
+                                ? 'border-accent-amber/40 bg-accent-amber/15 text-accent-amber hover:bg-accent-amber/25'
+                                : 'border-line'
+                            }`}
                           >
                             {groupNeedsPricing(row.children, row.totalPlatinum) ? t('pf.setPrices') : t('pf.adjustAmounts')}
-                          </button>
+                          </Button>
                         </span>
                       </div>
                       {expandedGroupIds.includes(row.groupId)
@@ -1397,55 +1405,46 @@ function TradeLogTab({ username }: { username: string | null }) {
               )}
             </div>
             </div>
-          </div>
+          </Panel>
         </div>
       )}
 
 
-      {allocationGroup ? (
-        <ModalPortal>
-        <div className="modal-backdrop" onClick={() => setAllocationGroupId(null)}>
-          <div
-            className="settings-modal portfolio-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t('a11y.adjustGroupedAmounts')}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-modal-header">
-              <div className="settings-modal-title">
-                <span className="card-label">{t('pf.tradeLog')}</span>
-                <h3>{t('pf.adjustAmounts')}</h3>
-              </div>
-              <button
-                className="modal-close"
-                type="button"
-                aria-label={t('a11y.closeAdjustAmounts')}
-                onClick={() => setAllocationGroupId(null)}
-              >
-                ×
-              </button>
-            </div>
-            <div className="settings-modal-body">
-              <div className="portfolio-allocation-summary">
-                <span>{t('pf.totalTradeValue')}</span>
-                <strong>{formatPlatinumValue(allocationExpectedTotal)}</strong>
-              </div>
-              <div className="portfolio-allocation-list">
+      <Dialog
+        open={allocationGroup !== null}
+        onOpenChange={(open) => !open && setAllocationGroupId(null)}
+      >
+        <DialogContent className="max-w-md">
+          {allocationGroup ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t('pf.adjustAmounts')}</DialogTitle>
+                <DialogDescription>
+                  {t('pf.totalTradeValue')} {formatPlatinumValue(allocationExpectedTotal)}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="flex min-h-0 flex-col gap-1.5 overflow-y-auto">
                 {allocationGroup.children.map((child) => (
-                  <div key={child.id} className="portfolio-allocation-row">
-                    <div className="portfolio-allocation-copy">
-                      <span className="portfolio-allocation-name">{child.itemName}</span>
-                      <span className="portfolio-allocation-meta">
-                        {t('pf.qtyValue', { n: child.quantity })}{child.rank != null ? t('pf.rankValue', { n: child.rank }) : ''}
+                  <div
+                    key={child.id}
+                    className="flex items-center gap-2.5 rounded-sm border border-line-subtle bg-bg-panel px-2 py-1.5"
+                  >
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-[11px] font-medium text-ink">
+                        {child.itemName}
+                      </span>
+                      <span className="font-mono text-[10px] text-ink-faint tabular-nums">
+                        {t('pf.qtyValue', { n: child.quantity })}
+                        {child.rank != null ? t('pf.rankValue', { n: child.rank }) : ''}
                       </span>
                     </div>
-                    <div className="portfolio-allocation-input-wrap">
-                      <input
-                        className="settings-text-input portfolio-allocation-input"
+                    <span className="relative shrink-0">
+                      <Input
                         type="number"
-                        min="0"
-                        step="1"
+                        min={0}
+                        step={1}
+                        className="h-7 w-24 pr-6 text-right tabular-nums"
                         value={allocationDrafts[child.id] ?? ''}
                         onChange={(event) =>
                           setAllocationDrafts((current) => ({
@@ -1454,35 +1453,46 @@ function TradeLogTab({ username }: { username: string | null }) {
                           }))
                         }
                       />
-                      <span className="portfolio-allocation-unit">pt</span>
-                    </div>
+                      <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center font-mono text-[10px] text-ink-faint">
+                        p
+                      </span>
+                    </span>
                   </div>
                 ))}
               </div>
-              <div className={`portfolio-allocation-summary${allocationMatches ? '' : ' error'}`}>
+
+              {/* Red when the split does not add up — saving is blocked on the same condition,
+                  so the reason the button is disabled is visible rather than implied. */}
+              <div
+                className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 font-mono text-[11px] tabular-nums ${
+                  allocationMatches
+                    ? 'border-line bg-bg-base text-ink-soft'
+                    : 'border-accent-red/30 bg-accent-red/[0.06] text-accent-red'
+                }`}
+              >
                 <span>{t('pf.allocatedTotal')}</span>
                 <strong>
-                  {formatPlatinumValue(allocationTotal)} / {formatPlatinumValue(allocationExpectedTotal)}
+                  {formatPlatinumValue(allocationTotal)} /{' '}
+                  {formatPlatinumValue(allocationExpectedTotal)}
                 </strong>
               </div>
-            </div>
-            <div className="settings-modal-actions">
-              <button className="period-btn" type="button" onClick={() => setAllocationGroupId(null)}>
-                {t('common.cancel')}
-              </button>
-              <button
-                className="act-btn"
-                type="button"
-                onClick={() => void handleSaveAllocations()}
-                disabled={savingAllocations || !allocationMatches}
-              >
-                {savingAllocations ? t('pf.saving') : t('pf.saveAmounts')}
-              </button>
-            </div>
-          </div>
-        </div>
-        </ModalPortal>
-      ) : null}
+
+              <DialogFooter>
+                <Button variant="ghost" size="sm" onClick={() => setAllocationGroupId(null)}>
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void handleSaveAllocations()}
+                  disabled={savingAllocations || !allocationMatches}
+                >
+                  {savingAllocations ? t('pf.saving') : t('pf.saveAmounts')}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

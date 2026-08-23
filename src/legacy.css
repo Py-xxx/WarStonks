@@ -6813,12 +6813,6 @@ body {
   font-size: 11px;
   line-height: 1.45;
 }
-
-.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.chart-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.portfolio-chart-grid {
-  margin-bottom: 14px;
-}
 .portfolio-chart-body {
   min-height: 176px;
   padding: 12px 14px 8px;
@@ -6840,11 +6834,6 @@ body {
   padding: 20px 14px;
   color: var(--text-secondary);
   font-size: 12px;
-}
-
-/* Progressive loading: each loadable panel/section is a positioning context for its overlay. */
-.portfolio-summary-loadable {
-  position: relative;
 }
 .portfolio-loading-overlay {
   position: absolute;
@@ -6870,15 +6859,6 @@ body {
   color: var(--text-secondary);
   font-size: 12px;
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-.portfolio-panel-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-.portfolio-summary-body .chart-card {
-  overflow: visible;
 }
 .info-hint-tooltip {
   position: absolute;
@@ -6949,135 +6929,9 @@ body {
   font-size: 11px;
   color: var(--text-secondary);
 }
-/* Matches the inventory toolbar's buttons — the app's current button shape. Both buttons in
-   this toolbar share it, so neither reads as more primary than the other. */
-.portfolio-log-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.portfolio-log-btn:hover:not(:disabled) {
-  color: var(--text-primary);
-  border-color: var(--accent-blue);
-}
-.portfolio-log-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.portfolio-secondary-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 92px;
-}
-/* An unpriced group trade is incomplete data, not a settled row — it reads amber until the
-   user assigns the per-item split. See plan §4.2: the game gives a total, never a unit price. */
-.portfolio-needs-pricing-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 92px;
-  white-space: nowrap;
-  border-color: rgba(240, 160, 48, 0.4);
-  background: rgba(240, 160, 48, 0.12);
-  color: var(--accent-amber);
-}
-.portfolio-needs-pricing-btn:hover {
-  background: rgba(240, 160, 48, 0.2);
-}
-.portfolio-needs-pricing-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(240, 160, 48, 0.24);
-  border-radius: 10px;
-  background: rgba(240, 160, 48, 0.08);
-  color: var(--accent-amber);
-  font-size: 12px;
-  line-height: 1.5;
-}
-.portfolio-log-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-}
 .portfolio-log-stack {
   display: grid;
   gap: 12px;
-}
-.portfolio-filter-card {
-  overflow: visible;
-}
-.portfolio-log-filters {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-  padding: 14px;
-  border-top: 1px solid var(--border-subtle);
-}
-.portfolio-filter-field {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-.portfolio-filter-field > span {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-.portfolio-filter-field .settings-text-input {
-  width: 100%;
-  min-height: 34px;
-  padding: 0 11px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: rgba(12, 17, 27, 0.96);
-  color: var(--text-primary);
-  font-size: 12px;
-  box-shadow: none;
-  appearance: none;
-  -webkit-appearance: none;
-}
-.portfolio-filter-field .settings-text-input::placeholder {
-  color: var(--text-muted);
-}
-.portfolio-filter-field .settings-text-input:focus {
-  outline: none;
-  border-color: rgba(74, 158, 255, 0.4);
-  box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.12);
-}
-.portfolio-filter-field select.settings-text-input {
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
-    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
-  background-position:
-    calc(100% - 16px) calc(50% - 2px),
-    calc(100% - 11px) calc(50% - 2px);
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-  padding-right: 28px;
-}
-.portfolio-filter-field input[type="date"].settings-text-input::-webkit-calendar-picker-indicator {
-  filter: invert(0.76) brightness(0.92);
-  cursor: pointer;
 }
 /* Horizontal scroll so the full row (including the Keep Item toggle) stays
    reachable on narrow windows instead of being clipped by the card. */
@@ -7336,80 +7190,6 @@ body {
   color: var(--text-primary);
   background: rgba(74, 158, 255, 0.08);
 }
-.portfolio-modal {
-  width: min(560px, calc(100vw - 32px));
-}
-.portfolio-allocation-list {
-  display: grid;
-  gap: 10px;
-}
-.portfolio-allocation-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
-}
-.portfolio-allocation-copy {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.portfolio-allocation-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.portfolio-allocation-meta {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-.portfolio-allocation-input-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.portfolio-allocation-input {
-  min-width: 0;
-}
-.portfolio-allocation-unit {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-.portfolio-allocation-summary {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(255, 255, 255, 0.02);
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.portfolio-allocation-summary strong {
-  color: var(--text-primary);
-  font-size: 13px;
-}
-.portfolio-allocation-summary.error {
-  border-color: rgba(255, 142, 142, 0.35);
-  background: rgba(255, 112, 112, 0.07);
-}
-.chart-header {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border-subtle);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
 .chart-body { padding: 12px 14px; }
 
 .market-news-stack {
@@ -7648,11 +7428,6 @@ body {
   .flash-sales-grid {
     grid-template-columns: 1fr;
   }
-
-  .portfolio-log-filters,
-  .portfolio-drilldown-grid {
-    grid-template-columns: 1fr 1fr;
-  }
 }
 
 @media (max-width: 920px) {
@@ -7679,13 +7454,6 @@ body {
   .portfolio-log-toolbar {
     width: 100%;
     justify-content: flex-end;
-  }
-
-  .portfolio-log-filters,
-  .portfolio-drilldown-grid,
-  .portfolio-detail-header,
-  .portfolio-detail-row {
-    grid-template-columns: 1fr;
   }
 
 }
@@ -11136,62 +10904,6 @@ img[data-asset-failed='true'] {
 }
 .portfolio-page-subnav .subtab.active::after {
   box-shadow: 0 0 8px rgba(139, 111, 255, 0.55);
-}
-
-/* Staggered entrance for summary sections */
-.portfolio-summary-body > * { animation: riseIn 0.32s ease both; }
-.portfolio-summary-body > *:nth-child(2) { animation-delay: 0.05s; }
-.portfolio-summary-body > *:nth-child(3) { animation-delay: 0.10s; }
-.portfolio-summary-body > *:nth-child(4) { animation-delay: 0.15s; }
-.portfolio-summary-body > *:nth-child(5) { animation-delay: 0.20s; }
-.portfolio-summary-body > *:nth-child(6) { animation-delay: 0.25s; }
-
-/* ── Panel headers (charts / breakdowns / confidence): kicker treatment ── */
-.portfolio-panel-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px 9px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.portfolio-panel-header > span:first-child {
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-.portfolio-panel-header::before {
-  content: '';
-  width: 14px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--accent-purple);
-  box-shadow: 0 0 6px rgba(139, 111, 255, 0.5);
-  flex-shrink: 0;
-}
-.portfolio-summary-body .chart-card {
-  border-radius: 12px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-.portfolio-summary-body .chart-card:hover { border-color: #3A4157; }
-
-/* ── Trade Log: cohesive filter toolbar ── */
-.portfolio-log-filters {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-panel);
-  padding: 10px 12px;
-}
-.portfolio-log-filters select,
-.portfolio-log-filters input {
-  border-radius: 8px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.portfolio-log-filters select:focus,
-.portfolio-log-filters input:focus {
-  border-color: rgba(139, 111, 255, 0.5);
-  box-shadow: 0 0 0 3px rgba(139, 111, 255, 0.12);
-  outline: none;
 }
 
 /* ── Trade Log rows ── */
