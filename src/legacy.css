@@ -61,26 +61,6 @@ textarea:focus-visible,
 .card.accent-amber  { --panel-accent: var(--accent-amber);  --panel-accent-glow: rgba(240, 160, 48, 0.45); }
 .card.accent-purple { --panel-accent: var(--accent-purple); --panel-accent-glow: rgba(139, 111, 255, 0.45); }
 
-/* Section header with a trailing rule, for grouping panels on busy pages. */
-.panel-section-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 6px 2px 0;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-.panel-section-header::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
-
 /* Standalone market panels (Scanners / Opportunities) don't carry the .card class, so
    they never got the Pass-A elevation and rendered transparent. Give them the same
    elevated panel surface, with padding since their inner content has no edge spacing. */
@@ -118,50 +98,6 @@ textarea:focus-visible,
   animation: fadeIn 0.18s ease both;
 }
 
-/* Top-bar back button (after redirecting via an item name). */
-.topbar-back-btn {
-  flex-shrink: 0;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.topbar-back-btn:hover {
-  color: var(--text-primary);
-  border-color: rgba(74, 158, 255, 0.4);
-}
-
-/* "Recent" section label in the search dropdown. */
-.search-section-label {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  padding: 8px 12px 4px;
-}
-
-/* Reusable domain dot for panels/rows that don't use the .card + .card-label pattern. */
-.panel-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--accent-blue);
-  box-shadow: 0 0 8px rgba(74, 158, 255, 0.45);
-  vertical-align: middle;
-}
-.panel-dot-purple { background: var(--accent-purple); box-shadow: 0 0 8px rgba(139, 111, 255, 0.45); }
-.panel-dot-green  { background: var(--accent-green);  box-shadow: 0 0 8px rgba(61, 214, 140, 0.45); }
-.panel-dot-amber  { background: var(--accent-amber);  box-shadow: 0 0 8px rgba(240, 160, 48, 0.45); }
-.panel-dot-blue   { background: var(--accent-blue);   box-shadow: 0 0 8px rgba(74, 158, 255, 0.45); }
-
 /* Notifications settings: ringtone selector + preview */
 
 /* ---- Merged notifications modal: shared small toggles + Desktop|Discord matrix ---- */
@@ -173,7 +109,6 @@ textarea:focus-visible,
 /* The event matrix: label + a Desktop and a Discord toggle per row. */
 
 /* Save row: the hint explains that Discord toggles only persist on Save. */
-
 
 /* Import / Export modal */
 @keyframes import-export-indeterminate {
@@ -194,7 +129,6 @@ textarea:focus-visible,
 
 /* Expanded body — recessed so parts read as belonging to the set above. */
 @media (max-width: 720px) {
-  /* The metrics moved inside .sp-set-head-main, so that's the box that has to wrap now. */
 }
 
 /* ═══ What to farm now — shares the planner's shell (sp-*) plus these ═════ */
@@ -266,387 +200,10 @@ body {
   white-space: nowrap;
 }
 
-.topbar-search-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
-}
-
-.search-bar {
-  position: relative;
-  flex: 1;
-  max-width: 480px;
-  min-width: 0;
-  height: 34px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  gap: 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-  cursor: text;
-}
-.search-bar.open {
-  border-color: rgba(74,158,255,0.35);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
-}
-.search-input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 12px;
-}
-.search-input::placeholder { color: var(--text-muted); }
-.search-input:focus { outline: none; }
-.search-bar .kbd {
-  margin-left: auto;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 5px;
-  color: var(--text-muted);
-}
-.topbar-search-refresh {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg-base);
-  color: var(--text-muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease, transform 140ms ease;
-}
-
-.topbar-search-refresh:hover:not(:disabled) {
-  border-color: rgba(74, 158, 255, 0.34);
-  color: var(--text-primary);
-  background: rgba(74, 158, 255, 0.08);
-}
-
-.topbar-search-refresh:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.topbar-search-refresh.is-loading svg {
-  animation: topbar-refresh-spin 0.9s linear infinite;
-}
-
 @keyframes topbar-refresh-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
-
-.search-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  overflow: hidden;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
-  z-index: 250;
-}
-.search-state {
-  padding: 10px 12px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.search-state.error { color: var(--accent-red); }
-.search-suggestion {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border: none;
-  border-top: 1px solid var(--border-subtle);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.search-suggestion:first-of-type { border-top: none; }
-.search-suggestion:hover,
-.search-suggestion.active {
-  background: var(--bg-elevated);
-}
-.search-suggestion-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.search-suggestion-thumb {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 82%, black);
-  color: var(--text-secondary);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  text-transform: uppercase;
-}
-.search-suggestion-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.search-suggestion-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.search-suggestion-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.search-suggestion-meta {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.topbar-market-variant {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  height: 32px;
-}
-
-.topbar-market-variant-label {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.topbar-market-variant-select {
-  min-width: 46px;
-  max-width: 58px;
-  height: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 0;
-}
-
-.topbar-market-variant-select:focus {
-  outline: none;
-}
-
-.topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-.notification-wrap {
-  position: relative;
-}
-.notification-btn {
-  width: 36px;
-  height: 36px;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.notification-btn:hover,
-.notification-btn.open {
-  border-color: #333849;
-  color: var(--text-primary);
-  background: #1f2334;
-}
-.notification-count {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent-red);
-  color: #fff;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-}
-.notification-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(460px, calc(100vw - 40px));
-  max-height: min(70vh, 640px);
-  overflow: auto;
-  padding: 14px;
-  border-radius: 16px;
-  border: 1px solid rgba(108, 174, 255, 0.16);
-  background: var(--bg-elevated);
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.3);
-  z-index: 260;
-}
-.notification-panel-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.btn-connect {
-  height: 32px;
-  padding: 0 14px;
-  border-radius: 4px;
-  border: 1px solid var(--accent-blue);
-  background: transparent;
-  color: var(--accent-blue);
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.btn-connect:hover { background: rgba(74,158,255,0.08); }
-
-/* ── CURRENCY STRIP ── */
-/* Platinum leads by position, not by size. The old strip gave all five currencies equal
-   weight and an 8px uppercase label each — below readable size, and redundant once the icon is
-   there. Names now live on hover, which buys back the room the two cramped lines were using. */
-.currency-strip {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 0 12px;
-  height: 36px;
-  flex-shrink: 0;
-}
-
-.currency-primary,
-.currency-secondary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: default;
-}
-
-/* One size for every balance: platinum is distinguished by sitting first, behind its own
-   divider, rather than by shouting. */
-.currency-primary-val,
-.currency-secondary-val {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 12px;
-  line-height: 1;
-}
-.currency-primary-val { color: var(--text-primary); }
-.currency-secondary-val { color: var(--text-secondary); }
-
-/* Only in the DOM once platinum has actually moved, so there is no blank slot the rest of the
-   time. The strip does shift by the chip's width when a trade lands — accepted deliberately:
-   a permanent gap to avoid a one-off nudge is the worse trade. */
-.currency-delta {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 10px;
-  line-height: 1;
-  padding: 3px 5px;
-  border-radius: 4px;
-  color: var(--accent-green);
-  background: rgba(61, 214, 140, 0.12);
-}
-.currency-delta.is-down {
-  color: var(--accent-red);
-  background: rgba(240, 79, 88, 0.12);
-}
-
-.currency-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--border);
-  flex-shrink: 0;
-}
-
-/* An equal box is not an equal icon.
-   Each source image carries a different amount of transparent padding — measured, the artwork
-   fills 97% of the credits canvas but only 52% of endo's — so `object-fit: contain` renders
-   endo at roughly half the visible size of credits even though both boxes are 17px. The
-   per-currency scales below correct for that, normalising every icon to ~15px of actual
-   artwork. Recompute them if an icon is ever replaced. */
-.currency-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 5px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-.currency-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-.ci-platinum img { transform: scale(1.01); }
-.ci-credits img  { transform: scale(0.91); }
-.ci-endo img     { transform: scale(1.71); }
-.ci-ducats img   { transform: scale(1.05); }
-.ci-aya img      { transform: scale(1.12); }
-
-/* No tint behind any of them. The chip existed to give the old flat platinum art some ground
-   to sit on; the current icon carries its own alpha and reads better unbacked. */
-
-.currency-primary-val.no-data,
-.currency-secondary-val.no-data { color: var(--text-muted); }
 
 /* Above the app, below the relic panel it dims. */
 
@@ -728,100 +285,7 @@ body {
   transition: width 0.2s;
 }
 .sidebar.collapsed { width: 48px; }
-
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 16px;
-  height: 40px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  border-left: 2px solid transparent;
-  transition: all 0.12s;
-  user-select: none;
-  white-space: nowrap;
-}
-.sidebar.collapsed .nav-item { padding: 0 0 0 14px; }
-.nav-item:hover { background: var(--bg-elevated); color: var(--text-primary); }
-.nav-item.active {
-  border-left-color: var(--accent-blue);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-.nav-icon {
-  width: 18px; height: 18px;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.nav-label { overflow: hidden; transition: opacity 0.15s; }
-.sidebar.collapsed .nav-label { opacity: 0; width: 0; }
-
-.sidebar-footer {
-  margin-top: auto;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-}
-.sidebar.collapsed .sidebar-footer {
-  padding: 12px 8px;
-  align-items: center;
-}
-.sidebar-footer-links {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.sidebar-footer-link {
-  height: 34px;
-  padding: 0 10px;
-  border-radius: 10px;
-  border-left-width: 0;
-}
-.sidebar-footer-link.active {
-  border-left-color: transparent;
-}
-.sidebar-footer-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.sidebar-footer .version {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-.sidebar.collapsed .sidebar-footer-links {
-  width: 100%;
-  align-items: center;
-}
-.sidebar.collapsed .sidebar-footer-link {
-  width: 32px;
-  height: 32px;
-  justify-content: center;
-  padding: 0;
-}
-.sidebar.collapsed .sidebar-footer-meta {
-  width: 100%;
-  justify-content: center;
-}
 .sidebar.collapsed .version { display: none; }
-.icon-btn-sm {
-  width: 22px; height: 22px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 3px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-.icon-btn-sm:hover { background: var(--bg-elevated); color: var(--text-secondary); }
 
 /* ── CONTENT AREA ── */
 .content {
@@ -839,43 +303,6 @@ body {
 .portfolio-page-content {
   --text-secondary: #b3bbcc;
   --text-muted: #818a9d;
-}
-
-/* ── SUB-NAV ── */
-/* Layout-transparent wrapper so a role="tablist" can group the tab buttons without disturbing
-   the flex subnav layout. */
-
-.seller-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px;
-}
-.seller-option {
-  padding: 3px 10px;
-  border: none;
-  background: transparent;
-  border-radius: 3px;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  color: var(--text-muted);
-  transition: all 0.12s;
-}
-.seller-option.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-
-.toggle-wrap {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  color: var(--text-secondary);
 }
 .toggle {
   width: 30px; height: 16px;
@@ -945,109 +372,6 @@ body {
 .trade-status-ingame { color: var(--accent-purple); }
 .badge.trade-status-ingame { background: rgba(139,111,255,0.15); color: var(--accent-purple); }
 
-/* ── BUTTONS ── */
-.text-btn {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: transparent;
-  border: none;
-}
-.text-btn:hover { color: var(--text-primary); background: var(--bg-elevated); }
-
-.btn-sm {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  border: 1px solid var(--accent-blue);
-  background: transparent;
-  color: var(--accent-blue);
-  white-space: nowrap;
-}
-.btn-sm:hover { background: rgba(74,158,255,0.08); }
-.btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.period-btn {
-  height: 26px;
-  padding: 0 12px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-}
-.period-btn.active {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
-  color: #fff;
-}
-.period-btn:not(.active):hover { color: var(--text-primary); }
-
-/* ── INPUTS ── */
-.price-input {
-  height: 24px;
-  width: 70px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  padding: 0 8px;
-  text-align: right;
-}
-.price-input:focus { outline: none; border-color: var(--accent-blue); }
-.price-input::placeholder { color: var(--text-muted); }
-
-.input-label {
-  font-size: 10px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-
-.field-input {
-  height: 30px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 12px;
-  padding: 0 10px;
-}
-.field-input::placeholder { color: var(--text-muted); }
-.field-input:focus { outline: none; border-color: var(--accent-blue); }
-
-.qty-input {
-  width: 44px; height: 26px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 11px;
-  text-align: center;
-  padding: 0 4px;
-}
-
-/* ── PRIORITY ROW ── */
-.priority-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-.priority-row > .card {
-  min-height: 360px;
-}
-
 /* ── EMPTY STATE ── */
 .empty-state {
   display: flex;
@@ -1059,319 +383,8 @@ body {
   color: var(--text-muted);
   padding: 14px;
 }
-.empty-state .empty-icon { font-size: 20px; opacity: 0.45; }
 .empty-state .empty-primary { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
 .empty-state .empty-sub { font-size: 11px; color: var(--text-muted); text-align: center; }
-
-.panel-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-.panel-title-eyebrow {
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--text-primary);
-}
-
-/* Shared "added to watchlist" feedback, used by the Market, Scanners, and Opportunities pages
-   (not by the watchlist surfaces themselves). */
-
-/* ── WATCHLIST: add form ──
-   A fixed grid of labelled fields. Every control keeps its column whatever the state (the
-   variant select always renders, disabled when there's only one), so the Add button can never
-   move — the previous flex row tracked the selected item's name length. */
-
-/* Item search (watchlist tab) — lets the tab add an item without depending on Quick View. */
-
-/* ── WATCHLIST: shared row parts ── */
-
-/* Three actions, always all three, always adjacent — so the column never changes width and the
-   buttons never move. Unavailable actions are disabled, not removed. */
-
-/* Status tones. Hitting your target is the good outcome, so it reads green — it used to render
-   red, which everywhere else in this app means something is wrong. */
-
-/* ── WATCHLIST: compact list (dashboard card) ── */
-/* The card lists the whole watchlist and scrolls, rather than hiding rows behind a cap —
-   sorted target-hit-first, so whatever needs acting on is already at the top. */
-
-/* ── WATCHLIST: filter chips (full tab) ── */
-
-/* ── WATCHLIST: full table ── */
-.td-green { color: var(--accent-green) !important; }
-.td-red   { color: var(--accent-red) !important; }
-.alerts-panel.compact .alerts-list {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-.alerts-panel.compact .alerts-section-card {
-  padding: 10px;
-}
-.alerts-panel.compact .alert-item {
-  gap: 10px;
-  padding: 10px;
-}
-.alerts-panel.compact .alert-actions {
-  gap: 4px;
-  margin-left: 8px;
-}
-.alerts-panel.compact .alert-clear-btn-floating {
-  width: 24px;
-  height: 24px;
-  top: 8px;
-  right: 8px;
-}
-
-
-/* ── CONTENT ROW ── */
-.content-row {
-  display: grid;
-  grid-template-columns: 3fr 2fr;
-  gap: 16px;
-  align-items: stretch;
-}
-.content-row > .card {
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── QUICK VIEW ── */
-
-/* Header-right cluster: where the market is sitting + the 5-listing spread. */
-
-/* ---------- Quick View: top-5 cheapest sellers ---------- */
-/* The copy affordance sits on every row (not just on hover) so it's obvious the row is
-   clickable at a glance — the old build only hinted at this in a line of small print. */
-/* Cheapest listing (and anything tied with it) reads green; anything within a couple of
-   platinum is still competitive, so it reads amber. */
-
-/* ---------- Analysis Preview: 24h trend chart ---------- */
-/* SVG presentation attributes can't resolve var(), so the trend colors live here and follow
-   the tone class on the wrapper — same pattern the old sparkline used. */
-
-/* ---------- Quick View: All Sell Orders popup ---------- */
-
-/* Keep the backdrop behind the panel (its shared class sets a high z-index that
-   would otherwise cover the modal and block interaction). */
-/* The popup reuses the Quick View row styling; only the scroll container differs. */
-
-/* ── ANALYSIS BARS ── */
-.analysis-bars { display: flex; flex-direction: column; gap: 8px; }
-.abar-row { display: flex; align-items: center; gap: 10px; }
-.abar-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  width: 68px;
-  flex-shrink: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.abar-track { flex: 1; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
-.abar-fill { height: 100%; border-radius: 2px; }
-.abar-val {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: var(--text-secondary);
-  width: 24px;
-  text-align: right;
-  flex-shrink: 0;
-}
-.analysis-note {
-  margin-top: 10px;
-  padding: 8px 10px;
-  background: var(--bg-elevated);
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
-.analysis-placeholder {
-  min-height: 220px;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  background: var(--bg-elevated);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 8px;
-  padding: 18px;
-}
-.analysis-placeholder-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.analysis-placeholder-body {
-  font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-.analysis-preview-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.analysis-preview-hero {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(152, 170, 210, 0.16);
-  background: rgba(12, 17, 28, 0.92);
-}
-
-.analysis-preview-hero.tone-green {
-  border-color: rgba(61, 214, 140, 0.18);
-  box-shadow: inset 0 1px 0 rgba(61, 214, 140, 0.12);
-}
-
-.analysis-preview-hero.tone-amber {
-  border-color: rgba(240, 160, 48, 0.18);
-  box-shadow: inset 0 1px 0 rgba(240, 160, 48, 0.12);
-}
-
-.analysis-preview-hero.tone-red {
-  border-color: rgba(240, 79, 88, 0.18);
-  box-shadow: inset 0 1px 0 rgba(240, 79, 88, 0.12);
-}
-
-.analysis-preview-kicker {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.analysis-preview-title {
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.1;
-  color: var(--text-primary);
-}
-
-.analysis-preview-copy {
-  margin-top: 6px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-
-.analysis-preview-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-muted);
-  text-align: right;
-}
-
-.analysis-preview-confidence {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  white-space: nowrap;
-}
-.analysis-preview-confidence.tone-green {
-  color: var(--accent-green);
-  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
-}
-.analysis-preview-confidence.tone-amber {
-  color: var(--accent-amber);
-  background: color-mix(in srgb, var(--accent-amber) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent-amber) 40%, transparent);
-}
-.analysis-preview-confidence.tone-red {
-  color: var(--accent-red);
-  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
-}
-.analysis-preview-confidence.tone-neutral {
-  color: var(--text-secondary);
-  background: var(--bg-elevated);
-  border-color: var(--border);
-}
-
-.analysis-preview-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.analysis-preview-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: rgba(10, 15, 27, 0.88);
-}
-
-.analysis-preview-stat-label {
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.analysis-preview-stat-value {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.1;
-  color: var(--text-primary);
-}
-
-/* ── EVENTS ── */
-.world-event-updated-at {
-  margin-bottom: 12px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-/* ── PAGE TABS ── */
-.page-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  padding: 0 20px;
-  background: var(--bg-surface);
-  flex-shrink: 0;
-}
-.page-tab {
-  padding: 0 14px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: all 0.12s;
-  white-space: nowrap;
-}
-.page-tab:hover { color: var(--text-primary); }
-.page-tab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
 
 /* ── PAGE CONTENT ── */
 .page-content {
@@ -1379,159 +392,9 @@ body {
   flex: 1;
   overflow-y: auto;
 }
-.text-dim {
-  color: var(--text-dim);
-}
-
-/* --- World clock (open-world cycles) --- */
-
-/* --- Nightwave / Steel Path / Prime Resurgence panels --- */
-/* Regal Aya, shown only here. A single inline row rather than a card: it is context for the
-   stock below, not a headline of its own. */
-
-/* ── WATCHLIST FULL SCREEN ── */
-
-/* ── TRADES ── */
-
-.trades-page-content .create-order-label {
-  color: var(--text-secondary);
-}
-
-.trades-page-content .create-order-label {
-  font-size: 10px;
-}
-
-.trades-page-content .conn-meta,
-.trades-page-content .health-note {
-  color: var(--text-secondary);
-}
-.connection-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 14px;
-}
-.conn-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 4px;
-  background: rgba(61,214,140,0.15);
-  color: var(--accent-green);
-  border: 1px solid rgba(61,214,140,0.2);
-}
-.conn-meta { font-size: 12px; color: var(--text-secondary); }
-.conn-meta strong { color: var(--text-primary); }
-.conn-actions { margin-left: auto; display: flex; gap: 8px; }
-
-.create-order-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 14px;
-  margin-bottom: 14px;
-}
-.create-order-label {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 10px;
-}
-.create-order-fields {
-  display: grid;
-  grid-template-columns: 3fr 1fr 1fr 1fr auto;
-  gap: 8px;
-  align-items: center;
-}
-
-/* Hidden orders are dimmed so on/off visibility is obvious at a glance. */
-
-/* Per-row visibility toggle pill. */
-
-/* Show All / Hide All toolbar above the listing table. */
-
-.item-cell { display: flex; align-items: center; gap: 10px; }
-.item-thumb {
-  width: 32px; height: 32px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; color: var(--text-muted);
-  flex-shrink: 0;
-}
-.item-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
 
 /* Thumbnail doubles as a quick visibility toggle: hovering fades the item art out to an eye. */
 .item-name { font-weight: 600; color: var(--text-primary); font-size: 12px; }
-.item-id { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 9px; color: var(--text-muted); margin-top: 2px; }
-
-.health-score { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 14px; font-weight: 700; }
-.health-note { font-size: 11px; color: var(--text-secondary); margin-top: 2px; line-height: 1.3; max-width: 220px; }
-.health-checked { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
-.actions-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-/* In split mode: form body becomes a borderless flex column, sections own spacing */
-/* Form section wrappers — transparent in single-column mode */
-/* In split mode: sections mirror the analysis panel treatment */
-/* Details section grows to fill remaining form-col height */
-/* Stack price/qty/rank/visibility into a single column in split mode */
-/* Analysis panel */
-/* Exit price hero */
-/* Rows and KV pairs */
-/* Exit zone band */
-/* Trend */
-/* ── Quantity stepper (watchlist rows + add controls) ── */
-/* Hide the native number spinners — the -/+ buttons are the control. */
-
-/* Mark-as-bought confirm — same compact, screen-centered treatment as the remove dialog so the
-   two watchlist confirmations feel like one family. */
-.rank-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-base);
-  overflow: hidden;
-}
-.rank-toggle-option {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 30px;
-  height: 22px;
-  padding: 0 8px;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.rank-toggle-option + .rank-toggle-option {
-  border-left: 1px solid var(--border-strong);
-}
-.rank-toggle-option:hover {
-  color: var(--text-primary);
-}
-.rank-toggle-option.active {
-  background: rgba(74, 158, 255, 0.16);
-  color: var(--accent-blue);
-}
 
 /* ── PORTFOLIO ── */
 .period-bar {
@@ -1542,44 +405,6 @@ body {
 }
 .period-bar label { font-size: 12px; color: var(--text-secondary); margin-right: 4px; }
 .period-right { margin-left: auto; }
-
-.plat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 10px; }
-.alloc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
-
-.info-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; }
-.info-card-label {
-  display: inline-flex;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 6px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 5px;
-}
-.info-card-val {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--accent-green);
-}
-.info-card-val.neutral { color: var(--text-primary); }
-.info-card-val.off     { color: var(--text-secondary); }
-.info-card-val.negative { color: #f37f87; }
-.info-card-subnote {
-  margin-top: 3px;
-  color: var(--color-amber);
-  font-size: 10px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-.info-card-note {
-  margin-top: 6px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.45;
-}
 .portfolio-chart-body {
   min-height: 176px;
   padding: 12px 14px 8px;
@@ -1626,44 +451,6 @@ body {
   color: var(--text-secondary);
   font-size: 12px;
   font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-.info-hint-tooltip {
-  position: absolute;
-  left: 0;
-  right: auto;
-  bottom: calc(100% + 8px);
-  z-index: 320;
-  width: 240px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: rgba(12, 17, 27, 0.98);
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.55;
-  text-transform: none;
-  letter-spacing: normal;
-  white-space: normal;
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(4px);
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-.info-hint-tooltip.bottom {
-  top: calc(100% + 8px);
-  bottom: auto;
-}
-.info-hint-tooltip.left {
-  top: 0;
-  bottom: auto;
-  left: auto;
-  right: calc(100% + 8px);
-}
-.info-hint:hover .info-hint-tooltip,
-.info-hint:focus-visible .info-hint-tooltip {
-  opacity: 1;
-  transform: translateY(0);
 }
 .portfolio-log-toolbar {
   display: flex;
@@ -1866,11 +653,6 @@ body {
   color: var(--text-secondary);
 }
 
-.portfolio-page-content .info-card-label {
-  font-size: 11px;
-  margin-bottom: 7px;
-}
-
 .portfolio-page-content .portfolio-log-header {
   font-size: 12px;
 }
@@ -1898,13 +680,6 @@ body {
 .chart-body { padding: 12px 14px; }
 
 @media (max-width: 1024px) {
-  .priority-row,
-  .content-row,
-  .chart-grid,
-  .plat-grid,
-  .alloc-grid {
-    grid-template-columns: 1fr;
-  }
 
   .watchlist-add {
     align-items: flex-start;
@@ -1916,18 +691,6 @@ body {
     grid-template-columns: minmax(180px, 1.5fr) 58px 92px 100px 108px 120px 104px;
     gap: 10px;
   }
-
-  .alerts-list,
-  .alerts-panel.compact .alerts-list {
-    grid-template-columns: 1fr;
-  }
-
-  .notification-panel {
-    right: -42px;
-    width: min(420px, calc(100vw - 24px));
-  }
-
-  /* Stacked layout: the header metrics read left-aligned under the item, not floated right. */
 }
 
 @media (max-width: 920px) {
@@ -1971,65 +734,6 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── SCANNERS: compact status strip ──
-   The old intro panel carried a paragraph of copy, a full auto-scan toggle block, a status
-   badge, the stage label, and a live "currently scanning X" readout — a tall header for
-   information that's either static or gone a second later. The toggle and timestamp moved to
-   the sub-nav; what's left is a single thin strip. */
-
-/* Sectioned hover card — grouped, two-column rows so each value is readable. */
-
-/* Each tick is absolutely positioned at the exact fraction of its matching SVG gridline so
-   the labels line up with the lines regardless of how the chart stretches. */
-
-/* Time-of-day weekday heatmap: 7 rows (Mon–Sun) × 12 two-hour blocks. The column header
-   and every row share one grid template so ticks line up with cells; the cell wrapper uses
-   display:contents so its 12 cells become direct grid items of the row. */
-/* Data cells with barely any activity still read as "has data" via a faint floor tint. */
-
-.market-panel-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 0 9px;
-  border-radius: 999px;
-  border: 1px solid rgba(152, 170, 210, 0.16);
-  background: rgba(15, 21, 35, 0.94);
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.market-panel-badge.tone-neutral {
-  border-color: rgba(152, 170, 210, 0.16);
-}
-
-.market-panel-badge.tone-blue {
-  border-color: rgba(104, 173, 255, 0.18);
-  color: #dbeeff;
-  background: rgba(17, 33, 58, 0.92);
-}
-
-.market-panel-badge.tone-green {
-  border-color: rgba(89, 216, 151, 0.18);
-  color: #d7f7e5;
-  background: rgba(14, 37, 27, 0.94);
-}
-
-.market-panel-badge.tone-amber {
-  border-color: rgba(241, 193, 93, 0.18);
-  color: #ffe9b3;
-  background: rgba(44, 31, 11, 0.94);
-}
-
-.market-panel-badge.tone-red {
-  border-color: rgba(255, 119, 140, 0.2);
-  color: #ffd6dd;
-  background: rgba(52, 18, 25, 0.94);
-}
-
 @keyframes market-panel-spin {
   from {
     transform: rotate(0deg);
@@ -2038,54 +742,6 @@ body {
     transform: rotate(360deg);
   }
 }
-
-/* ─── Calibration tab ─────────────────────────────────────────────────────── */
-
-.calib-bucket-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.calib-insufficient {
-  color: var(--text-muted);
-  font-size: 12px;
-  margin: 0;
-  line-height: 1.5;
-}
-
-.calib-return-band {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.calib-band-value {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.calib-band-sep {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.calib-rolling-hit {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-top: 2px;
-}
-
-.calib-rolling-hit.tone-green { color: var(--color-green); }
-.calib-rolling-hit.tone-amber { color: var(--color-amber); }
-.calib-rolling-hit.tone-red   { color: var(--color-red); }
-
-.calib-band-value.tone-green { color: var(--color-green); }
-.calib-band-value.tone-amber { color: var(--color-amber); }
-.calib-band-value.tone-red   { color: var(--color-red); }
 
 /* Images that exhausted load retries (useImageErrorRecovery): show a neutral placeholder
    instead of the browser's broken-image icon. */
@@ -2150,53 +806,6 @@ img[data-asset-failed='true'] {
 }
 
 .logo { display: flex; align-items: center; gap: 9px; }
-.logo-mark {
-  width: 26px; height: 26px;
-  display: grid; place-items: center;
-  border-radius: 8px;
-  color: var(--accent-blue);
-  background: linear-gradient(135deg, rgba(74, 158, 255, 0.22), rgba(139, 111, 255, 0.18));
-  border: 1px solid rgba(74, 158, 255, 0.35);
-  box-shadow: 0 0 14px rgba(74, 158, 255, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-.logo-text {
-  background: linear-gradient(92deg, #EAF0FF 20%, #9FC3FF 75%, #B7A6FF 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.search-bar {
-  border-radius: 8px;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
-}
-.search-bar:focus-within,
-.search-bar.open {
-  border-color: rgba(74, 158, 255, 0.5);
-  box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.12), 0 14px 30px rgba(0, 0, 0, 0.28);
-  background: #0E1118;
-}
-.topbar-search-refresh { border-radius: 8px; }
-.topbar-search-refresh:hover:not(:disabled) { transform: translateY(-1px); }
-.topbar-search-refresh:active:not(:disabled) { transform: translateY(0) scale(0.96); }
-
-.currency-strip {
-  border-radius: 7px;
-  background: linear-gradient(180deg, #0E1118, #0C0F15);
-}
-/* Balances survive a failed read and a restart, so they can be genuinely old. Dimmed rather
-   than recoloured: the numbers are still real, just not fresh, and an amber currency strip
-   would read as an error the user has to act on. */
-.currency-strip.is-stale {
-  border-color: rgba(240, 160, 48, 0.28);
-}
-.currency-strip.is-stale .currency-primary-val,
-.currency-strip.is-stale .currency-secondary-val {
-  opacity: 0.6;
-}
-.currency-icon { transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1); }
-.currency-primary:hover .currency-icon,
-.currency-secondary:hover .currency-icon { transform: scale(1.14); }
 
 /* ── Sidebar ── */
 .sidebar {
@@ -2204,68 +813,6 @@ img[data-asset-failed='true'] {
   background: var(--bg-surface);
 }
 .sidebar.collapsed { width: 56px; }
-
-.nav-item {
-  position: relative;
-  border-left: none;
-  border-radius: 9px;
-  padding: 0 12px;
-  margin: 1px 0;
-  --nav-accent: var(--accent-blue);
-  --nav-accent-soft: rgba(74, 158, 255, 0.12);
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.sidebar.collapsed .nav-item {
-  padding: 0;
-  width: 40px;
-  height: 40px;
-  margin: 1px auto;
-  justify-content: center;
-}
-.nav-item::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  height: 0;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--nav-accent);
-  box-shadow: 0 0 10px var(--nav-accent);
-  transform: translateY(-50%);
-  transition: height 0.18s cubic-bezier(0.22, 1, 0.36, 1);
-  pointer-events: none;
-}
-.sidebar.collapsed .nav-item::before { left: -6px; }
-.nav-item:hover { background: rgba(255, 255, 255, 0.045); color: var(--text-primary); }
-.nav-item.active {
-  border-left-color: transparent;
-  background: var(--nav-accent-soft);
-  color: var(--text-primary);
-}
-.nav-item.active::before { height: 60%; }
-.nav-icon { transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.15s ease; }
-.nav-item:hover .nav-icon { transform: translateY(-1px) scale(1.1); color: var(--nav-accent); }
-.nav-item.active .nav-icon { color: var(--nav-accent); }
-
-/* Per-page identity colors (kept within the existing accent palette). */
-.nav-home          { --nav-accent: var(--accent-blue);   --nav-accent-soft: rgba(74, 158, 255, 0.12); }
-.nav-market        { --nav-accent: var(--accent-green);  --nav-accent-soft: rgba(61, 214, 140, 0.10); }
-.nav-events        { --nav-accent: var(--accent-amber);  --nav-accent-soft: rgba(240, 160, 48, 0.10); }
-.nav-scanners      { --nav-accent: var(--accent-purple); --nav-accent-soft: rgba(139, 111, 255, 0.12); }
-.nav-opportunities { --nav-accent: var(--accent-amber);  --nav-accent-soft: rgba(240, 160, 48, 0.10); }
-.nav-inventory     { --nav-accent: var(--accent-green);  --nav-accent-soft: rgba(61, 214, 140, 0.10); }
-.nav-trades        { --nav-accent: var(--accent-blue);   --nav-accent-soft: rgba(74, 158, 255, 0.12); }
-.nav-portfolio     { --nav-accent: var(--accent-purple); --nav-accent-soft: rgba(139, 111, 255, 0.12); }
-.nav-strategy      { --nav-accent: var(--accent-blue);   --nav-accent-soft: rgba(74, 158, 255, 0.12); }
-
-.sidebar-footer { border-top: 1px solid var(--border-subtle); }
-.sidebar-footer .version {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border-subtle);
-  padding: 2px 7px;
-  border-radius: 5px;
-}
 
 /* ── Sub-nav tabs: animated underline ── */
 
@@ -2300,19 +847,9 @@ img[data-asset-failed='true'] {
 
 /* ── Empty states: breathe a little ── */
 .empty-state { gap: 7px; }
-.empty-state .empty-icon { animation: emptyPulse 3s ease-in-out infinite; }
 @keyframes emptyPulse {
   0%, 100% { opacity: 0.45; transform: none; }
   50% { opacity: 0.7; transform: translateY(-2px); }
-}
-
-/* ── Home page interactive rows ── */
-
-.seller-group { border-radius: 8px; }
-.seller-option { border-radius: 6px; transition: background 0.14s ease, color 0.14s ease; }
-.seller-option.active {
-  background: rgba(74, 158, 255, 0.14);
-  color: var(--accent-blue);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -2336,19 +873,6 @@ img[data-asset-failed='true'] {
 @keyframes meterSheen {
   0% { transform: translateX(-100%); }
   55%, 100% { transform: translateX(100%); }
-}
-
-/* ── Trade Posture hero: tone-tinted gradient + bigger identity ── */
-
-/* ── Chart toolbar: tactile segmented pills ── */
-
-/* ── Track record + calibration ── */
-
-.calib-bucket-card { transition: border-color 0.16s ease, transform 0.16s ease, box-shadow 0.2s ease; }
-.calib-bucket-card:hover { transform: translateY(-2px); }
-.calib-rolling-hit {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── Action readout value gets the mono/tabular treatment too ── */
@@ -2395,82 +919,13 @@ img[data-asset-failed='true'] {
 @keyframes langRingSpin {
   to { transform: rotate(360deg); }
 }
-
-/* ── Portal-based info tooltips (Portfolio): fixed + viewport-clamped ── */
-.info-hint-tooltip-floating {
-  position: fixed;
-  left: auto;
-  right: auto;
-  top: auto;
-  bottom: auto;
-  z-index: 2100;
-  width: 260px;
-  opacity: 1;
-  transform: none;
-  pointer-events: none;
-  animation: infoTipIn 0.14s ease both;
-  color: var(--text-primary);
-}
 @keyframes infoTipIn {
   from { opacity: 0; transform: translateY(3px); }
   to   { opacity: 1; transform: none; }
 }
-.info-hint-tooltip-floating.is-below { animation-name: infoTipInBelow; }
 @keyframes infoTipInBelow {
   from { opacity: 0; transform: translateY(-3px); }
   to   { opacity: 1; transform: none; }
-}
-
-/* ── Language settings: Beta pill + translation disclaimer ── */
-
-/* Strategy tab */
-/* The Strategy tab body: settings on the left, a scrollable activity panel on the right. */
-/* Sticky so the activity panel stays put while the settings column scrolls, and caps its own
-   height so a long feed scrolls internally instead of stretching the page. */
-
-/* ---- Trades: merged orders split view ---- */
-/* Dim only the data columns of a hidden listing — never the actions, or the popup menu
-   (a child of the row) would inherit the opacity and become un-clickable. */
-
-/* Trades: close-quantity popup */
-/* Same compact, screen-centered treatment as the watchlist confirm dialogs, so all three
-   quantity/confirm popups read as one family. */
-
-/* Trades: health enrichments (velocity, cost, age, breakdown, apply) */
-
-/* ============ Smart Manage (Strategy page) ============ */
-
-/* Per-listing Auto chip/toggle (orders + health) */
-
-/* Smart Manage go-live confirmation */
-
-/* Smart Manage — Phase 2 results panel */
-
-/* Per-listing Smart Manage strategy popover, anchored to the row's adjustments chip. */
-
-/* Enable row: the whole row is the switch, so there's no dead space beside a lone pill. */
-/* Price inputs get a trailing "p" affix without disturbing the number field. */
-
-/* Circuit-breaker banner: listings Smart Manage gave up on after repeated failed updates. */
-/* Relic drop table. Values come from the same scanner results "what to farm now" reads, so
-   the two tabs can never quote different prices for the same drop. */
-/* Carries its own surface. There is no generic `.modal` class in this codebase — the only
-   modal surface is `.settings-modal`, which is fixed at 760px and wrong for a drop table. */
-.af-relic-modal {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(520px, 92vw);
-  max-height: min(640px, calc(100vh - 96px));
-  overflow: auto;
-  padding: 16px;
-  border: 1px solid rgba(74, 158, 255, 0.18);
-  border-radius: 14px;
-  background: var(--bg-elevated);
-  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.34);
-  z-index: 360;
-  cursor: default;
 }
 
 /* AlecaFrame detection read-out. A dot rather than a badge: this is ambient status, not
@@ -2524,40 +979,3 @@ img[data-asset-failed='true'] {
   0%, 100% { opacity: 0.55; }
   50% { opacity: 1; }
 }
-
-/* Relic art carries its own silhouette on transparency, so the thumbnail chrome every other item
-   icon needs — a filled square with a border — reads as a chip drawn around a picture rather than
-   as the picture itself. One rule, applied at each surface that renders a relic; it is deliberately
-   last in the file so it wins on equal specificity against the five container classes it overrides
-   (`farm-now-thumb`, `sp-set-thumb`, `farm-cycle-thumb`, `fissure-tier-icon`, `market-drop-image`),
-   each of which is also used for non-relic items and must keep its chrome there.
-
-   Goes when those pages migrate; the Tailwind surfaces (Farm Now) express the same thing by simply
-   not drawing the chrome. */
-.relic-art,
-.relic-art img {
-  background: none;
-  border: 0;
-  outline: 0;
-  box-shadow: none;
-}
-
-.relic-art img {
-  object-fit: contain;
-}
-
-
-/* ── Baro's summary strip (rebuilt on Varzia's layout) ────────────────────────
-   The countdown is the fact people open the panel for, so it reads as a figure rather than as a
-   cell in a meta grid. Ducats sit beside it for the reason Regal Aya sits on Varzia: they buy
-   nothing anywhere else, so they are only worth knowing while looking at his stock. */
-
-
-/* ── Events overview ──────────────────────────────────────────────────────────
-   Summary cards for the sources whose full view lives behind a tab. Each shows the ONE fact that
-   changes (Baro's countdown, Teshin's weekly Limited item) and links onward; the sources that are
-   already short lists — alerts, active events, fissures — render in full instead. */
-
-/* ── Flash sales ──────────────────────────────────────────────────────────────
-   Fixed height on purpose: the value is "is there a discount on right now", which fits in the
-   first two rows, and nothing here is tradeable. */
