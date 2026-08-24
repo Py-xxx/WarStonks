@@ -98,24 +98,6 @@ textarea:focus-visible,
   animation: fadeIn 0.18s ease both;
 }
 
-/* Notifications settings: ringtone selector + preview */
-
-/* ---- Merged notifications modal: shared small toggles + Desktop|Discord matrix ---- */
-/* Every toggle in this modal (the three channel switches AND the matrix cells) uses the same
-   compact size, so nothing feels oversized next to the event list. */
-
-/* Ringtone + webhook URL share one row so the config stays compact. */
-
-/* The event matrix: label + a Desktop and a Discord toggle per row. */
-
-/* Save row: the hint explains that Discord toggles only persist on Save. */
-
-/* Import / Export modal */
-@keyframes import-export-indeterminate {
-  0% { left: -40%; }
-  100% { left: 100%; }
-}
-
 /* ═══ Set Completion Planner — redesigned (sp-*) ═══════════════════════════ */
 /* Summary strip: a quiet invest → sell → profit bar, not floating badges. */
 
@@ -128,8 +110,6 @@ textarea:focus-visible,
    state they can't enter — show the actionable label outright there. */
 
 /* Expanded body — recessed so parts read as belonging to the set above. */
-@media (max-width: 720px) {
-}
 
 /* ═══ What to farm now — shares the planner's shell (sp-*) plus these ═════ */
 /* Session still resolving: the shell paints instantly so "Farm this" never feels dead. */
@@ -198,11 +178,6 @@ body {
   color: var(--text-primary);
   letter-spacing: 0.05em;
   white-space: nowrap;
-}
-
-@keyframes topbar-refresh-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 /* Above the app, below the relic panel it dims. */
@@ -299,11 +274,6 @@ body {
   --text-secondary: #adb5c6;
   --text-muted: #788194;
 }
-
-.portfolio-page-content {
-  --text-secondary: #b3bbcc;
-  --text-muted: #818a9d;
-}
 .toggle {
   width: 30px; height: 16px;
   border-radius: 8px;
@@ -383,8 +353,6 @@ body {
   color: var(--text-muted);
   padding: 14px;
 }
-.empty-state .empty-primary { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
-.empty-state .empty-sub { font-size: 11px; color: var(--text-muted); text-align: center; }
 
 /* ── PAGE CONTENT ── */
 .page-content {
@@ -396,335 +364,11 @@ body {
 /* Thumbnail doubles as a quick visibility toggle: hovering fades the item art out to an eye. */
 .item-name { font-weight: 600; color: var(--text-primary); font-size: 12px; }
 
-/* ── PORTFOLIO ── */
-.period-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 14px;
-}
-.period-bar label { font-size: 12px; color: var(--text-secondary); margin-right: 4px; }
-.period-right { margin-left: auto; }
-.portfolio-chart-body {
-  min-height: 176px;
-  padding: 12px 14px 8px;
-  display: block;
-}
-.portfolio-chart-shell {
-  display: grid;
-  gap: 10px;
-}
-.portfolio-chart-empty {
-  min-height: 148px;
-  display: grid;
-  place-items: center;
-  color: var(--text-secondary);
-  font-size: 12px;
-  text-align: center;
-}
-.portfolio-breakdown-empty {
-  padding: 20px 14px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.portfolio-loading-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  border-radius: 10px;
-  background: rgba(8, 13, 22, 0.55);
-  backdrop-filter: blur(2px);
-}
-.portfolio-loading-spinner {
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  border: 3px solid rgba(121, 184, 255, 0.18);
-  border-top-color: #79b8ff;
-  animation: market-panel-spin 0.85s linear infinite;
-}
-.portfolio-loading-copy {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-}
-.portfolio-log-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-/* With the redundant "Trade Log" heading gone this bar holds only the toolbar, so it no longer
-   needs to reserve a row's worth of height for a label. */
-.portfolio-log-bar {
-  margin-bottom: 10px;
-}
-/* Reads as a labelled data point in the app's established idiom (micro uppercase label + mono
-   value, as on every info card) rather than as a status pill — nothing here has a status. */
-.portfolio-log-updated {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  margin-right: 2px;
-}
-.portfolio-log-updated-label {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 9px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.portfolio-log-updated-value {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.portfolio-log-stack {
-  display: grid;
-  gap: 12px;
-}
-/* Horizontal scroll so the full row (including the Keep Item toggle) stays
-   reachable on narrow windows instead of being clipped by the card. */
-.portfolio-log-scroll {
-  overflow: auto;
-  max-height: min(64vh, 680px);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-surface);
-}
-.portfolio-log-header,
-.portfolio-log-row {
-  display: grid;
-  grid-template-columns: minmax(200px, 1.6fr) 64px 100px 110px 118px 132px 118px;
-  align-items: center;
-  gap: 12px;
-  min-width: 780px;
-}
-.portfolio-log-header {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elevated);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.portfolio-log-header-num {
-  text-align: right;
-}
-.portfolio-log-list {
-  display: grid;
-}
-.portfolio-log-group {
-  display: grid;
-}
-.portfolio-log-row {
-  padding: 9px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  transition: background 100ms ease;
-}
-.portfolio-log-row:hover {
-  background: rgba(74, 158, 255, 0.045);
-}
-.portfolio-log-row:last-child {
-  border-bottom: none;
-}
-.portfolio-log-row-parent {
-  background: rgba(139, 111, 255, 0.04);
-}
-.portfolio-log-row-parent:hover {
-  background: rgba(139, 111, 255, 0.07);
-}
-.portfolio-log-row-child {
-  background: rgba(255, 255, 255, 0.015);
-  box-shadow: inset 2px 0 0 rgba(139, 111, 255, 0.35);
-}
-.portfolio-log-item {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-width: 0;
-}
-.portfolio-log-item-child {
-  padding-left: 32px;
-}
-.portfolio-log-thumb,
-.portfolio-log-thumb-fallback {
-  width: 32px;
-  height: 32px;
-  border-radius: 7px;
-  border: 1px solid var(--border);
-  background: rgba(16, 20, 28, 0.92);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  flex: 0 0 auto;
-}
-.portfolio-log-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.portfolio-log-thumb-fallback {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-}
-.portfolio-log-item-copy {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-.portfolio-log-item-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.portfolio-log-item-slug {
-  font-size: 10.5px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Numeric column: main value with its secondary metric stacked underneath (price/×qty,
-   profit/margin) — halves the column count so the ledger fits without horizontal scroll. */
-.portfolio-log-cell {
-  display: grid;
-  gap: 1px;
-  justify-items: end;
-  text-align: right;
-  min-width: 0;
-}
-.portfolio-log-cell-main {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 12.5px;
-  color: var(--text-primary);
-}
-.portfolio-log-cell-main.pos { color: var(--accent-green); }
-.portfolio-log-cell-main.neg { color: var(--accent-red); }
-.portfolio-log-cell-sub {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-.portfolio-log-status-cell {
-  display: flex;
-  justify-content: flex-start;
-  min-width: 0;
-}
-.portfolio-log-status-stack {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-/* "3/6" beside a Partial badge — how much of the stack has actually sold. */
-.portfolio-log-status-detail {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.portfolio-log-value,
-.portfolio-log-date {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.portfolio-page-content .info-card-label,
-.portfolio-page-content .portfolio-log-updated,
-.portfolio-page-content .portfolio-log-header,
-.portfolio-page-content .portfolio-log-item-slug {
-  color: var(--text-secondary);
-}
-
-.portfolio-page-content .portfolio-log-header {
-  font-size: 12px;
-}
-
-.portfolio-page-content .portfolio-log-updated,
-.portfolio-page-content .portfolio-breakdown-empty {
-  color: var(--text-secondary);
-}
-
-.portfolio-page-content .portfolio-log-item-name {
-  color: var(--text-primary);
-}
-.portfolio-log-date {
-  text-align: right;
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10.5px;
-  line-height: 1.45;
-  color: var(--text-muted);
-}
-.portfolio-log-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-}
-.chart-body { padding: 12px 14px; }
-
 @media (max-width: 1024px) {
 
   .watchlist-add {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .portfolio-log-header,
-  .portfolio-log-row {
-    grid-template-columns: minmax(180px, 1.5fr) 58px 92px 100px 108px 120px 104px;
-    gap: 10px;
-  }
-}
-
-@media (max-width: 920px) {
-  .portfolio-log-header {
-    display: none;
-  }
-
-  .portfolio-log-row {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-
-  .portfolio-log-date {
-    text-align: left;
-  }
-
-  .portfolio-log-actions {
-    justify-content: flex-start;
-  }
-
-  /* `space-between` was right when a "Trade Log" heading held the left of this bar. With the
-     heading gone it would fling the timestamp and the two buttons to opposite edges, so the
-     toolbar stays a group and simply sits right. */
-  .portfolio-log-toolbar {
-    width: 100%;
-    justify-content: flex-end;
-  }
-
-}
-
-@media (max-width: 720px) {
-  .portfolio-log-toolbar {
-    flex-wrap: wrap;
-    justify-content: flex-end;
   }
 }
 
@@ -732,15 +376,6 @@ body {
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(3px); }
   to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes market-panel-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* Images that exhausted load retries (useImageErrorRecovery): show a neutral placeholder
@@ -847,50 +482,6 @@ img[data-asset-failed='true'] {
 
 /* ── Empty states: breathe a little ── */
 .empty-state { gap: 7px; }
-@keyframes emptyPulse {
-  0%, 100% { opacity: 0.45; transform: none; }
-  50% { opacity: 0.7; transform: translateY(-2px); }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   MARKET TAB POLISH (2026-07) — Summary / Charts / Calibration.
-   Appended last to win the cascade. Scoped to .market-panel / market-page.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* ── Panel header hierarchy fix ──
-   Before: eyebrow was 14px white text and the real title was tiny uppercase mono
-   (inverted). Now the eyebrow is a small accent-colored kicker with a tick, and
-   the title is the prominent line. */
-/* The eyebrow tick already carries the accent — drop the old dot to avoid doubling. */
-
-/* ── Staggered panel entrance ── */
-
-/* ── Freshness chips (Snapshot / Stats / Computed) ── */
-
-/* ── Metric cards ── */
-
-/* ── Meters: thicker, animated fill, soft sheen ── */
-@keyframes meterSheen {
-  0% { transform: translateX(-100%); }
-  55%, 100% { transform: translateX(100%); }
-}
-
-/* ── Action readout value gets the mono/tabular treatment too ── */
-
-/* Market micro-polish: heatmap cells + empty-state breathing */
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   PORTFOLIO TAB POLISH (2026-07) — full overhaul of P&L Summary + Trade Log.
-   Page identity color: purple.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* Purple page identity for the subtab underline */
-
-/* ── Trade Log rows ── */
-.portfolio-log-row { transition: background 0.14s ease, border-color 0.14s ease; }
-.portfolio-log-row:hover { background: rgba(139, 111, 255, 0.045); }
-.portfolio-log-thumb { border-radius: 8px; overflow: hidden; }
-.portfolio-log-value { font-variant-numeric: tabular-nums; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    REMAINING TABS CONSISTENCY PASS (2026-07) — Events / Scanners /
@@ -905,77 +496,8 @@ img[data-asset-failed='true'] {
 .trades-page-content > * { animation: riseIn 0.32s ease both; }
 .trades-page-content > *:nth-child(2) { animation-delay: 0.05s; }
 
-/* ── Guide ── */
-
-/* ── Language-switch overlay: covers the app from click until the reload lands ── */
-@keyframes langOverlayIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-@keyframes langGlobePulse {
-  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px rgba(74, 158, 255, 0.35)); }
-  50% { transform: scale(1.06); filter: drop-shadow(0 0 18px rgba(74, 158, 255, 0.55)); }
-}
-@keyframes langRingSpin {
-  to { transform: rotate(360deg); }
-}
-@keyframes infoTipIn {
-  from { opacity: 0; transform: translateY(3px); }
-  to   { opacity: 1; transform: none; }
-}
-@keyframes infoTipInBelow {
-  from { opacity: 0; transform: translateY(-3px); }
-  to   { opacity: 1; transform: none; }
-}
-
 /* AlecaFrame detection read-out. A dot rather than a badge: this is ambient status, not
    something the user acts on. */
 
 /* ── TRADE DETECTION COMPARISON (shadow mode, temporary) ── */
 .det { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
-/* Where baseline prices come from, shown above the scanner's own status. One slim line: this
-   is ambient provenance, not a feature competing with the scan controls. */
-/* Credited, not decorated: the data is relics.run's and the attribution should read as a fact
-   rather than a badge. Pushed right so it reads as a footnote to the numbers. */
-
-/* Detected-but-not-logged. Carries its own surface and sits above the WFM comparison because
-   it reports live data loss, where the comparison below is a cutover-era debug artefact. */
-/* "Nothing was lost" is good news and should read calmly, not as an empty-state apology.
-   Scoped to beat `.det-state`, which is defined later in this file and would otherwise win
-   on equal specificity and grey it out. */
-/* The verdict is the point of the panel, so it reads as a statement rather than a footnote. */
-
-/* ---------------------------------------------------------------------------
-   Market — Quick View posture rail, supply rows, chart skeleton.
-
-   RECONSTRUCTED. The originals were written during the Market pass and lost to a
-   `git checkout` before they were committed; these were rewritten from the JSX that
-   uses them, so spacing and detail will differ from what shipped in the dev build.
-   Verify against `pnpm tauri dev` before trusting them.
-
-   All of this is scheduled for deletion when Market finishes migrating to Tailwind —
-   it exists so the page renders in the meantime, not as a long-term home.
-   --------------------------------------------------------------------------- */
-
-/* Quick View: summary stack on the left, posture rail on the right. The rail is what
-   fills the dead middle the panel used to waste. */
-
-/* The posture colour belongs to the surface that states it, so it outlines the whole card. */
-
-/* Signal bar. The fill plots a real 0–1 value passed from the component — its predecessor
-   picked the width from a tone, which is decoration posing as data. */
-
-/* Item details is capped to Quick View's height and scrolls, so the top row cannot be
-   dragged taller by a long description. */
-
-/* The heatmap's top-left spacer, matching the row-label column. */
-
-/* Set components and drop sources: one row each, fixed columns, so the same three numbers
-   line up down the list and you can compare them. */
-
-/* Chart-shaped placeholder. Deliberately not built from the `Skeleton` primitive: that
-   composes rectangles, and no arrangement of rectangles reads as a line chart. */
-@keyframes market-chart-skeleton-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
-}

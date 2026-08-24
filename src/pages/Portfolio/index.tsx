@@ -307,11 +307,11 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
         <PanelTitle variant="heading">{t('a11y.cumulativeProfit')}</PanelTitle>
         <InfoHint text={t('pf.cumulativeProfitInfo')} />
       </PanelHeader>
-      <div className="chart-body portfolio-chart-body">
+      <div className="block min-h-44 px-3.5 pt-3 pb-2">
         {summary.cumulativeProfitPoints.length === 0 ? (
-          <div className="portfolio-chart-empty">{t('pf.noClosedTrades')}</div>
+          <EmptyState className="min-h-[148px] justify-center" icon="ti-chart-line" title={t('pf.noClosedTrades')} />
         ) : (
-          <div className="portfolio-chart-shell relative">
+          <div className="relative grid gap-2.5">
             {hoverIndex !== null && activeData ? (
               <ChartReadout
                 value={formatSignedPlatinumValue(activeData.cumulativeProfit)}
@@ -460,11 +460,11 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
         <PanelTitle variant="heading">{t('a11y.profitPerTrade')}</PanelTitle>
         <InfoHint text={t('pf.profitPerTradeInfo')} />
       </PanelHeader>
-      <div className="chart-body portfolio-chart-body">
+      <div className="block min-h-44 px-3.5 pt-3 pb-2">
         {points.length === 0 ? (
-          <div className="portfolio-chart-empty">{t('pf.profitBarsHint')}</div>
+          <EmptyState className="min-h-[148px] justify-center" icon="ti-chart-bar" title={t('pf.profitBarsHint')} />
         ) : (
-          <div className="portfolio-chart-shell relative">
+          <div className="relative grid gap-2.5">
             {hoverIndex !== null && activeTrade ? (
               <ChartReadout
                 value={formatSignedPlatinumValue(activeTrade.profit)}
@@ -741,6 +741,53 @@ function PortfolioPanelHeader({ title, info }: { title: string; info: string }) 
   );
 }
 
+/** The ledger's column geometry, in one place because the header and every row have to agree —
+ *  it was a single `grid-template-columns` shared across two selectors in `legacy.css`, and two
+ *  copies of a seven-column track list would drift the first time one changed.
+ *
+ *  The two legacy breakpoints, inverted into Tailwind's min-width form: under 920px the row is a
+ *  single stacked column (and the header hides), 920–1024 tightens the tracks, 1024 up is the full
+ *  layout. `min-w-[780px]` applies at every width, as it did before — it is what makes the scroll
+ *  container scroll rather than crush the columns. */
+const LEDGER_GRID =
+  'grid min-w-[780px] grid-cols-1 items-center gap-2.5 ' +
+  'min-[920px]:grid-cols-[minmax(180px,1.5fr)_58px_92px_100px_108px_120px_104px] ' +
+  'min-[1024px]:grid-cols-[minmax(200px,1.6fr)_64px_100px_110px_118px_132px_118px] min-[1024px]:gap-3';
+
+/** A ledger row. The hover tint is purple on every row — a later `legacy.css` rule overrode the
+ *  blue one and this ports the value that was actually on screen. */
+const LEDGER_ROW =
+  `${LEDGER_GRID} border-b border-white/4 px-4 py-[9px] transition-[background-color,border-color] ` +
+  'duration-[140ms] last:border-b-0 hover:bg-accent-purple/[0.045]';
+
+/** Right-aligned once the columns exist; left-aligned while the row is stacked. */
+const LEDGER_DATE =
+  'text-left font-mono text-[10.5px] leading-[1.45] text-ink-dim tabular-nums min-[920px]:text-right';
+
+const LEDGER_ACTIONS = 'flex items-center justify-start min-[920px]:justify-end';
+
+/** Right-aligned numeric column: the main figure with its secondary metric stacked underneath
+ *  (qty under price, margin under profit), which is what halves the column count. */
+function LedgerCell({ main, sub, tone }: { main: string; sub?: string; tone?: 'pos' | 'neg' }) {
+  return (
+    <div className="grid min-w-0 justify-items-end gap-px text-right">
+      <span
+        className={`font-mono text-[12.5px] tabular-nums ${
+          tone === 'pos' ? 'text-accent-green' : tone === 'neg' ? 'text-accent-red' : 'text-ink'
+        }`}
+      >
+        {main}
+      </span>
+      {sub ? <span className="font-mono text-[10px] text-ink-dim tabular-nums">{sub}</span> : null}
+    </div>
+  );
+}
+
+/** The em-dash a cell shows when it has no value. */
+function LedgerBlank() {
+  return <span className="text-[13px] text-ink-soft tabular-nums">—</span>;
+}
+
 /** One ledger entry line — shared by standalone trades and expanded group children, which render
  *  identically except for the child indent. Numeric columns carry their secondary metric as a
  *  sub-line (qty under price, margin under profit) so the table fits without horizontal scroll. */
@@ -759,7 +806,7 @@ function TradeLogEntryRow({
   onToggleKeep: (entry: PortfolioTradeLogEntry) => void;
 }) {
   const { t } = useTranslation();
-  const profitTone = entry.profit == null ? '' : entry.profit < 0 ? ' neg' : ' pos';
+  const profitTone = entry.profit == null ? undefined : entry.profit < 0 ? ('neg' as const) : ('pos' as const);
   const statusDetail = renderTradeStatusDetail(entry);
   const metaParts = [
     tradeSourceLabel(entry.source, t),
@@ -771,49 +818,51 @@ function TradeLogEntryRow({
   ].filter(Boolean);
 
   return (
-    <div className={`portfolio-log-row${isChild ? ' portfolio-log-row-child' : ''}`}>
-      <div className={`portfolio-log-item${isChild ? ' portfolio-log-item-child' : ''}`}>
-        <span className="portfolio-log-thumb">
-          {entry.imagePath ? (
-            <img src={resolveWfmAssetUrl(entry.imagePath, entry.slug) ?? undefined} alt="" />
-          ) : (
-            <span className="portfolio-log-thumb-fallback">{entry.itemName.charAt(0)}</span>
-          )}
-        </span>
-        <div className="portfolio-log-item-copy">
-          <span className="portfolio-log-item-name">{entry.itemName}</span>
-          <span className="portfolio-log-item-slug">{metaParts.join(' · ')}</span>
+    <div
+      className={`${LEDGER_ROW} ${
+        isChild
+          ? 'bg-white/[0.015] shadow-[inset_2px_0_0_color-mix(in_oklab,var(--color-accent-purple)_35%,transparent)]'
+          : ''
+      }`}
+    >
+      <div className={`flex min-w-0 items-center gap-[11px] ${isChild ? 'pl-8' : ''}`}>
+        <ItemThumb
+          size="size-8"
+          src={entry.imagePath ? (resolveWfmAssetUrl(entry.imagePath, entry.slug) ?? null) : null}
+          fallback={entry.itemName.charAt(0)}
+        />
+        <div className="grid min-w-0 gap-0.5">
+          <span className="truncate text-[13px] font-semibold text-ink">{entry.itemName}</span>
+          <span className="truncate font-mono text-[10.5px] text-ink-soft">{metaParts.join(' · ')}</span>
         </div>
       </div>
       <span className={`badge ${buildTradeTypeClassName(entry.orderType)}`}>
         {renderTradeType(entry.orderType)}
       </span>
-      <div className="portfolio-log-cell">
-        <span className="portfolio-log-cell-main">{formatPlatinumValue(entry.platinum)}</span>
-        <span className="portfolio-log-cell-sub">×{entry.quantity}</span>
-      </div>
-      <div className="portfolio-log-cell">
-        <span className={`portfolio-log-cell-main${profitTone}`}>
-          {entry.profit == null ? '—' : formatPlatinumValue(entry.profit)}
-        </span>
-        <span className="portfolio-log-cell-sub">{formatMarginValue(entry.margin)}</span>
-      </div>
-      <span className="portfolio-log-status-cell">
+      <LedgerCell main={formatPlatinumValue(entry.platinum)} sub={`×${entry.quantity}`} />
+      <LedgerCell
+        main={entry.profit == null ? '—' : formatPlatinumValue(entry.profit)}
+        sub={formatMarginValue(entry.margin)}
+        tone={profitTone}
+      />
+      <span className="flex min-w-0 justify-start">
         {entry.status ? (
-          <span className="portfolio-log-status-stack">
+          <span className="inline-flex min-w-0 items-center gap-1.5">
             <span className={`badge ${buildTradeStatusClassName(entry.status)}`}>
               {renderTradeStatus(entry.status)}
             </span>
             {statusDetail ? (
-              <span className="portfolio-log-status-detail">{statusDetail}</span>
+              <span className="font-mono text-[10px] whitespace-nowrap text-ink-dim tabular-nums">
+                {statusDetail}
+              </span>
             ) : null}
           </span>
         ) : (
-          <span className="portfolio-log-value">—</span>
+          <LedgerBlank />
         )}
       </span>
-      <span className="portfolio-log-date">{formatShortLocalDateTime(entry.closedAt)}</span>
-      <span className="portfolio-log-actions">
+      <span className={LEDGER_DATE}>{formatShortLocalDateTime(entry.closedAt)}</span>
+      <span className={LEDGER_ACTIONS}>
         {entry.orderType === 'buy' ? (
           /* The last hand-rolled switch in the app. `Switch` has existed since the Trades pass;
              this one kept its `.toggle` CSS only because nothing had come back to it. */
@@ -827,7 +876,7 @@ function TradeLogEntryRow({
             <span className="text-[11px] text-ink-soft">{t('pf.keepItem')}</span>
           </label>
         ) : (
-          <span className="portfolio-log-value">—</span>
+          <LedgerBlank />
         )}
       </span>
     </div>
@@ -1155,15 +1204,20 @@ function TradeLogTab({ username }: { username: string | null }) {
   }, [username]);
 
   return (
-    <>
+    /* The container owns the vertical rhythm. This page's spacing used to live on
+       `margin-bottom` declarations inside the row and bar rules — migrate one of those away and
+       the gaps go with it, which is exactly what happened to the P&L tab (see §4 of the
+       inventory). */
+    <div className="flex flex-col gap-4 p-4">
       {/* No heading here — the sub-tab the user just clicked already says "Trade Log", and
           repeating it directly underneath spends a row saying nothing. */}
-      <div className="period-bar portfolio-log-bar">
-        <div className="period-right portfolio-log-toolbar">
+      <div className="flex flex-wrap items-center justify-end gap-2.5">
           {lastUpdatedAt ? (
-            <span className="portfolio-log-updated">
-              <span className="portfolio-log-updated-label">{t('pf.updated')}</span>
-              <time className="portfolio-log-updated-value">
+            <span className="mr-0.5 inline-flex items-baseline gap-1.5">
+              <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                {t('pf.updated')}
+              </span>
+              <time className="font-mono text-[11px] text-ink-soft tabular-nums">
                 {formatShortLocalDateTime(lastUpdatedAt)}
               </time>
             </span>
@@ -1181,7 +1235,6 @@ function TradeLogTab({ username }: { username: string | null }) {
             <i className="ti ti-refresh" aria-hidden="true" />
             {loading ? t('common.refreshing') : t('common.refresh')}
           </Button>
-        </div>
       </div>
 
       {needsPricingCount > 0 ? (
@@ -1211,21 +1264,21 @@ function TradeLogTab({ username }: { username: string | null }) {
       ) : null}
 
       {!username ? (
-        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">{t('pf.connectFirst')}</span>
-          <span className="empty-sub">{t('pf.tradeLogHint')}</span>
-        </div>
+        <EmptyState
+          className="mt-10 min-h-40 justify-center"
+          icon="ti-plug-connected-x"
+          title={t('pf.connectFirst')}
+          detail={t('pf.tradeLogHint')}
+        />
       ) : entries.length === 0 ? (
-        <div className="empty-state" style={{ marginTop: 40, minHeight: 160 }}>
-          <span className="empty-primary">{loading ? t('pf.loadingTradeHistory') : t('pf.noTradeHistoryYet')}</span>
-          <span className="empty-sub">
-            {loading
-              ? t('pf.loadingCachedTradeLog')
-              : t('pf.openTabOrRefresh')}
-          </span>
-        </div>
+        <EmptyState
+          className="mt-10 min-h-40 justify-center"
+          icon={loading ? 'ti-history' : 'ti-history-off'}
+          title={loading ? t('pf.loadingTradeHistory') : t('pf.noTradeHistoryYet')}
+          detail={loading ? t('pf.loadingCachedTradeLog') : t('pf.openTabOrRefresh')}
+        />
       ) : (
-        <div className="portfolio-log-stack">
+        <div className="grid gap-3">
           <Panel className="gap-0">
             <PortfolioPanelHeader
               title={t('a11y.filters')}
@@ -1297,20 +1350,24 @@ function TradeLogTab({ username }: { username: string | null }) {
               title={t('a11y.tradeLogLedger')}
               info={t('pf.tradeLedgerInfo')}
             />
-            <div className="portfolio-log-scroll">
-            <div className="portfolio-log-header">
+            <div className="max-h-[min(64vh,680px)] overflow-auto rounded-lg border border-line bg-bg-surface">
+            {/* Hidden while the rows are stacked — a seven-column header over a one-column row
+                labels nothing. */}
+            <div
+              className={`${LEDGER_GRID} sticky top-0 z-(--z-raised) hidden border-b border-line bg-bg-elevated px-4 py-[11px] font-mono text-xs tracking-[0.14em] text-ink-soft uppercase min-[920px]:grid`}
+            >
               <span>{t('pf.item')}</span>
               <span>{t('pf.type')}</span>
-              <span className="portfolio-log-header-num">{t('pf.price')}</span>
-              <span className="portfolio-log-header-num">{t('pf.profit')}</span>
+              <span className="text-right">{t('pf.price')}</span>
+              <span className="text-right">{t('pf.profit')}</span>
               <span>{t('pf.status')}</span>
-              <span className="portfolio-log-header-num">{t('pf.closed')}</span>
-              <span className="portfolio-log-header-num">{t('pf.action')}</span>
+              <span className="text-right">{t('pf.closed')}</span>
+              <span className="text-right">{t('pf.action')}</span>
             </div>
 
-            <div className="portfolio-log-list">
+            <div className="grid">
               {displayRows.length === 0 ? (
-                <div className="portfolio-breakdown-empty">{t('pf.noTradesFilter')}</div>
+                <EmptyState icon="ti-filter-off" title={t('pf.noTradesFilter')} />
               ) : (
                 displayRows.map((row) =>
                   row.kind === 'single' ? (
@@ -1321,9 +1378,9 @@ function TradeLogTab({ username }: { username: string | null }) {
                       onToggleKeep={handleToggleKeepItem}
                     />
                   ) : (
-                    <div key={row.groupId} className="portfolio-log-group">
-                      <div className="portfolio-log-row portfolio-log-row-parent">
-                        <div className="portfolio-log-item">
+                    <div key={row.groupId} className="grid">
+                      <div className={`${LEDGER_ROW} bg-accent-purple/[0.04] hover:bg-accent-purple/[0.07]`}>
+                        <div className="flex min-w-0 items-center gap-[11px]">
                           <Button
                             variant="outline"
                             size="icon-sm"
@@ -1336,16 +1393,18 @@ function TradeLogTab({ username }: { username: string | null }) {
                               aria-hidden="true"
                             />
                           </Button>
-                          <span className="portfolio-log-thumb">
-                            {row.children[0]?.imagePath ? (
-                              <img src={resolveWfmAssetUrl(row.children[0].imagePath, row.children[0].slug) ?? undefined} alt="" />
-                            ) : (
-                              <span className="portfolio-log-thumb-fallback">M</span>
-                            )}
-                          </span>
-                          <div className="portfolio-log-item-copy">
-                            <span className="portfolio-log-item-name">{row.label}</span>
-                            <span className="portfolio-log-item-slug">
+                          <ItemThumb
+                            size="size-8"
+                            src={
+                              row.children[0]?.imagePath
+                                ? (resolveWfmAssetUrl(row.children[0].imagePath, row.children[0].slug) ?? null)
+                                : null
+                            }
+                            fallback="M"
+                          />
+                          <div className="grid min-w-0 gap-0.5">
+                            <span className="truncate text-[13px] font-semibold text-ink">{row.label}</span>
+                            <span className="truncate font-mono text-[10.5px] text-ink-soft">
                               {buildTradeGroupSummary(row.children)}
                               {' · '}
                               {row.children.some((child) => child.allocationMode === 'manual') ? t('pf.manualSplit') : t('pf.autoSplit')}
@@ -1353,14 +1412,12 @@ function TradeLogTab({ username }: { username: string | null }) {
                           </div>
                         </div>
                         <span className={`badge ${buildTradeTypeClassName(row.orderType)}`}>{renderTradeType(row.orderType)}</span>
-                        <div className="portfolio-log-cell">
-                          <span className="portfolio-log-cell-main">{formatPlatinumValue(row.totalPlatinum)}</span>
-                          <span className="portfolio-log-cell-sub">{t('pf.itemsCount', { n: row.itemCount })}</span>
-                        </div>
-                        <div className="portfolio-log-cell">
-                          <span className="portfolio-log-cell-main">—</span>
-                        </div>
-                        <span className="portfolio-log-status-cell">
+                        <LedgerCell
+                          main={formatPlatinumValue(row.totalPlatinum)}
+                          sub={t('pf.itemsCount', { n: row.itemCount })}
+                        />
+                        <LedgerCell main="—" />
+                        <span className="flex min-w-0 justify-start">
                           {groupNeedsPricing(row.children, row.totalPlatinum) ? (
                             <span className="badge badge-amber" title={t('pf.needsPricingHint')}>
                               {t('pf.needsPricing')}
@@ -1369,8 +1426,8 @@ function TradeLogTab({ username }: { username: string | null }) {
                             <span className="badge">{t('pf.grouped')}</span>
                           )}
                         </span>
-                        <span className="portfolio-log-date">{formatShortLocalDateTime(row.closedAt)}</span>
-                        <span className="portfolio-log-actions">
+                        <span className={LEDGER_DATE}>{formatShortLocalDateTime(row.closedAt)}</span>
+                        <span className={LEDGER_ACTIONS}>
                           {/* An unpriced group is incomplete data, not a settled row, so it reads
                               amber until it is filled in. `min-w-23` keeps the column steady as
                               the label swaps between the two states. */}
@@ -1494,7 +1551,7 @@ function TradeLogTab({ username }: { username: string | null }) {
           ) : null}
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }
 
@@ -1544,9 +1601,12 @@ const PLACEHOLDER_PNL_SUMMARY: PortfolioPnlSummary = {
 /** Absolute-fill loading overlay placed over a panel/section that's still loading. */
 function PortfolioLoadingOverlay({ label }: { label?: string }) {
   return (
-    <div className="portfolio-loading-overlay">
-      <span className="portfolio-loading-spinner" aria-hidden="true" />
-      {label ? <span className="portfolio-loading-copy">{label}</span> : null}
+    <div className="absolute inset-0 z-(--z-raised) flex items-center justify-center gap-2.5 rounded-lg bg-bg-base/55 backdrop-blur-[2px]">
+      <span
+        className="size-[22px] animate-spin rounded-full border-[3px] border-accent-blue/20 border-t-accent-blue"
+        aria-hidden="true"
+      />
+      {label ? <span className="font-mono text-xs text-ink-soft">{label}</span> : null}
     </div>
   );
 }
@@ -2092,7 +2152,7 @@ export function PortfolioPage() {
   return (
     <>
       <PageHeading page="portfolio" />
-      <div className="page-content portfolio-page-content">
+      <div className="page-content">
         {portfolioTab === 'log' ? (
           <TradeLogTab username={tradeAccount?.name ?? null} />
         ) : (
