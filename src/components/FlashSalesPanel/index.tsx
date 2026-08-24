@@ -7,10 +7,10 @@
  * a panel that grows with the list — the value is "is there a discount on right now", and the
  * answer fits in the first two rows.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { useTranslation } from '../../i18n';
-import { formatWorldStateCountdown } from '../../lib/worldState';
+import { formatWorldStateCountdown, isWorldStateWindowActive } from '../../lib/worldState';
 import { useAppStore } from '../../stores/useAppStore';
 import { Countdown, EventEmpty, EventPanel, EventRow, EventTag } from '../Events/parts';
 
@@ -24,7 +24,33 @@ export function FlashSalesPanel() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const active = flashSales.filter((sale) => !sale.expired);
+  /**
+   * Live first, then **soonest to expire**. The list arrives in whatever order the worldstate
+   * feed emits, which put the permanent market bundles — the ones reading `1225d` — at the top and
+   * buried the sale ending in eight hours below them. The only reason to look at this panel is to
+   * catch something before it goes, so the thing closest to going leads.
+   *
+   * A missing or unparseable expiry sorts last rather than first: "no end date" is not "ending
+   * now", and treating it as `0` would put every undated row above every real countdown.
+   */
+  const active = useMemo(
+    () =>
+      flashSales
+        .filter((sale) => !sale.expired)
+        .sort((left, right) => {
+          const leftLive = Number(isWorldStateWindowActive(left.activation, left.expiry));
+          const rightLive = Number(isWorldStateWindowActive(right.activation, right.expiry));
+          const leftEnds = Date.parse(left.expiry ?? '');
+          const rightEnds = Date.parse(right.expiry ?? '');
+          return (
+            rightLive - leftLive ||
+            (Number.isFinite(leftEnds) ? leftEnds : Number.MAX_SAFE_INTEGER) -
+              (Number.isFinite(rightEnds) ? rightEnds : Number.MAX_SAFE_INTEGER) ||
+            left.item.localeCompare(right.item)
+          );
+        }),
+    [flashSales],
+  );
 
   return (
     <EventPanel
@@ -36,9 +62,10 @@ export function FlashSalesPanel() {
       {active.length === 0 ? (
         <EventEmpty icon="ti-tag" title={t('evt.noFlashSales')} detail={t('evt.flashSalesHint')} />
       ) : (
-        /* Fixed height on purpose: the value is "is there a discount on right now", which fits in
-           the first two rows, and nothing here is tradeable. */
-        <div className="flex max-h-52 flex-col overflow-y-auto">
+        /* Capped and scrollable: there are ~40 of these and most are permanent market bundles,
+           so the column must not grow to their length. The cap is generous now that this is a
+           real column on the News tab rather than a block in a corner. */
+        <div className="flex max-h-[70vh] flex-col overflow-y-auto">
           {active.map((sale) => (
             <EventRow
               key={sale.id}

@@ -12,7 +12,6 @@
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { ActiveEventsPanel } from '../../components/ActiveEventsPanel';
 import { ActivitiesPanel } from '../../components/ActivitiesPanel';
 import { EventsOverview } from '../../components/EventsOverview';
 import { FissuresPanel } from '../../components/FissuresPanel';
@@ -110,15 +109,14 @@ export function EventsPage() {
           </div>
         )}
 
+        {/* News and flash sales, side by side and nothing else.
+            Active events used to be duplicated here from the overview, and flash sales rendered
+            TWICE — once inside the legacy `MarketNewsPanel` and again in the panel beside it.
+            `MarketNewsPanel` is news only now; `FlashSalesPanel` is the single renderer. */}
         {eventsSubTab === 'events-news' && (
-          <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-2">
+          <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
             <MarketNewsPanel />
-            <div className="flex min-w-0 flex-col gap-3">
-              <ActiveEventsPanel />
-              {/* Least important thing on the page, and the only one that was fetched but never
-                  rendered until now. */}
-              <FlashSalesPanel />
-            </div>
+            <FlashSalesPanel />
           </div>
         )}
       </div>

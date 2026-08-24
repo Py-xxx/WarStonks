@@ -46,6 +46,8 @@ const MIGRATED_GLOBS = [
   join('src', 'components', 'ActiveEventsPanel'),
   join('src', 'components', 'ActivitiesPanel'),
   join('src', 'components', 'WorldClockPanel'),
+  join('src', 'components', 'StartupScreen'),
+  join('src', 'components', 'MarketNewsPanel'),
 ];
 
 function collectTsx(dir: string): string[] {

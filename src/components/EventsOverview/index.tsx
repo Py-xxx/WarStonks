@@ -46,7 +46,12 @@ function SummaryCard({
   eyebrow,
   headline,
   detail,
-  tone = 'neutral', actionLabel, onAction, children, }: { eyebrow: string;
+  tone = 'neutral',
+  actionLabel,
+  onAction,
+  children,
+}: {
+  eyebrow: string;
   headline: string;
   detail?: string | null;
   tone?: 'neutral' | 'positive' | 'muted';
@@ -70,11 +75,7 @@ function SummaryCard({
       >
         {headline}
       </span>
-      {detail ? (
-        <span className="text-[10px] leading-relaxed text-ink-dim">
-          {detail}
-        </span>
-      ) : null}
+      {detail ? <span className="text-[10px] leading-relaxed text-ink-dim">{detail}</span> : null}
       {children}
       <Button
         variant="ghost"
@@ -90,16 +91,12 @@ function SummaryCard({
   );
 }
 
-export function EventsOverview({
-  onNavigate,
-}: {
-  onNavigate: (tab: EventsSubTab) => void;
-}) {
+export function EventsOverview({ onNavigate }: { onNavigate: (tab: EventsSubTab) => void }) {
   const { t } = useTranslation();
   const voidTrader = useAppStore((state) => state.worldStateVoidTrader);
-  const vaultEntry = useAppStore( (state) => state.worldStateExtra['vault-trader'], );
-  const nightwaveEntry = useAppStore( (state) => state.worldStateExtra.nightwave, );
-  const steelPathEntry = useAppStore( (state) => state.worldStateExtra['steel-path'], );
+  const vaultEntry = useAppStore((state) => state.worldStateExtra['vault-trader']);
+  const nightwaveEntry = useAppStore((state) => state.worldStateExtra.nightwave);
+  const steelPathEntry = useAppStore((state) => state.worldStateExtra['steel-path']);
 
   const [nowMs, setNowMs] = useState(Date.now());
   useEffect(() => {
@@ -111,8 +108,8 @@ export function EventsOverview({
   const baroActive = voidTrader
     ? isWorldStateWindowActive(voidTrader.activation, voidTrader.expiry, nowMs)
     : false;
-  const baroCountdown = formatWorldStateCountdown( baroActive ? (voidTrader?.expiry ?? null)
-      : (voidTrader?.activation ?? null),
+  const baroCountdown = formatWorldStateCountdown(
+    baroActive ? (voidTrader?.expiry ?? null) : (voidTrader?.activation ?? null),
     nowMs,
   );
 

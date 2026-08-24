@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import {
-  formatWorldStateCountdown,
   formatWorldStateDateTime,
-  isWorldStateWindowActive,
 } from '../../lib/worldState';
-import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ItemThumb } from '../ListRow';
+import { EventEmpty, EventError, EventPanel, EventRow, EventTag } from '../Events/parts';
 import { useAppStore } from '../../stores/useAppStore';
-import type { WfstatFlashSale, WfstatNewsItem } from '../../types';
+import type { WfstatNewsItem } from '../../types';
 
 const INVALID_WORLDSTATE_DATE = '1970-01-01T00:00:00.000Z';
 
@@ -49,247 +49,87 @@ function sortNewsItems(left: WfstatNewsItem, right: WfstatNewsItem): number {
     || left.message.localeCompare(right.message);
 }
 
-function sortFlashSales(left: WfstatFlashSale, right: WfstatFlashSale): number {
-  const leftActive = Number(isWorldStateWindowActive(left.activation, left.expiry));
-  const rightActive = Number(isWorldStateWindowActive(right.activation, right.expiry));
-  const leftEndsAt = Date.parse(left.expiry ?? left.activation ?? '');
-  const rightEndsAt = Date.parse(right.expiry ?? right.activation ?? '');
-
-  return rightActive - leftActive
-    || (Number.isFinite(leftEndsAt) ? leftEndsAt : Number.MAX_SAFE_INTEGER)
-      - (Number.isFinite(rightEndsAt) ? rightEndsAt : Number.MAX_SAFE_INTEGER)
-    || left.item.localeCompare(right.item);
-}
-
 export function MarketNewsPanel() {
   const { t } = useTranslation();
   const news = useAppStore((state) => state.worldStateNews);
-  const flashSales = useAppStore((state) => state.worldStateFlashSales);
   const loading = useAppStore((state) => state.worldStateMarketNewsLoading);
   const error = useAppStore((state) => state.worldStateMarketNewsError);
   const lastUpdatedAt = useAppStore((state) => state.worldStateMarketNewsLastUpdatedAt);
   const refreshWorldStateMarketNews = useAppStore((state) => state.refreshWorldStateMarketNews);
-  const [nowMs, setNowMs] = useState(Date.now());
-
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
-
-    return () => window.clearInterval(intervalId);
-  }, []);
 
   const sortedNews = useMemo(() => [...news].sort(sortNewsItems), [news]);
-  const visibleFlashSales = useMemo(
-    () => flashSales.filter((sale) => !sale.expired).sort(sortFlashSales),
-    [flashSales],
-  );
-  const hasUsableData = sortedNews.length > 0 || visibleFlashSales.length > 0;
+  const hasUsableData = sortedNews.length > 0;
 
   return (
-    <div className="market-news-stack">
-      <div className="market-news-toolbar">
-        <div className="market-news-toolbar-copy">
-          <span className="page-title">{t('evt.marketNewsTitle')}</span>
-          <span className="market-news-toolbar-subtitle">
-            {t('ws.newsCacheHint')}
-          </span>
-        </div>
+    <EventPanel
+      title={t('ws.news')}
+      count={sortedNews.length}
+      countTone={sortedNews.length > 0 ? 'info' : 'muted'}
+      updatedAt={
+        lastUpdatedAt ? t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) }) : null
+      }
+      bodyClassName="flex flex-col gap-0.5 p-2"
+    >
+      {error ? (
+        <EventError
+          error={error}
+          stale={hasUsableData}
+          onRetry={() => void refreshWorldStateMarketNews()}
+        />
+      ) : null}
 
-        <div className="market-news-toolbar-actions">
-          {lastUpdatedAt ? (
-            <span className="world-event-updated-at">
-              {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
-            </span>
-          ) : null}
-          <button
-            className="text-btn"
-            type="button"
-            onClick={() => {
-              void refreshWorldStateMarketNews();
-            }}
+      {loading && sortedNews.length === 0 ? (
+        <Skeleton type="table-row@4" leafClassName="h-5" />
+      ) : null}
+
+      {!loading && sortedNews.length === 0 && !error ? (
+        <EventEmpty icon="ti-news" title={t('a11y.noNews')} />
+      ) : null}
+
+      {/* One row per story. It was a 96px-thumbnail card with the headline wrapped over three
+          lines and a separate "Open source" link underneath — three or four stories filled the
+          column. The whole row is the link now, and the thumbnail is a 28px identifier rather
+          than a picture you are meant to look at. */}
+      {sortedNews.map((item) => {
+        const date = formatMeaningfulDate(item.date ?? item.activation);
+        return (
+          <a
+            key={item.id}
+            href={item.link ?? undefined}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="min-w-0 rounded-sm no-underline transition-colors duration-150 ease-out hover:bg-white/[0.03]"
           >
-            {loading ? t('common.refreshing') : t('common.refresh')}
-          </button>
-        </div>
-      </div>
-
-      <EventsPanelNotice
-        message={error}
-        tone={hasUsableData ? 'warning' : 'error'}
-        loading={loading}
-        onRefresh={() => {
-          void refreshWorldStateMarketNews();
-        }}
-      />
-
-      <div className="market-news-layout">
-        <section className="card market-news-card">
-          <div className="card-header">
-            <span className="card-label">{t('ws.news')}</span>
-            <span className={`badge ${sortedNews.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
-              {t('evt.storiesCount', { n: sortedNews.length })}
-            </span>
-          </div>
-
-          <div className="card-body">
-            {loading && sortedNews.length === 0 ? (
-              <EventsPanelEmpty
-                title={t('a11y.loadingNews')}
-                detail={t('evt.pullingLatestNews')}
-              />
-            ) : null}
-
-            {!loading && sortedNews.length === 0 && error && !hasUsableData ? (
-              <EventsPanelEmpty
-                title={t('a11y.newsFailed')}
-                detail={error}
-                actionLabel={t('common.retry')}
-                onAction={() => {
-                  void refreshWorldStateMarketNews();
-                }}
-              />
-            ) : null}
-
-            {!loading && sortedNews.length === 0 && (!error || hasUsableData) ? (
-              <EventsPanelEmpty
-                title={t('a11y.noNews')}
-                detail={t('evt.noNewsDetail')}
-              />
-            ) : null}
-
-            {sortedNews.length > 0 ? (
-              <div className="market-news-list">
-                {sortedNews.map((item) => {
-                  const publishedAt = formatMeaningfulDate(item.date);
-
-                  return (
-                    <article key={item.id} className="market-news-item">
-                      <a
-                        className="market-news-thumb"
-                        href={item.link ?? undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label={item.link ? t('evt.openLabel', { message: item.message }) : undefined}
-                      >
-                        {item.imageLink ? <img src={item.imageLink} alt="" loading="lazy" /> : 'N'}
-                      </a>
-
-                      <div className="market-news-copy">
-                        <div className="market-news-item-topline">
-                          <span className="market-news-item-title">{item.message}</span>
-                          <span className={`badge ${item.priority ? 'badge-amber' : 'badge-muted'}`}>
-                            {buildNewsTone(item, t)}
-                          </span>
-                        </div>
-
-                        <div className="market-news-item-meta">
-                          {publishedAt ? <span>{publishedAt}</span> : null}
-                          {item.mobileOnly ? <span>{t('ws.mobile')}</span> : null}
-                          {item.link ? (
-                            <a href={item.link} target="_blank" rel="noreferrer">
-                              {t('evt.openSource')}
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="card market-news-card">
-          <div className="card-header">
-            <span className="card-label">{t('ws.flashSales')}</span>
-            <span className={`badge ${visibleFlashSales.length > 0 ? 'badge-green' : 'badge-muted'}`}>
-              {t('evt.trackedCount', { n: visibleFlashSales.length })}
-            </span>
-          </div>
-
-          <div className="card-body">
-            {loading && visibleFlashSales.length === 0 ? (
-              <EventsPanelEmpty
-                title={t('a11y.loadingFlashSales')}
-                detail={t('evt.checkingFlashSales')}
-              />
-            ) : null}
-
-            {!loading && visibleFlashSales.length === 0 && error && !hasUsableData ? (
-              <EventsPanelEmpty
-                title={t('a11y.flashSalesFailed')}
-                detail={error}
-                actionLabel={t('common.retry')}
-                onAction={() => {
-                  void refreshWorldStateMarketNews();
-                }}
-              />
-            ) : null}
-
-            {!loading && visibleFlashSales.length === 0 && (!error || hasUsableData) ? (
-              <EventsPanelEmpty
-                title={t('a11y.noFlashSales')}
-                detail={t('evt.noFlashSalesDetail')}
-              />
-            ) : null}
-
-            {visibleFlashSales.length > 0 ? (
-              <div className="flash-sales-grid">
-                {visibleFlashSales.map((sale) => {
-                  const isActive = isWorldStateWindowActive(sale.activation, sale.expiry, nowMs);
-                  const countdown = formatWorldStateCountdown(
-                    isActive ? sale.expiry : sale.activation,
-                    nowMs,
-                  );
-
-                  return (
-                    <article key={sale.id} className="flash-sale-card">
-                      <div className="flash-sale-topline">
-                        <span className="flash-sale-item-name">{sale.item}</span>
-                        <span className={`badge ${isActive ? 'badge-green' : 'badge-blue'}`}>
-                          {isActive ? t('evt.active') : t('evt.upcoming')}
-                        </span>
-                      </div>
-
-                      <div className="flash-sale-stat-grid">
-                        <div className="flash-sale-stat">
-                          <span className="qv-stat-label">{isActive ? t('evt.endsInLower') : t('evt.startsInLower')}</span>
-                          <span className="flash-sale-stat-value">{countdown}</span>
-                        </div>
-                        <div className="flash-sale-stat">
-                          <span className="qv-stat-label">{t('ws.discount')}</span>
-                          <span className="flash-sale-stat-value">
-                            {sale.discount !== null ? `${sale.discount}%` : '—'}
-                          </span>
-                        </div>
-                        <div className="flash-sale-stat">
-                          <span className="qv-stat-label">{t('ws.plat')}</span>
-                          <span className="flash-sale-stat-value">
-                            {sale.premiumOverride ?? '—'}
-                          </span>
-                        </div>
-                        <div className="flash-sale-stat">
-                          <span className="qv-stat-label">{t('ws.credit')}</span>
-                          <span className="flash-sale-stat-value">
-                            {sale.regularOverride ?? '—'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flash-sale-footer">
-                        <span>{sale.isShownInMarket ? t('evt.visibleInMarket') : t('evt.hiddenInMarket')}</span>
-                        <span>{formatWorldStateDateTime(isActive ? sale.expiry : sale.activation)}</span>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-        </section>
-      </div>
-    </div>
+            <EventRow
+              className="border-b-0"
+              lead={
+                <ItemThumb
+                  src={item.imageLink}
+                  fallback={item.message.slice(0, 1)}
+                  size="size-7"
+                />
+              }
+              title={item.message}
+              meta={date ?? undefined}
+              trailing={
+                <>
+                  {item.priority ? (
+                    <EventTag tone="amber">{t('evt.newsTonePriority')}</EventTag>
+                  ) : (
+                    <EventTag>{buildNewsTone(item, t)}</EventTag>
+                  )}
+                  {item.link ? (
+                    <i
+                      className="ti ti-external-link text-sm text-ink-faint"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                </>
+              }
+            />
+          </a>
+        );
+      })}
+    </EventPanel>
   );
 }
