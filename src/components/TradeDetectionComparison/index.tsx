@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getEeLogShadowTrades, getTradeDetectionComparison } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
+import { Button } from '@/components/ui/button';
+import { Panel } from '@/components/ui/panel';
 import { useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
@@ -78,24 +80,24 @@ function NotLoggedPanel({ rows, t }: { rows: ShadowTradeRow[]; t: TranslateFn })
   );
 
   return (
-    <section className="det-ingest">
-      <header className="det-ingest-head">
-        <h3 className="det-ingest-title">{t('det.ingest.title')}</h3>
-        <span className="det-ingest-sub">{t('det.ingest.subtitle')}</span>
+    <Panel className="min-w-0 gap-2 p-3">
+      <header className="flex flex-col gap-0.5">
+        <h3 className="text-xs font-semibold text-ink">{t('det.ingest.title')}</h3>
+        <span className="text-[10px] leading-relaxed text-ink-dim">{t('det.ingest.subtitle')}</span>
       </header>
 
       {problems.length === 0 ? (
-        <div className="det-state det-ingest-clear">{t('det.ingest.allLogged')}</div>
+        <p className="rounded-md border border-accent-green/25 bg-accent-green/8 px-2.5 py-2 text-[11px] text-accent-green">{t('det.ingest.allLogged')}</p>
       ) : (
-        <table className="det-table det-ingest-table">
+        <table className="w-full border-collapse">
           <thead>
-            <tr>
+            <tr className="[&>th]:border-b [&>th]:border-line [&>th]:px-2.5 [&>th]:py-1.5 [&>th]:text-left [&>th]:font-mono [&>th]:text-[9px] [&>th]:font-semibold [&>th]:tracking-[0.07em] [&>th]:text-ink-dim [&>th]:uppercase">
               <th>{t('det.colStatus')}</th>
               <th>{t('det.ingest.colReason')}</th>
               <th>{t('det.colItem')}</th>
               <th>{t('det.colWhen')}</th>
               <th>{t('det.colPartner')}</th>
-              <th className="det-num">{t('det.ingest.colRows')}</th>
+              <th className="text-right">{t('det.ingest.colRows')}</th>
             </tr>
           </thead>
           <tbody>
@@ -106,7 +108,7 @@ function NotLoggedPanel({ rows, t }: { rows: ShadowTradeRow[]; t: TranslateFn })
                     {t(INGEST_STATUS_KEYS[row.ingestStatus!])}
                   </span>
                 </td>
-                <td className="det-reason">
+                <td>
                   <span>
                     {row.ingestReason
                       ? t(INGEST_REASON_KEYS[row.ingestReason as TradeIngestReason])
@@ -115,15 +117,15 @@ function NotLoggedPanel({ rows, t }: { rows: ShadowTradeRow[]; t: TranslateFn })
                   {/* Which rows are missing, when the backend could name them — "a trade was
                       dropped" is far less actionable than "this item's row was dropped". */}
                   {row.ingestDetail ? (
-                    <span className="det-reason-detail">{row.ingestDetail}</span>
+                    <span className="block text-[10px] text-ink-faint">{row.ingestDetail}</span>
                   ) : null}
                 </td>
                 <td>{tradeItemSummary(row)}</td>
-                <td className="det-num">
+                <td className="text-right font-mono tabular-nums">
                   {row.occurredAt ? formatShortLocalDateTime(row.occurredAt) : '—'}
                 </td>
                 <td>{row.partner || '—'}</td>
-                <td className="det-num">
+                <td className="text-right font-mono tabular-nums">
                   {row.expectedRows === null
                     ? '—'
                     : `${row.loggedRows ?? 0}/${row.expectedRows}`}
@@ -137,9 +139,9 @@ function NotLoggedPanel({ rows, t }: { rows: ShadowTradeRow[]; t: TranslateFn })
       {/* Trades recorded before outcomes were tracked. Counted rather than listed, and never
           folded in with the successes — their real outcome is genuinely unknown. */}
       {untracked > 0 ? (
-        <p className="det-ingest-untracked">{t('det.ingest.untracked', { count: String(untracked) })}</p>
+        <p className="text-[10px] text-ink-faint">{t('det.ingest.untracked', { count: String(untracked) })}</p>
       ) : null}
-    </section>
+    </Panel>
   );
 }
 
@@ -188,20 +190,20 @@ export function TradeDetectionComparison() {
   }, [load]);
 
   if (!username) {
-    return <div className="det-state">{t('det.signInRequired')}</div>;
+    return <p className="px-1 py-2 text-[11px] text-ink-dim">{t('det.signInRequired')}</p>;
   }
   if (loading && !comparison) {
-    return <div className="det-state">{t('common.loading')}</div>;
+    return <p className="px-1 py-2 text-[11px] text-ink-dim">{t('common.loading')}</p>;
   }
   if (error) {
     return (
-      <div className="det-state det-error" role="alert">
+      <p className="rounded-md border border-accent-red/25 bg-accent-red/8 px-2.5 py-2 text-[11px] text-accent-red" role="alert">
         {error}
-      </div>
+      </p>
     );
   }
   if (!comparison) {
-    return <div className="det-state">{t('det.noData')}</div>;
+    return <p className="px-1 py-2 text-[11px] text-ink-dim">{t('det.noData')}</p>;
   }
 
   const { matchedCount, shadowOnlyCount, wfmOnlyCount, unresolvedItemCount, rows } = comparison;
@@ -215,42 +217,50 @@ export function TradeDetectionComparison() {
           below is a cutover-era artefact kept for debugging. */}
       <NotLoggedPanel rows={shadowRows} t={t} />
 
-      <div className="det-summary">
-        <div className="det-stat">
-          <span className="det-stat-value tone-green">{matchedCount}</span>
-          <span className="det-stat-label">{t('det.matched')}</span>
+      <Panel className="flex-row flex-wrap items-center gap-5 px-3 py-2.5">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-mono text-lg font-bold tabular-nums text-accent-green">{matchedCount}</span>
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('det.matched')}</span>
         </div>
-        <div className="det-stat">
-          <span className="det-stat-value tone-blue">{shadowOnlyCount}</span>
-          <span className="det-stat-label">{t('det.shadowOnly')}</span>
+        <div className="flex flex-col gap-0.5">
+          <span className="font-mono text-lg font-bold tabular-nums text-accent-blue">{shadowOnlyCount}</span>
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('det.shadowOnly')}</span>
         </div>
-        <div className="det-stat">
-          <span className={`det-stat-value${wfmOnlyCount > 0 ? ' tone-red' : ''}`}>
+        <div className="flex flex-col gap-0.5">
+          <span className={`font-mono text-lg font-bold tabular-nums ${wfmOnlyCount > 0 ? 'text-accent-red' : 'text-ink'}`}>
             {wfmOnlyCount}
           </span>
-          <span className="det-stat-label">{t('det.wfmOnly')}</span>
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('det.wfmOnly')}</span>
         </div>
-        <div className="det-stat">
-          <span className={`det-stat-value${unresolvedItemCount > 0 ? ' tone-amber' : ''}`}>
+        <div className="flex flex-col gap-0.5">
+          <span className={`font-mono text-lg font-bold tabular-nums ${unresolvedItemCount > 0 ? 'text-accent-amber' : 'text-ink'}`}>
             {unresolvedItemCount}
           </span>
-          <span className="det-stat-label">{t('det.unresolved')}</span>
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('det.unresolved')}</span>
         </div>
-        <button className="det-refresh" type="button" onClick={() => void load()}>
+        <Button variant="outline" size="sm" className="ml-auto" onClick={() => void load()}>
+          <i className="ti ti-refresh" aria-hidden="true" />
           {t('common.refresh')}
-        </button>
-      </div>
+        </Button>
+      </Panel>
 
-      <p className={`det-verdict${readyToCutOver ? ' ok' : ''}`}>
+      {/* The whole point of this debug tab: whether local detection can replace the WFM poll. */}
+      <p
+        className={`rounded-md border px-2.5 py-2 text-[11px] leading-relaxed ${
+          readyToCutOver
+            ? 'border-accent-green/25 bg-accent-green/8 text-accent-green'
+            : 'border-accent-amber/25 bg-accent-amber/8 text-accent-amber'
+        }`}
+      >
         {readyToCutOver ? t('det.verdictReady') : t('det.verdictNotReady')}
       </p>
 
       {rows.length === 0 ? (
-        <div className="det-state">{t('det.empty')}</div>
+        <p className="px-1 py-2 text-[11px] text-ink-dim">{t('det.empty')}</p>
       ) : (
-        <table className="det-table">
+        <table className="w-full border-collapse">
           <thead>
-            <tr>
+            <tr className="[&>th]:border-b [&>th]:border-line [&>th]:px-2.5 [&>th]:py-1.5 [&>th]:text-left [&>th]:font-mono [&>th]:text-[9px] [&>th]:font-semibold [&>th]:tracking-[0.07em] [&>th]:text-ink-dim [&>th]:uppercase">
               <th>{t('det.colStatus')}</th>
               <th>{t('det.colItem')}</th>
               <th>{t('det.colWhen')}</th>
@@ -260,27 +270,30 @@ export function TradeDetectionComparison() {
           </thead>
           <tbody>
             {rows.map((row, index) => (
-              <tr key={`${row.status}:${row.itemName}:${row.occurredAt ?? index}`}>
+              <tr key={`${row.status}:${row.itemName}:${row.occurredAt ?? index}`} className="[&>td]:border-b [&>td]:border-line-subtle [&>td]:px-2.5 [&>td]:py-1.5 [&>td]:text-[11px] [&>td]:text-ink-soft">
                 <td>
                   <span className={`badge ${STATUS_TONE[row.status]}`}>
                     {t(STATUS_LABEL_KEYS[row.status])}
                   </span>
                 </td>
                 <td>
-                  <span className="det-item">{row.itemName}</span>
+                  <span className="text-ink">{row.itemName}</span>
                   {/* An item the catalog could not identify would reach the trade log
                       unnamed, so it is called out even when the trade itself matched. */}
                   {row.slug === null ? (
-                    <span className="det-unresolved" title={t('det.unresolvedHelp')}>
+                    <span
+                      className="ml-1 rounded bg-accent-amber/15 px-1 py-px font-mono text-[9px] font-semibold text-accent-amber uppercase"
+                      title={t('det.unresolvedHelp')}
+                    >
                       {t('det.unresolvedTag')}
                     </span>
                   ) : null}
                 </td>
-                <td className="det-num">
+                <td className="text-right font-mono tabular-nums">
                   {row.occurredAt ? formatShortLocalDateTime(row.occurredAt) : '—'}
                 </td>
                 <td>{row.partner ?? '—'}</td>
-                <td className="det-num">{row.platinum}</td>
+                <td className="text-right font-mono tabular-nums">{row.platinum}</td>
               </tr>
             ))}
           </tbody>

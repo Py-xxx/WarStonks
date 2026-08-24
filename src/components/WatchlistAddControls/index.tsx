@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { ItemSearchInput } from '../ItemSearchInput';
 import { QuantityStepper } from '../QuantityStepper';
 import { getItemVariantsForMarket } from '../../lib/tauriClient';
@@ -116,26 +118,36 @@ export function WatchlistAddControls({ mode = 'selected' }: { mode?: WatchlistAd
   };
 
   return (
-    <div className="wl-add">
+    <div className="flex flex-col gap-2.5">
       {isSearchMode ? null : (
-        <div className="wl-add-head">
-          <span className="wl-add-eyebrow">{t('wl.addSelectedItem')}</span>
-          <span className="wl-add-item">{activeItemName ?? t('hm.searchFirst')}</span>
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('wl.addSelectedItem')}</span>
+          <span className="text-xs font-semibold text-ink">
+            {activeItemName ?? t('hm.searchFirst')}
+          </span>
         </div>
       )}
 
-      <div className={`wl-add-grid${isSearchMode ? ' with-search' : ''}`}>
+      {/* Fixed column widths so the row's controls line up whichever mode it is in — the search
+          field only exists in search mode, and everything after it must not shift. */}
+      <div
+        className={`grid items-end gap-2 border-y border-line-subtle py-2.5 ${
+          isSearchMode
+            ? '[grid-template-columns:minmax(0,1fr)_132px_92px_96px_auto]'
+            : '[grid-template-columns:132px_92px_96px_auto_minmax(0,1fr)]'
+        }`}
+      >
         {isSearchMode ? (
-          <div className="wl-field">
-            <span className="wl-field-label">{t('wl.item')}</span>
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('wl.item')}</span>
             <ItemSearchInput selected={searchItem} onSelect={setSearchItem} />
           </div>
         ) : null}
 
-        <label className="wl-field">
-          <span className="wl-field-label">{t('wl.variant')}</span>
-          <select
-            className="wl-field-control"
+        <label className="flex min-w-0 flex-col gap-1">
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('wl.variant')}</span>
+          <Select
+            className="h-8"
             value={variantKey ?? ''}
             disabled={variants.length <= 1}
             onChange={(event) => {
@@ -156,13 +168,14 @@ export function WatchlistAddControls({ mode = 'selected' }: { mode?: WatchlistAd
                 {variant.label === 'Base Market' ? t('mkt.baseMarketVariant') : variant.label}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
 
-        <label className="wl-field">
-          <span className="wl-field-label">{t('wl.target')}</span>
-          <div className="wl-field-control wl-target-control">
-            <input
+        <label className="flex min-w-0 flex-col gap-1">
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('wl.target')}</span>
+          <span className="relative flex items-center">
+            <Input
+              className="pr-7 tabular-nums"
               type="number"
               min="1"
               step="1"
@@ -173,12 +186,14 @@ export function WatchlistAddControls({ mode = 'selected' }: { mode?: WatchlistAd
               aria-label={t('a11y.desiredPrice')}
               onChange={(event) => setTargetInput(event.target.value)}
             />
-            <span className="wl-target-unit">pt</span>
-          </div>
+            <span className="pointer-events-none absolute right-2 font-mono text-[10px] text-ink-dim">
+              pt
+            </span>
+          </span>
         </label>
 
-        <label className="wl-field">
-          <span className="wl-field-label">{t('wl.boughtQuantity')}</span>
+        <label className="flex min-w-0 flex-col gap-1">
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('wl.boughtQuantity')}</span>
           <QuantityStepper
             value={Math.max(1, Number.parseInt(quantityInput, 10) || 1)}
             onChange={(next) => setQuantityInput(String(next))}
@@ -186,15 +201,15 @@ export function WatchlistAddControls({ mode = 'selected' }: { mode?: WatchlistAd
           />
         </label>
 
-        <Button className="wl-add-btn h-8 px-4 text-xs" onClick={submit} disabled={!canAdd}>
+        <Button className="h-8 px-4 text-xs" onClick={submit} disabled={!canAdd}>
           {t('wl.add')}
         </Button>
       </div>
 
       {marketVariantsError && !isSearchMode ? (
-        <div className="wl-add-error">{marketVariantsError}</div>
+        <p className="text-[11px] text-accent-red">{marketVariantsError}</p>
       ) : null}
-      {formError ? <div className="wl-add-error">{formError}</div> : null}
+      {formError ? <p className="text-[11px] text-accent-red">{formError}</p> : null}
     </div>
   );
 }

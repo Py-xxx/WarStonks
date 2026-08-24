@@ -1,3 +1,14 @@
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { InventorySubTab, OpportunitiesSubTab } from '../../lib/navigation';
@@ -49,7 +60,6 @@ import {
 import { PageHeading } from '../../components/PageHeading';
 import { selectAlecaframeInventoryAvailable, useAppStore } from '../../stores/useAppStore';
 import { AlecaframeInventoryPanel } from '../../components/AlecaframeInventory';
-import { useModalA11y } from '../../hooks/useModalA11y';
 import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { useItemQueryMatcher } from '../../hooks/useItemSearch';
 import { tActive, useTranslation } from '../../i18n';
@@ -146,6 +156,27 @@ type ScreenshotImportPreparedScreenshot = {
   detectionPreview: SetCompletionScreenshotDetectionPreview;
 };
 
+/** A small status pill. Was `scanner-run-pill` — Scanners' class, borrowed by this page. */
+function ScanRunPill({
+  tone = 'blue',
+  children,
+}: {
+  tone?: 'blue' | 'warning';
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={`shrink-0 rounded px-1.5 py-px font-mono text-[9px] font-semibold tracking-[0.04em] uppercase ${
+        tone === 'warning'
+          ? 'bg-accent-amber/15 text-accent-amber'
+          : 'bg-accent-blue/15 text-accent-blue'
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
 function renderScreenshotCellOverlays(screenshot: ScreenshotImportPreparedScreenshot) {
   const width = screenshot.detectionPreview.overlayWidth;
   const height = screenshot.detectionPreview.overlayHeight;
@@ -159,9 +190,10 @@ function renderScreenshotCellOverlays(screenshot: ScreenshotImportPreparedScreen
     const boxWidth = (cell.itemBox.width / width) * 100;
     const boxHeight = (cell.itemBox.height / height) * 100;
     return (
+      // Positioned in percentages of the preview, so it tracks the image at any width.
       <span
         key={cell.rowId}
-        className="screenshot-import-cell-overlay"
+        className="pointer-events-none absolute rounded-sm border border-accent-blue/70 bg-accent-blue/10"
         style={{
           left: `${left}%`,
           top: `${top}%`,
@@ -471,67 +503,62 @@ function SetCompletionScreenshotImportModal({
   onConfirm: () => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const modalRef = useModalA11y<HTMLDivElement>({ onClose, active: open });
-
-  if (!open) {
-    return null;
-  }
 
   return (
-    <>
-      <button
-        className="modal-backdrop"
-        type="button"
-        aria-label={t('a11y.closeImport')}
-        onClick={onClose}
-      />
-      <div
-        ref={modalRef}
-        className="settings-modal screenshot-import-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('a11y.importPrimeComponents')}
-      >
-        <div className="settings-modal-header">
-          <div className="settings-modal-title">
-            <span className="card-label">{t('opp.setCompletionImport')}</span>
-            <h3>
-              Import Prime Components Screenshot{' '}
-              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">{t('opp.experimental')}</span>
-            </h3>
-          </div>
-          <div className="settings-modal-actions">
-            <button className="settings-close-btn" type="button" aria-label={t('a11y.close')} onClick={onClose}>
-              ✕
-            </button>
-          </div>
-        </div>
+    // `Dialog`, not `modal-backdrop` + `useModalA11y`. Outside clicks are ignored the same way the
+    // listing dialog ignores them: a half-reviewed import is a lot of work to lose to a stray
+    // click, and Base UI reports the *reason* it wants to close rather than taking a prop.
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (!next && details.reason !== 'outside-press') {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="h-[min(760px,88vh)] max-w-6xl gap-0 overflow-hidden p-0">
+        <DialogHeader className="flex-row items-center gap-2 border-b border-line px-4 py-3">
+          <DialogTitle>{t('opp.importPrimeComponents')}</DialogTitle>
+          {/* This importer is OCR over a game screenshot and gets things wrong; the pill is a
+              standing warning, not decoration. */}
+          <ScanRunPill tone="warning">{t('opp.experimental')}</ScanRunPill>
+          <DialogDescription className="sr-only">
+            {t('a11y.importPrimeComponents')}
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="settings-modal-body screenshot-import-body">
-          <div className="settings-form-card screenshot-import-left">
-            <div className="screenshot-import-example">
-              <div className="screenshot-import-example-copy">
-                <span className="panel-title-eyebrow">{t('opp.exampleOnly')}</span>
-                <strong>{t('opp.framingReference')}</strong>
-                <span>{t('opp.screenshotFramingHint')}</span>
+        {/* Sources left, review right. The review column is where all the work happens, so it
+            gets the larger share and its own scroll. */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+          <div className="flex min-w-0 flex-col gap-3 overflow-y-auto border-r border-line p-4">
+            <div className="flex items-start gap-3 rounded-lg border border-line bg-bg-base p-3">
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                  {t('opp.exampleOnly')}
+                </span>
+                <strong className="text-xs text-ink">{t('opp.framingReference')}</strong>
+                <span className="text-[11px] leading-relaxed text-ink-dim">
+                  {t('opp.screenshotFramingHint')}
+                </span>
               </div>
-              <div className="screenshot-import-example-image">
-                <img src={setCompletionImportExample} alt={t('opp.exampleScreenshotAlt')} />
-              </div>
+              <img
+                src={setCompletionImportExample}
+                alt={t('opp.exampleScreenshotAlt')}
+                className="w-40 shrink-0 rounded-md border border-line object-contain"
+              />
             </div>
 
-            <div className="screenshot-import-toolbar">
-              <button
-                type="button"
-                className="settings-primary-btn"
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={processing || confirming}
               >
+                <i className="ti ti-photo" aria-hidden="true" />
                 {processing ? t('opp.processing') : t('opp.chooseScreenshot')}
-              </button>
+              </Button>
               <input
                 ref={fileInputRef}
-                className="screenshot-import-file-input"
+                className="hidden"
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
                 multiple
@@ -539,48 +566,68 @@ function SetCompletionScreenshotImportModal({
                   void onPickFile(event.target.files ? Array.from(event.target.files) : []);
                 }}
               />
-              <button
-                type="button"
-                className="settings-secondary-btn"
+              <Button
+                variant="outline"
                 disabled={processing || scanning || confirming || !screenshots.length}
                 onClick={() => {
                   void onScan();
                 }}
               >
                 {scanning ? t('opp.scanning') : t('opp.scan')}
-              </button>
+              </Button>
             </div>
 
-            <p className="watchlist-form-note">
-              {splitAroundEmphasis(t('opp.usePrimeComponentsTab', { tab: t('opp.primeComponents') }), t('opp.primeComponents'))}
-            </p>
-            <p className="watchlist-form-note">
-              {splitAroundEmphasis(t('opp.screenshotWorkflowHint', { scan: t('opp.scan') }), t('opp.scan'))}
-            </p>
+            <div className="flex flex-col gap-1 text-[11px] leading-relaxed text-ink-dim">
+              <p>
+                {splitAroundEmphasis(
+                  t('opp.usePrimeComponentsTab', { tab: t('opp.primeComponents') }),
+                  t('opp.primeComponents'),
+                )}
+              </p>
+              <p>
+                {splitAroundEmphasis(
+                  t('opp.screenshotWorkflowHint', { scan: t('opp.scan') }),
+                  t('opp.scan'),
+                )}
+              </p>
+            </div>
 
             {progress ? (
-              <div className="scanner-inline-progress screenshot-import-progress">
-                <span className="scanner-progress-label">{progress.stage.toUpperCase()}</span>
-                <strong>{progress.detail}</strong>
-              </div>
+              <p className="flex items-center gap-2 rounded-md border border-accent-blue/25 bg-accent-blue/8 px-2.5 py-2 text-[11px] text-accent-blue">
+                <span className="font-mono text-[9px] tracking-[0.07em] uppercase opacity-80">
+                  {progress.stage.toUpperCase()}
+                </span>
+                <strong className="min-w-0 flex-1">{progress.detail}</strong>
+              </p>
             ) : null}
 
-            {errorMessage ? <div className="scanner-inline-error">{errorMessage}</div> : null}
+            {errorMessage ? (
+              <p role="alert" className="rounded-md border border-accent-red/25 bg-accent-red/8 px-2.5 py-2 text-[11px] leading-relaxed text-accent-red">
+                {errorMessage}
+              </p>
+            ) : null}
+
             {screenshots.length ? (
-              <div className="screenshot-import-preview-list">
+              <div className="flex flex-col gap-3">
                 {screenshots.map((screenshot, index) => (
-                  <div key={screenshot.id} className="screenshot-import-original-preview">
-                    <div className="screenshot-import-original-preview-meta">
-                      <span className="card-label">{t('opp.screenshotLabel', { n: index + 1 })}</span>
-                      <strong>{screenshot.fileName}</strong>
+                  <div key={screenshot.id} className="flex min-w-0 flex-col gap-1.5">
+                    <div className="flex min-w-0 items-baseline gap-2">
+                      <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                        {t('opp.screenshotLabel', { n: index + 1 })}
+                      </span>
+                      <strong className="min-w-0 truncate text-[11px] text-ink-soft">
+                        {screenshot.fileName}
+                      </strong>
                     </div>
-                    <div className="screenshot-import-original-preview-shell">
+                    {/* `relative` so the detected-cell overlays, which are positioned in
+                        percentages of this box, land on the image they describe. */}
+                    <div className="relative overflow-hidden rounded-md border border-line">
                       <img
-                        className="screenshot-import-original-image"
+                        className="block w-full"
                         src={screenshot.previewUrl}
                         alt={t('opp.screenshotPreviewAlt', { n: index + 1 })}
                       />
-                      <div className="screenshot-import-cell-overlays">
+                      <div className="absolute inset-0">
                         {renderScreenshotCellOverlays(screenshot)}
                       </div>
                     </div>
@@ -588,26 +635,24 @@ function SetCompletionScreenshotImportModal({
                 ))}
               </div>
             ) : (
-              <div className="opportunities-placeholder">
-                {t('opp.chooseScreenshots')}
-              </div>
+              <EmptyState icon="ti-photo" title={t('opp.chooseScreenshots')} />
             )}
           </div>
 
-          <div className="settings-form-card screenshot-import-right">
-            <div className="screenshot-import-summary">
-              <div>
-                <span className="card-label">{t('opp.reviewMatches')}</span>
-                <h3>{t('opp.detectedComponents')}</h3>
-              </div>
-              <div className="scanner-run-summary">
-                <span className="scanner-run-pill scanner-run-pill-blue">
-                  {t('opp.rowsCount', { n: reviewRows.length })}
+          <div className="flex min-w-0 flex-col overflow-hidden">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-3">
+              <span className="min-w-0 flex-1">
+                <span className="block font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                  {t('opp.reviewMatches')}
                 </span>
-                {hasReviewRows ? (
-                  <span className="scanner-run-pill scanner-run-pill-warning">{t('opp.needsReview')}</span>
-                ) : null}
-              </div>
+                <span className="block text-sm font-semibold text-ink">
+                  {t('opp.detectedComponents')}
+                </span>
+              </span>
+              <ScanRunPill tone="blue">{t('opp.rowsCount', { n: reviewRows.length })}</ScanRunPill>
+              {hasReviewRows ? (
+                <ScanRunPill tone="warning">{t('opp.needsReview')}</ScanRunPill>
+              ) : null}
             </div>
 
             <datalist id="set-completion-screenshot-candidates">
@@ -616,85 +661,121 @@ function SetCompletionScreenshotImportModal({
               ))}
             </datalist>
 
-            {reviewRows.length ? (
-              <div className="screenshot-import-rows">
-                {reviewRows.map((row) => {
-                  const reviewReason = row.reviewReasons.join(' · ');
-                  return (
-                    <article
-                      key={row.state.rowId}
-                      className={`screenshot-import-row${row.reviewReasons.length ? ' needs-review' : ''}`}
-                    >
-                      {row.reviewReasons.length ? (
-                        <span className="screenshot-import-row-review-badge">{reviewReason}</span>
-                      ) : null}
-                      <div className="screenshot-import-row-main">
-                        <span className="screenshot-import-row-thumb">
-                          <img src={row.state.originalCellDataUrl} alt="" />
-                        </span>
-                        <div className="screenshot-import-row-editor">
-                          <div className="screenshot-import-row-copy">
-                            <strong>{t('opp.matchedName')}</strong>
-                            <span className="screenshot-import-row-source">
-                              {t('opp.screenshotSourceLabel', { n: row.state.screenshotIndex + 1, fileName: row.state.screenshotFileName })}
-                            </span>
-                            <input
-                              className="set-planner-search-input"
-                              list="set-completion-screenshot-candidates"
-                              type="text"
-                              value={row.state.nameInput}
-                              onChange={(event) => onNameChange(row.state.rowId, event.target.value)}
-                              placeholder={row.state.suggestedMatch?.name ?? t('opp.selectValidComponent')}
-                            />
-                            <span>
-                              O: {row.state.originalText || '—'} | P: {row.state.processedText || '—'}
-                            </span>
-                          </div>
-                          <div className="screenshot-import-qty-field">
-                            <span>{t('opp.quantity')}</span>
-                            <input
-                              className="screenshot-import-qty-input"
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={row.state.quantityInput}
-                              onChange={(event) => onQuantityChange(row.state.rowId, event.target.value)}
-                            />
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              {reviewRows.length ? (
+                <div className="flex flex-col gap-2">
+                  {reviewRows.map((row) => {
+                    const needsReview = row.reviewReasons.length > 0;
+                    return (
+                      // A row needing review takes an amber frame. That is the whole point of this
+                      // column: the ones OCR is unsure about have to be findable at a glance.
+                      <article
+                        key={row.state.rowId}
+                        className={`flex min-w-0 flex-col gap-2 rounded-md border px-2.5 py-2 ${
+                          needsReview
+                            ? 'border-accent-amber/35 bg-accent-amber/[0.06]'
+                            : 'border-line bg-bg-base'
+                        }`}
+                      >
+                        {needsReview ? (
+                          <span className="font-mono text-[9px] font-semibold tracking-[0.04em] text-accent-amber uppercase">
+                            {row.reviewReasons.join(' · ')}
+                          </span>
+                        ) : null}
+                        <div className="flex min-w-0 items-start gap-2.5">
+                          {/* The cropped cell OCR actually read, so a wrong match can be checked
+                              against the pixels rather than guessed at. */}
+                          <img
+                            src={row.state.originalCellDataUrl}
+                            alt=""
+                            className="size-12 shrink-0 rounded-sm border border-line object-cover"
+                          />
+                          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                            <div className="flex min-w-0 flex-col gap-1">
+                              <span className="flex flex-wrap items-baseline gap-x-2">
+                                <strong className="text-[11px] text-ink">
+                                  {t('opp.matchedName')}
+                                </strong>
+                                <span className="text-[10px] text-ink-faint">
+                                  {t('opp.screenshotSourceLabel', {
+                                    n: row.state.screenshotIndex + 1,
+                                    fileName: row.state.screenshotFileName,
+                                  })}
+                                </span>
+                              </span>
+                              <Input
+                                list="set-completion-screenshot-candidates"
+                                type="text"
+                                value={row.state.nameInput}
+                                onChange={(event) => onNameChange(row.state.rowId, event.target.value)}
+                                placeholder={
+                                  row.state.suggestedMatch?.name ?? t('opp.selectValidComponent')
+                                }
+                              />
+                              {/* The raw and processed OCR reads. Kept deliberately: when a match
+                                  is wrong this is the only way to see whether the scan or the
+                                  matcher is at fault. */}
+                              <span className="truncate font-mono text-[10px] text-ink-faint">
+                                O: {row.state.originalText || '—'} | P:{' '}
+                                {row.state.processedText || '—'}
+                              </span>
+                            </div>
+                            <label className="flex items-center gap-2">
+                              <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                                {t('opp.quantity')}
+                              </span>
+                              <Input
+                                className="h-7 w-20 tabular-nums"
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={row.state.quantityInput}
+                                onChange={(event) =>
+                                  onQuantityChange(row.state.rowId, event.target.value)
+                                }
+                              />
+                            </label>
                           </div>
                         </div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="opportunities-placeholder">
-                {t('opp.uploadThenScan')}
-              </div>
-            )}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <EmptyState icon="ti-search" title={t('opp.uploadThenScan')} />
+              )}
+            </div>
 
-            <div className="screenshot-import-footer">
-              <button type="button" className="settings-secondary-btn" onClick={onClose}>
+            <DialogFooter className="shrink-0 border-t border-line px-4 py-3">
+              <Button variant="ghost" size="sm" onClick={onClose}>
                 {t('opp.cancel')}
-              </button>
-              <button
-                type="button"
-                className="settings-primary-btn"
-                disabled={processing || scanning || confirming || !reviewRows.length || hasBlockedRows}
+              </Button>
+              <Button
+                size="sm"
+                disabled={
+                  processing || scanning || confirming || !reviewRows.length || hasBlockedRows
+                }
                 onClick={() => {
                   void onConfirm();
                 }}
               >
                 {confirming ? t('opp.confirming') : t('opp.confirm')}
-              </button>
-            </div>
+              </Button>
+            </DialogFooter>
           </div>
         </div>
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
 
+/**
+ * The requirements gate, shown before the importer opens.
+ *
+ * It exists because the OCR only works on one UI theme with the cursor out of the frame, and a
+ * screenshot that breaks either rule fails in a way the error messages cannot usefully explain.
+ * Three constraints, then Continue.
+ */
 function SetCompletionScreenshotImportWarningModal({
   open,
   onClose,
@@ -705,61 +786,50 @@ function SetCompletionScreenshotImportWarningModal({
   onContinue: () => void;
 }) {
   const { t } = useTranslation();
-  if (!open) {
-    return null;
-  }
 
   return (
-    <>
-      <button
-        className="modal-backdrop"
-        type="button"
-        aria-label={t('a11y.closeImportGuidance')}
-        onClick={onClose}
-      />
-      <div
-        className="settings-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('a11y.importRequirements')}
-      >
-        <div className="settings-modal-header">
-          <div className="settings-modal-title">
-            <span className="card-label">{t('opp.setCompletionImport')}</span>
-            <h3>
-              {t('opp.screenshotImportGuidanceTitle')}{' '}
-              <span className="scanner-run-pill scanner-run-pill-warning screenshot-import-experimental-pill">{t('opp.experimental')}</span>
-            </h3>
-          </div>
-          <div className="settings-modal-actions">
-            <button className="settings-close-btn" type="button" aria-label={t('a11y.close')} onClick={onClose}>
-              ✕
-            </button>
-          </div>
-        </div>
-        <div className="settings-modal-body">
-          <div className="settings-form-card screenshot-import-guidance-card">
-            <p className="watchlist-form-note screenshot-import-guidance-note">
-              {splitAroundEmphasis(t('opp.vitruvianThemeOnly', { theme: 'Vitruvian' }), 'Vitruvian', 'screenshot-import-guidance-theme')}
-            </p>
-            <p className="watchlist-form-note screenshot-import-guidance-note">
-              {splitAroundEmphasis(t('opp.cursorNotVisible', { notVisible: t('opp.notVisible') }), t('opp.notVisible'))}
-            </p>
-            <p className="watchlist-form-note screenshot-import-guidance-note">
-              {splitAroundEmphasis(t('opp.gridMatchExample', { grid: t('opp.primeComponentsGrid') }), t('opp.primeComponentsGrid'))}
-            </p>
-            <div className="settings-form-actions">
-              <button type="button" className="settings-secondary-btn" onClick={onClose}>
-                {t('opp.cancel')}
-              </button>
-              <button type="button" className="settings-primary-btn" onClick={onContinue}>
-                {t('opp.continue')}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader className="flex-row items-center gap-2">
+          <DialogTitle>{t('opp.screenshotImportGuidanceTitle')}</DialogTitle>
+          <ScanRunPill tone="warning">{t('opp.experimental')}</ScanRunPill>
+        </DialogHeader>
+
+        <ul className="flex flex-col gap-2">
+          {[
+            splitAroundEmphasis(
+              t('opp.vitruvianThemeOnly', { theme: 'Vitruvian' }),
+              'Vitruvian',
+            ),
+            splitAroundEmphasis(
+              t('opp.cursorNotVisible', { notVisible: t('opp.notVisible') }),
+              t('opp.notVisible'),
+            ),
+            splitAroundEmphasis(
+              t('opp.gridMatchExample', { grid: t('opp.primeComponentsGrid') }),
+              t('opp.primeComponentsGrid'),
+            ),
+          ].map((line, index) => (
+            <li key={index} className="flex items-start gap-2 text-[11px] leading-relaxed text-ink-soft">
+              <i
+                className="ti ti-alert-triangle mt-px shrink-0 text-sm text-accent-amber"
+                aria-hidden="true"
+              />
+              <span className="min-w-0">{line}</span>
+            </li>
+          ))}
+        </ul>
+
+        <DialogFooter>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            {t('opp.cancel')}
+          </Button>
+          <Button size="sm" onClick={onContinue}>
+            {t('opp.continue')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

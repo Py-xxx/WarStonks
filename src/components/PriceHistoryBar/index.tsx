@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getPriceHistoryStatus, refreshPriceHistory } from '../../lib/tauriClient';
 import { formatElapsedTime } from '../../lib/dateTime';
+import { Button } from '@/components/ui/button';
 import { useTranslation } from '../../i18n';
 import type { PriceHistoryStatus } from '../../types';
 
@@ -55,8 +56,8 @@ export function PriceHistoryBar() {
   const pending = status.itemCount === 0;
 
   return (
-    <div className="price-history-bar">
-      <span className="price-history-primary">
+    <div className="flex flex-wrap items-baseline gap-2.5 rounded-md border border-line bg-bg-panel px-3 py-1.5">
+      <span className="text-[11px] font-medium text-ink">
         {pending
           ? t('ph.pending')
           : t('ph.coverage', { items: status.itemCount.toLocaleString() })}
@@ -69,7 +70,7 @@ export function PriceHistoryBar() {
           is lost for anyone who wants it. Same reduction as Market's three timestamps. */}
       {!pending && status.lastIngestAt ? (
         <span
-          className="price-history-meta"
+          className="font-mono text-[10px] tabular-nums text-ink-dim"
           title={[
             t('ph.days', { days: String(status.daysStored) }),
             status.newestDay ? t('ph.newest', { day: status.newestDay }) : null,
@@ -83,18 +84,19 @@ export function PriceHistoryBar() {
 
       {/* The data is relics.run's, republished. Crediting it here rather than only in a code
           comment is the point of having this bar at all. */}
-      <span className="price-history-source" title={t('ph.sourceHelp')}>
+      <span className="text-[10px] text-ink-faint" title={t('ph.sourceHelp')}>
         {t('ph.source')}
       </span>
 
-      <button
-        className="price-history-refresh"
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
+        className="ml-auto h-6 px-2 text-[11px]"
         onClick={() => void handleRefresh()}
         disabled={refreshing}
       >
         {refreshing ? t('common.refreshing') : t('common.refresh')}
-      </button>
+      </Button>
     </div>
   );
 }

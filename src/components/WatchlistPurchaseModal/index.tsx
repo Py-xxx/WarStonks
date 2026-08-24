@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { useTranslation } from '../../i18n';
-import { createPortal } from 'react-dom';
-import { useModalA11y } from '../../hooks/useModalA11y';
 
 interface WatchlistPurchaseModalProps {
   itemName: string;
@@ -33,12 +41,6 @@ export function WatchlistPurchaseModal({
     setPriceInput(String(Math.max(1, Math.round(defaultPrice))));
   }, [defaultPrice]);
 
-  const modalRef = useModalA11y<HTMLDivElement>({ onClose });
-
-  if (typeof document === 'undefined') {
-    return null;
-  }
-
   const cap = Math.max(1, Math.round(maxQuantity));
   const parsedPrice = Number.parseInt(priceInput, 10);
   const parsedQuantity = Number.parseInt(quantityInput, 10);
@@ -52,84 +54,86 @@ export function WatchlistPurchaseModal({
     }
   };
 
-  return createPortal(
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onMouseDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div
-        ref={modalRef}
-        className="settings-modal watchlist-purchase-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="watchlist-purchase-modal-title"
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="settings-modal-header">
-          <div className="settings-modal-title">
-            <span className="card-label">{t('wl.watchlist')}</span>
-            <h3 id="watchlist-purchase-modal-title">{t('wl.markAsBought')}</h3>
-          </div>
-        </div>
-
-        <div className="settings-modal-body">
-          <p className="watchlist-purchase-copy">
+  return (
+    // `Dialog`, not a `createPortal` + `modal-backdrop` + `useModalA11y` stack. Outside clicks are
+    // allowed to close it — unlike the listing dialog, there is nothing here worth losing: two
+    // pre-filled numbers you can retype in a second.
+    <Dialog open onOpenChange={(open) => !open && !loading && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{t('wl.markAsBought')}</DialogTitle>
+          <DialogDescription className="text-[11px] leading-relaxed text-ink-soft">
             {t('wl.purchaseCopy', { item: itemName })}
-          </p>
+          </DialogDescription>
+        </DialogHeader>
 
-          <div className="watchlist-purchase-fields">
-            <label className="watchlist-purchase-field" htmlFor="watchlist-purchase-price">
-              <span>{t('wl.boughtPrice')}</span>
-              <input
-                id="watchlist-purchase-price"
-                type="number"
-                min={1}
-                step={1}
-                value={priceInput}
-                onChange={(event) => setPriceInput(event.target.value)}
-                disabled={loading}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') submit();
-                }}
-              />
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              className="font-mono text-[10px] tracking-[0.08em] text-ink-dim uppercase"
+              htmlFor="watchlist-purchase-price"
+            >
+              {t('wl.boughtPrice')}
             </label>
-            <label className="watchlist-purchase-field" htmlFor="watchlist-purchase-quantity">
-              <span>{t('wl.boughtQuantity')}</span>
-              <input
-                id="watchlist-purchase-quantity"
-                type="number"
-                min={1}
-                max={cap}
-                step={1}
-                value={quantityInput}
-                onChange={(event) => setQuantityInput(event.target.value)}
-                disabled={loading || cap === 1}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') submit();
-                }}
-              />
-            </label>
+            <Input
+              id="watchlist-purchase-price"
+              className="tabular-nums"
+              type="number"
+              min={1}
+              step={1}
+              autoFocus
+              value={priceInput}
+              onChange={(event) => setPriceInput(event.target.value)}
+              disabled={loading}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') submit();
+              }}
+            />
           </div>
-
-          {cap > 1 ? (
-            <p className="watchlist-purchase-hint">{t('wl.ofOutstanding', { n: cap })}</p>
-          ) : null}
-          {errorMessage ? <div className="settings-inline-error">{errorMessage}</div> : null}
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              className="font-mono text-[10px] tracking-[0.08em] text-ink-dim uppercase"
+              htmlFor="watchlist-purchase-quantity"
+            >
+              {t('wl.boughtQuantity')}
+            </label>
+            <Input
+              id="watchlist-purchase-quantity"
+              className="tabular-nums"
+              type="number"
+              min={1}
+              max={cap}
+              step={1}
+              value={quantityInput}
+              onChange={(event) => setQuantityInput(event.target.value)}
+              // Disabled at a cap of 1: there is only one valid value, and an editable field
+              // that rejects everything you type is worse than one you cannot touch.
+              disabled={loading || cap === 1}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') submit();
+              }}
+            />
+            {cap > 1 ? (
+              <span className="text-[10px] text-ink-dim">{t('wl.ofOutstanding', { n: cap })}</span>
+            ) : null}
+          </div>
         </div>
 
-        <div className="settings-modal-actions">
-          <button className="btn-secondary" type="button" onClick={onClose} disabled={loading}>
+        {errorMessage ? (
+          <p role="alert" className="text-[11px] leading-relaxed text-accent-red">
+            {errorMessage}
+          </p>
+        ) : null}
+
+        <DialogFooter>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>
             {t('common.cancel')}
-          </button>
-          <button className="btn-primary" type="button" onClick={submit} disabled={!canSubmit}>
+          </Button>
+          <Button size="sm" onClick={submit} disabled={!canSubmit}>
             {loading ? t('common.saving') : t('wl.confirmBought')}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useTranslation } from '../../i18n';
 
 /**
@@ -23,18 +24,26 @@ export function QuantityStepper({
   const clamp = (next: number) => Math.max(min, Math.min(max, next));
 
   return (
-    <span className="qty-stepper" onClick={(event) => event.stopPropagation()}>
-      <button
-        type="button"
-        className="qty-stepper-btn"
+    // `stopPropagation` because this sits inside a clickable watchlist row.
+    <span
+      className="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg-base p-0.5"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        static
+        className="size-5.5 rounded-sm"
         aria-label={t('wl.decreaseQuantity')}
         disabled={disabled || value <= min}
         onClick={() => onChange(clamp(value - 1))}
       >
-        <i className="ti ti-minus" aria-hidden="true" />
-      </button>
+        <i className="ti ti-minus text-[11px]" aria-hidden="true" />
+      </Button>
+      {/* `appearance-none` and no spinners: the −/+ buttons ARE the stepper, and the browser's
+          own arrows would be a second one inside it. */}
       <input
-        className="qty-stepper-value"
+        className="w-8 appearance-none border-0 bg-transparent p-0 text-center font-mono text-[11px] tabular-nums text-ink outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         type="number"
         inputMode="numeric"
         min={min}
@@ -49,15 +58,17 @@ export function QuantityStepper({
           }
         }}
       />
-      <button
-        type="button"
-        className="qty-stepper-btn"
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        static
+        className="size-5.5 rounded-sm"
         aria-label={t('wl.increaseQuantity')}
         disabled={disabled || value >= max}
         onClick={() => onChange(clamp(value + 1))}
       >
-        <i className="ti ti-plus" aria-hidden="true" />
-      </button>
+        <i className="ti ti-plus text-[11px]" aria-hidden="true" />
+      </Button>
     </span>
   );
 }

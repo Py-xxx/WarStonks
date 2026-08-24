@@ -24,8 +24,9 @@
  *   set) and then sat on screen forever, unclosable. Keyframes fire a real `animationend`, so the
  *   lifecycle completes. They are also neutralised by the global `prefers-reduced-motion` block.
  *
- * `useModalA11y` stays for the screenshot-import modals until they migrate; Base UI handles focus
- * trapping, Escape and focus restoration itself, so a `Dialog` must not also use that hook.
+ * **`Dialog` is now the only modal in the app.** `useModalA11y` and `ModalPortal` are deleted —
+ * the screenshot-import modals were the last callers. Base UI handles focus trapping, Escape and
+ * focus restoration itself, so nothing should ever re-introduce a second implementation of them.
  */
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 

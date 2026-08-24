@@ -65,6 +65,22 @@
      Change this and you change every tooltip, popover, menu and dialog in the app. */
   --color-bg-overlay: #1e2230;
 
+  /* Chart series — a CATEGORICAL palette, deliberately separate from the accents above.
+     The accents carry meaning (green profit, red loss, amber warning) and `ELEMENTS.md` §5 is
+     explicit that spending them decoratively destroys that signal. A price chart needs four
+     hues that are merely *distinguishable*, which is a different job: painting the moving
+     average `accent-green` would assert "profit" about a statistic that means nothing of the
+     kind. Values carried over from the shipped chart's legend swatches.
+
+     Entry and exit are the exception and DO keep meaning: entry is where you buy (amber, the
+     zone to act in) and exit is where you sell. */
+  --color-chart-lowest: #79b8ff;
+  --color-chart-median: #ffd166;
+  --color-chart-average: #c8d2ea;
+  --color-chart-sma: #7ce0b6;
+  --color-chart-entry: #f6c945;
+  --color-chart-exit: #ff7c9c;
+
   /* Lines. */
   --color-line-subtle: #1c1f2b;
   --color-line: #242836;

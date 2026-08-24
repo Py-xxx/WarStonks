@@ -17,6 +17,17 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
+/**
+ * The app's one pulse.
+ *
+ * Exported because `ChartSkeleton` (`pages/Market/index.tsx`) is the single registered exception
+ * to "loading states compose `Skeleton`" — this primitive composes rectangles, and no arrangement
+ * of rectangles reads as a line chart (`ELEMENTS.md` §3). It still must not grow its OWN pulse:
+ * guard 3 bans the literal `animate-pulse` everywhere but here, so an exception has to import the
+ * timing rather than restate it, and the two can never drift.
+ */
+const SKELETON_PULSE = 'animate-pulse';
+
 /** Leaf shapes. Everything else composes from these. */
 const PRIMITIVES = {
   text: 'h-3 w-full rounded-sm',
@@ -89,7 +100,7 @@ function renderNode(
         <span
           key={key}
           className={cn(
-            'block animate-pulse bg-line-strong/60',
+            `block ${SKELETON_PULSE} bg-line-strong/60`,
             PRIMITIVES[node.name as PrimitiveName],
             leafClassName,
           )}
@@ -105,7 +116,7 @@ function renderNode(
       out.push(
         <span
           key={key}
-          className={cn('block animate-pulse bg-line-strong/60', PRIMITIVES.text, leafClassName)}
+          className={cn(`block ${SKELETON_PULSE} bg-line-strong/60`, PRIMITIVES.text, leafClassName)}
         />,
       );
       continue;
@@ -172,4 +183,4 @@ function Skeleton({
   );
 }
 
-export { Skeleton };
+export { Skeleton, SKELETON_PULSE };

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import {
   getWfmAutocompleteItems,
   getItemAnalytics,
@@ -26,8 +26,24 @@ import {
   toUnitInterval,
   clampNumber,
 } from './posture';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Select } from '@/components/ui/select';
 import { Metric, MetricGrid } from '@/components/ui/metric';
-import { Skeleton } from '@/components/ui/skeleton';
+import { ItemThumb } from '../../components/ListRow';
+import { MarketChip, MarketStatus, SignalMeter, SlopeCard } from './parts';
+
+/** Action-card tone → the accent it earns. `buy` is an opportunity, `avoid` is a loss risk. */
+const ACTION_TONE: Record<string, string> = {
+  positive: 'text-accent-green',
+  green: 'text-accent-green',
+  negative: 'text-accent-red',
+  red: 'text-accent-red',
+  amber: 'text-accent-amber',
+  warning: 'text-accent-amber',
+  blue: 'text-accent-blue',
+  neutral: 'text-ink',
+};
+import { SKELETON_PULSE, Skeleton } from '@/components/ui/skeleton';
 import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { InfoHint } from '../../components/InfoHint';
 import { PageHeading } from '../../components/PageHeading';
@@ -77,20 +93,38 @@ type ChartMode = 'line' | 'candlestick';
  * so it greyed out the range/bucket selects and the series toggles — controls that are usable
  * while the chart loads, and that you often want to change *because* it is loading.
  */
+/**
+ * A chart-shaped placeholder — gridlines, an area and a line.
+ *
+ * Deliberately **not** built on `Skeleton`: that primitive composes rectangles, and no arrangement
+ * of rectangles reads as a line chart (`ELEMENTS.md` §3 records this as the one sanctioned
+ * exception). It pulses on the same 2s cycle so it belongs to the same family.
+ */
 function ChartSkeleton() {
   return (
-    <div className="market-chart-skeleton" aria-hidden="true">
-      <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="market-chart-skeleton-svg">
+    <div className={`h-[404px] w-full px-2 py-3 ${SKELETON_PULSE}`} aria-hidden="true">
+      <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="size-full">
         {[8, 16, 24, 32].map((y) => (
-          <line key={y} x1="0" y1={y} x2="100" y2={y} className="market-chart-skeleton-grid" />
+          <line
+            key={y}
+            x1="0"
+            y1={y}
+            x2="100"
+            y2={y}
+            stroke="var(--color-line)"
+            strokeWidth={0.3}
+          />
         ))}
         <path
           d="M0 30 L12 26 L24 28 L36 18 L48 21 L60 12 L72 15 L84 8 L100 11 L100 40 L0 40 Z"
-          className="market-chart-skeleton-area"
+          fill="var(--color-bg-elevated)"
         />
         <path
           d="M0 30 L12 26 L24 28 L36 18 L48 21 L60 12 L72 15 L84 8 L100 11"
-          className="market-chart-skeleton-line"
+          fill="none"
+          stroke="var(--color-line-strong)"
+          strokeWidth={0.6}
+          vectorEffect="non-scaling-stroke"
         />
       </svg>
     </div>
@@ -124,7 +158,8 @@ interface MockBucketPoint {
 interface ChartSeriesOption {
   key: ChartSeriesKey;
   label: TranslationKey;
-  colorClass: string;
+  /** A `var(--color-chart-*)` reference, passed straight to SVG `stroke`/`fill`. */
+  color: string;
 }
 
 
@@ -155,13 +190,27 @@ const BUCKET_OPTIONS_BY_DOMAIN: Record<ChartDomainKey, ChartBucketKey[]> = {
   '90d': ['24h', '7d', '14d'],
 };
 
+/**
+ * **This is also a bug fix.** Each series used to carry a `colorClass` rendered as
+ * `market-chart-line-${colorClass}` and `market-chart-marker-${colorClass}` — and **none of those
+ * classes exist in `legacy.css`.** `.market-chart-line` set `fill: none; stroke-width: 3` and no
+ * `stroke`, and SVG's initial stroke is `none`, so **every price line was drawing invisibly**; the
+ * markers had no `fill` either, so they fell back to black on a near-black panel. The chart has
+ * been rendering its gridlines, bands, candles and volume bars over an empty plot.
+ *
+ * Colours are now a value on the series, passed straight to the SVG attribute, so a series cannot
+ * exist without one.
+ */
+/** The toolbar's field labels — mono micro-caps, matching every other label on this page. */
+const CHART_LABEL = 'font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase';
+
 const SERIES_OPTIONS: ChartSeriesOption[] = [
-  { key: 'median', label: 'mkt.median', colorClass: 'secondary' },
-  { key: 'lowest', label: 'mkt.lowest', colorClass: 'primary' },
-  { key: 'movingAverage', label: 'mkt.sma', colorClass: 'moving' },
-  { key: 'average', label: 'mkt.series.avgPrice', colorClass: 'average' },
-  { key: 'entryZone', label: 'mkt.entryZone', colorClass: 'entry' },
-  { key: 'exitZone', label: 'mkt.exitZone', colorClass: 'exit' },
+  { key: 'median', label: 'mkt.median', color: 'var(--color-chart-median)' },
+  { key: 'lowest', label: 'mkt.lowest', color: 'var(--color-chart-lowest)' },
+  { key: 'movingAverage', label: 'mkt.sma', color: 'var(--color-chart-sma)' },
+  { key: 'average', label: 'mkt.series.avgPrice', color: 'var(--color-chart-average)' },
+  { key: 'entryZone', label: 'mkt.entryZone', color: 'var(--color-chart-entry)' },
+  { key: 'exitZone', label: 'mkt.exitZone', color: 'var(--color-chart-exit)' },
 ];
 
 const DEFAULT_SERIES_TOGGLES: Record<ChartSeriesKey, boolean> = {
@@ -220,7 +269,7 @@ function renderStatHighlightLine(line: string): ReactNode {
           {segment.text}
         </span>
       ) : (
-        <span key={`${keyPrefix}-${index}`} className="market-detail-highlight-copy">
+        <span key={`${keyPrefix}-${index}`} className="text-ink-dim">
           {segment.text}
         </span>
       ),
@@ -238,7 +287,7 @@ function renderStatHighlightLine(line: string): ReactNode {
   return (
     <>
       {label ? renderSegments(label, 'label') : null}
-      <span className="market-detail-highlight-change">{changedText}</span>
+      <span className="font-semibold text-accent-blue">{changedText}</span>
       {suffix ? renderSegments(suffix, 'suffix') : null}
     </>
   );
@@ -464,90 +513,114 @@ function StaticAnalyticsChart({
   }
 
   return (
-    <div className="card market-chart-stack">
-      <div className="card-header">
-        <div className="market-chart-header">
-          <div className="market-chart-header-copy">
-            <span className="panel-title-eyebrow">{t('market.priceChart')}</span>
-            <span className="card-label market-panel-title-row">
-              <span>{itemName}</span>
-              <InfoHint text={t('mki.chart')} />
-            </span>
-          </div>
-          <div className="market-chart-select-row">
-            <label className="market-toolbar-group">
-              <span className="market-toolbar-label">{t('market.toolbar.range')}</span>
-              <select
-                className="market-variant-select"
-                value={domain}
-                onChange={(event) => onDomainChange(event.target.value as ChartDomainKey)}
+    <Panel className="gap-0">
+      <PanelHeader className="min-h-0 flex-wrap gap-3 border-b-0 px-4 pt-4 pb-0">
+        {/* No eyebrow — the panel's title is the noun, with nothing above it. This one still
+            carried "Price chart" over the item name. */}
+        <PanelTitle variant="heading" className="flex items-center gap-1.5">
+          <span className="truncate">{itemName}</span>
+          <InfoHint text={t('mki.chart')} />
+        </PanelTitle>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5">
+            <span className={CHART_LABEL}>{t('market.toolbar.range')}</span>
+            <Select
+              className="h-7 w-24"
+              value={domain}
+              onChange={(event) => onDomainChange(event.target.value as ChartDomainKey)}
+            >
+              {DOMAIN_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {t(option.label as TranslationKey)}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <label className="flex items-center gap-1.5">
+            <span className={CHART_LABEL}>{t('market.toolbar.bucket')}</span>
+            <Select
+              className="h-7 w-20"
+              value={bucket}
+              onChange={(event) => onBucketChange(event.target.value as ChartBucketKey)}
+            >
+              {bucketOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </Select>
+          </label>
+          {/* The segmented group from the watchlist rows — the app's one treatment for a
+              two-option mode switch. */}
+          <div className="flex items-center gap-0.5 rounded-md bg-bg-base p-0.5" role="group">
+            {(
+              [
+                ['line', t('mkt.chartModeLine')],
+                ['candlestick', t('mkt.chartModeCandles')],
+              ] as const
+            ).map(([mode, label]) => (
+              <Button
+                key={mode}
+                variant="ghost"
+                size="sm"
+                static
+                aria-pressed={chartMode === mode}
+                onClick={() => setChartMode(mode)}
+                className={`h-6 rounded-sm px-2 text-[11px] ${
+                  chartMode === mode ? 'bg-bg-elevated text-ink' : 'text-ink-dim hover:text-ink'
+                }`}
               >
-                {DOMAIN_OPTIONS.map((option) => (
-                  <option key={option.key} value={option.key}>
-                    {t(option.label as TranslationKey)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="market-toolbar-group">
-              <span className="market-toolbar-label">{t('market.toolbar.bucket')}</span>
-              <select
-                className="market-variant-select"
-                value={bucket}
-                onChange={(event) => onBucketChange(event.target.value as ChartBucketKey)}
-              >
-                {bucketOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="market-chart-mode-row">
-              <button
-                className={`market-mode-chip${chartMode === 'line' ? ' active' : ''}`}
-                type="button"
-                onClick={() => setChartMode('line')}
-              >
-                Line
-              </button>
-              <button
-                className={`market-mode-chip${chartMode === 'candlestick' ? ' active' : ''}`}
-                type="button"
-                onClick={() => setChartMode('candlestick')}
-              >
-                Candles
-              </button>
-            </div>
+                {label}
+              </Button>
+            ))}
           </div>
         </div>
-      </div>
-      <div className="card-body market-panel-body">
-        <div className="market-chart-card">
-          <div className="market-chart-toolbar">
-            {/* The static O/H/L/C strip is gone. Only candlestick mode has open/high/low/close,
-                so in the default line view it rendered "O — H — L — C — — (—)" permanently, and
-                the hover readout already gives those four per point in candle mode. */}
-            <div className="market-toggle-row">
-              {SERIES_OPTIONS.map((option) => (
-                <button
+      </PanelHeader>
+      <div className="flex min-w-0 flex-col gap-3 p-4">
+        <div className="flex min-w-0 flex-col gap-2">
+          {/* The static O/H/L/C strip is gone. Only candlestick mode has open/high/low/close,
+              so in the default line view it rendered "O — H — L — C — — (—)" permanently, and
+              the hover readout already gives those four per point in candle mode. */}
+          {/* Legend and control in one: the swatch IS the series colour, so toggling a series
+              off dims the chip that names it. An off series keeps its swatch at low opacity
+              rather than losing it, so the legend never changes width. */}
+          <div className="flex flex-wrap items-center gap-1">
+            {SERIES_OPTIONS.map((option) => {
+              const on = seriesToggles[option.key];
+              return (
+                <Button
                   key={option.key}
-                  className={`market-chart-toggle${seriesToggles[option.key] ? ' active' : ''}`}
-                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  static
+                  aria-pressed={on}
                   onClick={() => toggleSeries(option.key)}
+                  className={`h-6 gap-1.5 rounded px-1.5 text-[11px] ${
+                    on ? 'text-ink' : 'text-ink-faint hover:text-ink-dim'
+                  }`}
                 >
-                  <span className={`legend-swatch ${option.colorClass}`} />
+                  <span
+                    className="size-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: option.color, opacity: on ? 1 : 0.35 }}
+                    aria-hidden="true"
+                  />
                   {t(option.label)}
-                </button>
-              ))}
-            </div>
+                </Button>
+              );
+            })}
           </div>
 
-          <div className="market-chart-surface">
-            <div className="market-chart-y-axis">
+          {/* 66px axis gutter + the plot. `min-h` matches the SVG's fixed 404px so the surface
+              does not resize between the skeleton, an error and real data. */}
+          <div className="grid min-h-[404px] items-stretch gap-2.5 rounded-lg border border-line bg-bg-base p-3 [grid-template-columns:66px_1fr]">
+            <div className="relative font-mono text-[11px] text-ink-dim">
+              {/* Each tick is absolutely positioned at the exact fraction of its matching SVG
+                  gridline, so labels track the lines however the chart stretches. */}
               {tickValues.map((value, index) => (
                 <span
                   key={value}
+                  className="absolute right-0 -translate-y-1/2 whitespace-nowrap tabular-nums"
                   style={{
                     top: `${((index / 4) * pricePlotHeight) / (totalPlotHeight + xAxisHeight) * 100}%`,
                   }}
@@ -559,43 +632,60 @@ function StaticAnalyticsChart({
             {chartLoading ? (
               <ChartSkeleton />
             ) : errorMessage ? (
-              <div className="market-chart-status is-error">{errorMessage}</div>
+              <p className="grid place-items-center text-center text-[11px] text-accent-red">
+                {errorMessage}
+              </p>
             ) : points.length === 0 ? (
-              <div className="market-chart-status">{t('mkt.noChartHistory')}</div>
+              <p className="grid place-items-center text-center text-[11px] text-ink-dim">
+                {t('mkt.noChartHistory')}
+              </p>
             ) : (
-              <div className="market-chart-plot-wrap">
+              <div className="relative min-w-0">
                 {activePoint ? (
+                  // Flips to whichever side the cursor is NOT on, so the readout never covers
+                  // the point it describes. `bg-overlay` because it floats above the plot —
+                  // `bg-elevated` is 1.04:1 against a panel and would not read as a layer.
                   <div
-                    className={`market-chart-hover-card${hoverCardOnRight ? ' is-right' : ' is-left'}`}
+                    className={`pointer-events-none absolute top-3 z-(--z-raised) grid gap-2 rounded-lg border border-white/12 bg-bg-overlay p-3 shadow-float ${
+                      hoverCardOnRight ? 'right-3' : 'left-3'
+                    }`}
                   >
-                    <div className="market-chart-hover-header">
-                      <span className="market-chart-hover-label">{t('mkt.hoveredBucket')}</span>
-                      <span className="market-chart-hover-time">{formatChartTimestamp(activePoint.timestamp, domain)}</span>
+                    <div className="grid gap-0.5">
+                      <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                        {t('mkt.hoveredBucket')}
+                      </span>
+                      <span className="font-mono text-[11px] text-ink">
+                        {formatChartTimestamp(activePoint.timestamp, domain)}
+                      </span>
                     </div>
-                    <div className="market-chart-hover-section">
-                      <span className="market-chart-hover-section-title">{t('mkt.market')}</span>
-                      <div className="market-chart-hover-rows">
-                        <span className="market-chart-hover-row"><span>{t('mkt.lowest')}</span><span>{formatPrice(activePoint.lowest)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.highest')}</span><span>{formatPrice(activePoint.high)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.median')}</span><span>{formatPrice(activePoint.median)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.average')}</span><span>{formatPrice(activePoint.average)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.volume')}</span><span>{formatNumber(activePoint.volume, 0)}</span></span>
+                    <div className="grid gap-1">
+                      <span className="font-mono text-[9px] tracking-[0.07em] text-ink-faint uppercase">
+                        {t('mkt.market')}
+                      </span>
+                      <div className="grid gap-0.5">
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.lowest')}</span><span>{formatPrice(activePoint.lowest)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.highest')}</span><span>{formatPrice(activePoint.high)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.median')}</span><span>{formatPrice(activePoint.median)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.average')}</span><span>{formatPrice(activePoint.average)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.volume')}</span><span>{formatNumber(activePoint.volume, 0)}</span></span>
                       </div>
                     </div>
-                    <div className="market-chart-hover-section">
-                      <span className="market-chart-hover-section-title">{t('mkt.levels')}</span>
-                      <div className="market-chart-hover-rows">
-                        <span className="market-chart-hover-row"><span>{t('mkt.open')}</span><span>{formatPrice(activePoint.open)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.close')}</span><span>{formatPrice(activePoint.close)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.sma')}</span><span>{formatPrice(activePoint.movingAverage)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.entry')}</span><span>{formatPrice(activePoint.entryZone)}</span></span>
-                        <span className="market-chart-hover-row"><span>{t('mkt.exit')}</span><span>{formatPrice(activePoint.exitZone)}</span></span>
+                    <div className="grid gap-1 border-t border-line pt-2">
+                      <span className="font-mono text-[9px] tracking-[0.07em] text-ink-faint uppercase">
+                        {t('mkt.levels')}
+                      </span>
+                      <div className="grid gap-0.5">
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.open')}</span><span>{formatPrice(activePoint.open)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.close')}</span><span>{formatPrice(activePoint.close)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.sma')}</span><span>{formatPrice(activePoint.movingAverage)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.entry')}</span><span>{formatPrice(activePoint.entryZone)}</span></span>
+                        <span className="flex items-baseline justify-between gap-6 font-mono text-[11px] tabular-nums [&>span:first-child]:text-ink-dim [&>span:last-child]:text-ink"><span>{t('mkt.exit')}</span><span>{formatPrice(activePoint.exitZone)}</span></span>
                       </div>
                     </div>
                   </div>
                 ) : null}
                 <svg
-                  className="market-chart-svg"
+                  className="block h-[404px] w-full"
                   viewBox={`0 0 ${plotWidth} ${totalPlotHeight + xAxisHeight}`}
                   preserveAspectRatio="none"
                   aria-label={t('market.graphAria')}
@@ -607,7 +697,8 @@ function StaticAnalyticsChart({
                     return (
                       <line
                         key={`h-${index}`}
-                        className="market-chart-gridline"
+                        stroke="var(--color-line)"
+                        strokeWidth={1}
                         x1="0"
                         y1={y}
                         x2={plotWidth}
@@ -618,15 +709,20 @@ function StaticAnalyticsChart({
                   {xAxisTicks.map((tick, index) => (
                     <line
                       key={`v-${index}`}
-                      className="market-chart-gridline market-chart-gridline-vertical"
+                      stroke="var(--color-line)"
+                      strokeWidth={1}
+                      strokeDasharray="4 6"
                       x1={tick.x}
                       y1="0"
                       x2={tick.x}
                       y2={totalPlotHeight}
                     />
                   ))}
+                  {/* Separates the price plot from the volume histogram beneath it. */}
                   <line
-                    className="market-chart-gridline market-chart-divider"
+                    stroke="var(--color-line-strong)"
+                    strokeWidth={1}
+                    strokeDasharray="6 6"
                     x1="0"
                     y1={volumeTop - 8}
                     x2={plotWidth}
@@ -635,7 +731,9 @@ function StaticAnalyticsChart({
 
                   {seriesToggles.entryZone && entryBand ? (
                     <rect
-                      className="market-chart-band market-chart-band-entry"
+                      fill="color-mix(in srgb, var(--color-chart-entry) 12%, transparent)"
+                      stroke="color-mix(in srgb, var(--color-chart-entry) 42%, transparent)"
+                      strokeWidth={1}
                       x="0"
                       y={entryBand.y}
                       width={plotWidth}
@@ -645,7 +743,9 @@ function StaticAnalyticsChart({
                   ) : null}
                   {seriesToggles.exitZone && exitBand ? (
                     <rect
-                      className="market-chart-band market-chart-band-exit"
+                      fill="color-mix(in srgb, var(--color-chart-exit) 12%, transparent)"
+                      stroke="color-mix(in srgb, var(--color-chart-exit) 42%, transparent)"
+                      strokeWidth={1}
                       x="0"
                       y={exitBand.y}
                       width={plotWidth}
@@ -656,7 +756,9 @@ function StaticAnalyticsChart({
 
                   {activePointX !== null ? (
                     <line
-                      className="market-chart-hover-line"
+                      stroke="color-mix(in srgb, var(--color-accent-blue) 46%, transparent)"
+                      strokeWidth={1.3}
+                      strokeDasharray="5 6"
                       x1={activePointX}
                       y1="0"
                       x2={activePointX}
@@ -689,14 +791,17 @@ function StaticAnalyticsChart({
                         return (
                           <g key={point.timestamp}>
                             <line
-                              className={`market-candle-wick${isUp ? ' is-up' : ' is-down'}${activePointIndex === index ? ' is-active' : ''}`}
+                              stroke={isUp ? 'var(--color-accent-green)' : 'var(--color-accent-red)'}
+                              strokeWidth={activePointIndex === index ? 2 : 1.2}
+                              opacity={activePointIndex === index ? 1 : 0.8}
                               x1={x}
                               y1={highY}
                               x2={x}
                               y2={lowY}
                             />
                             <rect
-                              className={`market-candle-body${isUp ? ' is-up' : ' is-down'}${activePointIndex === index ? ' is-active' : ''}`}
+                              fill={isUp ? 'var(--color-accent-green)' : 'var(--color-accent-red)'}
+                              opacity={activePointIndex === index ? 1 : 0.72}
                               x={x - candleWidth / 2}
                               y={bodyY}
                               width={candleWidth}
@@ -711,7 +816,15 @@ function StaticAnalyticsChart({
                   {visibleLineSeries.map((series) => (
                     <path
                       key={series.key}
-                      className={`market-chart-line market-chart-line-${series.colorClass}`}
+                      fill="none"
+                      stroke={series.color}
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      // `preserveAspectRatio="none"` stretches the viewBox, which would stretch
+                      // the stroke with it. This keeps every series the same visible weight at
+                      // any panel width.
+                      vectorEffect="non-scaling-stroke"
                       d={buildSeriesPath(points, series.key, plotWidth, pricePlotHeight, minValue, maxValue)}
                     />
                   ))}
@@ -729,10 +842,14 @@ function StaticAnalyticsChart({
                         return (
                           <circle
                             key={`${series.key}-${point.timestamp}`}
-                            className={`market-chart-marker market-chart-marker-${series.colorClass}${activePointIndex === index ? ' is-active' : ''}`}
+                            fill={series.color}
+                            // A ring in the panel's own ground, so overlapping markers stay
+                            // countable. They had no `fill` at all before and fell back to black.
+                            stroke="var(--color-bg-panel)"
+                            strokeWidth={activePointIndex === index ? 2.2 : 1.5}
                             cx={x}
                             cy={y}
-                            r={activePointIndex === index ? '5.25' : '3.5'}
+                            r={activePointIndex === index ? 5.25 : 3.5}
                           />
                         );
                       }),
@@ -751,7 +868,9 @@ function StaticAnalyticsChart({
                       return (
                         <circle
                           key={`active-${series.key}-${activePoint.timestamp}`}
-                          className={`market-chart-active-marker market-chart-marker-${series.colorClass}`}
+                          fill={series.color}
+                          stroke="var(--color-bg-panel)"
+                          strokeWidth={2.2}
                           cx={activePointX}
                           cy={renderChartY(value, pricePlotHeight, minValue, maxValue)}
                           r="4.25"
@@ -770,7 +889,8 @@ function StaticAnalyticsChart({
                     return (
                       <rect
                         key={`volume-${point.timestamp}`}
-                        className={`market-volume-bar${isUp ? ' is-up' : ' is-down'}${activePointIndex === index ? ' is-active' : ''}`}
+                        fill={isUp ? 'var(--color-accent-green)' : 'var(--color-accent-red)'}
+                        opacity={activePointIndex === index ? 0.7 : 0.32}
                         x={x}
                         y={totalPlotHeight - height}
                         width={width}
@@ -784,7 +904,7 @@ function StaticAnalyticsChart({
                     tick.timestamp ? (
                       <text
                         key={`x-${index}-${tick.timestamp}`}
-                        className="market-chart-axis-label"
+                        className="fill-ink-dim font-mono text-[11px]"
                         x={tick.x}
                         y={totalPlotHeight + 18}
                         textAnchor={tick.anchor}
@@ -798,14 +918,21 @@ function StaticAnalyticsChart({
             )}
           </div>
 
-          <div className="market-chart-legend market-chart-footer">
-            <span>Median {formatPrice(points[points.length - 1]?.median ?? null)}</span>
-            <span>{t('mkt.lowestPrefix', { price: formatPrice(points[points.length - 1]?.lowest ?? null) })}</span>
-            <span>Volume {formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
+          {/* The latest bucket, so the panel states a current value without needing a hover. */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-ink-dim">
+            <span>
+              {t('mkt.median')} <span className="text-ink">{formatPrice(points[points.length - 1]?.median ?? null)}</span>
+            </span>
+            <span>
+              {t('mkt.lowest')} <span className="text-ink">{formatPrice(points[points.length - 1]?.lowest ?? null)}</span>
+            </span>
+            <span>
+              {t('mkt.volume')} <span className="text-ink">{formatNumber(points[points.length - 1]?.volume ?? null, 0)}</span>
+            </span>
           </div>
         </div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -1388,9 +1515,9 @@ function ConfidenceBadge({
   }
 
   return (
-    <span className={`market-panel-badge tone-${getConfidenceTone(confidence)}`}>
+    <MarketStatus tone={getConfidenceTone(confidence)}>
       {tConfidence(t, confidence)}
-    </span>
+    </MarketStatus>
   );
 }
 
@@ -1404,9 +1531,7 @@ function ConfidenceNote({
   }
 
   return (
-    <div className="market-confidence-note">
-      {confidence.reasons.join(' · ')}
-    </div>
+    <p className="text-[10px] leading-relaxed text-ink-dim">{confidence.reasons.join(' · ')}</p>
   );
 }
 
@@ -1536,15 +1661,18 @@ function EmptyAnalyticsState({
   const resolvedTitle = title ?? t('mkt.emptyReady');
 
   return (
-    <div className="market-empty-state">
-      <span className="empty-primary">{resolvedTitle}</span>
-      <span className="empty-sub">{body}</span>
-      {actionLabel && onAction ? (
-        <button type="button" className="market-empty-state-action" onClick={onAction}>
-          {actionLabel}
-        </button>
-      ) : null}
-    </div>
+    <EmptyState
+      icon="ti-search"
+      title={resolvedTitle}
+      detail={body}
+      action={
+        actionLabel && onAction ? (
+          <Button variant="outline" size="sm" onClick={onAction}>
+            {actionLabel}
+          </Button>
+        ) : null
+      }
+    />
   );
 }
 
@@ -1556,15 +1684,17 @@ function MarketInlineNotice({
   message: string;
 }) {
   return (
-    <div
-      className={
+    <p
+      role="alert"
+      className={`flex items-start gap-2 rounded-md border px-2.5 py-2 text-[11px] leading-relaxed ${
         tone === 'warning'
-          ? 'settings-inline-warning market-inline-notice'
-          : 'settings-inline-error market-inline-notice'
-      }
+          ? 'border-accent-amber/25 bg-accent-amber/8 text-accent-amber'
+          : 'border-accent-red/25 bg-accent-red/8 text-accent-red'
+      }`}
     >
-      {message}
-    </div>
+      <i className="ti ti-alert-triangle mt-px shrink-0 text-sm" aria-hidden="true" />
+      <span className="min-w-0 flex-1">{message}</span>
+    </p>
   );
 }
 
@@ -1842,7 +1972,7 @@ function AnalyticsTab() {
   }
 
   return (
-    <div ref={pageContentRef} className="page-content market-page-content">
+    <div ref={pageContentRef} className="page-content flex flex-col gap-5 [&>*]:shrink-0">
       {errorMessage && analytics ? (
         <MarketInlineNotice tone="warning" message={errorMessage} />
       ) : null}
@@ -1904,19 +2034,19 @@ function AnalyticsTab() {
                 />
                 <Metric label={t('mkt.zoneQuality')} value={tHealth(t, analytics?.entryExitZoneOverview.zoneQuality) || '—'} />
               </MetricGrid>
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.entryZone')}</span>
-                <span>
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.entryZone')}</span>
+                <span className="font-mono text-sm font-semibold tabular-nums text-ink">
                   {formatPrice(analytics?.entryExitZoneOverview.entryZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.entryZoneHigh)}
                 </span>
-                <p>{tEntryRationale(t, analytics?.entryExitZoneOverview.entryRationale, analytics?.entryExitZoneOverview.confidenceSummary) || '—'}</p>
+                <p className="text-[11px] leading-relaxed text-ink-dim">{tEntryRationale(t, analytics?.entryExitZoneOverview.entryRationale, analytics?.entryExitZoneOverview.confidenceSummary) || '—'}</p>
               </div>
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.exitZone')}</span>
-                <span>
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.exitZone')}</span>
+                <span className="font-mono text-sm font-semibold tabular-nums text-ink">
                   {formatPrice(analytics?.entryExitZoneOverview.exitZoneLow)} - {formatPrice(analytics?.entryExitZoneOverview.exitZoneHigh)}
                 </span>
-                <p>{tExitRationale(t, analytics?.entryExitZoneOverview.exitRationale, analytics?.entryExitZoneOverview.confidenceSummary) || '—'}</p>
+                <p className="text-[11px] leading-relaxed text-ink-dim">{tExitRationale(t, analytics?.entryExitZoneOverview.exitRationale, analytics?.entryExitZoneOverview.confidenceSummary) || '—'}</p>
               </div>
               <ConfidenceNote confidence={analytics?.entryExitZoneOverview.confidenceSummary} />
             </AnalyticsPanel>
@@ -1937,20 +2067,10 @@ function AnalyticsTab() {
                 />
                 <Metric label={t('mkt.pressure')} value={tHealth(t, analytics?.orderbookPressure.pressureLabel) || '—'} />
               </MetricGrid>
-              <div className="market-pressure-row">
-                <div>
-                  <span className="market-copy-title">{t('mkt.entryDepth')}</span>
-                  <span>{t('mkt.visibleQuantity', { n: formatNumber(analytics?.orderbookPressure.entryDepth, 0) })}</span>
-                </div>
-                <div>
-                  <span className="market-copy-title">{t('mkt.exitDepth')}</span>
-                  <span>{t('mkt.visibleQuantity', { n: formatNumber(analytics?.orderbookPressure.exitDepth, 0) })}</span>
-                </div>
-                <div>
-                  <span className="market-copy-title">{t('mkt.pressureRatio')}</span>
-                  <span>{formatNumber(analytics?.orderbookPressure.pressureRatio, 2)}</span>
-                </div>
-              </div>
+              <MetricGrid columns={3}>
+                <Metric label={t('mkt.entryDepth')} value={t('mkt.visibleQuantity', { n: formatNumber(analytics?.orderbookPressure.entryDepth, 0) })} />
+                <Metric label={t('mkt.exitDepth')} value={t('mkt.visibleQuantity', { n: formatNumber(analytics?.orderbookPressure.exitDepth, 0) })} />
+              </MetricGrid>
               <ConfidenceNote confidence={analytics?.orderbookPressure.confidenceSummary} />
             </AnalyticsPanel>
 
@@ -1961,16 +2081,27 @@ function AnalyticsTab() {
               errorMessage={analyticsPanelError}
               headerAside={<ConfidenceBadge confidence={analytics?.trendQualityBreakdown.confidenceSummary} />}
             >
-              <div className="market-tab-row">
+              {/* The segmented group, same as the chart's mode switch — this page had two
+                  different treatments for "pick one of N". */}
+              <div className="flex items-center gap-0.5 self-start rounded-md bg-bg-base p-0.5" role="group">
                 {(['lowestSell', 'medianSell', 'weightedAvg'] as const).map((key) => (
-                  <button
+                  <Button
                     key={key}
-                    className={`market-chip${trendTab === key ? ' active' : ''}`}
-                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    static
+                    aria-pressed={trendTab === key}
                     onClick={() => setTrendTab(key)}
+                    className={`h-6 rounded-sm px-2 text-[11px] ${
+                      trendTab === key ? 'bg-bg-elevated text-ink' : 'text-ink-dim hover:text-ink'
+                    }`}
                   >
-                    {key === 'lowestSell' ? t('mkt.trend.lowestSell') : key === 'medianSell' ? t('mkt.trend.medianLowest') : t('mkt.trend.weightedAvg')}
-                  </button>
+                    {key === 'lowestSell'
+                      ? t('mkt.trend.lowestSell')
+                      : key === 'medianSell'
+                        ? t('mkt.trend.medianLowest')
+                        : t('mkt.trend.weightedAvg')}
+                  </Button>
                 ))}
               </div>
               <MetricGrid>
@@ -1979,33 +2110,24 @@ function AnalyticsTab() {
                 <Metric label={t('mkt.slope6h')} value={formatPercent(trendMetrics?.slope6h)} />
                 <Metric label={t('mkt.confidence')} value={formatPercent(trendMetrics?.confidence)} />
               </MetricGrid>
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.crossSignal')}</span>
-                <p>{tHealth(t, trendMetrics?.crossSignal) || '—'}</p>
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.crossSignal')}</span>
+                <p className="text-[11px] leading-relaxed text-ink-soft">{tHealth(t, trendMetrics?.crossSignal) || '—'}</p>
               </div>
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.reversal')}</span>
-                <p>{tHealth(t, trendMetrics?.reversal) || '—'}</p>
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.reversal')}</span>
+                <p className="text-[11px] leading-relaxed text-ink-soft">{tHealth(t, trendMetrics?.reversal) || '—'}</p>
               </div>
-              <div className="market-signal-list">
+              <div className="flex flex-wrap gap-1">
                 {(trendMetrics?.confirmingSignals ?? []).map((signal) => (
-                  <span key={signal} className="market-signal-pill">{tHealth(t, signal)}</span>
+                  <MarketChip key={signal} tone="blue">{tHealth(t, signal)}</MarketChip>
                 ))}
               </div>
-              <div className="market-pressure-row">
-                <div>
-                  <span className="market-copy-title">{t('mkt.stability')}</span>
-                  <span>{formatPercent(analytics?.trendQualityBreakdown.stability)}</span>
-                </div>
-                <div>
-                  <span className="market-copy-title">{t('mkt.volatility')}</span>
-                  <span>{formatPercent(analytics?.trendQualityBreakdown.volatility)}</span>
-                </div>
-                <div>
-                  <span className="market-copy-title">{t('mkt.noise')}</span>
-                  <span>{formatPercent(analytics?.trendQualityBreakdown.noise)}</span>
-                </div>
-              </div>
+              <MetricGrid columns={3}>
+                <Metric label={t('mkt.stability')} value={formatPercent(analytics?.trendQualityBreakdown.stability)} />
+                <Metric label={t('mkt.volatility')} value={formatPercent(analytics?.trendQualityBreakdown.volatility)} />
+                <Metric label={t('mkt.noise')} value={formatPercent(analytics?.trendQualityBreakdown.noise)} />
+              </MetricGrid>
               <ConfidenceNote confidence={analytics?.trendQualityBreakdown.confidenceSummary} />
             </AnalyticsPanel>
 
@@ -2016,10 +2138,20 @@ function AnalyticsTab() {
               errorMessage={analyticsPanelError}
               headerAside={<ConfidenceBadge confidence={analytics?.actionCard.confidenceSummary} />}
             >
-              <div className={`market-action-card tone-${analytics?.actionCard.tone ?? 'neutral'}`}>
-                <div className="market-action-header">
-                  <span className="market-action-label">{t('mkt.suggestedAction')}</span>
-                  <span className="market-action-value">{tHealth(t, analytics?.actionCard.suggestedAction) || '—'}</span>
+              {/* The panel already frames this; the card inside it was a second frame. What is
+                  left is the recommendation stated once, at a size that says it is the answer. */}
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1">
+                  <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                    {t('mkt.suggestedAction')}
+                  </span>
+                  <span
+                    className={`font-mono text-lg font-bold ${
+                      ACTION_TONE[analytics?.actionCard.tone ?? 'neutral'] ?? 'text-ink'
+                    }`}
+                  >
+                    {tHealth(t, analytics?.actionCard.suggestedAction) || '—'}
+                  </span>
                 </div>
                 <MetricGrid>
                   <Metric label={t('mkt.zoneQuality')} value={tHealth(t, analytics?.actionCard.zoneQuality) || '—'} />
@@ -2030,10 +2162,12 @@ function AnalyticsTab() {
                   />
                   <Metric label={t('mkt.bookBias')} value={tHealth(t, analytics?.actionCard.pressureLabel) || '—'} />
                 </MetricGrid>
-                <p className="market-action-rationale">{tActionRationale(t, analytics?.actionCard.rationale, analytics?.actionCard.confidenceSummary) || '—'}</p>
-                <div className="market-signal-list">
+                <p className="text-[11px] leading-relaxed text-ink-soft">
+                  {tActionRationale(t, analytics?.actionCard.rationale, analytics?.actionCard.confidenceSummary) || '—'}
+                </p>
+                <div className="flex flex-wrap gap-1">
                   {(analytics?.actionCard.alignedSignals ?? []).map((signal) => (
-                    <span key={signal} className="market-signal-pill">{tHealth(t, signal)}</span>
+                    <MarketChip key={signal} tone="green">{tHealth(t, signal)}</MarketChip>
                   ))}
                 </div>
                 <ConfidenceNote confidence={analytics?.actionCard.confidenceSummary} />
@@ -2072,8 +2206,18 @@ function ActionCardTrackRecord({
     stats.medianReturnPct >= 5 ? 'green' : stats.medianReturnPct >= 0 ? 'amber' : 'red';
 
   return (
-    <div className={`market-track-record tone-${tone}`}>
-      <span className="market-track-record-label">{t('mkt.trackRecord')}</span>
+    <div
+      className={`flex flex-col gap-1 rounded-md border px-2.5 py-2 text-[11px] leading-relaxed ${
+        tone === 'green'
+          ? 'border-accent-green/25 bg-accent-green/8 text-accent-green'
+          : tone === 'amber'
+            ? 'border-accent-amber/25 bg-accent-amber/8 text-accent-amber'
+            : 'border-accent-red/25 bg-accent-red/8 text-accent-red'
+      }`}
+    >
+      <span className="font-mono text-[9px] font-semibold tracking-[0.07em] uppercase opacity-80">
+        {t('mkt.trackRecord')}
+      </span>
       <span>
         {`${action} signals here: ${hitPct}% hit rate, median ${returnSign}${stats.medianReturnPct.toFixed(1)}%${dayNote} (${stats.tradeCount} graded trades)`}
       </span>
@@ -2271,7 +2415,7 @@ function AnalysisTab() {
     itemDetailsError && effectiveItemDetails ? itemDetailsError : null;
 
   return (
-    <div ref={pageContentRef} className="page-content market-page-content">
+    <div ref={pageContentRef} className="page-content flex flex-col gap-5 [&>*]:shrink-0">
       {analysisError && !analysis && !analysisLoading ? (
         <EmptyAnalyticsState
           title={t('a11y.analysisFailed')}
@@ -2326,7 +2470,7 @@ function AnalysisTab() {
           </div>
         </ErrorBoundary>
 
-        <div className="market-item-details-cell xl:col-span-2">
+        <div className="relative min-w-0 xl:col-span-2">
 <AnalyticsPanel
                 title={t('a11y.itemDetails')}
                 info={t('mki.reference')}
@@ -2334,46 +2478,47 @@ function AnalysisTab() {
                   !selectedItem ? 'idle' : effectiveItemDetails ? 'ready' : 'loading'
                 }
                 errorMessage={effectiveItemDetails ? null : itemDetailsError}
-                className="market-panel-tone-neutral market-item-details-panel"
+                className="absolute inset-0"
                 headerAside={
                   effectiveItemDetails?.category ? (
-                    <div className="market-badge-stack">
-                      <span className="market-panel-badge tone-neutral">{effectiveItemDetails.category}</span>
+                    <div className="flex items-center gap-2">
+                      <MarketStatus>{effectiveItemDetails.category}</MarketStatus>
                     </div>
                   ) : null
                 }
               >
-                <div className="market-item-detail-card">
-                  {itemImageUrl ? (
-                    <img
-                      className="market-item-detail-image"
-                      src={itemImageUrl}
-                      alt={effectiveItemDetails?.name ?? selectedItem?.name ?? ''}
-                    />
-                  ) : (
-                    <div className="market-item-detail-image placeholder" />
-                  )}
-                  <div className="market-item-detail-copy">
-                    <span className="market-item-detail-name">{effectiveItemDetails?.name ?? selectedItem?.name ?? '—'}</span>
+                <div className="flex min-w-0 items-center gap-3">
+                  <ItemThumb
+                    src={itemImageUrl ?? null}
+                    fallback={(effectiveItemDetails?.name ?? selectedItem?.name ?? '?').slice(0, 1)}
+                    size="size-12"
+                  />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="truncate text-sm font-semibold text-ink">
+                      {effectiveItemDetails?.name ?? selectedItem?.name ?? '—'}
+                    </span>
                     {effectiveItemDetails?.wikiLink ? (
-                      <button
-                        type="button"
-                        className="market-item-detail-link"
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        static
+                        className="-ml-1.5 h-6 self-start px-1.5 text-[11px] text-accent-blue hover:bg-accent-blue/10 hover:text-accent-blue"
                         onClick={() => {
                           void handleOpenExternalLink(effectiveItemDetails.wikiLink);
                         }}
                       >
-                        Open Wiki
-                    </button>
+                        <i className="ti ti-external-link" aria-hidden="true" />
+                        {t('mkt.openWiki')}
+                      </Button>
                     ) : null}
                   </div>
                 </div>
                 {effectiveItemDetails?.description ? (
-                  <div className="market-copy-block">
-                    <span className="market-copy-title">{t('mkt.description')}</span>
-                    <p>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.description')}</span>
+                    <p className="text-[11px] leading-relaxed text-ink-soft">
                       {parseWarframeMarkupLines(effectiveItemDetails.description).map((line, lineIndex) => (
-                        <span key={lineIndex} className="market-detail-description-line">
+                        <span key={lineIndex} className="block">
                           {line.map((segment, segmentIndex) =>
                             segment.color ? (
                               <span key={segmentIndex} style={{ color: segment.color }}>
@@ -2389,15 +2534,13 @@ function AnalysisTab() {
                   </div>
                 ) : null}
                 {(effectiveItemDetails?.statHighlights.length ?? 0) > 0 ? (
-                  <div className="market-copy-block">
-                    <span className="market-copy-title">
-                      {effectiveItemDetails?.rankScaleLabel ?? t('mkt.rankScaling')}
-                    </span>
-                    <div className="market-detail-highlight-list">
+                  <div className="flex flex-col gap-1.5">
+                    <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{effectiveItemDetails?.rankScaleLabel ?? t('mkt.rankScaling')}</span>
+                    <div className="flex flex-col gap-1.5">
                       {(effectiveItemDetails?.statHighlights ?? []).map((line) => (
-                        <div key={line} className="market-detail-highlight">
+                        <div key={line} className="flex flex-col gap-0.5 rounded-sm bg-bg-base px-2 py-1.5 text-[11px] text-ink-soft">
                           {splitWarframeMarkupLines(line).map((segment, segmentIndex) => (
-                            <div key={`${line}-${segmentIndex}`} className="market-detail-highlight-line">
+                            <div key={`${line}-${segmentIndex}`} className="flex items-baseline justify-between gap-2 tabular-nums">
                               {renderStatHighlightLine(segment)}
                             </div>
                           ))}
@@ -2406,15 +2549,20 @@ function AnalysisTab() {
                     </div>
                   </div>
                 ) : null}
-                <div className="market-detail-section-list">
+                <div className="flex flex-col gap-3">
                   {itemDetailSections.map((section) => (
-                    <div key={section.title} className="market-detail-section">
-                      <span className="market-copy-title">{section.title}</span>
-                      <div className="market-detail-grid">
+                    <div key={section.title} className="flex flex-col gap-1.5">
+                      <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{section.title}</span>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                         {section.fields.map((field) => (
-                          <div key={`${section.title}-${field.label}-${field.value}`}>
-                            <span className="market-copy-title">{field.label}</span>
-                            <span>{field.value}</span>
+                          <div
+                            key={`${section.title}-${field.label}-${field.value}`}
+                            className="flex min-w-0 flex-col gap-0.5"
+                          >
+                            <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{field.label}</span>
+                            <span className="truncate font-mono text-[11px] tabular-nums text-ink">
+                              {field.value}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -2440,12 +2588,11 @@ function AnalysisTab() {
             info={t('mki.flip')}
             phase={analysisPhase}
             errorMessage={analysisError}
-            className="market-panel-tone-blue"
             headerAside={
-              <div className="market-badge-stack">
-                <span className="market-panel-badge tone-blue">
+              <div className="flex items-center gap-2">
+                <MarketStatus tone="blue">
                   {tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || t('trades.row.building')}
-                </span>
+                </MarketStatus>
                 <ConfidenceBadge confidence={analysis?.flipAnalysis.confidenceSummary} />
               </div>
             }
@@ -2467,12 +2614,11 @@ function AnalysisTab() {
             info={t('mki.trendSummary')}
             phase={analysisPhase}
             errorMessage={analysisError}
-            className={`market-panel-tone-${getTrendTone(analysis?.trend.direction)}`}
             headerAside={
-              <div className="market-badge-stack">
-                <span className={`market-panel-badge tone-${getTrendTone(analysis?.trend.direction)}`}>
+              <div className="flex items-center gap-2">
+                <MarketStatus tone={getTrendTone(analysis?.trend.direction)}>
                   {tHealth(t, analysis?.trend.direction) || t('trades.row.building')}
-                </span>
+                </MarketStatus>
                 <ConfidenceBadge confidence={analysis?.trend.confidenceSummary} />
               </div>
             }
@@ -2480,35 +2626,32 @@ function AnalysisTab() {
             <MetricGrid>
               <Metric label={t('mkt.direction')} value={tHealth(t, analysis?.trend.direction) || '—'} />
               <Metric label={t('mkt.confidence')} value={formatPercent(analysis?.trend.confidence)} />
-              <Metric label={t('mkt.slope1h')} value={formatPercent(analysis?.trend.slope1h)} />
-              <Metric label={t('mkt.slope3h')} value={formatPercent(analysis?.trend.slope3h)} />
-              <Metric label={t('mkt.slope6h')} value={formatPercent(analysis?.trend.slope6h)} />
             </MetricGrid>
-            <div className="market-slope-grid">
+            {/* The three slopes were in the grid above and again as cards below — stated twice.
+                The cards win: a slope is a signed magnitude, and the bar is what makes 1H vs 6H
+                comparable at a glance. */}
+            <div className="grid grid-cols-3 gap-2">
               {[
                 { label: '1H', value: analysis?.trend.slope1h ?? null },
                 { label: '3H', value: analysis?.trend.slope3h ?? null },
                 { label: '6H', value: analysis?.trend.slope6h ?? null },
               ].map((slope) => (
-                <div key={slope.label} className="market-slope-card">
-                  <div className="market-slope-head">
-                    <span className="market-copy-title">{slope.label} Slope</span>
-                    <span className={`market-slope-value${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}>
-                      {formatPercent(slope.value)}
-                    </span>
-                  </div>
-                  <div className="market-slope-track">
-                    <div
-                      className={`market-slope-fill${(slope.value ?? 0) >= 0 ? ' is-up' : ' is-down'}`}
-                      style={{ '--slope-fill': `${Math.round(slopeToUnitInterval(slope.value) * 100)}%` } as CSSProperties}
-                    />
-                  </div>
-                </div>
+                <SlopeCard
+                  key={slope.label}
+                  label={t('mkt.slopeLabel', { window: slope.label })}
+                  value={formatPercent(slope.value)}
+                  magnitude={slopeToUnitInterval(slope.value)}
+                  positive={(slope.value ?? 0) >= 0}
+                />
               ))}
             </div>
-            <div className="market-copy-block">
-              <span className="market-copy-title">{t('mkt.summary')}</span>
-              <p>{analysis ? tTrendSummary(t, analysis.trend) : '—'}</p>
+            <div className="flex flex-col gap-1">
+              <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                {t('mkt.summary')}
+              </span>
+              <p className="text-[11px] leading-relaxed text-ink-soft">
+                {analysis ? tTrendSummary(t, analysis.trend) : '—'}
+              </p>
             </div>
             <ConfidenceNote confidence={analysis?.trend.confidenceSummary} />
           </AnalyticsPanel>
@@ -2517,39 +2660,26 @@ function AnalysisTab() {
             info={t('mki.timeOfDay')}
             phase={analysisPhase}
             errorMessage={analysisError}
-              className="market-panel-tone-blue"
               headerAside={
-                <div className="market-badge-stack">
-                  <span className="market-panel-badge tone-blue">
+                <div className="flex items-center gap-2">
+                  <MarketStatus tone="blue">
                     {timeOfDayDisplay.todayBestLabels[0] ?? t('trades.row.building')}
-                  </span>
+                  </MarketStatus>
                   <ConfidenceBadge confidence={analysis?.timeOfDayLiquidity.confidenceSummary} />
                 </div>
               }
             >
-            <div className="market-pressure-row">
-              <div>
-                <span className="market-copy-title">{t('mkt.bestWindowsToday')}</span>
-                <span>
-                  {timeOfDayDisplay.todayBestLabels.length > 0
+            <MetricGrid columns={3}>
+                <Metric label={t('mkt.bestWindowsToday')} value={timeOfDayDisplay.todayBestLabels.length > 0
                     ? timeOfDayDisplay.todayBestLabels.join(' · ')
-                    : '—'}
-                </span>
-              </div>
-              <div>
-                <span className="market-copy-title">{t('mkt.strongestAllDays')}</span>
-                <span>{timeOfDayDisplay.strongestWindowLabel ?? '—'}</span>
-              </div>
-              <div>
-                <span className="market-copy-title">{t('mkt.weakestAllDays')}</span>
-                <span>{timeOfDayDisplay.weakestWindowLabel ?? '—'}</span>
-              </div>
-            </div>
-            <div className="market-tod-heatmap">
-              <div className="market-tod-colheader">
-                <span className="market-tod-corner" aria-hidden="true" />
+                    : '—'} />
+                <Metric label={t('mkt.strongestAllDays')} value={timeOfDayDisplay.strongestWindowLabel ?? '—'} />
+              </MetricGrid>
+            <div className="grid gap-[3px]">
+              <div className="grid items-center gap-[3px] [grid-template-columns:34px_repeat(12,minmax(0,1fr))]">
+                <span aria-hidden="true" />
                 {timeOfDayDisplay.columnLabels.map((label, index) => (
-                  <span key={label} className="market-tod-coltick">
+                  <span key={label} className="text-center font-mono text-[9px] text-ink-dim">
                     {/* Axis ticks show the hour the block starts — "10", "12" — while the cell
                         tooltip carries the full `10:00–12:00`. */}
                     {index % 2 === 0 ? label.slice(0, 2) : ''}
@@ -2559,15 +2689,35 @@ function AnalysisTab() {
               {timeOfDayDisplay.rows.map((row) => (
                 <div
                   key={row.weekday}
-                  className={`market-tod-row${row.isToday ? ' is-today' : ''}`}
+                  className={`grid items-center gap-[3px] [grid-template-columns:34px_repeat(12,minmax(0,1fr))] ${
+                    row.isToday ? '[&>span]:shadow-[inset_0_-2px_0_rgba(116,237,177,0.25)]' : ''
+                  }`}
                 >
-                  <span className="market-tod-row-label">{row.label}</span>
-                  <div className="market-tod-row-cells">
+                  <span className="truncate font-mono text-[9px] text-ink-dim">{row.label}</span>
+                  {/* `display: contents` so the cells become direct grid children of the row and
+                      line up with the header ticks. */}
+                  <div className="contents">
                     {row.cells.map((cell) => (
                       <div
                         key={cell.bucketIndex}
-                        className={`market-tod-cell${cell.sampleCount > 0 ? '' : ' is-empty'}`}
-                        style={{ '--heat-strength': cell.heatScore ?? 0 } as CSSProperties}
+                        // The heat is an inline `backgroundColor`, not a CSS variable feeding a
+                        // gradient: it plots `heatScore` directly, so alpha scales with the real
+                        // number and a cold cell cannot look warm. Cells with no samples get a
+                        // flat faint fill instead, so "no data" never reads as "zero activity".
+                        className={`min-h-4 rounded-sm ${
+                          cell.sampleCount > 0
+                            ? 'ring-1 ring-inset ring-white/[0.04]'
+                            : 'bg-white/[0.03]'
+                        }`}
+                        style={
+                          cell.sampleCount > 0
+                            ? {
+                                backgroundColor: `color-mix(in srgb, var(--color-accent-green) ${Math.round(
+                                  (cell.heatScore ?? 0) * 100,
+                                )}%, var(--color-bg-base))`,
+                              }
+                            : undefined
+                        }
                         title={[
                           `${row.label} ${cell.label} (UTC)`,
                           `${t('mkt.heat')} ${formatPercent((cell.heatScore ?? 0) * 100)}`,
@@ -2594,9 +2744,8 @@ function AnalysisTab() {
             info={t('mki.supply')}
             phase={analysisPhase}
             errorMessage={analysisError}
-            className="market-panel-tone-amber"
             headerAside={
-              <div className="market-badge-stack">
+              <div className="flex items-center gap-2">
                 <ConfidenceBadge confidence={analysis?.supplyContext.confidenceSummary} />
                 {/* Adding a set one part at a time is six clicks through six inputs for the same
                     decision. This takes whatever is in the boxes — which default to the
@@ -2646,7 +2795,7 @@ function AnalysisTab() {
             }
           >
             {analysis?.supplyContext.mode === 'set-components' ? (
-              <div className="market-component-list">
+              <div className="flex flex-col gap-1.5">
                 {(analysis?.supplyContext.components ?? []).map((component) => {
                   const imageUrl = resolveWfmAssetUrl(component.imagePath, component.slug);
                   const targetValue = componentTargets[component.slug] ?? '';
@@ -2669,12 +2818,11 @@ function AnalysisTab() {
                   // the actual question ("which part is dragging the set?"). Prose lines could
                   // only be read one component at a time.
                   return (
-                    <div key={component.slug} className="market-component-row">
-                      {imageUrl ? (
-                        <img className="market-component-image" src={imageUrl} alt="" />
-                      ) : (
-                        <div className="market-component-image placeholder" />
-                      )}
+                    <div
+                      key={component.slug}
+                      className="flex items-center gap-2.5 rounded-md border border-line bg-bg-base px-2.5 py-2"
+                    >
+                      <ItemThumb src={imageUrl ?? null} fallback={component.name.slice(0, 1)} size="size-8" />
 
                       {/* Wraps rather than truncating, and `pr-3` keeps the wrapped line clear
                           of the columns to its right — component names are long enough that a
@@ -2687,7 +2835,9 @@ function AnalysisTab() {
 
                       {/* Quantity reads as a count, not a suffix on the name. It is the first
                           thing that tells you how much of the set this part is. */}
-                      <span className="market-component-qty">×{component.quantityInSet}</span>
+                      <span className="shrink-0 rounded border border-line-strong px-1.5 py-px font-mono text-[11px] tabular-nums text-ink-soft">
+                        ×{component.quantityInSet}
+                      </span>
 
                       <Metric
                         label={t('mkt.currentLowest')}
@@ -2745,26 +2895,26 @@ function AnalysisTab() {
                 })}
               </div>
             ) : analysis?.supplyContext.mode === 'drop-sources' ? (
-              <div className="market-drop-list">
+              <div className="flex flex-col gap-1.5">
                 {displayDropSources.map((source) => {
                   // Relic sources carry the relic's name in `location`; era art replaces WFM's.
                   const imageUrl = source.isRelic
                     ? resolveRelicAssetUrl({ name: source.location }) ?? resolveWfmAssetUrl(source.imagePath)
                     : resolveWfmAssetUrl(source.imagePath);
                   return (
-                    <div key={source.key} className="market-drop-row">
-                      {imageUrl ? (
-                        <img
-                          className={`market-drop-image${source.isRelic ? ' relic-art' : ''}`}
-                          src={imageUrl}
-                          alt=""
-                          loading="lazy"
-                        />
-                      ) : (
-                        <span className="market-drop-image placeholder" aria-hidden="true">
-                          {source.location.slice(0, 2)}
-                        </span>
-                      )}
+                    <div
+                      key={source.key}
+                      className="flex items-center gap-2.5 rounded-md border border-line bg-bg-base px-2.5 py-2"
+                    >
+                      {/* `chrome={false}` for relics: their art is a shaped icon on transparency,
+                          so a thumbnail box reads as a chip drawn over a picture
+                          (`ELEMENTS.md` §7). Non-relic drop icons keep the box. */}
+                      <ItemThumb
+                        src={imageUrl ?? null}
+                        fallback={source.location.slice(0, 2)}
+                        size="size-9"
+                        chrome={!source.isRelic}
+                      />
                       <span className="min-w-0 flex-1 truncate text-xs text-ink">
                         {source.location}
                       </span>
@@ -2795,9 +2945,9 @@ function AnalysisTab() {
                 })}
               </div>
             ) : (
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.noSupplyContext')}</span>
-                <p>{t('mkt.noSupplyBody')}</p>
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.noSupplyContext')}</span>
+                <p className="text-[11px] leading-relaxed text-ink-soft">{t('mkt.noSupplyBody')}</p>
               </div>
             )}
             <ConfidenceNote confidence={analysis?.supplyContext.confidenceSummary} />
@@ -2809,69 +2959,59 @@ function AnalysisTab() {
             info={t('mki.liquidity')}
             phase={analysisPhase}
             errorMessage={analysisError}
-            className="market-panel-tone-blue"
             headerAside={
-              <div className="market-badge-stack">
-                <span className="market-panel-badge tone-blue">
+              <div className="flex items-center gap-2">
+                <MarketStatus tone="blue">
                   {analysis?.liquidityDetail.state ?? t('mkt.profiling')}
-                </span>
+                </MarketStatus>
                 <ConfidenceBadge confidence={analysis?.liquidityDetail.confidenceSummary} />
               </div>
             }
           >
             <MetricGrid>
-              <Metric label={t('mkt.demandRatio')} value={formatNumber(analysis?.liquidityDetail.demandRatio, 2)} />
               <Metric label={t('mkt.state')} value={analysis?.liquidityDetail.state ?? '—'} />
               <Metric label={t('mkt.sellersWithin')} value={formatNumber(analysis?.liquidityDetail.sellersWithinTwoPt, 0)} />
               <Metric
                 label={t('mkt.undercutVelocity')}
                 value={`${formatNumber(analysis?.liquidityDetail.undercutVelocity, 2)} / h`}
               />
-              <Metric label={t('mkt.qtyWeightedDemand')} value={formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)} />
-              <Metric label={t('mkt.liquidity')} value={formatPercent(analysis?.liquidityDetail.liquidityScore)} />
             </MetricGrid>
-            <ConfidenceNote confidence={analysis?.liquidityDetail.confidenceSummary} />
-            <div className="market-signal-board">
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.demandRatio')}</span>
-                <div className="market-signal-track">
-                  <div
-                    className="market-signal-fill tone-blue"
-                    style={{ '--signal-fill': `${Math.round(ratioToUnitInterval(analysis?.liquidityDetail.demandRatio) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.qtyWeightedDemand')}</span>
-                <div className="market-signal-track">
-                  <div
-                    className="market-signal-fill tone-green"
-                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.quantityWeightedDemand) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.liquidityScore')}</span>
-                <div className="market-signal-track">
-                  <div
-                    className="market-signal-fill tone-cyan"
-                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.liquidityDetail.liquidityScore) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
+            {/* Demand ratio, quantity-weighted demand and liquidity were in the grid above AND in
+                a signal board below it — the same three numbers twice, once as text and once as a
+                bar. `SignalMeter` carries label, value and proportion in one row, so they are
+                stated once. */}
+            <div className="flex flex-col gap-3">
+              <SignalMeter
+                label={t('mkt.demandRatio')}
+                value={formatNumber(analysis?.liquidityDetail.demandRatio, 2)}
+                fill={ratioToUnitInterval(analysis?.liquidityDetail.demandRatio)}
+                tone="blue"
+              />
+              <SignalMeter
+                label={t('mkt.qtyWeightedDemand')}
+                value={formatPercent(analysis?.liquidityDetail.quantityWeightedDemand)}
+                fill={toUnitInterval(analysis?.liquidityDetail.quantityWeightedDemand)}
+                tone="green"
+              />
+              <SignalMeter
+                label={t('mkt.liquidityScore')}
+                value={formatPercent(analysis?.liquidityDetail.liquidityScore)}
+                fill={toUnitInterval(analysis?.liquidityDetail.liquidityScore)}
+                tone="cyan"
+              />
             </div>
+            <ConfidenceNote confidence={analysis?.liquidityDetail.confidenceSummary} />
           </AnalyticsPanel>
 <AnalyticsPanel
             title={t('a11y.manipulationRisk')}
             info={t('mki.risk')}
             phase={analysisPhase}
             errorMessage={analysisError}
-            className={`market-panel-tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}
             headerAside={
-              <div className="market-badge-stack">
-                <span className={`market-panel-badge tone-${getRiskTone(analysis?.manipulationRisk.riskLevel)}`}>
+              <div className="flex items-center gap-2">
+                <MarketStatus tone={getRiskTone(analysis?.manipulationRisk.riskLevel)}>
                   {tHealth(t, analysis?.manipulationRisk.riskLevel) || t('trades.row.building')}
-                </span>
+                </MarketStatus>
                 <ConfidenceBadge confidence={analysis?.manipulationRisk.confidenceSummary} />
               </div>
             }
@@ -2881,29 +3021,36 @@ function AnalysisTab() {
               <Metric label={t('mkt.activeSignals')} value={formatNumber(analysis?.manipulationRisk.activeSignals, 0)} />
               <Metric label={t('mkt.efficiencyPenalty')} value={formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)} />
             </MetricGrid>
-            <div className="market-signal-board">
-              <div className="market-signal-row">
-                <span className="market-signal-label">{t('mkt.penaltyApplied')}</span>
-                <div className="market-signal-track danger">
-                  <div
-                    className="market-signal-fill tone-red"
-                    style={{ '--signal-fill': `${Math.round(toUnitInterval(analysis?.manipulationRisk.efficiencyPenaltyPct) * 100)}%` } as CSSProperties}
-                  />
-                </div>
-              </div>
-            </div>
+            <SignalMeter
+              label={t('mkt.penaltyApplied')}
+              value={formatPercent(analysis?.manipulationRisk.efficiencyPenaltyPct)}
+              fill={toUnitInterval(analysis?.manipulationRisk.efficiencyPenaltyPct)}
+              tone="red"
+            />
             <ConfidenceNote confidence={analysis?.manipulationRisk.confidenceSummary} />
-            <div className="market-analysis-signal-list">
+            <div className="grid gap-2 sm:grid-cols-2">
               {(analysis?.manipulationRisk.signals ?? []).map((signal) => (
                 <div
                   key={signal.key}
-                  className={`market-analysis-signal-card${signal.active ? ' active' : ''}`}
+                  // An ACTIVE manipulation signal is the thing you came to this panel to find,
+                  // so it takes the red frame; a clear one stays neutral and recedes.
+                  className={`flex min-w-0 flex-col gap-1 rounded-md border px-2.5 py-2 ${
+                    signal.active
+                      ? 'border-accent-red/30 bg-accent-red/8'
+                      : 'border-line bg-bg-base'
+                  }`}
                 >
-                  <span className="market-copy-title">{tHealth(t, signal.label)}</span>
-                  <span className="market-analysis-signal-state">
+                  <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{tHealth(t, signal.label)}</span>
+                  <span
+                    className={`font-mono text-[11px] font-semibold ${
+                      signal.active ? 'text-accent-red' : 'text-ink-dim'
+                    }`}
+                  >
                     {signal.active ? t('mkt.signal.active') : t('mkt.signal.clear')}
                   </span>
-                  <p>{tSignalDetail(t, signal.detail)}</p>
+                  <p className="text-[10px] leading-relaxed text-ink-dim">
+                    {tSignalDetail(t, signal.detail)}
+                  </p>
                 </div>
               ))}
             </div>
@@ -2913,29 +3060,33 @@ function AnalysisTab() {
             info={t('mki.worldstate')}
             phase={analysisPhase}
             errorMessage={analysisError}
-            className="market-panel-tone-amber"
             headerAside={
-              <div className="market-badge-stack">
-                <span className="market-panel-badge tone-amber">
+              <div className="flex items-center gap-2">
+                <MarketStatus tone="amber">
                   {eventContextEntries.length} {eventContextEntries.length === 1 ? 'match' : 'matches'}
-                </span>
+                </MarketStatus>
                 <ConfidenceBadge confidence={eventContextConfidence} />
               </div>
             }
           >
+            {/* A timeline: each entry carries a warm left edge so the column reads as a
+                sequence of things happening, not a bag of cards. */}
             {eventContextEntries.length > 0 ? (
-              <div className="market-context-list market-context-list-timeline">
+              <div className="flex flex-col gap-2">
                 {eventContextEntries.map((entry) => (
-                  <div key={`${entry.label}-${entry.impact}`} className="market-context-card">
-                    <span className="market-copy-title">{entry.label}</span>
-                    <p>{entry.impact}</p>
+                  <div
+                    key={`${entry.label}-${entry.impact}`}
+                    className="flex min-w-0 flex-col gap-1 rounded-md border border-line border-l-[3px] border-l-accent-amber/70 bg-bg-base px-2.5 py-2"
+                  >
+                    <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{entry.label}</span>
+                    <p className="text-[11px] leading-relaxed text-ink-soft">{entry.impact}</p>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="market-copy-block">
-                <span className="market-copy-title">{t('mkt.noActiveContext')}</span>
-                <p>{t('mkt.noActiveBody')}</p>
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.noActiveContext')}</span>
+                <p className="text-[11px] leading-relaxed text-ink-soft">{t('mkt.noActiveBody')}</p>
               </div>
             )}
             <ConfidenceNote confidence={eventContextConfidence} />

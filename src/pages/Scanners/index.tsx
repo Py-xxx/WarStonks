@@ -14,6 +14,8 @@ import { useLocalizedName } from '../../hooks/useLocalizedName';
 import { useItemQueryMatcher } from '../../hooks/useItemSearch';
 import { tConfidence, tHealth } from '../../lib/healthLabels';
 import { useTranslation } from '../../i18n';
+import { ScanGroup, ScanItemRow, ScanPill, ScanRank, ScanSearch, ScanSummary } from './parts';
+import { ItemThumb, ListRow, RowMetric } from '../../components/ListRow';
 import type { TranslationKey } from '../../i18n/en';
 import {
   formatScannerErrorMessage,
@@ -27,7 +29,10 @@ import { PageHeading } from '../../components/PageHeading';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Metric, MetricGrid } from '@/components/ui/metric';
+import { Panel } from '@/components/ui/panel';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAppStore } from '../../stores/useAppStore';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -44,11 +49,6 @@ import type {
 } from '../../types';
 
 
-const ScanChevron = ({ up }: { up?: boolean }) => (
-  <svg className="sp-set-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d={up ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'} />
-  </svg>
-);
 type RelicRefinementKey = 'intact' | 'exceptional' | 'flawless' | 'radiant';
 type ScannerErrorState = {
   context: ScannerErrorContext;
@@ -227,70 +227,68 @@ function ArbitrageComponentRow({
   onAdd: () => void;
 }) {
   const { t } = useTranslation();
-  const imageUrl = resolveWfmAssetUrl(component.imagePath, component.slug);
   const isDisabled = !component.itemKey || !targetValue.trim();
 
   return (
-    <div className="scanner-component-row">
-      <div className="scanner-component-main">
-        <span className="scanner-component-thumb">
-          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{component.name.slice(0, 1)}</span>}
-        </span>
-        <div className="scanner-component-copy">
-          <div className="scanner-component-name-row">
-            <span className="scanner-component-name">
-              {component.quantityInSet}x{' '}
-              <ItemName
-                name={component.name}
-                slug={component.slug}
-                wfmId={component.itemKey ?? undefined}
-                imagePath={component.imagePath}
-              />
-            </span>
-            <span className={`market-panel-badge tone-${confidenceTone(component.confidenceSummary.level)}`}>
-              {tConfidence(t, component.confidenceSummary)}
-            </span>
-          </div>
-          <MetricGrid columns={3} className="mt-1">
-            <Metric
-              label={t('scan.entryZone')}
-              value={`${formatPlat(component.recommendedEntryLow)} - ${formatPlat(component.recommendedEntryHigh)}`}
-            />
-          </MetricGrid>
-        </div>
-      </div>
-      <div className="scanner-component-actions">
-        {/* Owned vs needed, never a binary "owned" tick. Half a set is the common case and the
-            useful number is the SHORTFALL — 1/3 and 3/3 are different decisions, and a tick would
-            collapse them. Reads 0 when no inventory is loaded, which is honest: we do not know
-            that you own none, we know we have not been told. */}
-        <span
-          className="shrink-0 font-mono text-[11px] tabular-nums"
-          title={t('scan.ownedOfNeeded', { owned, needed: component.quantityInSet })}
-        >
-          <span className={owned > 0 ? 'text-accent-green' : 'text-ink-faint'}>{owned}</span>
-          <span className="text-ink-faint">/{component.quantityInSet}</span>
-        </span>
-        <Input
-          type="number"
-          min="0"
-          step="1"
-          aria-label={t('wl.targetPriceFor', { item: component.name })}
-          className="h-7 w-20 tabular-nums"
-          value={targetValue}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => onTargetChange(event.target.value)}
-        />
-        <Button
-          variant="secondary"
-          size="sm"
-          className="h-7 shrink-0 border-line px-2 text-[11px]"
-          disabled={isDisabled}
-          onClick={onAdd}
-        >
-          {recentlyAdded ? t('wl.added') : t('common.add')}
-        </Button>
-      </div>
-    </div>
+    <ScanItemRow
+      imageUrl={resolveWfmAssetUrl(component.imagePath, component.slug)}
+      fallback={component.name.slice(0, 1)}
+      name={
+        <>
+          {component.quantityInSet}x{' '}
+          <ItemName
+            name={component.name}
+            slug={component.slug}
+            wfmId={component.itemKey ?? undefined}
+            imagePath={component.imagePath}
+          />
+        </>
+      }
+      badges={
+        <ScanPill tone={confidenceTone(component.confidenceSummary.level)}>
+          {tConfidence(t, component.confidenceSummary)}
+        </ScanPill>
+      }
+      metrics={[
+        {
+          label: t('scan.entryZone'),
+          value: `${formatPlat(component.recommendedEntryLow)} - ${formatPlat(component.recommendedEntryHigh)}`,
+        },
+      ]}
+      actions={
+        <>
+          {/* Owned vs needed, never a binary "owned" tick. Half a set is the common case and the
+              useful number is the SHORTFALL — 1/3 and 3/3 are different decisions, and a tick
+              would collapse them. Reads 0 when no inventory is loaded, which is honest: we do not
+              know that you own none, we know we have not been told. */}
+          <span
+            className="shrink-0 font-mono text-[11px] tabular-nums"
+            title={t('scan.ownedOfNeeded', { owned, needed: component.quantityInSet })}
+          >
+            <span className={owned > 0 ? 'text-accent-green' : 'text-ink-faint'}>{owned}</span>
+            <span className="text-ink-faint">/{component.quantityInSet}</span>
+          </span>
+          <Input
+            type="number"
+            min="0"
+            step="1"
+            aria-label={t('wl.targetPriceFor', { item: component.name })}
+            className="h-7 w-20 tabular-nums"
+            value={targetValue}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>) => onTargetChange(event.target.value)}
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 shrink-0 border-line px-2 text-[11px]"
+            disabled={isDisabled}
+            onClick={onAdd}
+          >
+            {recentlyAdded ? t('wl.added') : t('common.add')}
+          </Button>
+        </>
+      }
+    />
   );
 }
 
@@ -326,104 +324,109 @@ function ArbitrageRow({
   );
 
   return (
-    <article className={`sp-set${expanded ? ' is-expanded' : ''}`}>
-      <button className="sp-set-head" type="button" onClick={onToggle} aria-expanded={expanded}>
-        <span className="scan-rank">{index + 1}</span>
-        <span className="sp-set-thumb">
-          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 2)}</span>}
-        </span>
-        <div className="sp-set-copy">
-          <span className="fn-row-title">
-            <span className="sp-set-name">
-              <ItemName
-                name={entry.name}
-                slug={entry.slug}
-                wfmId={entry.setItemKey}
-                imagePath={entry.imagePath}
-              />
-            </span>
-            <span className={`scan-confidence-pill tone-${confidenceTone(entry.confidenceSummary.level)}`}>
-              {tConfidence(t, entry.confidenceSummary)}
-            </span>
-          </span>
-          <span className="fn-row-sub">
-            {t('scan.partsAndLiquidity', {
-              n: entry.componentCount,
-              pct: `${Math.round(entry.liquidityScore)}%`,
-            })}
-          </span>
-        </div>
-        <div className="sp-set-metrics">
-          <div className="sp-set-metric">
-            <span className="sp-set-metric-label">{t('scan.buyIn')}</span>
-            <span className="sp-set-metric-value">{formatPlat(entry.basketEntryCost)}</span>
-          </div>
-          <div className="sp-set-metric">
-            <span className="sp-set-metric-label">{t('scan.sellAt')}</span>
-            <span className="sp-set-metric-value">{formatPlat(entry.recommendedSetExitPrice)}</span>
-          </div>
-          <div className="sp-set-metric">
-            <span className="sp-set-metric-label">{t('scan.margin')}</span>
-            <span className="sp-set-metric-value pos">{formatPlat(entry.grossMargin)}</span>
-          </div>
-          <span className="sp-set-roi">{formatPercent(entry.roiPct)} ROI</span>
-        </div>
-        <ScanChevron up={expanded} />
-      </button>
-
-      {expanded ? (
-        <div className="sp-set-body">
-          <div className="sp-set-detail-stats">
-            <span>{t('scan.exitZone')} <strong>{formatPlat(entry.setExitLow)}–{formatPlat(entry.setExitHigh)}</strong></span>
-            <span>{t('scan.score')} <strong>{Math.round(entry.arbitrageScore)}</strong></span>
-            <span>{t('scan.liquidity')} <strong>{Math.round(entry.liquidityScore)}%</strong></span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="sp-part-group-label missing">
-              {t('scan.partsToBuy', { n: entry.componentCount })}
-            </div>
-            <div className="ml-auto flex items-center gap-1.5">
-              {/* Two buttons, because they answer different questions. "Add all" watches the whole
-                  set. "Add unowned" watches only what you are short of — which is what you
-                  actually want once you already hold half the parts, and is the reason the owned
-                  counts are on screen at all. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-[11px] text-ink-dim hover:text-ink"
-                disabled={unownedComponents.length === 0}
-                title={unownedComponents.length === 0 ? t('scan.allOwned') : t('scan.addUnownedHint')}
-                onClick={() => onAddMany(unownedComponents)}
-              >
-                {t('scan.addUnowned')}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-7 border-line px-2.5 text-[11px]"
-                onClick={() => onAddMany(entry.components)}
-              >
-                {t('scan.addAll')}
-              </Button>
-            </div>
-          </div>
-          <div className="sp-part-list">
-              {entry.components.map((component) => (
-                <ArbitrageComponentRow
-                  key={`${entry.slug}-${component.slug}`}
-                  component={component}
-                  targetValue={targetInputs[component.slug] ?? getDefaultComponentTarget(component)}
-                  recentlyAdded={Boolean(recentlyAddedKeys[component.slug])}
-                  owned={ownedQuantities.get(component.slug) ?? 0}
-                  onTargetChange={(value) => onTargetChange(component, value)}
-                  onAdd={() => onAddToWatchlist(component)}
+    <ListRow
+      expanded={expanded}
+      onToggle={onToggle}
+      toggleLabel={expanded ? t('opp.collapseSet') : t('opp.expandSet')}
+      head={
+        <>
+          <ScanRank index={index} />
+          <ItemThumb src={imageUrl} fallback={entry.name.slice(0, 2)} size="size-9" />
+          <span className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-xs font-semibold text-ink">
+                <ItemName
+                  name={entry.name}
+                  slug={entry.slug}
+                  wfmId={entry.setItemKey}
+                  imagePath={entry.imagePath}
                 />
-              ))}
-          </div>
+              </span>
+              <ScanPill tone={confidenceTone(entry.confidenceSummary.level)}>
+                {tConfidence(t, entry.confidenceSummary)}
+              </ScanPill>
+            </span>
+            <span className="truncate font-mono text-[10px] font-normal text-ink-dim">
+              {t('scan.partsAndLiquidity', {
+                n: entry.componentCount,
+                pct: `${Math.round(entry.liquidityScore)}%`,
+              })}
+            </span>
+          </span>
+          <RowMetric label={t('scan.buyIn')} value={formatPlat(entry.basketEntryCost)} />
+          <RowMetric label={t('scan.sellAt')} value={formatPlat(entry.recommendedSetExitPrice)} />
+          <RowMetric
+            label={t('scan.margin')}
+            value={formatPlat(entry.grossMargin)}
+            tone={(entry.grossMargin ?? 0) >= 0 ? 'positive' : 'negative'}
+          />
+        </>
+      }
+      aside={
+        <span className="rounded-md border border-line bg-bg-base px-2 py-1 font-mono text-xs font-semibold tabular-nums text-ink-soft">
+          {formatPercent(entry.roiPct)} ROI
+        </span>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-ink-dim">
+        <span>
+          {t('scan.exitZone')}{' '}
+          <span className="text-ink">
+            {formatPlat(entry.setExitLow)}–{formatPlat(entry.setExitHigh)}
+          </span>
+        </span>
+        <span>
+          {t('scan.score')} <span className="text-ink">{Math.round(entry.arbitrageScore)}</span>
+        </span>
+        <span>
+          {t('scan.liquidity')} <span className="text-ink">{Math.round(entry.liquidityScore)}%</span>
+        </span>
+      </div>
+
+      <ScanGroup
+        label={t('scan.partsToBuy', { n: entry.componentCount })}
+        actions={
+          <>
+            {/* Two buttons, because they answer different questions. "Add all" watches the whole
+                set. "Add unowned" watches only what you are short of — which is what you actually
+                want once you already hold half the parts, and is the reason the owned counts are
+                on screen at all. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-[11px] text-ink-dim hover:text-ink"
+              disabled={unownedComponents.length === 0}
+              title={unownedComponents.length === 0 ? t('scan.allOwned') : t('scan.addUnownedHint')}
+              onClick={() => onAddMany(unownedComponents)}
+            >
+              {t('scan.addUnowned')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-7 border-line px-2.5 text-[11px]"
+              onClick={() => onAddMany(entry.components)}
+            >
+              {t('scan.addAll')}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-1.5">
+          {entry.components.map((component) => (
+            <ArbitrageComponentRow
+              key={`${entry.slug}-${component.slug}`}
+              component={component}
+              targetValue={targetInputs[component.slug] ?? getDefaultComponentTarget(component)}
+              recentlyAdded={Boolean(recentlyAddedKeys[component.slug])}
+              owned={ownedQuantities.get(component.slug) ?? 0}
+              onTargetChange={(value) => onTargetChange(component, value)}
+              onAdd={() => onAddToWatchlist(component)}
+            />
+          ))}
         </div>
-      ) : null}
-    </article>
+      </ScanGroup>
+    </ListRow>
   );
 }
 
@@ -450,30 +453,29 @@ function RelicDropRow({
       : null;
 
   return (
-    <div className="scanner-component-row scanner-component-row-inline">
-      <div className="scanner-component-main">
-        <span className="scanner-component-thumb">
-          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{drop.name.slice(0, 1)}</span>}
-        </span>
-        <div className="scanner-component-copy">
-          <div className="scanner-component-name-row">
-            <span className="scanner-component-name">{localizeName(drop)}</span>
-            {drop.rarity ? <span className="market-panel-badge tone-blue">{drop.rarity}</span> : null}
-            <span className={`market-panel-badge tone-${confidenceTone(drop.confidenceSummary.level)}`}>
-              {tConfidence(t, drop.confidenceSummary)}
-            </span>
-          </div>
-          <MetricGrid columns={3} className="mt-1">
-            <Metric label={t('scan.chance')} value={formatChance(chance)} />
-            <Metric
-              label={t('scan.optimalExit')}
-              value={`${formatPlat(drop.recommendedExitLow)} - ${formatPlat(drop.recommendedExitHigh)}`}
-            />
-            <Metric label={"EV"} value={formatPlat(expectedContribution)} />
-          </MetricGrid>
-        </div>
-      </div>
-    </div>
+    <ScanItemRow
+      imageUrl={imageUrl}
+      fallback={drop.name.slice(0, 1)}
+      name={localizeName(drop)}
+      badges={
+        <>
+          {drop.rarity ? <ScanPill tone="blue">{drop.rarity}</ScanPill> : null}
+          <ScanPill tone={confidenceTone(drop.confidenceSummary.level)}>
+            {tConfidence(t, drop.confidenceSummary)}
+          </ScanPill>
+        </>
+      }
+      metrics={[
+        { label: t('scan.chance'), value: formatChance(chance) },
+        {
+          label: t('scan.optimalExit'),
+          value: `${formatPlat(drop.recommendedExitLow)} - ${formatPlat(drop.recommendedExitHigh)}`,
+        },
+        // Chance × exit price: what this drop is worth to a run on average, which is the number
+        // that decides whether a relic is worth running at all.
+        { label: t('scan.ev'), value: formatPlat(expectedContribution) },
+      ]}
+    />
   );
 }
 
@@ -500,80 +502,85 @@ function RelicRoiRow({
     .sort((a, b) => (b.recommendedExitPrice ?? 0) - (a.recommendedExitPrice ?? 0))[0];
 
   return (
-    <article className={`sp-set${expanded ? ' is-expanded' : ''}`}>
-      <button className="sp-set-head" type="button" onClick={onToggle} aria-expanded={expanded}>
-        <span className="scan-rank">{index + 1}</span>
-        <span className="sp-set-thumb relic-art">
-          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{entry.name.slice(0, 2)}</span>}
-        </span>
-        <div className="sp-set-copy">
-          <span className="fn-row-title">
-            <span className="sp-set-name">
-              <ItemName
-                name={entry.name}
-                slug={entry.slug}
-                wfmId={entry.relicItemId}
-                imagePath={entry.imagePath}
-              />
-            </span>
-            <span className={`scan-confidence-pill tone-${entry.isUnvaulted ? 'green' : 'amber'}`}>
-              {entry.isUnvaulted ? t('scan.unvaulted') : t('scan.vaulted')}
-            </span>
-          </span>
-          <span className="fn-row-sub">
-            {bestDrop
-              ? t('scan.bestDrop', {
-                  name: bestDrop.name,
-                  price: formatPlat(bestDrop.recommendedExitPrice),
-                })
-              : tConfidence(t, summary?.confidenceSummary ?? entry.confidenceSummary)}
-          </span>
-        </div>
-        <div className="sp-set-metrics">
-          <span className="relic-refinement-pill relic-refinement-pill-blue">
-            {t('opp.runRefinement', { refinement: tHealth(t, summary?.refinementLabel) || '—' })}
-          </span>
-          <div className="sp-set-metric">
-            <span className="sp-set-metric-label">{t('scan.runValueLabel')}</span>
-            <span className="sp-set-metric-value pos">{formatPlatPrecise(summary?.runValue ?? null)}</span>
-          </div>
-          <div className="sp-set-metric">
-            <span className="sp-set-metric-label">{t('scan.liquidity')}</span>
-            <span className="sp-set-metric-value">{Math.round(summary?.liquidityScore ?? 0)}%</span>
-          </div>
-        </div>
-        <ScanChevron up={expanded} />
-      </button>
-
-      {expanded ? (
-        <div className="sp-set-body">
-          <MetricGrid columns={4}>
-            <Metric label={t('scan.refinement')} value={tHealth(t, summary?.refinementLabel) || '—'} />
-            <Metric label={t('scan.runValue')} value={formatPlatPrecise(summary?.runValue ?? null)} />
-            <Metric label={t('scan.liquidity')} value={<>{Math.round(summary?.liquidityScore ?? 0)}%</>} />
-            <Metric label={t('scan.drops')} value={entry.dropCount} />
-          </MetricGrid>
-
-          <div className="scanner-components-panel">
-            <div className="scanner-components-header">
-              <span className="card-label">{t('scan.primeRewards')}</span>
-              <span className="scanner-components-meta">
-                {t('scan.ratesApplied', { label: summary?.refinementLabel ? tHealth(t, summary.refinementLabel) : t('scan.selectedRefinement') })}
-              </span>
-            </div>
-            <div className="scanner-components-list">
-              {entry.drops.map((drop) => (
-                <RelicDropRow
-                  key={`${entry.slug}-${refinementKey}-${drop.slug}`}
-                  drop={drop}
-                  refinementKey={refinementKey}
+    <ListRow
+      expanded={expanded}
+      onToggle={onToggle}
+      toggleLabel={expanded ? t('opp.collapseSet') : t('opp.expandSet')}
+      head={
+        <>
+          <ScanRank index={index} />
+          {/* Relic art draws no thumbnail chrome — it is a shaped icon on transparency, so a box
+              around it reads as a chip drawn over a picture (`ELEMENTS.md` §7). */}
+          <ItemThumb src={imageUrl} fallback={entry.name.slice(0, 2)} size="size-9" chrome={false} />
+          <span className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-xs font-semibold text-ink">
+                <ItemName
+                  name={entry.name}
+                  slug={entry.slug}
+                  wfmId={entry.relicItemId}
+                  imagePath={entry.imagePath}
                 />
-              ))}
-            </div>
-          </div>
+              </span>
+              <ScanPill tone={entry.isUnvaulted ? 'green' : 'amber'}>
+                {entry.isUnvaulted ? t('scan.unvaulted') : t('scan.vaulted')}
+              </ScanPill>
+            </span>
+            {/* The best drop at the active refinement — the single most useful fact about a
+                relic, and it used to be hidden until the row was expanded. */}
+            <span className="truncate font-mono text-[10px] font-normal text-ink-dim">
+              {bestDrop
+                ? t('scan.bestDrop', {
+                    name: bestDrop.name,
+                    price: formatPlat(bestDrop.recommendedExitPrice),
+                  })
+                : tConfidence(t, summary?.confidenceSummary ?? entry.confidenceSummary)}
+            </span>
+          </span>
+          <RowMetric
+            label={t('scan.runValueLabel')}
+            value={formatPlatPrecise(summary?.runValue ?? null)}
+            tone="positive"
+          />
+          <RowMetric
+            label={t('scan.liquidity')}
+            value={`${Math.round(summary?.liquidityScore ?? 0)}%`}
+            width="w-14"
+          />
+        </>
+      }
+      aside={
+        <ScanPill tone="blue">
+          {t('opp.runRefinement', { refinement: tHealth(t, summary?.refinementLabel) || '—' })}
+        </ScanPill>
+      }
+    >
+      <MetricGrid columns={4}>
+        <Metric label={t('scan.refinement')} value={tHealth(t, summary?.refinementLabel) || '—'} />
+        <Metric label={t('scan.runValue')} value={formatPlatPrecise(summary?.runValue ?? null)} />
+        <Metric label={t('scan.liquidity')} value={`${Math.round(summary?.liquidityScore ?? 0)}%`} />
+        <Metric label={t('scan.drops')} value={entry.dropCount} />
+      </MetricGrid>
+
+      <ScanGroup
+        label={t('scan.primeRewards')}
+        meta={t('scan.ratesApplied', {
+          label: summary?.refinementLabel
+            ? tHealth(t, summary.refinementLabel)
+            : t('scan.selectedRefinement'),
+        })}
+      >
+        <div className="flex flex-col gap-1.5">
+          {entry.drops.map((drop) => (
+            <RelicDropRow
+              key={`${entry.slug}-${refinementKey}-${drop.slug}`}
+              drop={drop}
+              refinementKey={refinementKey}
+            />
+          ))}
         </div>
-      ) : null}
-    </article>
+      </ScanGroup>
+    </ListRow>
   );
 }
 
@@ -982,24 +989,25 @@ export function ScannersPage() {
       <PageHeading
         page="scanners"
         actions={
-          <div className="subnav-right scanner-subnav-right">
-            <label className="scanner-topbar-toggle" title={t('scan.autoScanHelp')}>
-              <span>{t('scan.autoScan')}</span>
-              <button
-                type="button"
-                className={`toggle${autoScanEnabled ? ' on' : ''}`}
-                role="switch"
-                aria-checked={autoScanEnabled}
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex cursor-pointer items-center gap-2" title={t('scan.autoScanHelp')}>
+              <span className="text-[11px] text-ink-dim">{t('scan.autoScan')}</span>
+              <Switch
+                tone="positive"
+                checked={autoScanEnabled}
                 aria-label={t('scan.autoScan')}
-                onClick={() => setAutoScanEnabled(!autoScanEnabled)}
+                onCheckedChange={setAutoScanEnabled}
               />
             </label>
-            <span className="scanner-topbar-stamp" title={lastScanTitle ?? undefined}>
+            <span
+              className="font-mono text-[10px] tracking-[0.04em] text-ink-dim"
+              title={lastScanTitle ?? undefined}
+            >
               {lastScanLabel}
             </span>
-            <button
-              className="scanner-action-button"
-              type="button"
+            <Button
+              variant={isRunning ? 'outline' : 'default'}
+              size="sm"
               onClick={() => {
                 if (isRunning) {
                   void stopArbitrageScan();
@@ -1008,108 +1016,107 @@ export function ScannersPage() {
                 void runArbitrageScan();
               }}
             >
+              <i className={`ti ${isRunning ? 'ti-player-pause' : 'ti-radar'}`} aria-hidden="true" />
               {isRunning ? t('scan.stopScan') : actionLabel}
-            </button>
+            </Button>
           </div>
         }
       />
 
-      <div className="page-content scanners-page-content">
-        <div className="scanners-shell">
+      {/* `[&>*]:shrink-0` — `.page-content` is `flex: 1` + `overflow-y: auto`, so without it the
+          browser squashes short children instead of scrolling. See the handoff's traps. */}
+      <div className="page-content flex flex-col gap-4 [&>*]:shrink-0">
+        <div className="flex min-w-0 flex-col gap-3">
             {/* Above the scanner's own status: this is the baseline both tabs now fall back to
                 for items no scan has reached, so it belongs before the scan-specific counts. */}
             <PriceHistoryBar />
-            <div className="scanner-statusbar">
-              <div className="scanner-statusbar-progress">
-                <div className="scanner-progress-track">
-                  <div
-                    className={`scanner-progress-fill${isRunning ? ' running' : ''}`}
+            <Panel className="flex-row flex-wrap items-center gap-4 px-3 py-2.5">
+              <div className="flex min-w-40 flex-1 items-center gap-2">
+                <span className="h-1 flex-1 overflow-hidden rounded-full bg-bg-base">
+                  {/* Plots the scanner's real `progressValue`. The bar is the only motion on this
+                      strip, and it is driven by a running scan, never by a poll. */}
+                  <span
+                    className={`block h-full rounded-full transition-[width] duration-300 ease-out ${
+                      isRunning ? 'bg-accent-blue' : 'bg-line-strong'
+                    }`}
                     style={{ width: `${Math.max(0, Math.min(100, progress?.progressValue ?? 0))}%` }}
                   />
-                </div>
-                <span className="scanner-statusbar-pct">
+                </span>
+                <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-soft">
                   {Math.round(progress?.progressValue ?? 0)}%
                 </span>
               </div>
               {arbitrage ? (
-                <div className="scanner-count-pills">
-                  <span className="scanner-count-pill">
-                    <b>{arbitrage.scannedSetCount}</b> {t('scan.sets')}
-                  </span>
-                  <span className="scanner-count-pill">
-                    <b>{arbitrage.scannedComponentCount}</b> {t('scan.components')}
-                  </span>
-                  <span className="scanner-count-pill">
-                    <b>{arbitrage.scannedRelicCount}</b> {t('scan.relics')}
-                  </span>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-ink-dim">
+                  {(
+                    [
+                      [arbitrage.scannedSetCount, t('scan.sets')],
+                      [arbitrage.scannedComponentCount, t('scan.components')],
+                      [arbitrage.scannedRelicCount, t('scan.relics')],
+                    ] as const
+                  ).map(([count, label]) => (
+                    <span key={label}>
+                      <span className="font-semibold text-ink">{count}</span> {label}
+                    </span>
+                  ))}
                 </div>
               ) : (
-                <span className="scanner-count-empty">{t('scan.noSavedScan')}</span>
+                <span className="font-mono text-[10px] text-ink-faint">{t('scan.noSavedScan')}</span>
               )}
-            </div>
+            </Panel>
 
             {showInlineScannerNotice && scannerError ? (
-              <div className="activity-inline-state scanner-inline-state" role="alert">
-                <span
-                  className={
-                    scannerError.tone === 'warning'
-                      ? 'settings-inline-warning'
-                      : 'settings-inline-error'
-                  }
-                >
-                  {scannerError.message}
-                </span>
+              <p
+                role="alert"
+                className={`flex items-start gap-2 rounded-md border px-2.5 py-2 text-[11px] leading-relaxed ${
+                  scannerError.tone === 'warning'
+                    ? 'border-accent-amber/25 bg-accent-amber/8 text-accent-amber'
+                    : 'border-accent-red/25 bg-accent-red/8 text-accent-red'
+                }`}
+              >
+                <i className="ti ti-alert-triangle mt-px shrink-0 text-sm" aria-hidden="true" />
+                <span className="min-w-0 flex-1">{scannerError.message}</span>
                 {scannerErrorAction ? (
-                  <button className="text-btn" type="button" onClick={scannerErrorAction.onClick}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    static
+                    onClick={scannerErrorAction.onClick}
+                    className="-my-0.5 h-5 shrink-0 px-1.5 text-[10px] text-current hover:bg-white/10 hover:text-current"
+                  >
                     {scannerErrorAction.label}
-                  </button>
+                  </Button>
                 ) : null}
-              </div>
+              </p>
             ) : null}
 
             {/* `|| !scannerStateLoaded` so the list shell (and its skeleton) renders while the
                 first state call is still out. Gating on `arbitrage` alone made the skeleton
                 unreachable — `arbitrage` is null for exactly the period the skeleton is for. */}
             {activeTab === 'arbitrage' && (arbitrage || !scannerStateLoaded) ? (
-              <div className="scanner-results-list">
-                <div className="sp-summary">
-                  <div className="sp-summary-lead">
-                    <span className="sp-summary-lead-icon"><i className="ti ti-radar" aria-hidden="true" /></span>
-                    <div>
-                      <span className="sp-summary-title">
-                        {t('scan.setsWorthFlipping', { n: arbitrageResults.length })}
-                      </span>
-                      <span className="sp-summary-sub">{t('scan.flipSubtitle')}</span>
-                    </div>
-                  </div>
-                  <div className="sp-summary-flow">
-                    <div className="sp-summary-stat">
-                      <span className="sp-summary-stat-label">{t('scan.bestMargin')}</span>
-                      <span className="sp-summary-stat-value">
-                        {formatPlat(arbitrageResults[0]?.grossMargin ?? null)}
-                      </span>
-                    </div>
-                    <div className="sp-summary-stat sp-summary-stat-profit">
-                      <span className="sp-summary-stat-label">{t('scan.bestRoi')}</span>
-                      <span className="sp-summary-stat-value">
-                        {formatPercent(arbitrageResults[0]?.roiPct ?? null)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div className="fn-controls">
-                  <div className="fn-controls-row">
-                    <div className="fn-search">
-                      <i className="ti ti-search fn-search-icon" aria-hidden="true" />
-                      <input
-                        className="fn-search-input"
-                        type="search"
-                        value={arbitrageSearch}
-                        onChange={(event) => setArbitrageSearch(event.target.value)}
-                        placeholder={t('scan.searchSetsOrParts')}
-                      />
-                    </div>
-                  </div>
+              <div className="flex min-w-0 flex-col gap-2">
+                <ScanSummary
+                  icon="ti-radar"
+                  title={t('scan.setsWorthFlipping', { n: arbitrageResults.length })}
+                  subtitle={t('scan.flipSubtitle')}
+                  stats={[
+                    {
+                      label: t('scan.bestMargin'),
+                      value: formatPlat(arbitrageResults[0]?.grossMargin ?? null),
+                    },
+                    {
+                      label: t('scan.bestRoi'),
+                      value: formatPercent(arbitrageResults[0]?.roiPct ?? null),
+                      positive: true,
+                    },
+                  ]}
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <ScanSearch
+                    value={arbitrageSearch}
+                    placeholder={t('scan.searchSetsOrParts')}
+                    onChange={setArbitrageSearch}
+                  />
                 </div>
                 {!scannerStateLoaded ? (
                   <ScannerRowsSkeleton />
@@ -1132,12 +1139,7 @@ export function ScannersPage() {
                     />
                   ))
                 ) : (
-                  <div className="empty-state scanners-empty-state scanner-results-empty-state">
-                    <span className="empty-primary">{t('scan.noSets')}</span>
-                    <span className="empty-sub">
-                      {t('scan.tryAnotherSet')}
-                    </span>
-                  </div>
+                  <EmptyState icon="ti-search-off" title={t('scan.noSets')} detail={t('scan.tryAnotherSet')} />
                 )}
               </div>
             ) : activeTab === 'relic-roi' && (arbitrage || !scannerStateLoaded) ? (
@@ -1145,68 +1147,58 @@ export function ScannersPage() {
                  INSIDE `relicResults.length > 0`, so searching something with no matches removed
                  the search box along with the rows — leaving no way to change or clear the query
                  that caused it. Only the ROWS swap for the empty state now. */
-              <div className="scanner-results-list">
-                  <div className="sp-summary">
-                    <div className="sp-summary-lead">
-                      <span className="sp-summary-lead-icon"><i className="ti ti-flame" aria-hidden="true" /></span>
-                      <div>
-                        <span className="sp-summary-title">
-                          {t('scan.relicsRanked2', { n: relicResults.length })}
-                        </span>
-                        <span className="sp-summary-sub">{t('scan.relicSubtitle')}</span>
-                      </div>
-                    </div>
-                    <div className="sp-summary-flow">
-                      <div className="sp-summary-stat sp-summary-stat-profit">
-                        <span className="sp-summary-stat-label">{t('scan.bestRun')}</span>
-                        <span className="sp-summary-stat-value">
-                          {relicResults.length > 0
+              <div className="flex min-w-0 flex-col gap-2">
+                  <ScanSummary
+                    icon="ti-flame"
+                    title={t('scan.relicsRanked2', { n: relicResults.length })}
+                    subtitle={t('scan.relicSubtitle')}
+                    stats={[
+                      {
+                        label: t('scan.bestRun'),
+                        value:
+                          relicResults.length > 0
                             ? formatPlatPrecise(
-                                getRelicRefinementSummary(relicResults[0], relicRefinement)?.runValue ?? null,
+                                getRelicRefinementSummary(relicResults[0], relicRefinement)?.runValue ??
+                                  null,
                               )
-                            : '—'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="fn-controls">
-                    <div className="fn-controls-row">
-                      <div className="fn-search">
-                        <i className="ti ti-search fn-search-icon" aria-hidden="true" />
-                        <input
-                          className="fn-search-input"
-                          type="search"
-                          value={relicSearch}
-                          onChange={(event) => setRelicSearch(event.target.value)}
-                          placeholder={t('scan.searchRelicsOrDrops')}
-                        />
-                      </div>
-                      <div className="fn-filters">
-                        <label className="fn-filter">
-                          <span>{t('scan.refinement')}</span>
-                          <select
-                            value={relicRefinement}
-                            onChange={(event) => setRelicRefinement(event.target.value as RelicRefinementKey)}
-                          >
-                            {RELIC_REFINEMENT_KEYS.map((key) => (
-                              <option key={key} value={key}>
-                                {t(RELIC_REFINEMENT_LABEL_KEYS[key])}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="toggle-wrap scan-unvaulted-toggle" htmlFor="relic-unvaulted-toggle">
-                          <span>{t('scan.unvaultedOnly')}</span>
-                          <button
-                            id="relic-unvaulted-toggle"
-                            className={`toggle${showOnlyUnvaulted ? ' on' : ''}`}
-                            type="button"
-                            aria-pressed={showOnlyUnvaulted}
-                            onClick={() => setShowOnlyUnvaulted((current) => !current)}
-                          />
-                        </label>
-                      </div>
-                    </div>
+                            : '—',
+                        positive: true,
+                      },
+                    ]}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ScanSearch
+                      value={relicSearch}
+                      placeholder={t('scan.searchRelicsOrDrops')}
+                      onChange={setRelicSearch}
+                    />
+                    <label className="flex shrink-0 items-center gap-1.5">
+                      <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                        {t('scan.refinement')}
+                      </span>
+                      <Select
+                        className="h-8 w-32"
+                        value={relicRefinement}
+                        onChange={(event) =>
+                          setRelicRefinement(event.target.value as RelicRefinementKey)
+                        }
+                      >
+                        {RELIC_REFINEMENT_KEYS.map((key) => (
+                          <option key={key} value={key}>
+                            {t(RELIC_REFINEMENT_LABEL_KEYS[key])}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <label className="flex shrink-0 cursor-pointer items-center gap-2">
+                      <span className="text-[11px] text-ink-dim">{t('scan.unvaultedOnly')}</span>
+                      <Switch
+                        tone="positive"
+                        checked={showOnlyUnvaulted}
+                        aria-label={t('scan.unvaultedOnly')}
+                        onCheckedChange={setShowOnlyUnvaulted}
+                      />
+                    </label>
                   </div>
                   {!scannerStateLoaded ? (
                     <ScannerRowsSkeleton rows={5} />
@@ -1237,43 +1229,44 @@ export function ScannersPage() {
                   )}
                 </div>
             ) : showBlockingScannerEmptyState && scannerError ? (
-              <div className="empty-state scanners-empty-state">
-                <span className="empty-primary">{t('scan.dataCouldNotLoad')}</span>
-                <span className="empty-sub">{scannerError.message}</span>
-                {scannerErrorAction ? (
-                  <button
-                    type="button"
-                    className="market-empty-state-action"
-                    onClick={scannerErrorAction.onClick}
-                  >
-                    {scannerErrorAction.label}
-                  </button>
-                ) : null}
-              </div>
+              <EmptyState
+                icon="ti-alert-triangle"
+                title={t('scan.dataCouldNotLoad')}
+                detail={scannerError.message}
+                action={
+                  scannerErrorAction ? (
+                    <Button variant="outline" size="sm" onClick={scannerErrorAction.onClick}>
+                      {scannerErrorAction.label}
+                    </Button>
+                  ) : null
+                }
+              />
             ) : !isRunning ? (
-              <div className="empty-state scanners-empty-state">
-                <span className="empty-primary">
-                  {normalizedArbitrageSearch
+              <EmptyState
+                icon={normalizedArbitrageSearch ? 'ti-search-off' : 'ti-radar'}
+                title={
+                  normalizedArbitrageSearch
                     ? t('scan.noSetsMatchSearch')
-                    : t('scan.noCachedResults')}
-                </span>
-                <span className="empty-sub">
-                  {normalizedArbitrageSearch
+                    : t('scan.noCachedResults')
+                }
+                detail={
+                  normalizedArbitrageSearch
                     ? t('scan.tryAnotherSetSearch')
-                    : t('scan.startScanFirstResult')}
-                </span>
-                {!normalizedArbitrageSearch ? (
-                  <button
-                    type="button"
-                    className="market-empty-state-action"
-                    onClick={() => {
-                      void runArbitrageScan();
-                    }}
-                  >
-                    {actionLabel}
-                  </button>
-                ) : null}
-              </div>
+                    : t('scan.startScanFirstResult')
+                }
+                action={
+                  !normalizedArbitrageSearch ? (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        void runArbitrageScan();
+                      }}
+                    >
+                      {actionLabel}
+                    </Button>
+                  ) : null
+                }
+              />
             ) : null}
         </div>
       </div>

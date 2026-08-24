@@ -1,7 +1,20 @@
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Panel } from '@/components/ui/panel';
+import { PageHeading } from '../../components/PageHeading';
 import { useTranslation } from '../../i18n';
 import { GUIDE_SECTIONS, type GuideBlock, type GuideSection } from './guideContent';
+
+/** Callout tone → its frame. Amber warns, green confirms, blue is neutral information. */
+const CALLOUT_TONE: Record<string, string> = {
+  info: 'border-accent-blue/25 border-l-accent-blue bg-accent-blue/8 text-ink-soft',
+  warning: 'border-accent-amber/25 border-l-accent-amber bg-accent-amber/8 text-ink-soft',
+  success: 'border-accent-green/25 border-l-accent-green bg-accent-green/8 text-ink-soft',
+  tip: 'border-accent-blue/25 border-l-accent-blue bg-accent-blue/8 text-ink-soft',
+};
 
 /** Lowercased haystack of every searchable string in a section. */
 function sectionSearchText(section: GuideSection): string {
@@ -36,12 +49,14 @@ function GuideBlockView({ block }: { block: GuideBlock }) {
 
   switch (block.kind) {
     case 'paragraph':
-      return <p className="guide-paragraph">{block.text}</p>;
+      // `max-w-[70ch]` throughout: this is the one surface in the app that is genuinely prose,
+      // and a line of body text running the full width of a desktop window is unreadable.
+      return <p className="max-w-[70ch] text-xs leading-relaxed text-ink-soft">{block.text}</p>;
     case 'subheading':
-      return <h3 className="guide-subheading">{block.text}</h3>;
+      return <h3 className="mt-1 text-xs font-semibold text-ink">{block.text}</h3>;
     case 'steps':
       return (
-        <ol className="guide-steps">
+        <ol className="ml-4 flex max-w-[70ch] list-decimal flex-col gap-1 text-xs leading-relaxed text-ink-soft marker:text-ink-faint">
           {block.items.map((item, i) => (
             <li key={i}>{item}</li>
           ))}
@@ -49,55 +64,70 @@ function GuideBlockView({ block }: { block: GuideBlock }) {
       );
     case 'list':
       return (
-        <ul className="guide-list">
+        <ul className="ml-4 flex max-w-[70ch] list-disc flex-col gap-1 text-xs leading-relaxed text-ink-soft marker:text-ink-faint">
           {block.items.map((item, i) => (
             <li key={i}>{item}</li>
           ))}
         </ul>
       );
     case 'callout':
-      return <div className={`guide-callout guide-callout-${block.tone}`}>{block.text}</div>;
+      return (
+        <p
+          className={`max-w-[70ch] rounded-md border border-l-[3px] px-3 py-2 text-xs leading-relaxed ${
+            CALLOUT_TONE[block.tone] ?? CALLOUT_TONE.info
+          }`}
+        >
+          {block.text}
+        </p>
+      );
     case 'tabCard':
       return (
-        <div className="guide-tab-card">
-          <div className="guide-tab-card-head">
-            <span className="guide-tab-card-title">{block.title}</span>
-            <button
-              type="button"
-              className="text-btn"
+        <Panel className="max-w-[70ch] gap-2 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-ink">{block.title}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-1.5 text-[11px] text-accent-blue hover:bg-accent-blue/10 hover:text-accent-blue"
               onClick={() => setActivePage(block.page)}
             >
-              Open {block.title} →
-            </button>
+              {block.title}
+              <i className="ti ti-arrow-right" aria-hidden="true" />
+            </Button>
           </div>
-          <p className="guide-tab-card-line">
-            <span className="guide-tab-card-label">What it’s for</span>
-            {block.whatFor}
-          </p>
-          <p className="guide-tab-card-line">
-            <span className="guide-tab-card-label">When to use it</span>
-            {block.whenToUse}
-          </p>
-        </div>
+          {(
+            [
+              ['What it’s for', block.whatFor],
+              ['When to use it', block.whenToUse],
+            ] as const
+          ).map(([label, text]) => (
+            <p key={label} className="flex flex-col gap-0.5">
+              <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">
+                {label}
+              </span>
+              <span className="text-xs leading-relaxed text-ink-soft">{text}</span>
+            </p>
+          ))}
+        </Panel>
       );
     case 'glossary':
       return (
-        <dl className="guide-glossary">
-          {block.terms.map((t, i) => (
-            <div className="guide-glossary-item" key={i}>
-              <dt>{t.term}</dt>
-              <dd>{t.def}</dd>
+        <dl className="flex max-w-[70ch] flex-col gap-2">
+          {block.terms.map((term, i) => (
+            <div key={i} className="flex flex-col gap-0.5 border-l-2 border-line-strong pl-3">
+              <dt className="text-xs font-semibold text-ink">{term.term}</dt>
+              <dd className="text-xs leading-relaxed text-ink-dim">{term.def}</dd>
             </div>
           ))}
         </dl>
       );
     case 'faq':
       return (
-        <div className="guide-faq">
-          {block.items.map((f, i) => (
-            <div className="guide-faq-item" key={i}>
-              <span className="guide-faq-q">{f.q}</span>
-              <p className="guide-faq-a">{f.a}</p>
+        <div className="flex max-w-[70ch] flex-col gap-3">
+          {block.items.map((faq, i) => (
+            <div key={i} className="flex flex-col gap-1">
+              <span className="text-xs font-semibold text-ink">{faq.q}</span>
+              <p className="text-xs leading-relaxed text-ink-dim">{faq.a}</p>
             </div>
           ))}
         </div>
@@ -131,63 +161,91 @@ export function GuidePage() {
 
   return (
     <>
-      <div className="subnav guide-subnav">
-        <div className="subnav-left">
-          <span className="page-title">{t('guide.title')}</span>
-          {!normalizedQuery
-            ? GUIDE_SECTIONS.map((section) => (
-                <span
-                  key={section.id}
-                  className={`subtab${activeSectionId === section.id ? ' active' : ''}`}
-                  onClick={() => handleJump(section.id)}
-                  role="tab"
-                  aria-selected={activeSectionId === section.id}
-                  tabIndex={0}
-                  onKeyDown={(e) => e.key === 'Enter' && handleJump(section.id)}
-                >
-                  {section.title}
-                </span>
-              ))
-            : null}
-        </div>
-        <div className="subnav-right">
-          <input
-            type="search"
-            className="guide-search"
-            placeholder={t('guide.searchPlaceholder')}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label={t('guide.searchAria')}
-          />
-        </div>
-      </div>
+      {/* The guide's sections are a document table of contents, not navigation — they scroll the
+          page rather than change it — which is why they live here and not in the sidebar
+          (`ELEMENTS.md` §7 excludes Guide for exactly this reason). */}
+      <PageHeading
+        page="guide"
+        actions={
+          <span className="relative flex w-56 items-center">
+            <i
+              className="ti ti-search pointer-events-none absolute left-2.5 text-sm text-ink-dim"
+              aria-hidden="true"
+            />
+            <Input
+              type="search"
+              className="pl-8"
+              placeholder={t('guide.searchPlaceholder')}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label={t('guide.searchAria')}
+            />
+          </span>
+        }
+      />
 
-      <div className="page-content guide-page-content">
+      <div className="page-content flex flex-col gap-4 [&>*]:shrink-0">
+        {/* Hidden while searching: the contents list describes the whole document, and a filtered
+            view is not the document. */}
+        {!normalizedQuery ? (
+          <nav
+            className="flex flex-wrap items-center gap-1"
+            aria-label={t('guide.title')}
+          >
+            {GUIDE_SECTIONS.map((section) => (
+              <Button
+                key={section.id}
+                variant="ghost"
+                size="sm"
+                static
+                aria-current={activeSectionId === section.id ? 'true' : undefined}
+                onClick={() => handleJump(section.id)}
+                className={`h-7 rounded-md px-2.5 text-[11px] ${
+                  activeSectionId === section.id
+                    ? 'bg-bg-elevated text-ink'
+                    : 'text-ink-dim hover:text-ink'
+                }`}
+              >
+                {section.title}
+              </Button>
+            ))}
+          </nav>
+        ) : null}
+
         {/* Temporary. The guide predates the local-source pivot, so parts of it describe an
             app that no longer exists — say so rather than let it quietly mislead. */}
-        <div className="guide-stale-banner" role="status">
+        <p
+          role="status"
+          className="flex max-w-[70ch] items-start gap-2 rounded-md border border-accent-amber/25 bg-accent-amber/8 px-3 py-2 text-[11px] leading-relaxed text-accent-amber"
+        >
+          <i className="ti ti-alert-triangle mt-px shrink-0 text-sm" aria-hidden="true" />
           {t('guide.staleNotice')}
-        </div>
+        </p>
 
-        <div className="guide-intro">{t('guide.intro')}</div>
+        <p className="max-w-[70ch] text-xs leading-relaxed text-ink-soft">{t('guide.intro')}</p>
 
         {visibleSections.length === 0 ? (
-          <div className="empty-state" style={{ marginTop: 32, minHeight: 160 }}>
-            <span className="empty-primary">{t('guide.noMatches')}</span>
-            <span className="empty-sub">{t('guide.noMatchesSub', { query })}</span>
-          </div>
+          <EmptyState
+            className="py-10"
+            icon="ti-search-off"
+            title={t('guide.noMatches')}
+            detail={t('guide.noMatchesSub', { query })}
+          />
         ) : (
           visibleSections.map((section) => (
             <section
               key={section.id}
               id={`guide-section-${section.id}`}
-              className="guide-section"
+              // `scroll-mt` so `scrollIntoView` does not tuck the heading under the top bar.
+              className="flex scroll-mt-4 flex-col gap-3 border-t border-line pt-4 first-of-type:border-t-0 first-of-type:pt-0"
             >
-              <header className="guide-section-header">
-                <h2 className="guide-section-title">{section.title}</h2>
-                <p className="guide-section-blurb">{section.blurb}</p>
+              <header className="flex flex-col gap-1">
+                <h2 className="text-sm font-semibold text-ink">{section.title}</h2>
+                <p className="max-w-[70ch] text-[11px] leading-relaxed text-ink-dim">
+                  {section.blurb}
+                </p>
               </header>
-              <div className="guide-section-body">
+              <div className="flex flex-col gap-3">
                 {section.blocks.map((block, i) => (
                   <GuideBlockView key={i} block={block} />
                 ))}

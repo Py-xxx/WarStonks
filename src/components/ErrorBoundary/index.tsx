@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
 import { tActive } from '../../i18n';
 
 interface ErrorBoundaryProps {
@@ -33,15 +34,21 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render(): ReactNode {
     if (this.state.error) {
       return (
-        <div className="card error-boundary-card">
-          <div className="empty-state">
-            <span className="empty-primary">{tActive('err.boundaryTitle', { label: this.props.label })}</span>
-            <span className="empty-sub">
+        // Plain markup rather than `Panel`/`EmptyState`: this renders *because a render failed*,
+        // so the fallback keeps its dependency surface small. `Button` is the exception — it is a
+        // leaf primitive, and if it were the thing that broke, nothing in the app would render.
+        <div className="m-3 rounded-lg border border-accent-red/25 bg-accent-red/8 p-6">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <i className="ti ti-alert-triangle text-lg text-accent-red" aria-hidden="true" />
+            <span className="text-xs font-medium text-ink">
+              {tActive('err.boundaryTitle', { label: this.props.label })}
+            </span>
+            <span className="text-[11px] leading-relaxed text-ink-dim">
               {tActive('err.boundary')}
             </span>
-            <button className="text-btn" type="button" onClick={this.handleRetry}>
+            <Button variant="outline" size="sm" className="mt-1" onClick={this.handleRetry}>
               {tActive('common.retry')}
-            </button>
+            </Button>
           </div>
         </div>
       );

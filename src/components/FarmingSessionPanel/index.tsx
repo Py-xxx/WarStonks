@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { Button } from '@/components/ui/button';
+import { ItemThumb } from '../ListRow';
 import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../stores/useAppStore';
 import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
@@ -47,37 +49,55 @@ export function FarmingSessionPanel() {
   if (!session && loading) {
     if (!expanded) {
       return (
-        <button
-          type="button"
-          className="farm-fab is-loading"
+        <Button
+          variant="ghost"
           aria-label={t('farm.reopen')}
           title={loading.label}
           onClick={() => setExpanded(true)}
+          className="fixed right-6 bottom-6 z-(--z-nav) size-13 rounded-full border border-accent-amber/50 bg-bg-elevated text-accent-amber shadow-float"
         >
-          <span className="farm-fab-spinner" aria-hidden="true" />
-        </button>
+          {/* A spinner, not a skeleton, and deliberately: this is a *pending action* the user
+              just triggered, not content loading into a known shape. Rule 5 is about the
+              latter. */}
+          <span
+            className="size-5 animate-spin rounded-full border-2 border-accent-amber/30 border-t-accent-amber"
+            aria-hidden="true"
+          />
+        </Button>
       );
     }
     return (
-      <section ref={panelRef} className="farm-panel" aria-busy="true" aria-label={t('farm.nowFarming')}>
-        <header className="farm-panel-head">
-          <div className="farm-panel-title">
-            <span className="farm-panel-eyebrow">{t('farm.huntingItem', { item: loading.label })}</span>
-            <strong>{t('farm.findingRelics')}</strong>
+      <section
+        ref={panelRef}
+        className="fixed right-6 bottom-6 z-(--z-nav) flex w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-accent-amber/40 bg-bg-elevated shadow-float"
+        aria-busy="true"
+        aria-label={t('farm.nowFarming')}
+      >
+        <header className="flex items-start justify-between gap-2.5 border-b border-line p-3.5">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="font-mono text-[9px] tracking-[0.07em] uppercase text-accent-amber">
+              {t('farm.huntingItem', { item: loading.label })}
+            </span>
+            <strong className="truncate text-sm text-ink">{t('farm.findingRelics')}</strong>
           </div>
-          <button
-            type="button"
-            className="farm-panel-minimize"
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label={t('farm.minimize')}
             title={t('farm.minimize')}
             onClick={() => setExpanded(false)}
           >
             <i className="ti ti-chevron-down" aria-hidden="true" />
-          </button>
+          </Button>
         </header>
-        <div className="farm-panel-loading">
-          <span className="farm-panel-spinner" aria-hidden="true" />
-          <span>{t('farm.loadingRelics')}</span>
+        {/* The relic list is a variable-length list of unknown length, so a skeleton would be
+            inventing a shape. A pending line is honest here. */}
+        <div className="flex items-center gap-2 p-3.5 text-[11px] text-ink-dim">
+          <span
+            className="size-3.5 animate-spin rounded-full border-2 border-line-strong border-t-accent-amber"
+            aria-hidden="true"
+          />
+          {t('farm.loadingRelics')}
         </div>
       </section>
     );
@@ -111,16 +131,22 @@ export function FarmingSessionPanel() {
 
   if (!expanded) {
     return (
-      <button
-        type="button"
-        className="farm-fab"
+      // Amber is the farming session's colour throughout (`ELEMENTS.md` §5) — the one
+      // established extension to "accents carry meaning".
+      <Button
+        variant="ghost"
         aria-label={t('farm.reopen')}
         title={`${t('farm.nowFarming')}: ${active?.relicName ?? ''}`}
         onClick={() => setExpanded(true)}
+        className="fixed right-6 bottom-6 z-(--z-nav) size-13 rounded-full border border-accent-amber/50 bg-bg-elevated text-accent-amber shadow-float hover:bg-bg-overlay hover:text-accent-amber"
       >
-        <i className="ti ti-flame" aria-hidden="true" />
-        {totalRuns > 0 ? <span className="farm-fab-badge">{totalRuns}</span> : null}
-      </button>
+        <i className="ti ti-flame text-xl" aria-hidden="true" />
+        {totalRuns > 0 ? (
+          <span className="absolute -top-1 -right-1 grid h-5 min-w-5 place-items-center rounded-full bg-accent-amber px-1.5 font-mono text-[10px] font-bold tabular-nums text-bg-base">
+            {totalRuns}
+          </span>
+        ) : null}
+      </Button>
     );
   }
 
@@ -149,26 +175,34 @@ export function FarmingSessionPanel() {
   const renderDrop = (drop: FarmingSessionDrop) => {
     const image = resolveWfmAssetUrl(drop.imagePath, drop.slug);
     return (
-      <button
+      // Filler recedes: it is worth nothing and is only here so "I got nothing" is one tap
+      // rather than a decision.
+      <Button
         key={drop.slug}
-        type="button"
-        className={`farm-drop${drop.isFiller ? ' is-filler' : ''}`}
+        variant="ghost"
+        size="sm"
+        static
         onClick={() => void logDrop(drop)}
+        className={`h-auto w-full justify-start gap-2 rounded-md border px-2 py-1.5 text-left ${
+          drop.isFiller
+            ? 'border-line bg-bg-base text-ink-dim'
+            : 'border-line-strong bg-bg-base hover:border-accent-amber/45 hover:bg-accent-amber/8'
+        }`}
       >
-        <span className="farm-drop-thumb" aria-hidden="true">
-          {image ? <img src={image} alt="" loading="lazy" /> : <span>{drop.name.slice(0, 1)}</span>}
-        </span>
-        <span className="farm-drop-copy">
-          <span className="farm-drop-name">{drop.isFiller ? t('farm.filler') : drop.name}</span>
+        <ItemThumb src={image} fallback={drop.name.slice(0, 1)} size="size-7" />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate text-[11px] font-medium text-ink">
+            {drop.isFiller ? t('farm.filler') : drop.name}
+          </span>
           {!drop.isFiller ? (
-            <span className="farm-drop-meta">
+            <span className="truncate font-mono text-[10px] font-normal tabular-nums text-ink-dim">
               {drop.rarity ?? ''}
               {drop.chance != null ? ` · ${Math.round(drop.chance * 100)}%` : ''}
               {drop.recommendedExitPrice != null ? ` · ${drop.recommendedExitPrice}p` : ''}
             </span>
           ) : null}
         </span>
-      </button>
+      </Button>
     );
   };
 
@@ -176,67 +210,78 @@ export function FarmingSessionPanel() {
   const fillerDrops = drops.filter((drop) => drop.isFiller);
 
   return (
-    <section ref={panelRef} className="farm-panel" aria-label={t('farm.nowFarming')}>
-      <header className="farm-panel-head">
-        <div className="farm-panel-title">
-          <span className="farm-panel-eyebrow">
+    // Amber-framed and fixed bottom-right: a farming run is a *session* that outlives whatever
+    // page you navigate to, so it floats above the app rather than living on one.
+    <section
+      ref={panelRef}
+      className="fixed right-6 bottom-6 z-(--z-nav) flex max-h-[min(70vh,640px)] w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-accent-amber/40 bg-bg-elevated shadow-float"
+      aria-label={t('farm.nowFarming')}
+    >
+      <header className="flex shrink-0 items-start justify-between gap-2.5 border-b border-line p-3.5">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase text-accent-amber">
             {session.targetDropName
               ? t('farm.huntingItem', { item: session.targetDropName })
               : t('farm.nowFarming')}
           </span>
-          <strong>{active?.relicName ?? ''}</strong>
-          <span className="farm-panel-refinement">
-            <span className="farm-refine-current">
+          <strong className="truncate text-sm text-ink">{active?.relicName ?? ''}</strong>
+          <span className="flex flex-wrap items-baseline gap-x-1.5 text-[10px]">
+            <span className="text-ink-dim">
               {t('farm.runningAt', { refinement: active?.refinement ?? '' })}
             </span>
+            {/* Running below the recommended refinement costs real odds, so it reads amber. */}
             {active && active.recommendedRefinement !== active.refinement ? (
-              <span className="farm-refine-recommended" title={t('farm.upgradeHint')}>
+              <span className="text-accent-amber" title={t('farm.upgradeHint')}>
                 {t('farm.recommends', { refinement: active.recommendedRefinement })}
               </span>
             ) : (
-              <span className="farm-refine-best">{t('farm.bestAlready')}</span>
+              <span className="text-accent-green">{t('farm.bestAlready')}</span>
             )}
           </span>
         </div>
-        <div className="farm-panel-actions">
-          <button type="button" className="act-btn" onClick={stop}>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={stop}>
             {t('farm.stop')}
-          </button>
-          <button
-            type="button"
-            className="farm-panel-minimize"
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label={t('farm.minimize')}
             title={t('farm.minimize')}
             onClick={() => setExpanded(false)}
           >
             <i className="ti ti-chevron-down" aria-hidden="true" />
-          </button>
+          </Button>
         </div>
       </header>
+
+      {/* One scroll region: the header, the cycle and the footer stay put while the drop list
+          moves, so "what did you get" is always reachable without hunting for it. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3.5">
 
       {/* Relic carousel: the cycle is frozen at selection time, so changing filters afterwards
           can't reorder what the user is stepping through. */}
       {canCycle ? (
-        <div className="farm-cycle">
-          <button
-            type="button"
-            className="farm-cycle-arrow"
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label={t('farm.previousRelic')}
             onClick={() => cycleRelic(-1)}
           >
             <i className="ti ti-chevron-left" aria-hidden="true" />
-          </button>
-          <div className="farm-cycle-card">
-            <span className="farm-cycle-thumb relic-art" aria-hidden="true">
-              {activeRelicImage ? (
-                <img src={activeRelicImage} alt="" />
-              ) : (
-                <span>{(active?.relicName ?? '?').slice(0, 2)}</span>
-              )}
-            </span>
-            <div className="farm-cycle-copy">
-              <span className="farm-cycle-name">{active?.relicName}</span>
-              <span className="farm-cycle-meta">
+          </Button>
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-line bg-bg-base px-2 py-1.5">
+            {/* Relic art draws no thumbnail chrome — `ELEMENTS.md` §7. */}
+            <ItemThumb
+              src={activeRelicImage}
+              fallback={(active?.relicName ?? '?').slice(0, 2)}
+              size="size-8"
+              chrome={false}
+            />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="truncate text-[11px] font-medium text-ink">{active?.relicName}</span>
+              <span className="truncate font-mono text-[10px] tabular-nums text-ink-dim">
                 {t('farm.relicsLeft', { n: remaining, total: active?.ownedCount ?? 0 })}
                 {active?.targetChance != null
                   ? ` · ${Math.round(active.targetChance * 100)}% ${t('opp.oddsPerRun')}`
@@ -246,67 +291,74 @@ export function FarmingSessionPanel() {
                   : ''}
               </span>
             </div>
-            <span className="farm-cycle-index">
+            <span className="shrink-0 font-mono text-[10px] tabular-nums text-ink-faint">
               {session.activeIndex + 1}/{session.cycle.length}
             </span>
           </div>
-          <button
-            type="button"
-            className="farm-cycle-arrow"
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label={t('farm.nextRelic')}
             onClick={() => cycleRelic(1)}
           >
             <i className="ti ti-chevron-right" aria-hidden="true" />
-          </button>
+          </Button>
         </div>
       ) : null}
 
-      <div className="farm-panel-stats">
-        <span className="farm-stat">
-          <strong>{runCount}</strong>
-          {runCount === 1 ? t('farm.runsLoggedOne') : t('farm.runsLogged', { n: runCount })}
-        </span>
-        <span className="farm-stat">
-          <strong>{platGained}p</strong>
-          {t('farm.platGained')}
-        </span>
-        {seenOdds !== null && bestDrop ? (
-          <span className="farm-stat-odds">
-            {t('farm.sessionOdds', {
-              n: runCount,
-              pct: `${Math.round(seenOdds * 100)}%`,
-            })}
+        <div className="flex shrink-0 flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-ink-dim">
+          <span>
+            <strong className="text-ink">{runCount}</strong>{' '}
+            {runCount === 1 ? t('farm.runsLoggedOne') : t('farm.runsLogged', { n: runCount })}
           </span>
-        ) : null}
-      </div>
-
-      <div className="farm-panel-prompt">
-        {allSpent ? t('farm.allSpent') : t('farm.whatDidYouGet')}
-      </div>
-
-      {drops.length === 0 ? (
-        <div className="farm-panel-empty">{t('farm.noDrops')}</div>
-      ) : (
-        <div className="farm-drop-list">
-          {realDrops.map(renderDrop)}
-          {fillerDrops.map(renderDrop)}
+          <span>
+            <strong className="text-accent-green">{platGained}p</strong> {t('farm.platGained')}
+          </span>
+          {/* Cumulative odds of having seen the target by now — the number that tells you when
+              to stop, and it plots a computed value, not a mood. */}
+          {seenOdds !== null && bestDrop ? (
+            <span className="text-accent-amber">
+              {t('farm.sessionOdds', {
+                n: runCount,
+                pct: `${Math.round(seenOdds * 100)}%`,
+              })}
+            </span>
+          ) : null}
         </div>
-      )}
 
-      <footer className="farm-panel-foot">
+        <div className="shrink-0 text-[11px] font-medium text-ink">
+          {allSpent ? t('farm.allSpent') : t('farm.whatDidYouGet')}
+        </div>
+
+        {drops.length === 0 ? (
+          <p className="text-[11px] text-ink-dim">{t('farm.noDrops')}</p>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {realDrops.map(renderDrop)}
+            {fillerDrops.map(renderDrop)}
+          </div>
+        )}
+      </div>
+
+      <footer className="flex shrink-0 items-center gap-2 border-t border-line px-3.5 py-2.5">
         {lastRun ? (
           <>
-            <span className="farm-panel-last">
+            <span className="min-w-0 flex-1 truncate text-[10px] text-ink-dim">
               {t('farm.lastLogged', {
                 item: lastRun.isFiller ? t('farm.fillerShort') : lastRun.dropName,
               })}
             </span>
-            <button type="button" className="act-btn" onClick={() => void undoLast()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 px-2 text-[11px]"
+              onClick={() => void undoLast()}
+            >
               {t('farm.undo')}
-            </button>
+            </Button>
           </>
         ) : (
-          <span className="farm-panel-note">{t('farm.relicNote')}</span>
+          <span className="text-[10px] leading-relaxed text-ink-faint">{t('farm.relicNote')}</span>
         )}
       </footer>
     </section>

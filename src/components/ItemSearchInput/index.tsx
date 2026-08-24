@@ -1,3 +1,6 @@
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ItemThumb } from '../ListRow';
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import { getWfmAutocompleteItems } from '../../lib/tauriClient';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
@@ -79,27 +82,26 @@ export function ItemSearchInput({ selected, onSelect, placeholder }: ItemSearchI
   if (selected) {
     const imageUrl = resolveWfmAssetUrl(selected.imagePath, selected.slug);
     return (
-      <div className="wl-field-control wl-search-chip">
-        <span className="wl-row-thumb">
-          {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{selected.name.slice(0, 1)}</span>}
-        </span>
-        <span className="wl-search-chip-name">{selected.name}</span>
-        <button
-          type="button"
-          className="wl-search-clear"
+      <div className="flex h-8 min-w-0 items-center gap-2 rounded-md border border-line-strong bg-bg-base px-2">
+        <ItemThumb src={imageUrl} fallback={selected.name.slice(0, 1)} size="size-5" />
+        <span className="min-w-0 flex-1 truncate text-xs text-ink">{selected.name}</span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          static
+          className="-mr-1 size-6 shrink-0"
           aria-label={t('wl.clearSelection')}
           onClick={() => onSelect(null)}
         >
-          ×
-        </button>
+          <i className="ti ti-x text-xs" aria-hidden="true" />
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="wl-search" ref={containerRef}>
-      <input
-        className="wl-field-control wl-search-input"
+    <div className="relative min-w-0" ref={containerRef}>
+      <Input
         type="text"
         value={query}
         placeholder={placeholder ?? t('wl.searchItems')}
@@ -128,36 +130,45 @@ export function ItemSearchInput({ selected, onSelect, placeholder }: ItemSearchI
         }}
       />
       {open && (suggestions.length > 0 || query.trim().length > 0 || loadState !== 'ready') ? (
-        <div className="wl-search-menu" role="listbox">
+        // `z-(--z-dropdown)` written in the form Tailwind actually generates — a bare `z-dropdown`
+        // produces nothing and leaves the menu at `z-index: auto`. Guard 7 catches that.
+        <div
+          className="absolute top-full right-0 left-0 z-(--z-dropdown) mt-1 max-h-60 overflow-y-auto rounded-md border border-white/12 bg-bg-overlay p-1 shadow-float"
+          role="listbox"
+        >
           {loadState === 'error' ? (
-            <div className="wl-search-note">{t('wl.searchUnavailable')}</div>
+            <p className="px-2 py-1.5 text-[11px] text-accent-red">{t('wl.searchUnavailable')}</p>
           ) : null}
           {loadState === 'loading' ? (
-            <div className="wl-search-note">{t('wl.searchLoading')}</div>
+            <p className="px-2 py-1.5 text-[11px] text-ink-dim">{t('wl.searchLoading')}</p>
           ) : null}
           {loadState === 'ready' && query.trim().length > 0 && suggestions.length === 0 ? (
-            <div className="wl-search-note">{t('wl.searchNoMatches')}</div>
+            <p className="px-2 py-1.5 text-[11px] text-ink-dim">{t('wl.searchNoMatches')}</p>
           ) : null}
           {suggestions.map((item, index) => {
             const imageUrl = resolveWfmAssetUrl(item.imagePath, item.slug);
             return (
-              <button
+              <Button
                 key={item.wfmId}
-                type="button"
+                variant="ghost"
+                size="sm"
+                static
                 role="option"
                 aria-selected={index === highlighted}
-                className={`wl-search-option${index === highlighted ? ' highlighted' : ''}`}
+                className={`h-auto w-full min-w-0 justify-start gap-2 rounded-sm px-1.5 py-1 text-left ${
+                  index === highlighted ? 'bg-bg-elevated text-ink' : 'text-ink-soft'
+                }`}
                 onMouseEnter={() => setHighlighted(index)}
+                // `onMouseDown` + `preventDefault`, not `onClick`: the input's blur fires first
+                // and would close the menu before a click could land on it.
                 onMouseDown={(event) => {
                   event.preventDefault();
                   choose(item);
                 }}
               >
-                <span className="wl-row-thumb">
-                  {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span>{item.name.slice(0, 1)}</span>}
-                </span>
-                <span className="wl-search-option-name">{item.name}</span>
-              </button>
+                <ItemThumb src={imageUrl} fallback={item.name.slice(0, 1)} size="size-5" />
+                <span className="min-w-0 flex-1 truncate text-xs">{item.name}</span>
+              </Button>
             );
           })}
         </div>

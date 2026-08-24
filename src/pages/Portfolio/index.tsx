@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Metric, MetricGrid } from '@/components/ui/metric';
 import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { ItemThumb } from '../../components/ListRow';
@@ -814,16 +815,16 @@ function TradeLogEntryRow({
       <span className="portfolio-log-date">{formatShortLocalDateTime(entry.closedAt)}</span>
       <span className="portfolio-log-actions">
         {entry.orderType === 'buy' ? (
-          <label className="portfolio-keep-toggle-wrap">
-            <button
-              className={`toggle portfolio-keep-toggle${keepOn ? ' on' : ''}`}
-              type="button"
-              role="switch"
-              aria-checked={keepOn}
+          /* The last hand-rolled switch in the app. `Switch` has existed since the Trades pass;
+             this one kept its `.toggle` CSS only because nothing had come back to it. */
+          <label className="flex cursor-pointer items-center gap-2">
+            <Switch
+              tone="positive"
+              checked={keepOn}
               aria-label={t('pf.keepAriaLabel', { name: entry.itemName })}
-              onClick={() => onToggleKeep(entry)}
+              onCheckedChange={() => onToggleKeep(entry)}
             />
-            <span>{t('pf.keepItem')}</span>
+            <span className="text-[11px] text-ink-soft">{t('pf.keepItem')}</span>
           </label>
         ) : (
           <span className="portfolio-log-value">—</span>
