@@ -9,6 +9,8 @@
  * Changes from the source:
  * - `lucide-react` swapped for our Tabler icon font — one icon system per app.
  * - `z-50` replaced with the `--z-modal` layering token, and the backdrop with `--z-overlay`.
+ *   The backdrop is `black/80`, not the source's `/50`: on a near-black app a lighter scrim leaves
+ *   the page too legible behind the dialog to read as dismissed.
  *   A literal z-index is what produced twenty-one hand-picked values before the migration.
  * - Colours on our tokens. The popup uses `--color-bg-overlay` and a `white/12` border, like the
  *   tooltip and popover: an overlay has to read as *above* the page, and `bg-elevated` sits at
@@ -51,7 +53,7 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       data-ws-overlay=""
-      className={cn('fixed inset-0 z-(--z-overlay) bg-black/70', className)}
+      className={cn('fixed inset-0 z-(--z-overlay) bg-black/80', className)}
       {...props}
     />
   );

@@ -1,6 +1,8 @@
 import { useAppStore } from '../../stores/useAppStore';
 import { useTranslation } from '../../i18n';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EventEmpty, EventPanel, EventRow, EventTag, RowFigure } from '../Events/parts';
 
 type NightwaveChallenge = {
   title: string;
@@ -64,51 +66,64 @@ export function NightwavePanel() {
     (left, right) => challengeTier(left, tierLabels).order - challengeTier(right, tierLabels).order,
   );
 
-  if (!payload && entry.loading) {
-    return <div className="opportunities-placeholder">{t('evt.loadingNightwave')}</div>;
-  }
   if (!payload) {
-    return <div className="opportunities-placeholder">{t('evt.noNightwaveSeason')}</div>;
+    return (
+      <EventPanel title="Nightwave" bodyClassName="p-2">
+        {entry.loading ? (
+          <Skeleton type="table-row@3" leafClassName="h-5" />
+        ) : (
+          <EventEmpty icon="ti-flame" title={t('evt.noNightwaveSeason')} />
+        )}
+      </EventPanel>
+    );
   }
 
   return (
-    <div className="market-panel">
-      <div className="events-section-header">
-        <span className="panel-title-eyebrow">
-          Nightwave
-        </span>
-        <h3>
-          {season !== null ? t('evt.nightwaveSeason', { n: season }) : 'Nightwave'}
-          {phase !== null ? t('evt.nightwavePhase', { n: phase }) : ''}
-        </h3>
-        {expiry ? (
-          <p className="text-dim">{t('evt.nightwaveSeasonEnds', { date: formatShortLocalDateTime(expiry) })}</p>
-        ) : null}
-      </div>
+    <EventPanel
+      title="Nightwave"
+      count={challenges.length}
+      countTone="info"
+      aside={
+        expiry ? (
+          <span className="font-mono text-[10px] text-ink-dim">
+            {t('evt.nightwaveSeasonEnds', { date: formatShortLocalDateTime(expiry) })}
+          </span>
+        ) : null
+      }
+      bodyClassName="flex flex-col gap-1 p-2"
+    >
+      <span className="px-1 text-[11px] text-ink-dim">
+        {season !== null ? t('evt.nightwaveSeason', { n: season }) : 'Nightwave'}
+        {phase !== null ? t('evt.nightwavePhase', { n: phase }) : ''}
+      </span>
 
       {challenges.length === 0 ? (
-        <div className="opportunities-placeholder">{t('evt.noActiveChallenges')}</div>
+        <EventEmpty icon="ti-checks" title={t('evt.noActiveChallenges')} />
       ) : (
-        <div className="nightwave-grid">
-          {challenges.map((challenge, index) => {
-            const tier = challengeTier(challenge, tierLabels);
-            return (
-              <div key={index} className="nightwave-card">
-                <div className="nightwave-card-head">
-                  <span className={`market-panel-badge tone-${tier.tone}`}>{tier.label}</span>
-                  {challenge.reputation !== null ? (
-                    <span className="nightwave-standing">
-                      {t('evt.standingGain', { n: challenge.reputation.toLocaleString() })}
-                    </span>
-                  ) : null}
-                </div>
-                <strong className="nightwave-title">{challenge.title}</strong>
-                {challenge.desc ? <p className="nightwave-desc">{challenge.desc}</p> : null}
-              </div>
-            );
-          })}
-        </div>
+        /* Rows, not cards. A challenge is a title, a tier and a standing figure — three facts
+           that line up into columns, where a card per challenge was three lines of box. */
+        challenges.map((challenge, index) => {
+          const tier = challengeTier(challenge, tierLabels);
+          return (
+            <EventRow
+              key={index}
+              lead={<EventTag tone={tier.tone as never}>{tier.label}</EventTag>}
+              title={challenge.title}
+              meta={challenge.desc || undefined}
+              trailing={
+                challenge.reputation !== null ? (
+                  <RowFigure
+                    label={t('evt.standing')}
+                    value={challenge.reputation.toLocaleString()}
+                    tone="positive"
+                    width="w-16"
+                  />
+                ) : null
+              }
+            />
+          );
+        })
       )}
-    </div>
+    </EventPanel>
   );
 }

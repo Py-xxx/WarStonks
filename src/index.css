@@ -54,11 +54,16 @@
   --color-bg-surface: #13161e;
   --color-bg-panel: #171b24;
   --color-bg-elevated: #1a1e2a;
-  /* Overlays only — tooltips, popovers, menus. Deliberately lighter than every in-page surface:
+  /* Overlays only — tooltips, popovers, menus, dialogs. Still lighter than every in-page surface,
+     because an overlay has to read as ABOVE the page rather than as another region of it:
      `bg-elevated` sits at 1.04:1 against `bg-panel`, so a tooltip drawn on it was invisible as a
-     surface and only its border separated it from the panel underneath. An overlay has to read as
-     ABOVE the page, not as another region of it. */
-  --color-bg-overlay: #262c3c;
+     surface and only its border separated it from the panel underneath.
+
+     Darkened from #262c3c, which read as a light grey card dropped onto a near-black app — the
+     step up was doing elevation's whole job on its own. It is now ~1.25:1 above `bg-panel`, enough
+     to see as a surface change, with the `white/12` border and `shadow-float` carrying the rest.
+     Change this and you change every tooltip, popover, menu and dialog in the app. */
+  --color-bg-overlay: #1e2230;
 
   /* Lines. */
   --color-line-subtle: #1c1f2b;
@@ -155,6 +160,16 @@
   @keyframes ws-overlay-out {
     from { opacity: 1; transform: none; }
     to   { opacity: 0; transform: scale(0.97); }
+  }
+
+  /* Indeterminate progress, for a user-initiated operation whose duration is genuinely unknown
+     (an export/import streaming through a multi-table database). This is NOT a loading state over
+     known content — those are skeletons. It is keyed to a user action, never to polled data, so
+     it does not violate the never-animate-on-data-arrival rule; and the global reduced-motion
+     block neutralises it. */
+  @keyframes ws-indeterminate {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
   }
 
   [data-ws-overlay][data-open] {

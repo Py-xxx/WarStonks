@@ -27,6 +27,12 @@ function PopoverTrigger(props: PopoverPrimitive.Trigger.Props) {
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
 }
 
+/** Closes the popover when its child is activated — a menu item, a Cancel. Wrapping a `Button`
+ *  in this is how a menu row both acts and dismisses without the caller tracking `open`. */
+function PopoverClose(props: PopoverPrimitive.Close.Props) {
+  return <PopoverPrimitive.Close data-slot="popover-close" {...props} />;
+}
+
 function PopoverContent({
   className,
   align = 'start',
@@ -61,4 +67,4 @@ function PopoverContent({
   );
 }
 
-export { Popover, PopoverTrigger, PopoverContent };
+export { Popover, PopoverClose, PopoverTrigger, PopoverContent };

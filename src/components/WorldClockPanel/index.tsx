@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
+import { Panel } from '@/components/ui/panel';
 import { useAppStore } from '../../stores/useAppStore';
 
 type CycleConfig = {
@@ -9,6 +10,21 @@ type CycleConfig = {
   // Maps the raw worldstate state string → a display label + tone class.
   // Fass/Vome are Warframe-specific proper nouns and stay in English like Archwing/Sharkwing.
   tone: (state: string) => { labelKey: TranslationKey | null; label?: string; tone: string };
+};
+
+/** Cycle state → colour. Day/warm read warm, night/cold read cool; the dot carries it so the
+ *  label does not have to be a coloured pill. */
+const STATE_DOT: Record<string, string> = {
+  day: 'bg-accent-amber',
+  night: 'bg-accent-purple',
+  warm: 'bg-accent-amber',
+  cold: 'bg-accent-blue',
+};
+const STATE_TEXT: Record<string, string> = {
+  day: 'text-accent-amber',
+  night: 'text-accent-purple',
+  warm: 'text-accent-amber',
+  cold: 'text-accent-blue',
 };
 
 const CYCLES: CycleConfig[] = [
@@ -106,26 +122,47 @@ export function WorldClockPanel() {
 
   if (cycles.length === 0) {
     return (
-      <div className="world-clock world-clock-empty">
+      <Panel className="px-3 py-2 text-[11px] text-ink-dim">
         {entry.loading ? t('evt.loadingWorldCycles') : t('evt.worldCyclesUnavailable')}
-      </div>
+      </Panel>
     );
   }
 
   return (
-    <div className="world-clock" aria-label={t('a11y.openWorldCycles')}>
+    /* One strip, four cells, no panel header. This is a clock: it has no title worth a row and no
+       state worth a refresh button, and it sits above every Events tab, so every pixel of chrome
+       here is paid four times over. */
+    <Panel
+      className="grid divide-x divide-line overflow-hidden [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]"
+      aria-label={t('a11y.openWorldCycles')}
+    >
       {cycles.map(({ config, data }) => {
         const display = config.tone(data!.state);
         return (
-          <div key={config.key} className={`world-clock-cell world-clock-${display.tone}`}>
-            <span className="world-clock-place">{config.label}</span>
-            <span className={`world-clock-state world-clock-state-${display.tone}`}>
+          /* The three facts read as one phrase — "Cetus · Day · 42m" — so they sit together
+             and the cell centres them. The place name used to be `flex-1`, which pushed the
+             state and the countdown to the far right edge of the cell and left a gap wide
+             enough to read them as unrelated. */
+          <div
+            key={config.key}
+            className="flex min-w-0 items-center justify-center gap-2 px-3 py-2"
+          >
+            <span
+              className={`size-1.5 shrink-0 rounded-full ${STATE_DOT[display.tone] ?? 'bg-ink-faint'}`}
+              aria-hidden="true"
+            />
+            <span className="truncate text-[11px] text-ink-dim">{config.label}</span>
+            <span
+              className={`shrink-0 text-[11px] font-semibold ${STATE_TEXT[display.tone] ?? 'text-ink'}`}
+            >
               {display.labelKey ? t(display.labelKey) : display.label}
             </span>
-            <span className="world-clock-countdown">{formatCountdown(data!.expiry, now, t('evt.now'))}</span>
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-soft">
+              {formatCountdown(data!.expiry, now, t('evt.now'))}
+            </span>
           </div>
         );
       })}
-    </div>
+    </Panel>
   );
 }

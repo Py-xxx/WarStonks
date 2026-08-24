@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
+import { Metric, MetricGrid } from '@/components/ui/metric';
 import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Stat } from '@/components/ui/stat';
@@ -9,6 +10,7 @@ import { DetailGroup, ItemThumb, ListRow, RowMetric } from '../../components/Lis
 import { ItemName } from '../../components/ItemName';
 import { useTranslation } from '../../i18n';
 import { tConfidence } from '../../lib/healthLabels';
+import { confidenceTone } from '../../lib/opportunityView';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import type { ArbitrageScannerComponentEntry } from '../../types';
 import { formatPlat } from './farmNowModel';
@@ -28,6 +30,14 @@ import type {
  * established (`components/ListRow`), so the three list pages in this part of the app read as one
  * product rather than three. The accordion is kept deliberately.
  */
+
+/** `confidenceTone`'s vocabulary mapped onto `Metric`'s. Muted stays neutral-dim rather than
+ *  becoming red — see `lib/opportunityView`. */
+const CONFIDENCE_METRIC_TONE = {
+  green: 'green',
+  amber: 'amber',
+  muted: 'neutral',
+} as const;
 
 const PROGRESS_TONE: Record<string, string> = {
   complete: 'bg-accent-green',
@@ -148,44 +158,50 @@ function MissingComponentRow({
           ) : null}
         </span>
 
-        <span className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10px] text-ink-faint tabular-nums">
-          <span>
-            {t('opp.buyZone')} {formatPlat(component.recommendedEntryLow)}–
-            {formatPlat(component.recommendedEntryHigh)}
+        {relicHints.length > 0 ? (
+          <span className="flex min-w-0">
+            {/* You may not need to buy this at all — this is the "or farm it" answer, and it
+                carries you to the odds for the relics you actually hold. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              static
+              onClick={onFarmComponent}
+              title={t('opp.farmThisItemHint', { item: component.name })}
+              className="-ml-1.5 h-5 rounded px-1.5 font-mono text-[10px] text-accent-amber tabular-nums hover:bg-accent-amber/15"
+            >
+              <i className="ti ti-diamond" aria-hidden="true" />
+              {t('opp.relicsOwnedShort', { n: ownedRelicCount })}
+            </Button>
           </span>
-          <span aria-hidden="true">·</span>
-          {/* Owned is a shortfall, not a tick — 1/3 and 3/3 are different decisions. */}
-          <span>
-            {component.quantityInSet > 1
-              ? t('opp.haveOfNeed', {
-                  have: componentState.coveredQuantity,
-                  need: component.quantityInSet,
-                })
-              : t('opp.ownedOfTotal', {
-                  owned: componentState.coveredQuantity,
-                  total: component.quantityInSet,
-                })}
-          </span>
-          {relicHints.length > 0 ? (
-            <>
-              <span aria-hidden="true">·</span>
-              {/* You may not need to buy this at all — this is the "or farm it" answer, and it
-                  carries you to the odds for the relics you actually hold. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                static
-                onClick={onFarmComponent}
-                title={t('opp.farmThisItemHint', { item: component.name })}
-                className="h-5 rounded px-1.5 font-mono text-[10px] text-accent-amber tabular-nums hover:bg-accent-amber/15"
-              >
-                <i className="ti ti-diamond" aria-hidden="true" />
-                {t('opp.relicsOwnedShort', { n: ownedRelicCount })}
-              </Button>
-            </>
-          ) : null}
-        </span>
+        ) : null}
       </div>
+
+      {/* The two numbers this row exists to deliver, as real figures rather than clauses in a
+          10px run-on sentence. Ported from Scanners → Arbitrage, where the entry zone has always
+          been a `Metric`; the Planner is the same decision and was whispering it. */}
+      <MetricGrid columns={2} className="shrink-0 gap-x-5">
+        <Metric
+          label={t('opp.buyZone')}
+          value={`${formatPlat(component.recommendedEntryLow)} – ${formatPlat(component.recommendedEntryHigh)}`}
+        />
+        {/* Owned is a shortfall, not a tick — 1/3 and 3/3 are different decisions, and a tick
+            would collapse them. The held count carries the colour; the requirement stays faint so
+            the eye lands on what you have. */}
+        <Metric
+          label={t('opp.owned')}
+          value={
+            <>
+              <span
+                className={componentState.coveredQuantity > 0 ? 'text-accent-green' : 'text-ink-faint'}
+              >
+                {componentState.coveredQuantity}
+              </span>
+              <span className="text-ink-faint">/{component.quantityInSet}</span>
+            </>
+          }
+        />
+      </MetricGrid>
 
       <label className="flex shrink-0 items-center gap-1.5">
         <span className="font-mono text-[9px] tracking-[0.06em] text-ink-faint uppercase">
@@ -299,11 +315,11 @@ function SetRow({
             </span>
             <span className="flex items-center gap-2">
               <ProgressBar pct={progressPct} tone={progressTone} />
-              <span className="font-mono text-[10px] font-normal text-ink-dim tabular-nums">
-                {t('opp.partsOwned', {
-                  owned: planner.ownedPartsCount,
-                  total: planner.totalPartsNeeded,
-                })}
+              {/* How much of the set you hold is the fact this row is sorted and judged on, so it
+                  is read at 11px with the held count in full ink — not 10px faint beside the bar. */}
+              <span className="font-mono text-[11px] font-normal text-ink-dim tabular-nums">
+                <span className="font-semibold text-ink">{planner.ownedPartsCount}</span>
+                {t('opp.partsOwnedTail', { total: planner.totalPartsNeeded })}
               </span>
             </span>
           </span>
@@ -334,7 +350,7 @@ function SetRow({
             {t('opp.sellNow')}
           </Button>
         ) : (
-          <span className="font-mono text-[11px] text-ink-dim tabular-nums">
+          <span className="rounded-md border border-line bg-bg-base px-2 py-1 font-mono text-xs font-semibold text-ink-soft tabular-nums">
             {planner.completionRoiPct === null
               ? '—'
               : t('opp.roiValue', { value: Math.round(planner.completionRoiPct) })}
@@ -342,22 +358,25 @@ function SetRow({
         )
       }
     >
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-ink-dim tabular-nums">
-        <span>
-          {t('mkt.exit')}{' '}
-          <strong className="text-ink">
-            {formatPlat(planner.entry.recommendedSetExitPrice)}
-          </strong>
-        </span>
-        <span>
-          {t('opp.liquidity')}{' '}
-          <strong className="text-ink">{Math.round(planner.entry.liquidityScore)}%</strong>
-        </span>
-        <span>
-          {t('opp.confidence')}{' '}
-          <strong className="text-ink">{tConfidence(t, planner.entry.confidenceSummary)}</strong>
-        </span>
-      </div>
+      {/* Three facts that decide whether the set is worth finishing, so they get the metric
+          treatment rather than being a 10px run-on line with `<strong>` doing the work.
+          Confidence keeps its tone — green/amber/muted, never red: low confidence is uncertainty,
+          not a loss (`lib/opportunityView`). */}
+      <MetricGrid columns={3}>
+        <Metric
+          label={t('mkt.exit')}
+          value={formatPlat(planner.entry.recommendedSetExitPrice)}
+        />
+        <Metric
+          label={t('opp.liquidity')}
+          value={`${Math.round(planner.entry.liquidityScore)}%`}
+        />
+        <Metric
+          label={t('opp.confidence')}
+          value={tConfidence(t, planner.entry.confidenceSummary)}
+          tone={CONFIDENCE_METRIC_TONE[confidenceTone(planner.entry.confidenceSummary.level)]}
+        />
+      </MetricGrid>
 
       {missing.length > 0 ? (
         <DetailGroup label={t('opp.missingToBuy', { n: missing.length })} tone="primary">

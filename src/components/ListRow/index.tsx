@@ -150,13 +150,22 @@ export function ListRow({
         expanded ? 'border-line-strong' : 'border-line hover:border-line-strong'
       }`}
     >
-      <div className="flex items-stretch">
+      {/* The hover tint lives on the ROW, not on the two buttons.
+          It used to be `hover:bg-white/[0.03]` on the head button and on the chevron button
+          separately — so hovering the head lit only the head, and `aside` (which is deliberately
+          outside both buttons, see above) never lit at all. On the Planner that is the whole
+          right-hand side of the row: the ROI figure and the "Sell now" control just sat there at
+          a different shade while everything left of them highlighted. One container tint fixes it
+          for every consumer at once, and `focus-within` gives keyboard users the same feedback the
+          mouse gets. The buttons now explicitly clear `ghost`'s own hover background so they do
+          not double-tint on top of it. */}
+      <div className="flex items-stretch transition-colors duration-150 ease-out hover:bg-white/[0.03] focus-within:bg-white/[0.03]">
         <Button
           variant="ghost"
           static
           aria-expanded={expanded}
           onClick={onToggle}
-          className="h-auto min-w-0 flex-1 justify-start gap-3 rounded-none px-3 py-2.5 text-left hover:bg-white/[0.03]"
+          className="h-auto min-w-0 flex-1 justify-start gap-3 rounded-none px-3 py-2.5 text-left hover:bg-transparent"
         >
           {head}
         </Button>
@@ -170,7 +179,7 @@ export function ListRow({
           aria-expanded={expanded}
           aria-label={toggleLabel}
           onClick={onToggle}
-          className="h-auto shrink-0 rounded-none px-2 text-ink-dim hover:bg-white/[0.03]"
+          className="h-auto shrink-0 rounded-none px-2 text-ink-dim hover:bg-transparent"
         >
           <i className={`ti ${expanded ? 'ti-chevron-up' : 'ti-chevron-down'}`} aria-hidden="true" />
         </Button>

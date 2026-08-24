@@ -47,8 +47,9 @@ export const NAV_SUB_ITEMS: Partial<Record<PageId, NavSubItem[]>> = {
     { id: 'analytics', labelKey: 'market.tab.analytics' },
   ],
   events: [
-    { id: 'vendors', labelKey: 'events.tab.vendors' },
+    { id: 'overview', labelKey: 'events.tab.overview' },
     { id: 'fissures', labelKey: 'events.tab.fissures' },
+    { id: 'vendors', labelKey: 'events.tab.vendors' },
     { id: 'activities', labelKey: 'events.tab.activities' },
     { id: 'progression', labelKey: 'events.tab.progression' },
     { id: 'events-news', labelKey: 'events.tab.eventsNews' },

@@ -14,7 +14,9 @@ export type PageId =
 export type SellerMode = 'ingame' | 'ingame-online';
 export type TradePeriod = '7d' | '30d' | '90d' | 'all';
 export type TradesSubTab = 'orders' | 'health' | 'detection';
-export type SettingsSection = 'alecaframe' | 'discord-webhook' | 'notifications' | 'import-export' | 'language';
+/** The four sections of the settings dialog. `discord-webhook` is gone: Discord is a
+ *  notification channel, and it now lives inside Notifications where its toggles are. */
+export type SettingsSection = 'notifications' | 'alecaframe' | 'language' | 'data';
 export type WorldStateEndpointKey =
   | 'events'
   | 'alerts'
@@ -36,8 +38,10 @@ export type WorldStateExtraKey = 'cycles' | 'steel-path' | 'nightwave' | 'vault-
 
 /** Events-page sub-tabs after the overhaul. */
 export type EventsSubTab =
-  | 'vendors'
+  /** What is happening right now, across every source. The default. */
+  | 'overview'
   | 'fissures'
+  | 'vendors'
   | 'activities'
   | 'progression'
   | 'events-news';

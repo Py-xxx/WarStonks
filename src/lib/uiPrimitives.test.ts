@@ -32,6 +32,20 @@ const MIGRATED_GLOBS = [
   join('src', 'components', 'ListRow'),
   join('src', 'components', 'AlecaframeInventory'),
   join('src', 'components', 'AlertsPanel'),
+  join('src', 'pages', 'Trades'),
+  join('src', 'components', 'Settings'),
+  join('src', 'components', 'Events'),
+  join('src', 'components', 'EventsOverview'),
+  join('src', 'components', 'FissuresPanel'),
+  join('src', 'components', 'FlashSalesPanel'),
+  join('src', 'components', 'WorldStateAlertsPanel'),
+  join('src', 'components', 'VoidTraderPanel'),
+  join('src', 'components', 'VaultTraderPanel'),
+  join('src', 'components', 'NightwavePanel'),
+  join('src', 'components', 'SteelPathPanel'),
+  join('src', 'components', 'ActiveEventsPanel'),
+  join('src', 'components', 'ActivitiesPanel'),
+  join('src', 'components', 'WorldClockPanel'),
 ];
 
 function collectTsx(dir: string): string[] {

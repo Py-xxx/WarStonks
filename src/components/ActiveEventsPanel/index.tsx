@@ -5,7 +5,9 @@ import {
   formatWorldStateDateTime,
   getWorldStateEventProgressPercent,
 } from '../../lib/worldState';
-import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Countdown, EventEmpty, EventError, EventPanel, EventRow, EventTag } from '../Events/parts';
 import { useAppStore } from '../../stores/useAppStore';
 import type { WfstatEventReward, WfstatWorldStateEvent } from '../../types';
 
@@ -68,199 +70,92 @@ export function ActiveEventsPanel() {
   const creditsLabel = (n: number) => t('evt.creditsSuffix', { n });
 
   return (
-    <div className="card">
-      <div className="card-header">
-        <span className="card-label">{t('ws.activeEvents')}</span>
-        <span className={`badge ${events.length > 0 ? 'badge-purple' : 'badge-muted'}`}>
-          {t('evt.activeCount', { n: events.length })}
-        </span>
-        <div className="card-actions">
-          <button
-            className="text-btn"
-            type="button"
-            onClick={() => {
-              void refreshWorldStateEvents();
-            }}
-          >
-            {loading ? t('common.refreshing') : t('common.refresh')}
-          </button>
-        </div>
-      </div>
-
-      <div className="card-body">
-        {lastUpdatedAt ? (
-          <div className="world-event-updated-at">
-            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
-          </div>
-        ) : null}
-
-        <EventsPanelNotice
-          message={error}
-          tone={hasUsableEvents ? 'warning' : 'error'}
-          loading={loading}
-          onRefresh={() => {
-            void refreshWorldStateEvents();
-          }}
+    <EventPanel
+      title={t('ws.activeEvents')}
+      count={events.length}
+      countTone={events.length > 0 ? 'positive' : 'muted'}
+      updatedAt={
+        lastUpdatedAt ? t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) }) : null
+      }
+      bodyClassName="flex flex-col gap-1 p-2"
+    >
+      {error ? (
+        <EventError
+          error={error}
+          stale={hasUsableEvents}
+          onRetry={() => void refreshWorldStateEvents()}
         />
+      ) : null}
 
-        {loading && events.length === 0 ? (
-          <EventsPanelEmpty
-            title={t('a11y.loadingEvents')}
-            detail={t('evt.checkingActiveEvents')}
-          />
-        ) : null}
+      {loading && events.length === 0 ? <Skeleton type="table-row@2" leafClassName="h-5" /> : null}
 
-        {!loading && events.length === 0 && error ? (
-          <EventsPanelEmpty
-            title={t('a11y.activeEventsFailed')}
-            detail={error}
-            actionLabel={t('common.retry')}
-            onAction={() => {
-              void refreshWorldStateEvents();
-            }}
-          />
-        ) : null}
+      {!loading && events.length === 0 && !error ? (
+        <EventEmpty icon="ti-flame" title={t('a11y.noActiveEvents')} />
+      ) : null}
 
-        {!loading && events.length === 0 && !error ? (
-          <EventsPanelEmpty
-            title={t('a11y.noActiveEvents')}
-            detail={t('evt.noActiveEventsDetail')}
-          />
-        ) : null}
+      {events.map((event) => {
+        const progressPercent = getWorldStateEventProgressPercent(event, nowMs);
+        const rewardPreview = buildEventRewardPreview(event, creditsLabel);
+        const expanded = expandedIds.includes(event.id);
 
-        {events.length > 0 ? (
-          <div className="world-event-list">
-            {events.map((event) => {
-              const progressPercent = getWorldStateEventProgressPercent(event, nowMs);
-              const rewardPreview = buildEventRewardPreview(event, creditsLabel);
-              const expanded = expandedIds.includes(event.id);
-
-              return (
-                <article key={event.id} className="world-event-card">
-                  <button
-                    className="world-event-toggle"
-                    type="button"
-                    onClick={() => toggleExpanded(event.id)}
-                  >
-                    <div className="world-event-topline">
-                      <div className="world-event-main">
-                        <div className="world-event-name">{event.description}</div>
-                        {event.tooltip ? (
-                          <div className="world-event-tooltip">{event.tooltip}</div>
-                        ) : null}
-                      </div>
-
-                      <div className="world-event-badges">
-                        <span className="badge badge-green">
-                          {formatWorldStateCountdown(event.expiry, nowMs)}
-                        </span>
-                        {event.isCommunity ? (
-                          <span className="badge badge-blue">{t('ov.community')}</span>
-                        ) : null}
-                        {event.isPersonal ? (
-                          <span className="badge badge-purple">{t('ov.personal')}</span>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="world-event-meta-grid">
-                      <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">{t('ws.node')}</span>
-                        <span className="world-event-meta-value">
-                          {event.node ?? t('evt.unknown')}
-                        </span>
-                      </div>
-                      <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">{t('ws.activation')}</span>
-                        <span className="world-event-meta-value">
-                          {formatWorldStateDateTime(event.activation)}
-                        </span>
-                      </div>
-                      <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">{t('ws.expiry')}</span>
-                        <span className="world-event-meta-value">
-                          {formatWorldStateDateTime(event.expiry)}
-                        </span>
-                      </div>
-                      <div className="world-event-meta-item">
-                        <span className="world-event-meta-label">{t('ws.progress')}</span>
-                        <span className="world-event-meta-value">
-                          {formatEventScore(event)}
-                        </span>
-                      </div>
-                    </div>
-
+        return (
+          <div key={event.id} className="min-w-0">
+            <Button
+              variant="ghost"
+              static
+              aria-expanded={expanded}
+              onClick={() => toggleExpanded(event.id)}
+              className="h-auto w-full justify-start rounded-sm p-0 text-left hover:bg-transparent"
+            >
+              <EventRow
+                className="w-full border-b-0"
+                title={event.description}
+                meta={event.tooltip || undefined}
+                trailing={
+                  <>
+                    {event.isCommunity ? <EventTag tone="blue">{t('ov.community')}</EventTag> : null}
                     {progressPercent !== null ? (
-                      <div className="world-event-progress">
-                        <div
-                          className="world-event-progress-fill"
-                          style={{ width: `${progressPercent}%` }}
-                        />
-                      </div>
+                      <span className="font-mono text-[11px] font-semibold tabular-nums text-accent-green">
+                        {Math.round(progressPercent)}%
+                      </span>
                     ) : null}
+                    <Countdown value={formatWorldStateCountdown(event.expiry, nowMs)} />
+                    <i
+                      className={`ti ${expanded ? 'ti-chevron-up' : 'ti-chevron-down'} text-sm text-ink-dim`}
+                      aria-hidden="true"
+                    />
+                  </>
+                }
+              />
+            </Button>
 
-                    {rewardPreview ? (
-                      <div className="world-event-reward-preview">{rewardPreview}</div>
-                    ) : null}
+            {/* The progress bar plots a REAL value — `getWorldStateEventProgressPercent` — and is
+                rendered only when there is one to plot. */}
+            {progressPercent !== null ? (
+              <span className="mx-2 mb-1 block h-1 overflow-hidden rounded-full bg-bg-base" aria-hidden="true">
+                <span
+                  className="block h-full rounded-full bg-accent-green"
+                  style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                />
+              </span>
+            ) : null}
 
-                    <div className="world-event-expand-copy">
-                      {expanded ? t('evt.hideRewardsDetails') : t('evt.showRewardsDetails')}
-                    </div>
-                  </button>
-
-                  {expanded ? (
-                    <div className="world-event-expanded">
-                      {event.rewards.length > 0 ? (
-                        <div className="world-event-expanded-block">
-                          <span className="card-label">{t('ws.rewards')}</span>
-                          <div className="world-event-tag-list">
-                            {event.rewards.map((reward, index) => (
-                              <span key={`${event.id}-reward-${index}`} className="world-event-tag">
-                                {buildRewardLabel(reward, creditsLabel)}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {event.interimSteps.length > 0 ? (
-                        <div className="world-event-expanded-block">
-                          <span className="card-label">{t('ws.interimSteps')}</span>
-                          <div className="world-event-step-list">
-                            {event.interimSteps.map((step, index) => (
-                              <div key={`${event.id}-step-${index}`} className="world-event-step">
-                                <span className="world-event-step-goal">
-                                  {t('evt.goal', { value: step.goal ?? '—' })}
-                                </span>
-                                <span className="world-event-step-reward">
-                                  {step.reward ? buildRewardLabel(step.reward, creditsLabel) : t('evt.noRewardData')}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {event.concurrentNodes.length > 0 ? (
-                        <div className="world-event-expanded-block">
-                          <span className="card-label">{t('ws.concurrentNodes')}</span>
-                          <div className="world-event-tag-list">
-                            {event.concurrentNodes.map((node) => (
-                              <span key={`${event.id}-${node}`} className="world-event-tag">
-                                {node}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </article>
-              );
-            })}
+            {expanded ? (
+              <div className="flex flex-col gap-1.5 border-t border-line-subtle px-2 py-2">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-ink-dim">
+                  <span>
+                    {t('ws.progress')} <span className="text-ink">{formatEventScore(event)}</span>
+                  </span>
+                  {event.node ? <span className="text-ink">{event.node}</span> : null}
+                </div>
+                {rewardPreview ? (
+                  <p className="text-[11px] leading-relaxed text-ink-soft">{rewardPreview}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
-        ) : null}
-      </div>
-    </div>
+        );
+      })}
+    </EventPanel>
   );
 }

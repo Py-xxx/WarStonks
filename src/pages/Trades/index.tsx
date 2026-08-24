@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import { createPortal } from 'react-dom';
 import {
   cacheOrderHealth,
   marketLowCache,
@@ -10,7 +9,6 @@ import {
   tradeOverviewLoadPromises,
 } from '../../lib/tradeCache';
 import { useSmartManageStates } from '../../hooks/useSmartManageStates';
-import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import { formatTradesErrorMessage } from '../../lib/tradesErrorHandling';
 import {
   closeWfmSellOrder,
@@ -44,7 +42,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
+import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Select } from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Stat } from '@/components/ui/stat';
+import { Switch } from '@/components/ui/switch';
+import wfmLogo from '../../assets/branding/warframe-market.png';
+import { ItemThumb } from '../../components/ListRow';
 import { InfoHint } from '../../components/InfoHint';
 import { ItemName } from '../../components/ItemName';
 import { PageHeading } from '../../components/PageHeading';
@@ -164,11 +171,19 @@ function evictRemovedOrdersFromCache(
 
 function getTradeHealthToneClass(tone: string): string {
   const normalized = tone.trim().toLowerCase();
-  if (normalized === 'green') return 'tone-green';
-  if (normalized === 'blue') return 'tone-blue';
-  if (normalized === 'red') return 'tone-red';
-  return 'tone-amber';
+  if (normalized === 'green') return 'text-accent-green';
+  if (normalized === 'blue') return 'text-accent-blue';
+  if (normalized === 'red') return 'text-accent-red';
+  return 'text-accent-amber';
 }
+
+/** `getGapClassName`'s three outcomes, on tokens. A positive gap means you are above market,
+ *  which is the bad direction for a seller — the mapping is deliberately not "positive = green". */
+const GAP_TONE_CLASS: Record<string, string> = {
+  good: 'text-accent-green',
+  bad: 'text-accent-red',
+  neutral: 'text-ink-dim',
+};
 
 function getTradeHealthPriority(order: TradeSellOrder): number {
   const health = order.health;
@@ -377,30 +392,48 @@ async function loadTradeOverviewSnapshot(sellerMode: SellerMode): Promise<TradeO
   return loadPromise;
 }
 
+/** The two label scales inside the listing dialog and the Smart Manage popover: a 9px mono
+ *  section marker, and a 10px mono field label. One definition each, shared by both columns. */
+const SECTION_LABEL = 'font-mono text-[9px] font-semibold tracking-[0.1em] text-ink-dim uppercase';
+const FIELD_LABEL = 'font-mono text-[10px] tracking-[0.08em] text-ink-dim uppercase';
+
 /**
  * Per-listing Smart Manage strategy. A cheap fast-moving part and an expensive slow set want
  * different behaviour, so each listing can override the global preset and pin hard price bounds.
  * Empty fields inherit / mean "no bound" — nothing here is required.
+ *
+ * The chip and the panel are one component because the chip's only job is to show and open this
+ * state. It replaced a portal positioned by `useAnchoredPopover`: `Popover` portals and runs its
+ * own collision detection, so a row at the bottom of a long scrolling list flips correctly with
+ * no measuring code of ours — and the popover's dismissal comes with it.
+ *
+ * Purple throughout: Smart Manage owns purple across the app (`ELEMENTS.md` §5).
  */
-function SmartListingStrategyPopover({
+function SmartManageControl({
   initial,
   enabled,
-  anchorEl,
   onToggleEnabled,
-  onClose,
   onSave,
 }: {
   initial: SmartListingOverrides;
   enabled: boolean;
-  anchorEl: HTMLElement | null;
   onToggleEnabled: () => void;
-  onClose: () => void;
   onSave: (next: SmartListingOverrides) => void;
 }) {
   const { t } = useTranslation();
-  const { popoverRef, style } = useAnchoredPopover(anchorEl, true, onClose);
+  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<SmartListingOverrides>(initial);
   const [error, setError] = useState<string | null>(null);
+
+  // The draft is seeded when the popover opens, not on every render: `overridesFor` builds a new
+  // object each call, so an effect keyed on `initial` would reset the user's typing on every poll.
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      setDraft(initial);
+      setError(null);
+    }
+    setOpen(next);
+  };
 
   const parseBound = (raw: string): number | null => {
     const trimmed = raw.trim();
@@ -415,107 +448,103 @@ function SmartListingStrategyPopover({
       return;
     }
     onSave(draft);
-    onClose();
+    setOpen(false);
   };
 
-  return createPortal(
-    <div
-      ref={popoverRef}
-      style={style}
-      className="smart-strategy-pop"
-      role="dialog"
-      aria-label={t('smart.perListingTitle')}
-    >
-      <div className="smart-strategy-head">
-        <span>{t('smart.perListingTitle')}</span>
-        <button type="button" className="smart-strategy-close" onClick={onClose} aria-label={t('common.close')}>
-          <i className="ti ti-x" aria-hidden="true" />
-        </button>
-      </div>
-
-      <button
-        type="button"
-        className={`smart-strategy-toggle${enabled ? ' on' : ''}`}
-        role="switch"
-        aria-checked={enabled}
-        onClick={onToggleEnabled}
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            static
+            title={t('smart.perListingTitle')}
+            aria-label={t('smart.perListingTitle')}
+            className={`ml-auto h-6 shrink-0 gap-1 border px-1.5 font-mono text-[10px] tracking-[0.06em] uppercase ${
+              enabled
+                ? 'border-accent-purple/45 bg-accent-purple/12 text-accent-purple hover:bg-accent-purple/20'
+                : 'border-line-strong text-ink-dim hover:text-ink'
+            }`}
+          />
+        }
       >
-        <span className="smart-strategy-toggle-label">{t('smart.enableAuto')}</span>
-        <span className="smart-strategy-toggle-state">
-          {enabled ? t('common.on') : t('common.off')}
-          <span className="smart-strategy-toggle-track">
-            <span className="smart-strategy-toggle-thumb" />
-          </span>
-        </span>
-      </button>
+        <i className="ti ti-robot text-[11px]" aria-hidden="true" />
+        {t('smart.auto')}
+      </PopoverTrigger>
 
-      <p className="smart-strategy-note">{t('smart.perListingNote')}</p>
+      <PopoverContent
+        side="bottom"
+        align="end"
+        className="flex w-64 flex-col gap-3 p-3"
+        aria-label={t('smart.perListingTitle')}
+      >
+        <span className="text-xs font-semibold text-ink">{t('smart.perListingTitle')}</span>
 
-      <label className="smart-strategy-field">
-        <span>{t('smart.aggressiveness')}</span>
-        <select
-          value={draft.aggressiveness ?? ''}
-          onChange={(event) =>
-            setDraft((current: SmartListingOverrides) => ({
-              ...current,
-              aggressiveness: (event.target.value || null) as SmartAggressiveness | null,
-            }))
-          }
-        >
-          <option value="">{t('smart.inheritGlobal')}</option>
-          <option value="conservative">{t('smart.agg.conservative')}</option>
-          <option value="balanced">{t('smart.agg.balanced')}</option>
-          <option value="aggressive">{t('smart.agg.aggressive')}</option>
-        </select>
-      </label>
-
-      <div className="smart-strategy-bounds">
-        <label className="smart-strategy-field">
-          <span>{t('smart.minPrice')}</span>
-          <div className="smart-strategy-price-input">
-            <input
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={draft.minPrice ?? ''}
-              placeholder={t('smart.noBound')}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, minPrice: parseBound(event.target.value) }))
-              }
-            />
-            <span>p</span>
-          </div>
+        <label className="flex cursor-pointer items-center justify-between gap-2">
+          <span className="text-[11px] font-medium text-ink-soft">{t('smart.enableAuto')}</span>
+          <Switch tone="accent" checked={enabled} onCheckedChange={onToggleEnabled} />
         </label>
-        <label className="smart-strategy-field">
-          <span>{t('smart.maxPrice')}</span>
-          <div className="smart-strategy-price-input">
-            <input
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={draft.maxPrice ?? ''}
-              placeholder={t('smart.noBound')}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, maxPrice: parseBound(event.target.value) }))
-              }
-            />
-            <span>p</span>
-          </div>
-        </label>
-      </div>
 
-      {error ? <p className="smart-strategy-error">{error}</p> : null}
+        <div className="flex flex-col gap-1.5">
+          <span className={FIELD_LABEL}>{t('smart.aggressiveness')}</span>
+          <Select
+            value={draft.aggressiveness ?? ''}
+            onChange={(event) =>
+              setDraft((current: SmartListingOverrides) => ({
+                ...current,
+                aggressiveness: (event.target.value || null) as SmartAggressiveness | null,
+              }))
+            }
+          >
+            <option value="">{t('smart.inheritGlobal')}</option>
+            <option value="conservative">{t('smart.agg.conservative')}</option>
+            <option value="balanced">{t('smart.agg.balanced')}</option>
+            <option value="aggressive">{t('smart.agg.aggressive')}</option>
+          </Select>
+        </div>
 
-      <div className="smart-strategy-actions">
-        <button type="button" className="smart-strategy-btn secondary" onClick={onClose}>
-          {t('common.close')}
-        </button>
-        <button type="button" className="smart-strategy-btn primary" onClick={handleSave}>
-          {t('common.save')}
-        </button>
-      </div>
-    </div>,
-    document.body,
+        <div className="grid grid-cols-2 gap-2">
+          {(
+            [
+              ['minPrice', t('smart.minPrice')],
+              ['maxPrice', t('smart.maxPrice')],
+            ] as const
+          ).map(([key, label]) => (
+            <div key={key} className="flex min-w-0 flex-col gap-1.5">
+              <span className={FIELD_LABEL}>{label}</span>
+              <span className="relative flex items-center">
+                <Input
+                  type="number"
+                  min={1}
+                  inputMode="numeric"
+                  className="h-7 pr-6 tabular-nums"
+                  value={draft[key] ?? ''}
+                  placeholder={t('smart.noBound')}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, [key]: parseBound(event.target.value) }))
+                  }
+                />
+                <span className="pointer-events-none absolute right-2 font-mono text-[10px] text-ink-dim">
+                  p
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {error ? <p className="text-[11px] text-accent-red">{error}</p> : null}
+
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+            {t('trades.modal.cancel')}
+          </Button>
+          <Button size="sm" onClick={handleSave}>
+            {t('common.save')}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -678,25 +707,92 @@ function getTrendArrow(direction: string): string {
   return '→';
 }
 
-function getLiquidityBadgeClass(label: string): string {
+function getLiquidityBadgeClass(label: string): 'good' | 'bad' | 'neutral' {
   const l = label.toLowerCase();
   if (l.includes('high') || l.includes('active') || l.includes('good') || l.includes('strong')) return 'good';
   if (l.includes('low') || l.includes('poor') || l.includes('weak')) return 'bad';
   return 'neutral';
 }
 
-function getZoneQualityClass(quality: string): string {
+function getZoneQualityClass(quality: string): 'good' | 'bad' | 'neutral' {
   const q = quality.toLowerCase();
   if (q.includes('high') || q.includes('strong') || q.includes('good') || q.includes('great')) return 'good';
   if (q.includes('poor') || q.includes('weak') || q.includes('low')) return 'bad';
   return 'neutral';
 }
 
-function getTrendClass(direction: string): string {
+function getTrendClass(direction: string): 'good' | 'bad' | 'neutral' {
   const d = direction.toLowerCase();
   if (d === 'up' || d === 'rising') return 'good';
   if (d === 'down' || d === 'falling' || d === 'declining') return 'bad';
   return 'neutral';
+}
+
+/** One section of either column of the listing dialog: a mono micro-label over its content. */
+function FormSection({
+  title,
+  className,
+  children,
+}: {
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={`flex flex-col gap-2.5 px-4 py-3.5 ${className ?? ''}`}>
+      <h3 className={SECTION_LABEL}>{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+/** A labelled control. `htmlFor` is omitted for the toggle, which labels itself. */
+function Field({
+  label,
+  htmlFor,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      {htmlFor ? (
+        <label className={FIELD_LABEL} htmlFor={htmlFor}>
+          {label}
+        </label>
+      ) : (
+        <span className={FIELD_LABEL}>{label}</span>
+      )}
+      {children}
+      {hint ? <span className="text-[10px] leading-snug text-ink-dim">{hint}</span> : null}
+    </div>
+  );
+}
+
+/** Plain coloured uppercase text, not a pill — the status-label treatment from `ELEMENTS.md` §4. */
+function AnalysisTag({ tone, children }: { tone: 'good' | 'bad' | 'neutral'; children: React.ReactNode }) {
+  return (
+    <span
+      className={`font-mono text-[9px] font-semibold tracking-[0.08em] uppercase ${
+        tone === 'good' ? 'text-accent-green' : tone === 'bad' ? 'text-accent-red' : 'text-ink-dim'
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function AnalysisKeyValue({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="shrink-0 font-mono text-[10px] tracking-[0.04em] text-ink-dim">{label}</span>
+      <span className="text-right font-mono text-[11px] tabular-nums text-ink">{value}</span>
+    </div>
+  );
 }
 
 function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }: {
@@ -707,17 +803,30 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
   orderType: 'sell' | 'buy';
 }) {
   const { t } = useTranslation();
+
+  const header = (freshness?: string) => (
+    <header className="flex items-baseline justify-between gap-2 border-b border-line px-4 py-3">
+      <h2 className="font-mono text-xs font-semibold tracking-[0.06em] text-ink-soft uppercase">
+        {t('trades.analysis.title')}
+      </h2>
+      {freshness ? (
+        <span className="font-mono text-[10px] tracking-[0.04em] text-ink-dim uppercase">
+          {freshness}
+        </span>
+      ) : null}
+    </header>
+  );
+
   if (loading) {
+    // The shape is known, so it is a skeleton, not the three bouncing dots this replaced — and
+    // it is laid out like the real panel so nothing moves when the data lands.
     return (
-      <div className="listing-analysis-panel">
-        <div className="listing-analysis-panel-header">
-          <span className="card-label">{t('trades.analysis.title')}</span>
-        </div>
-        <div className="listing-analysis-loading">
-          <span className="listing-analysis-loading-dot" />
-          <span className="listing-analysis-loading-dot" />
-          <span className="listing-analysis-loading-dot" />
-          <span className="listing-analysis-loading-text">{t('trades.analysis.fetching')}</span>
+      <div className="flex min-w-0 flex-col">
+        {header()}
+        <div className="flex flex-col gap-4 px-4 py-4">
+          <Skeleton type="heading, text" leafClassName="first:h-8" />
+          <Skeleton type="text@2" />
+          <Skeleton type="text@3" />
         </div>
       </div>
     );
@@ -725,24 +834,24 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
 
   if (error) {
     return (
-      <div className="listing-analysis-panel">
-        <div className="listing-analysis-panel-header">
-          <span className="card-label">{t('trades.analysis.title')}</span>
-        </div>
-        <div className="listing-analysis-error">{error}</div>
+      <div className="flex min-w-0 flex-col">
+        {header()}
+        <p className="px-4 py-3 text-[11px] leading-relaxed text-accent-red">{error}</p>
       </div>
     );
   }
 
   if (!analysis) {
     return (
-      <div className="listing-analysis-panel">
-        <div className="listing-analysis-panel-header">
-          <span className="card-label">{t('trades.analysis.title')}</span>
-        </div>
-        <div className="listing-analysis-idle">
-          {t('trades.analysis.idle', { kind: t(orderType === 'buy' ? 'trades.analysis.entryPrice' : 'trades.analysis.exitPrice') })}
-        </div>
+      <div className="flex min-w-0 flex-col">
+        {header()}
+        <EmptyState
+          className="py-10"
+          icon="ti-chart-histogram"
+          title={t('trades.analysis.idle', {
+            kind: t(orderType === 'buy' ? 'trades.analysis.entryPrice' : 'trades.analysis.exitPrice'),
+          })}
+        />
       </div>
     );
   }
@@ -752,129 +861,107 @@ function ListingAnalysisPanel({ analysis, analytics, loading, error, orderType }
   const pressure = analytics?.orderbookPressure ?? null;
   const zones = analytics?.entryExitZoneOverview ?? null;
   const heroPrice = orderType === 'buy' ? headline.entryPrice : headline.exitPrice;
+  const zoneLow = orderType === 'buy' ? zones?.entryZoneLow : zones?.exitZoneLow;
+  const zoneHigh = orderType === 'buy' ? zones?.entryZoneHigh : zones?.exitZoneHigh;
+  const zoneRationale = orderType === 'buy' ? zones?.entryRationale : zones?.exitRationale;
 
   return (
-    <div className="listing-analysis-panel">
-      <div className="listing-analysis-panel-header">
-        <span className="card-label">{t('trades.analysis.title')}</span>
-        <span className="listing-analysis-freshness">{analysis.variantLabel}</span>
+    <div className="flex min-w-0 flex-col divide-y divide-line-subtle">
+      {header(analysis.variantLabel)}
+
+      {/* The one figure this column exists to deliver. `Stat`, stripped of its own frame so it
+          reads as a band across the top of the column rather than a card inside it. */}
+      <div className="bg-accent-green/[0.04]">
+        <Stat
+          className="gap-2 rounded-none border-0 bg-transparent px-4 py-3.5"
+          icon="ti-target"
+          tone="positive"
+          label={orderType === 'buy' ? t('trades.analysis.recommendedEntry') : t('trades.analysis.recommendedExit')}
+          value={heroPrice !== null ? formatPlatinumValue(heroPrice) : '—'}
+        />
+        {orderType === 'sell' && headline.exitPercentileLabel ? (
+          <p className="px-4 pb-3 text-[10px] text-ink-dim">{headline.exitPercentileLabel}</p>
+        ) : null}
       </div>
 
-      {/* Recommended entry / exit price */}
-      <div className="listing-analysis-section listing-analysis-exit-hero">
-        <div className="listing-analysis-exit-label">
-          {orderType === 'buy' ? t('trades.analysis.recommendedEntry') : t('trades.analysis.recommendedExit')}
-        </div>
-        <div className="listing-analysis-exit-price">
-          {heroPrice !== null
-            ? formatPlatinumValue(heroPrice)
-            : <span className="listing-analysis-muted">—</span>}
-        </div>
-        {orderType === 'sell' && headline.exitPercentileLabel && (
-          <div className="listing-analysis-exit-sub">{headline.exitPercentileLabel}</div>
-        )}
-      </div>
-
-      {/* Liquidity */}
-      <div className="listing-analysis-section">
-        <div className="listing-analysis-section-title">{t('trades.analysis.liquidity')}</div>
-        <div className="listing-analysis-row">
-          <span className="listing-analysis-metric">
-            {headline.liquidityScore !== null
-              ? Math.round(headline.liquidityScore)
-              : '—'}
+      <FormSection title={t('trades.analysis.liquidity')}>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-lg font-semibold tabular-nums text-ink">
+            {headline.liquidityScore !== null ? Math.round(headline.liquidityScore) : '—'}
           </span>
-          <span className={`listing-analysis-badge ${getLiquidityBadgeClass(headline.liquidityLabel)}`}>
+          <AnalysisTag tone={getLiquidityBadgeClass(headline.liquidityLabel)}>
             {tHealth(t, headline.liquidityLabel)}
-          </span>
+          </AnalysisTag>
         </div>
-        {liquidityDetail.state && (
-          <div className="listing-analysis-note">{liquidityDetail.state}</div>
-        )}
-      </div>
+        {liquidityDetail.state ? (
+          <p className="text-[10px] leading-relaxed text-ink-dim">{liquidityDetail.state}</p>
+        ) : null}
+      </FormSection>
 
-      {/* Market snapshot */}
-      {(snapshot || pressure) && (
-        <div className="listing-analysis-section">
-          <div className="listing-analysis-section-title">{t('trades.analysis.snapshot')}</div>
-          {snapshot?.lowestSell !== null && snapshot?.lowestSell !== undefined && (
-            <div className="listing-analysis-kv">
-              <span className="listing-analysis-kv-label">{t('trades.analysis.floor')}</span>
-              <span className="listing-analysis-kv-value">{formatPlatinumValue(snapshot.lowestSell)}</span>
-            </div>
-          )}
-          {pressure?.spread !== null && pressure?.spread !== undefined && (
-            <div className="listing-analysis-kv">
-              <span className="listing-analysis-kv-label">{t('trades.analysis.spread')}</span>
-              <span className="listing-analysis-kv-value">
-                {formatPlatinumValue(pressure.spread)}
-                {pressure.spreadPct !== null ? ` (${pressure.spreadPct.toFixed(1)}%)` : ''}
-              </span>
-            </div>
-          )}
-          {pressure?.pressureLabel && (
-            <div className="listing-analysis-kv">
-              <span className="listing-analysis-kv-label">{t('trades.analysis.pressure')}</span>
-              <span className="listing-analysis-kv-value">{tHealth(t, pressure.pressureLabel)}</span>
-            </div>
-          )}
-        </div>
-      )}
+      {snapshot || pressure ? (
+        <FormSection title={t('trades.analysis.snapshot')} className="gap-1.5">
+          {snapshot?.lowestSell !== null && snapshot?.lowestSell !== undefined ? (
+            <AnalysisKeyValue
+              label={t('trades.analysis.floor')}
+              value={formatPlatinumValue(snapshot.lowestSell)}
+            />
+          ) : null}
+          {pressure?.spread !== null && pressure?.spread !== undefined ? (
+            <AnalysisKeyValue
+              label={t('trades.analysis.spread')}
+              value={`${formatPlatinumValue(pressure.spread)}${
+                pressure.spreadPct !== null ? ` (${pressure.spreadPct.toFixed(1)}%)` : ''
+              }`}
+            />
+          ) : null}
+          {pressure?.pressureLabel ? (
+            <AnalysisKeyValue
+              label={t('trades.analysis.pressure')}
+              value={tHealth(t, pressure.pressureLabel)}
+            />
+          ) : null}
+        </FormSection>
+      ) : null}
 
-      {/* Entry / Exit zone */}
-      {orderType === 'buy' ? (
-        zones?.entryZoneLow !== null && zones?.entryZoneLow !== undefined
-          && zones?.entryZoneHigh !== null && zones?.entryZoneHigh !== undefined && (
-          <div className="listing-analysis-section">
-            <div className="listing-analysis-section-title">{t('trades.analysis.entryZone')}</div>
-            <div className="listing-analysis-zone-band">
-              <span className="listing-analysis-zone-range">
-                {formatPlatinumValue(zones.entryZoneLow)} – {formatPlatinumValue(zones.entryZoneHigh)}
-              </span>
-              <span className={`listing-analysis-badge ${getZoneQualityClass(zones.zoneQuality)}`}>
-                {zones.zoneQuality}
-              </span>
-            </div>
-            {zones.entryRationale && (
-              <div className="listing-analysis-note">{zones.entryRationale}</div>
-            )}
+      {zoneLow !== null && zoneLow !== undefined && zoneHigh !== null && zoneHigh !== undefined ? (
+        <FormSection title={orderType === 'buy' ? t('trades.analysis.entryZone') : t('trades.analysis.exitZone')}>
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[13px] font-semibold tabular-nums text-ink">
+              {formatPlatinumValue(zoneLow)} – {formatPlatinumValue(zoneHigh)}
+            </span>
+            <AnalysisTag tone={getZoneQualityClass(zones?.zoneQuality ?? '')}>
+              {zones?.zoneQuality}
+            </AnalysisTag>
           </div>
-        )
-      ) : (
-        zones?.exitZoneLow !== null && zones?.exitZoneLow !== undefined
-          && zones?.exitZoneHigh !== null && zones?.exitZoneHigh !== undefined && (
-          <div className="listing-analysis-section">
-            <div className="listing-analysis-section-title">{t('trades.analysis.exitZone')}</div>
-            <div className="listing-analysis-zone-band">
-              <span className="listing-analysis-zone-range">
-                {formatPlatinumValue(zones.exitZoneLow)} – {formatPlatinumValue(zones.exitZoneHigh)}
-              </span>
-              <span className={`listing-analysis-badge ${getZoneQualityClass(zones.zoneQuality)}`}>
-                {zones.zoneQuality}
-              </span>
-            </div>
-            {zones.exitRationale && (
-              <div className="listing-analysis-note">{zones.exitRationale}</div>
-            )}
-          </div>
-        )
-      )}
+          {zoneRationale ? (
+            <p className="text-[10px] leading-relaxed text-ink-dim">{zoneRationale}</p>
+          ) : null}
+        </FormSection>
+      ) : null}
 
-      {/* Trend */}
-      <div className="listing-analysis-section">
-        <div className="listing-analysis-section-title">{t('trades.analysis.trend')}</div>
-        <div className="listing-analysis-row">
-          <span className={`listing-analysis-trend-dir ${getTrendClass(trend.direction)}`}>
+      <FormSection title={t('trades.analysis.trend')}>
+        <div className="flex items-center gap-2">
+          <span
+            className={`font-mono text-xs font-semibold capitalize ${
+              getTrendClass(trend.direction) === 'good'
+                ? 'text-accent-green'
+                : getTrendClass(trend.direction) === 'bad'
+                  ? 'text-accent-red'
+                  : 'text-ink-soft'
+            }`}
+          >
             {getTrendArrow(trend.direction)} {tHealth(t, trend.direction)}
           </span>
-          {trend.confidence !== null && (
-            <span className="listing-analysis-muted">{t('trades.analysis.confPct', { pct: Math.round(trend.confidence) })}</span>
-          )}
+          {trend.confidence !== null ? (
+            <span className="font-mono text-[10px] tabular-nums text-ink-dim">
+              {t('trades.analysis.confPct', { pct: Math.round(trend.confidence) })}
+            </span>
+          ) : null}
         </div>
-        {trend.summary && (
-          <div className="listing-analysis-note listing-analysis-trend-summary">{tTrendSummary(t, trend)}</div>
-        )}
-      </div>
+        {trend.summary ? (
+          <p className="text-[10px] leading-relaxed text-ink-dim italic">{tTrendSummary(t, trend)}</p>
+        ) : null}
+      </FormSection>
     </div>
   );
 }
@@ -890,16 +977,24 @@ function initialsForName(name: string): string {
     .join('');
 }
 
+/** 58px, `cover` not `contain` — this is a user's profile picture, not item art. */
+const AVATAR_CLASS =
+  'grid size-[58px] shrink-0 place-items-center overflow-hidden rounded-xl border border-line bg-bg-elevated';
+
 function TradeAvatar({ imageUrl, name }: { imageUrl: string | null; name: string }) {
   if (imageUrl) {
     return (
-      <span className="trade-avatar">
-        <img src={imageUrl} alt="" />
+      <span className={AVATAR_CLASS}>
+        <img src={imageUrl} alt="" className="size-full object-cover" />
       </span>
     );
   }
 
-  return <span className="trade-avatar fallback">{initialsForName(name)}</span>;
+  return (
+    <span className={`${AVATAR_CLASS} font-mono text-lg font-bold text-ink`}>
+      {initialsForName(name)}
+    </span>
+  );
 }
 
 function ListingModal({
@@ -933,7 +1028,6 @@ function ListingModal({
   const quantityNumber = Number.parseInt(form.quantity, 10);
   const ptOptions = perTradeOptions(Number.isInteger(quantityNumber) ? quantityNumber : 0);
   const typeLocked = form.mode === 'edit';
-  const showAnalysis = true;
 
   // Subtyped items (Atragraph-variant mods, relics, fish…) get a variant picker; the choice is
   // reset whenever the item changes so a stale value can never be submitted for the wrong item.
@@ -961,192 +1055,6 @@ function ListingModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subtypeWfmId]);
 
-  const formContent = (
-    <>
-      <div className="listing-form-section listing-form-section-type">
-        <div className="listing-form-section-title">{t('trades.modal.orderType')}</div>
-        <div className="trade-listing-type-tabs" role="tablist" aria-label={t('trades.modal.listingTypeAria')}>
-          {(['sell', 'buy'] as TradeListingKind[]).map((type) => (
-            <button
-              key={type}
-              className={`trade-listing-type-tab${form.orderType === type ? ' active' : ''}`}
-              type="button"
-              role="tab"
-              aria-selected={form.orderType === type}
-              disabled={typeLocked}
-              onClick={() => onChange({ orderType: type })}
-            >
-              {type === 'sell' ? t('trades.modal.sell') : t('trades.modal.buy')}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="listing-form-section listing-form-section-item">
-        <div className="listing-form-section-title">{t('trades.modal.itemSection')}</div>
-        <div className="trade-listing-fieldset">
-          <label className="trade-listing-label" htmlFor="trade-listing-item">{t('trades.modal.itemName')}</label>
-          <input
-            id="trade-listing-item"
-            className="field-input"
-            value={form.itemName}
-            onChange={(event) =>
-              onChange({ itemName: event.target.value, selectedItem: null, rank: '', perTrade: '' })
-            }
-            placeholder={t('trades.searchPlaceholder')}
-            disabled={form.mode === 'edit'}
-          />
-          {form.mode === 'create' ? (
-            <div className="trade-listing-autocomplete">
-              {!autocompleteReady && !autocompleteError ? (
-                <div className="trade-listing-autocomplete-state">{t('trades.modal.loadingCatalog')}</div>
-              ) : null}
-              {autocompleteError ? (
-                <div className="trade-listing-autocomplete-state error">{autocompleteError}</div>
-              ) : null}
-              {autocompleteReady && suggestions.length > 0 ? (
-                <div className="trade-listing-autocomplete-list">
-                  {suggestions.map((item) => (
-                    <button
-                      key={item.wfmId ?? item.slug}
-                      className="trade-listing-autocomplete-option"
-                      type="button"
-                      onClick={() => onSelectItem(item)}
-                    >
-                      <span className="trade-listing-autocomplete-thumb">
-                        {resolveWfmAssetUrl(item.imagePath, item.slug) ? (
-                          <img src={resolveWfmAssetUrl(item.imagePath, item.slug) ?? undefined} alt="" />
-                        ) : (
-                          <span>{item.name.slice(0, 1)}</span>
-                        )}
-                      </span>
-                      <span className="trade-listing-autocomplete-copy">
-                        <span className="trade-listing-autocomplete-name">{item.name}</span>
-                        <span className="trade-listing-autocomplete-meta">
-                          {item.itemFamily ?? t('trades.modal.itemFamilyFallback')}
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="listing-form-section listing-form-section-details">
-        <div className="listing-form-section-title">{t('trades.modal.listingDetails')}</div>
-        <div className="trade-listing-grid">
-          <div className="trade-listing-fieldset">
-            <label className="trade-listing-label" htmlFor="trade-listing-price">{t('trades.modal.price')}</label>
-            <input
-              id="trade-listing-price"
-              className="field-input"
-              type="number"
-              min={1}
-              step={1}
-              value={form.price}
-              onChange={(event) => onChange({ price: event.target.value, priceTouched: true })}
-              placeholder={t('trades.pricePlaceholder')}
-            />
-          </div>
-          <div className="trade-listing-fieldset">
-            <label className="trade-listing-label" htmlFor="trade-listing-quantity">{t('trades.col.quantity')}</label>
-            <input
-              id="trade-listing-quantity"
-              className="field-input"
-              type="number"
-              min={1}
-              step={1}
-              value={form.quantity}
-              onChange={(event) => {
-                const nextQuantity = event.target.value;
-                if (!bulkApplicable) {
-                  onChange({ quantity: nextQuantity });
-                  return;
-                }
-                // Keep perTrade valid: it must divide the new quantity and stay ≤ 6.
-                const parsed = Number.parseInt(nextQuantity, 10);
-                const opts = perTradeOptions(Number.isInteger(parsed) ? parsed : 0);
-                const current = Number.parseInt(form.perTrade, 10);
-                const nextPerTrade = String(opts.includes(current) ? current : 1);
-                onChange({ quantity: nextQuantity, perTrade: nextPerTrade });
-              }}
-              placeholder={t('trades.quantityPlaceholder')}
-            />
-          </div>
-          {rankApplicable ? (
-            <div className="trade-listing-fieldset">
-              <label className="trade-listing-label" htmlFor="trade-listing-rank">{t('trades.modal.rank')}</label>
-              <select
-                id="trade-listing-rank"
-                className="field-input"
-                value={form.rank}
-                onChange={(event) => onChange({ rank: event.target.value })}
-              >
-                {Array.from({ length: (form.selectedItem?.maxRank ?? 0) + 1 }, (_, index) => (
-                  <option key={index} value={String(index)}>
-                    {index}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-          {form.mode === 'create' && subtypeOptions.length > 1 ? (
-            <div className="trade-listing-fieldset">
-              <label className="trade-listing-label" htmlFor="trade-listing-subtype">{t('trades.modal.subtype')}</label>
-              <select
-                id="trade-listing-subtype"
-                className="field-input"
-                value={form.subtype || subtypeOptions[0]}
-                onChange={(event) => onChange({ subtype: event.target.value })}
-              >
-                {subtypeOptions.map((subtype) => (
-                  <option key={subtype} value={subtype}>
-                    {tSubtype(t, subtype)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-          {bulkApplicable ? (
-            <div className="trade-listing-fieldset">
-              <label className="trade-listing-label" htmlFor="trade-listing-per-trade">{t('trades.modal.perTrade')}</label>
-              <select
-                id="trade-listing-per-trade"
-                className="field-input"
-                value={form.perTrade || '1'}
-                onChange={(event) => onChange({ perTrade: event.target.value })}
-              >
-                {ptOptions.map((value) => (
-                  <option key={value} value={String(value)}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-              <span className="trade-listing-hint">{t('trades.modal.bulkHint')}</span>
-            </div>
-          ) : null}
-          <div className="trade-listing-fieldset trade-listing-toggle-field">
-            <span className="trade-listing-label">{t('trades.modal.visibility')}</span>
-            <button
-              className={`trade-visibility-toggle${form.visible ? ' on' : ''}`}
-              type="button"
-              onClick={() => onChange({ visible: !form.visible })}
-            >
-              <span className="trade-visibility-toggle-track" />
-              <span className="trade-visibility-toggle-copy">
-                {form.visible ? t('common.on') : t('common.off')}
-              </span>
-            </button>
-          </div>
-        </div>
-        {errorMessage ? <div className="trade-inline-error">{errorMessage}</div> : null}
-      </div>
-    </>
-  );
-
   return (
     // Outside clicks deliberately do NOT close this: an accidental one would discard a half-typed
     // listing. Cancel, the × and Escape all still close it — the same three ways as before.
@@ -1159,39 +1067,234 @@ function ListingModal({
         }
       }}
     >
-      <DialogContent className={showAnalysis ? 'max-w-4xl' : 'max-w-lg'}>
-        <DialogHeader>
+      {/* A fixed height, not a `max-h`: the analysis column fills in asynchronously, and a dialog
+          that grows under the cursor while you are typing a price is worse than one with space
+          reserved for the panel that is coming. Taller and narrower than the first pass — the
+          analysis column at 4xl was ~600px of column for values that are all under six
+          characters, so the width was ornament and the height was the part in short supply. */}
+      <DialogContent className="h-[min(670px,88vh)] max-w-2xl gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-line px-4 py-3">
           <DialogTitle>
             {form.mode === 'create'
               ? t(form.orderType === 'sell' ? 'trades.modal.createSell' : 'trades.modal.createBuy')
               : t(form.orderType === 'sell' ? 'trades.modal.editSell' : 'trades.modal.editBuy')}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            {t(form.orderType === 'sell' ? 'trades.modal.sell' : 'trades.modal.buy')}
+          </DialogDescription>
         </DialogHeader>
 
-        {showAnalysis ? (
-          <div className="trade-listing-modal-columns">
-            <div className="trade-listing-form-col">
-              <div className="settings-modal-body trade-listing-modal-body">
-                {formContent}
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,300px)_minmax(0,1fr)]">
+          <div className="flex min-w-0 flex-col divide-y divide-line-subtle overflow-y-auto border-r border-line">
+            <FormSection title={t('trades.modal.orderType')}>
+              {/* The segmented group from the watchlist rows: a recessed track, the selected
+                  option raised onto `bg-elevated`. Neutral by design — the title already says
+                  which side this is, and green/red carry profit and loss here. */}
+              <div
+                className="inline-grid grid-cols-2 gap-0.5 rounded-md bg-bg-base p-0.5"
+                role="group"
+                aria-label={t('trades.modal.listingTypeAria')}
+              >
+                {(['sell', 'buy'] as TradeListingKind[]).map((type) => {
+                  const active = form.orderType === type;
+                  return (
+                    <Button
+                      key={type}
+                      variant="ghost"
+                      size="sm"
+                      static
+                      aria-pressed={active}
+                      disabled={typeLocked}
+                      onClick={() => onChange({ orderType: type })}
+                      className={`h-7 rounded-sm font-mono text-[10px] tracking-[0.08em] uppercase ${
+                        active ? 'bg-bg-elevated text-ink' : 'text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {type === 'sell' ? t('trades.modal.sell') : t('trades.modal.buy')}
+                    </Button>
+                  );
+                })}
               </div>
-            </div>
-            <div className="trade-listing-analysis-col">
-              <ListingAnalysisPanel
-                analysis={analysis?.analysis ?? null}
-                analytics={analysis?.analytics ?? null}
-                loading={analysis?.loading ?? false}
-                error={analysis?.error ?? null}
-                orderType={form.orderType}
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="settings-modal-body trade-listing-modal-body">
-            {formContent}
-          </div>
-        )}
+            </FormSection>
 
-        <DialogFooter>
+            <FormSection title={t('trades.modal.itemSection')}>
+              <Field label={t('trades.modal.itemName')} htmlFor="trade-listing-item">
+                <Input
+                  id="trade-listing-item"
+                  value={form.itemName}
+                  onChange={(event) =>
+                    onChange({ itemName: event.target.value, selectedItem: null, rank: '', perTrade: '' })
+                  }
+                  placeholder={t('trades.searchPlaceholder')}
+                  disabled={form.mode === 'edit'}
+                />
+              </Field>
+              {form.mode === 'create' ? (
+                <>
+                  {!autocompleteReady && !autocompleteError ? (
+                    <Skeleton type="list-item-avatar@3" leafClassName="h-6" />
+                  ) : null}
+                  {autocompleteError ? (
+                    <p className="text-[11px] text-accent-red">{autocompleteError}</p>
+                  ) : null}
+                  {/* Gone once an item is chosen: selecting sets `itemName` to that item's own
+                      name, which still matches the query, so the list cannot key off the text.
+                      Editing the field clears `selectedItem` and brings it back. */}
+                  {autocompleteReady && !form.selectedItem && suggestions.length > 0 ? (
+                    <div className="flex max-h-52 flex-col overflow-y-auto rounded-md border border-line-strong bg-bg-base p-1">
+                      {suggestions.map((item) => (
+                        <Button
+                          key={item.wfmId ?? item.slug}
+                          variant="ghost"
+                          size="sm"
+                          static
+                          onClick={() => onSelectItem(item)}
+                          className="h-auto justify-start gap-2 px-1.5 py-1 text-left"
+                        >
+                          <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded-sm bg-bg-elevated font-mono text-[10px] text-ink-dim">
+                            {resolveWfmAssetUrl(item.imagePath, item.slug) ? (
+                              <img
+                                className="size-full object-contain"
+                                src={resolveWfmAssetUrl(item.imagePath, item.slug) ?? undefined}
+                                alt=""
+                              />
+                            ) : (
+                              item.name.slice(0, 1)
+                            )}
+                          </span>
+                          <span className="flex min-w-0 flex-col">
+                            <span className="truncate text-[11px] text-ink">{item.name}</span>
+                            <span className="truncate text-[10px] font-normal text-ink-dim">
+                              {item.itemFamily ?? t('trades.modal.itemFamilyFallback')}
+                            </span>
+                          </span>
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </FormSection>
+
+            <FormSection title={t('trades.modal.listingDetails')} className="flex-1">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+                <Field label={t('trades.modal.price')} htmlFor="trade-listing-price">
+                  <Input
+                    id="trade-listing-price"
+                    className="tabular-nums"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={form.price}
+                    onChange={(event) => onChange({ price: event.target.value, priceTouched: true })}
+                    placeholder={t('trades.pricePlaceholder')}
+                  />
+                </Field>
+                <Field label={t('trades.col.quantity')} htmlFor="trade-listing-quantity">
+                  <Input
+                    id="trade-listing-quantity"
+                    className="tabular-nums"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={form.quantity}
+                    onChange={(event) => {
+                      const nextQuantity = event.target.value;
+                      if (!bulkApplicable) {
+                        onChange({ quantity: nextQuantity });
+                        return;
+                      }
+                      // Keep perTrade valid: it must divide the new quantity and stay ≤ 6.
+                      const parsed = Number.parseInt(nextQuantity, 10);
+                      const opts = perTradeOptions(Number.isInteger(parsed) ? parsed : 0);
+                      const current = Number.parseInt(form.perTrade, 10);
+                      const nextPerTrade = String(opts.includes(current) ? current : 1);
+                      onChange({ quantity: nextQuantity, perTrade: nextPerTrade });
+                    }}
+                    placeholder={t('trades.quantityPlaceholder')}
+                  />
+                </Field>
+                {rankApplicable ? (
+                  <Field label={t('trades.modal.rank')} htmlFor="trade-listing-rank">
+                    <Select
+                      id="trade-listing-rank"
+                      className="h-8 tabular-nums"
+                      value={form.rank}
+                      onChange={(event) => onChange({ rank: event.target.value })}
+                    >
+                      {Array.from({ length: (form.selectedItem?.maxRank ?? 0) + 1 }, (_, index) => (
+                        <option key={index} value={String(index)}>
+                          {index}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                ) : null}
+                {form.mode === 'create' && subtypeOptions.length > 1 ? (
+                  <Field label={t('trades.modal.subtype')} htmlFor="trade-listing-subtype">
+                    <Select
+                      id="trade-listing-subtype"
+                      className="h-8"
+                      value={form.subtype || subtypeOptions[0]}
+                      onChange={(event) => onChange({ subtype: event.target.value })}
+                    >
+                      {subtypeOptions.map((subtype) => (
+                        <option key={subtype} value={subtype}>
+                          {tSubtype(t, subtype)}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                ) : null}
+                {bulkApplicable ? (
+                  <Field
+                    label={t('trades.modal.perTrade')}
+                    htmlFor="trade-listing-per-trade"
+                    hint={t('trades.modal.bulkHint')}
+                  >
+                    <Select
+                      id="trade-listing-per-trade"
+                      className="h-8 tabular-nums"
+                      value={form.perTrade || '1'}
+                      onChange={(event) => onChange({ perTrade: event.target.value })}
+                    >
+                      {ptOptions.map((value) => (
+                        <option key={value} value={String(value)}>
+                          {value}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                ) : null}
+                <Field label={t('trades.modal.visibility')}>
+                  <label className="flex h-8 cursor-pointer items-center gap-2">
+                    <Switch
+                      tone="positive"
+                      checked={form.visible}
+                      onCheckedChange={(visible) => onChange({ visible })}
+                    />
+                    <span className="text-xs font-medium text-ink">
+                      {form.visible ? t('common.on') : t('common.off')}
+                    </span>
+                  </label>
+                </Field>
+              </div>
+              {errorMessage ? <p className="text-[11px] text-accent-red">{errorMessage}</p> : null}
+            </FormSection>
+          </div>
+
+          <div className="min-w-0 overflow-y-auto">
+            <ListingAnalysisPanel
+              analysis={analysis?.analysis ?? null}
+              analytics={analysis?.analytics ?? null}
+              loading={analysis?.loading ?? false}
+              error={analysis?.error ?? null}
+              orderType={form.orderType}
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="border-t border-line px-4 py-3">
           <Button variant="ghost" size="sm" onClick={onClose}>
             {t('trades.modal.cancel')}
           </Button>
@@ -1208,6 +1311,27 @@ function ListingModal({
   );
 }
 
+/**
+ * The sign-in screen — a **design pass** (`ELEMENTS.md` §1), not a migration. It was a 520px
+ * bordered rectangle with a 24px heading, a 34-word paragraph and a right-aligned button, and it
+ * had not been touched since long before the primitives existed.
+ *
+ * What changed and why:
+ * - **It is the only thing on screen, so it gets the view's one Expressive moment** — a soft accent
+ *   bloom behind the mark. One per view is the budget (`SKILL.md`), and this view has nothing else
+ *   competing for it.
+ * - Narrower (400px) and centred rather than 520px of half-empty card. A login form is two fields;
+ *   width was making it look like there was more to fill in than there is.
+ * - The paragraph explained how the integration works internally. Deleted, per `ui-copy`'s delete
+ *   test, and replaced with the one fact a user actually needs before typing a password into a
+ *   third-party app: where that password goes.
+ * - **A show/hide control on the password.** Desktop, long password, no second chance before the
+ *   request goes out — this is the one place the app should let you check what you typed. It reuses
+ *   the `EyeIcon`/`EyeOffIcon` already in this file rather than risking a Tabler glyph that is not
+ *   in the bundled subset.
+ * - `Switch` for "stay signed in", `Input` for the fields, a full-width primary `Button`.
+ * - Enter submits from either field, not just the password one.
+ */
 function SignInPanel() {
   const { t } = useTranslation();
   const tradeAccountLoading = useAppStore((s) => s.tradeAccountLoading);
@@ -1215,6 +1339,7 @@ function SignInPanel() {
   const signInTradeAccount = useAppStore((s) => s.signInTradeAccount);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordVisible, setPasswordVisible] = useState(false);
   // Default on so the session persists across restarts (saves credentials for automatic
   // re-auth once the session token expires). Users can opt out by toggling it off.
   const [stayLoggedIn, setStayLoggedIn] = useState(true);
@@ -1240,70 +1365,109 @@ function SignInPanel() {
     }
   };
 
+  const submitOnEnter = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      void handleSubmit();
+    }
+  };
+
+  const error = localError ?? tradeAccountError;
+
   return (
-    <div className="trade-auth-shell">
-      <div className="trade-auth-card">
-        <span className="card-label">{t('trades.auth.brand')}</span>
-        <h2 className="trade-auth-title">{t('trades.auth.title')}</h2>
-        <p className="trade-auth-copy">
-          {t('trades.auth.copy')}
-        </p>
+    <div className="grid min-h-[60vh] place-items-center">
+      <Panel className="relative w-full max-w-[400px] overflow-hidden p-6">
+        {/* The one Expressive moment in this view. Purely decorative, so it is hidden from the
+            accessibility tree and takes no pointer events. */}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-20 left-1/2 h-40 w-64 -translate-x-1/2 rounded-full bg-accent-blue/15 blur-3xl"
+        />
 
-        <div className="trade-auth-grid">
-          <label className="trade-listing-label" htmlFor="trade-signin-email">
-            {t('trades.auth.email')}
-          </label>
-          <input
-            id="trade-signin-email"
-            className="field-input"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder={t('trades.auth.emailPlaceholder')}
-          />
-
-          <label className="trade-listing-label" htmlFor="trade-signin-password">
-            {t('trades.auth.password')}
-          </label>
-          <input
-            id="trade-signin-password"
-            className="field-input"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder={t('trades.auth.passwordPlaceholder')}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                void handleSubmit();
-              }
-            }}
-          />
-        </div>
-
-        <div className="trade-auth-options">
-          <div className="toggle-wrap">
-            <button
-              className={`toggle${stayLoggedIn ? ' on' : ''}`}
-              type="button"
-              aria-pressed={stayLoggedIn}
-              onClick={() => setStayLoggedIn((current) => !current)}
+        <div className="relative flex flex-col gap-5">
+          <div className="flex flex-col items-center gap-3 text-center">
+            {/* The real warframe.market mark, not a stand-in glyph. No chrome around it — it is
+                artwork on transparency, and a box drawn around a logo reads as a chip. */}
+            <img
+              src={wfmLogo}
+              alt=""
+              className="size-12 shrink-0 object-contain"
+              aria-hidden="true"
             />
-            <span>{t('trades.auth.stayLoggedIn')}</span>
+            <div className="flex flex-col gap-1">
+              {/* Lowercase and untracked on purpose: it is a domain, and `uppercase` would render
+                  it WARFRAME.MARKET. Text inherits `text-transform` — see the handoff's traps. */}
+              <span className="font-mono text-[15px] font-semibold text-ink normal-case">
+                {t('trades.auth.brand')}
+              </span>
+              <h2 className="text-xs font-medium text-ink-dim">{t('trades.auth.title')}</h2>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <Field label={t('trades.auth.email')} htmlFor="trade-signin-email">
+              <Input
+                id="trade-signin-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                onKeyDown={submitOnEnter}
+                placeholder={t('trades.auth.emailPlaceholder')}
+              />
+            </Field>
+
+            <Field label={t('trades.auth.password')} htmlFor="trade-signin-password">
+              <span className="relative flex items-center">
+                <Input
+                  id="trade-signin-password"
+                  className="pr-8"
+                  type={passwordVisible ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  onKeyDown={submitOnEnter}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  static
+                  className="absolute right-0.5 size-7 [&_svg]:size-4"
+                  aria-label={t(passwordVisible ? 'trades.auth.hidePassword' : 'trades.auth.showPassword')}
+                  title={t(passwordVisible ? 'trades.auth.hidePassword' : 'trades.auth.showPassword')}
+                  onClick={() => setPasswordVisible((current) => !current)}
+                >
+                  {passwordVisible ? <EyeOffIcon /> : <EyeIcon />}
+                </Button>
+              </span>
+            </Field>
+          </div>
+
+          <label className="flex cursor-pointer items-center justify-between gap-2">
+            <span className="text-xs text-ink-soft">{t('trades.auth.stayLoggedIn')}</span>
+            <Switch tone="positive" checked={stayLoggedIn} onCheckedChange={setStayLoggedIn} />
+          </label>
+
+          {error ? (
+            <p className="flex items-start gap-2 rounded-md border border-accent-red/25 bg-accent-red/8 px-2.5 py-2 text-[11px] leading-relaxed text-accent-red">
+              <i className="ti ti-alert-triangle mt-px shrink-0 text-sm" aria-hidden="true" />
+              {error}
+            </p>
+          ) : null}
+
+          <div className="flex flex-col gap-3">
+            <Button
+              className="w-full"
+              onClick={() => void handleSubmit()}
+              disabled={tradeAccountLoading}
+            >
+              {tradeAccountLoading ? t('trades.auth.connecting') : t('trades.auth.connect')}
+            </Button>
+            <p className="text-center text-[10px] leading-relaxed text-ink-dim">
+              {t('trades.auth.privacy')}
+            </p>
           </div>
         </div>
-
-        {localError || tradeAccountError ? (
-          <div className="trade-inline-error">{localError ?? tradeAccountError}</div>
-        ) : null}
-
-        <div className="trade-auth-actions">
-          <button className="btn-primary" type="button" onClick={() => void handleSubmit()} disabled={tradeAccountLoading}>
-            {tradeAccountLoading ? t('trades.auth.connecting') : t('trades.auth.connect')}
-          </button>
-        </div>
-      </div>
+      </Panel>
     </div>
   );
 }
@@ -1501,8 +1665,6 @@ function HealthTabContainer() {
 function ListingsTab() {
   const { t } = useTranslation();
   const smartStates = useSmartManageStates();
-  const [strategyPopoverId, setStrategyPopoverId] = useState<string | null>(null);
-  const [strategyAnchorEl, setStrategyAnchorEl] = useState<HTMLElement | null>(null);
   const tradeOverviewReloadNonce = useAppStore((s) => s.tradeOverviewReloadNonce);
   const tradeAccount = useAppStore((s) => s.tradeAccount);
   const loadTradeAccount = useAppStore((s) => s.loadTradeAccount);
@@ -1543,7 +1705,6 @@ function ListingsTab() {
     setPendingOrderIds(Array.from(pendingOrderIdsRef.current));
   };
   const isOrderPending = (orderId: string) => pendingOrderIds.includes(orderId);
-  const [actionMenuOrderId, setActionMenuOrderId] = useState<string | null>(null);
   // Quantity popup for closing part of a stacked order (quantity > 1).
   const [closeQtyTarget, setCloseQtyTarget] = useState<TradeSellOrder | null>(null);
   const [closeQtyValue, setCloseQtyValue] = useState('1');
@@ -2110,57 +2271,69 @@ function ListingsTab() {
       recommendedPrice !== null && recommendedPrice !== undefined
       && recommendedPrice > 0 && recommendedPrice !== order.yourPrice;
     const eta = type === 'sell' ? formatEtaHours(order.health?.estSellHoursAtPrice) : null;
-    const menuOpen = actionMenuOrderId === order.orderId;
+    const applyLabel = t('trades.row.applyAction', {
+      action: tHealth(t, order.health?.actionLabel) || t('trades.health.apply'),
+      price: formatPlatinumValue(recommendedPrice ?? 0),
+    });
     return (
       <div
         key={order.orderId}
-        className={`trade-split-row${order.visible ? '' : ' trade-row-hidden'}`}
+        className="grid grid-cols-[minmax(0,1.5fr)_92px_52px_128px] items-center gap-2 border-b border-line px-3 py-2 last:border-b-0"
       >
-        <div className="trade-split-item">
-          <button
-            type="button"
-            className="item-thumb trade-item-thumb trade-thumb-toggle"
+        {/* Only the data columns dim for a hidden listing — never the actions, or the popover
+            menu (a child of the row) would inherit the opacity and become un-clickable. */}
+        <div className={`flex min-w-0 items-center gap-2 ${order.visible ? '' : 'opacity-50'}`}>
+          {/* The thumbnail doubles as the visibility toggle: hovering fades the art out to an eye.
+              `group` + `peer`-free because both layers are inside this one button. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            static
             disabled={pending}
             title={order.visible ? t('trades.row.hideListing') : t('trades.row.showListing')}
             aria-label={order.visible ? t('trades.row.hideListing') : t('trades.row.showListing')}
             onClick={() => void handleToggleOrderVisibility(order)}
+            className="group relative size-8 p-0"
           >
-            <span className="trade-thumb-art" aria-hidden="true">
-              {resolveWfmAssetUrl(order.imagePath, order.slug) ? (
-                <img src={resolveWfmAssetUrl(order.imagePath, order.slug) ?? undefined} alt="" />
-              ) : (
-                <span>{order.name.slice(0, 1)}</span>
-              )}
+            <span className="transition-opacity duration-150 ease-out group-hover:opacity-12 group-focus-visible:opacity-12">
+              <ItemThumb
+                src={resolveWfmAssetUrl(order.imagePath, order.slug)}
+                fallback={order.name.slice(0, 1)}
+                size="size-8"
+              />
             </span>
-            <span className="trade-thumb-eye" aria-hidden="true">
+            <span
+              className="absolute inset-0 grid place-items-center rounded-md bg-bg-base/60 text-ink opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-visible:opacity-100"
+              aria-hidden="true"
+            >
               {order.visible ? <EyeIcon /> : <EyeOffIcon />}
             </span>
-          </button>
-          <div className="trade-split-item-copy">
+          </Button>
+          <div className="min-w-0 flex-1">
             <ItemName
-              className="item-name trade-split-item-name"
+              className="block truncate text-xs font-semibold text-ink"
               name={order.name}
               slug={order.slug}
               itemId={order.itemId}
               imagePath={order.imagePath}
             />
-            <span className="trade-split-subline">
+            <span className="block truncate text-[10px] text-ink-dim">
               {order.maxRank !== null && order.maxRank !== undefined && order.maxRank > 0
                 ? `${order.rank ?? 0}/${order.maxRank} · `
                 : null}
               ×{order.quantity}
               {!order.visible ? ` · ${t('trades.row.hidden').toLowerCase()}` : null}
               {order.health ? (
-                <span className={`trade-split-health ${getTradeHealthToneClass(order.health.tone)}`}>
+                <span className={getTradeHealthToneClass(order.health.tone)}>
                   {' · '}{tHealth(t, order.health.label)}
                 </span>
               ) : null}
-              {eta ? <span className="trade-split-eta">{' · '}{eta}</span> : null}
+              {eta ? <span className="text-accent-blue">{' · '}{eta}</span> : null}
               {order.health?.wouldRealizeLoss ? (
-                <span className="trade-split-loss">{' · '}{t('trades.health.wouldLose')}</span>
+                <span className="text-accent-red">{' · '}{t('trades.health.wouldLose')}</span>
               ) : null}
               {type === 'sell' ? (
-                <span className="trade-split-age">
+                <span>
                   {' · '}
                   {marketLowTimestamps[order.orderId]
                     ? formatMarketLowAge(marketLowTimestamps[order.orderId])
@@ -2172,75 +2345,53 @@ function ListingsTab() {
             </span>
           </div>
           {type === 'sell' && order.wfmId ? (
-            <div className="smart-strategy-anchor">
-              <button
-                type="button"
-                className={`trade-auto-chip ${smartStates.isManaged(order.wfmId, order.rank) ? 'on' : 'off'}`}
-                title={t('smart.perListingTitle')}
-                aria-label={t('smart.perListingTitle')}
-                aria-expanded={strategyPopoverId === order.orderId}
-                onClick={(event) => {
-                  const trigger = event.currentTarget;
-                  setStrategyPopoverId((current) => {
-                    const next = current === order.orderId ? null : order.orderId;
-                    setStrategyAnchorEl(next ? trigger : null);
-                    return next;
-                  });
-                }}
-              >
-                <i className="ti ti-robot" aria-hidden="true" />
-                {t('smart.auto')}
-              </button>
-              {strategyPopoverId === order.orderId ? (
-                <SmartListingStrategyPopover
-                  initial={smartStates.overridesFor(order.wfmId, order.rank)}
-                  enabled={smartStates.isManaged(order.wfmId, order.rank)}
-                  anchorEl={strategyAnchorEl}
-                  onToggleEnabled={() => void smartStates.toggle(order.wfmId, order.rank)}
-                  onClose={() => setStrategyPopoverId(null)}
-                  onSave={(next) => {
-                    void smartStates.saveOverrides(order.wfmId, order.rank, next);
-                  }}
-                />
-              ) : null}
-            </div>
+            <SmartManageControl
+              initial={smartStates.overridesFor(order.wfmId, order.rank)}
+              enabled={smartStates.isManaged(order.wfmId, order.rank)}
+              onToggleEnabled={() => void smartStates.toggle(order.wfmId, order.rank)}
+              onSave={(next) => {
+                void smartStates.saveOverrides(order.wfmId, order.rank, next);
+              }}
+            />
           ) : null}
         </div>
-        <span className="trade-split-prices">
+        <span className={`font-mono text-xs whitespace-nowrap tabular-nums ${order.visible ? '' : 'opacity-50'}`}>
           {formatPlatinumValue(order.yourPrice)}
-          <span className="trade-split-market">
+          <span className="text-ink-dim">
             {' / '}
             {order.marketLow !== null && order.marketLow !== undefined
               ? formatPlatinumValue(order.marketLow)
               : '—'}
           </span>
         </span>
-        <span className={`trade-split-gap ${getGapClassName(order.priceGap)}`}>
+        <span
+          className={`font-mono text-xs tabular-nums ${order.visible ? '' : 'opacity-50'} ${GAP_TONE_CLASS[getGapClassName(order.priceGap)]}`}
+        >
           {order.marketLow !== null && order.marketLow !== undefined ? formatGap(order.priceGap) : '—'}
         </span>
-        <span className="trade-split-actions">
-          {canApplyPrice ? (
-            <button
-              type="button"
-              className="trade-icon-btn trade-icon-btn-warn"
-              disabled={pending}
-              title={t('trades.row.applyAction', {
-                action: tHealth(t, order.health?.actionLabel) || t('trades.health.apply'),
-                price: formatPlatinumValue(recommendedPrice ?? 0),
-              })}
-              aria-label={t('trades.row.applyAction', {
-                action: tHealth(t, order.health?.actionLabel) || t('trades.health.apply'),
-                price: formatPlatinumValue(recommendedPrice ?? 0),
-              })}
-              onClick={() => void handleApplyRecommended(order)}
-            >
-              <BoltIcon />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="trade-icon-btn trade-icon-btn-good"
+        {/* The segmented icon group from the watchlist rows: every action is always present and
+            an unavailable one is disabled, never removed, so the column keeps one width down the
+            list. Apply used to disappear when there was nothing to apply, which moved the other
+            three buttons on every row that had a recommendation. */}
+        <span className="flex items-center justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            static
+            disabled={pending || !canApplyPrice}
+            className="size-6.5 border border-accent-amber/40 bg-accent-amber/8 text-accent-amber hover:bg-accent-amber/16 hover:text-accent-amber"
+            title={applyLabel}
+            aria-label={applyLabel}
+            onClick={() => void handleApplyRecommended(order)}
+          >
+            <BoltIcon />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            static
             disabled={pending}
+            className="size-6.5 border border-accent-green/35 text-accent-green hover:bg-accent-green/12 hover:text-accent-green"
             title={t(type === 'sell' ? 'trades.row.markSold' : 'trades.row.markBought')}
             aria-label={t(type === 'sell' ? 'trades.row.markSoldAria' : 'trades.row.markBoughtAria', { name: order.name })}
             onClick={() => {
@@ -2253,55 +2404,66 @@ function ListingsTab() {
             }}
           >
             <CheckIcon />
-          </button>
-          <button
-            type="button"
-            className="trade-icon-btn"
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            static
             disabled={pending}
+            className="size-6.5 border border-line-strong"
             title={t('trades.row.edit')}
             aria-label={t('trades.row.edit')}
             onClick={() => openEditListing(order)}
           >
             <PencilIcon />
-          </button>
-          <span className="trade-split-menu-wrap">
-            <button
-              type="button"
-              className={`trade-icon-btn${menuOpen ? ' open' : ''}`}
-              disabled={pending}
-              title={t('trades.row.more')}
-              aria-label={t('trades.row.more')}
-              aria-expanded={menuOpen}
-              onClick={() => setActionMenuOrderId(menuOpen ? null : order.orderId)}
+          </Button>
+          {/* Was a hand-rolled absolute panel plus a document `mousedown` listener, inside a row
+              in a scrolling list. `Popover` portals it and handles dismissal. */}
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  static
+                  disabled={pending}
+                  className="size-6.5 border border-line-strong data-[popup-open]:bg-bg-elevated data-[popup-open]:text-ink"
+                  title={t('trades.row.more')}
+                  aria-label={t('trades.row.more')}
+                />
+              }
             >
               <DotsIcon />
-            </button>
-            {menuOpen ? (
-              <div className="trade-split-menu" role="menu">
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setActionMenuOrderId(null);
-                    void handleToggleOrderVisibility(order);
-                  }}
-                >
-                  {order.visible ? t('trades.row.ariaHide') : t('trades.row.ariaShow')}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="danger"
-                  onClick={() => {
-                    setActionMenuOrderId(null);
-                    void handleDeleteOrder(order);
-                  }}
-                >
-                  {t('trades.row.remove')}
-                </button>
-              </div>
-            ) : null}
-          </span>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="end" className="w-40">
+              <PopoverClose
+                render={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    static
+                    className="w-full justify-start"
+                    onClick={() => void handleToggleOrderVisibility(order)}
+                  />
+                }
+              >
+                {order.visible ? t('trades.row.ariaHide') : t('trades.row.ariaShow')}
+              </PopoverClose>
+              <PopoverClose
+                render={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    static
+                    className="w-full justify-start text-accent-red hover:bg-accent-red/12 hover:text-accent-red"
+                    onClick={() => void handleDeleteOrder(order)}
+                  />
+                }
+              >
+                {t('trades.row.remove')}
+              </PopoverClose>
+            </PopoverContent>
+          </Popover>
         </span>
       </div>
     );
@@ -2310,141 +2472,164 @@ function ListingsTab() {
   const renderOrderPanel = (type: TradeListingKind) => {
     const panelOrders = type === 'sell' ? sellOrders : buyOrders;
     const visibleCount = panelOrders.filter((order) => order.visible).length;
+    const allVisible = panelOrders.every((order) => order.visible);
+    const allHidden = panelOrders.every((order) => !order.visible);
     return (
-      <div className="trade-order-panel">
-        <div className="trade-order-panel-head">
-          <span className={`trade-order-panel-dot ${type}`} />
-          <span className="trade-order-panel-title">
-            {t(type === 'sell' ? 'trades.panel.sellOrders' : 'trades.panel.buyOrders')}
+      <Panel>
+        <PanelHeader className="px-3">
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              className={`size-[7px] shrink-0 rounded-full ${
+                type === 'sell' ? 'bg-accent-green' : 'bg-accent-blue'
+              }`}
+              aria-hidden="true"
+            />
+            <PanelTitle className="text-[10px] tracking-[0.1em] text-ink">
+              {t(type === 'sell' ? 'trades.panel.sellOrders' : 'trades.panel.buyOrders')}
+            </PanelTitle>
+            <span className="font-mono text-[9px] tabular-nums text-ink-dim">
+              {visibleCount}/{panelOrders.length}
+            </span>
           </span>
-          <span className="trade-order-panel-count">
-            {visibleCount}/{panelOrders.length}
-          </span>
-          <span className="trade-order-panel-head-actions">
-            <button
-              className="act-btn"
-              type="button"
-              disabled={visibilityActionPending || panelOrders.every((order) => order.visible)}
+          <span className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              static
+              className="h-6 px-2 text-[11px]"
+              disabled={visibilityActionPending || allVisible}
               onClick={() => void handleSetAllVisibility(true, type)}
             >
               {t('trades.showAll')}
-            </button>
-            <button
-              className="act-btn"
-              type="button"
-              disabled={visibilityActionPending || panelOrders.every((order) => !order.visible)}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              static
+              className="h-6 px-2 text-[11px]"
+              disabled={visibilityActionPending || allHidden}
               onClick={() => void handleSetAllVisibility(false, type)}
             >
               {t('trades.hideAll')}
-            </button>
+            </Button>
           </span>
-        </div>
-        <div className="trade-split-header">
+        </PanelHeader>
+        <div className="grid grid-cols-[minmax(0,1.5fr)_92px_52px_128px] gap-2 border-b border-line px-3 py-1.5 font-mono text-[8px] tracking-[0.08em] text-ink-dim uppercase">
           <span>{t('trades.col.item')}</span>
           <span>{t(type === 'sell' ? 'trades.col.yoursLow' : 'trades.col.yoursMarket')}</span>
           <span>{t('trades.col.priceGap')}</span>
-          <span className="trade-split-header-actions">{t('trades.col.actions')}</span>
+          <span className="text-right">{t('trades.col.actions')}</span>
         </div>
         {panelOrders.map((order) => renderOrderRow(order, type))}
         {overview && panelOrders.length === 0 ? (
-          <div className="empty-state trade-split-empty">
-            <span className="empty-primary">
-              {t(type === 'sell' ? 'trades.noSellOrders' : 'trades.noBuyOrders')}
-            </span>
-            <span className="empty-sub">
-              {t(type === 'sell' ? 'trades.createSellHint' : 'trades.createBuyHint')}
-            </span>
-          </div>
+          <EmptyState
+            icon={type === 'sell' ? 'ti-tag' : 'ti-shopping-cart'}
+            title={t(type === 'sell' ? 'trades.noSellOrders' : 'trades.noBuyOrders')}
+            detail={t(type === 'sell' ? 'trades.createSellHint' : 'trades.createBuyHint')}
+            action={
+              type === 'sell' ? (
+                <Button size="sm" onClick={() => openCreateListing('sell')}>
+                  {t('trades.hero.createListing')}
+                </Button>
+              ) : null
+            }
+          />
         ) : null}
-      </div>
+      </Panel>
     );
   };
 
   return (
     <>
-      <div className="trade-hero">
-        <div className="trade-hero-main">
+      <Panel className="flex-row flex-wrap items-start justify-between gap-4 p-4">
+        <div className="flex min-w-0 items-center gap-3.5">
           <TradeAvatar imageUrl={overview?.account.avatarUrl ?? tradeAccount.avatarUrl} name={tradeAccount.name} />
-          <div className="trade-hero-copy">
-            <div className="trade-hero-title-row">
-              <h2 className="trade-hero-title">{tradeAccount.name}</h2>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-base font-semibold text-ink">{tradeAccount.name}</h2>
               <span className={`badge ${getTradeStatusToneClass(tradeAccount.status)}`}>
                 {formatTradeStatusLabel(tradeAccount.status)}
               </span>
             </div>
-            <div className="trade-hero-meta">
+            <div className="flex flex-wrap items-center gap-3 text-[11px] text-ink-dim">
               <span>{t('trades.hero.lastUpdated')} {formatShortLocalDateTime(overview?.lastUpdatedAt ?? tradeAccount.lastUpdatedAt)}</span>
               <span>{t('home.seller.filter')} {sellerMode === 'ingame-online' ? t('home.seller.ingameOnline') : t('home.seller.ingame')}</span>
             </div>
           </div>
         </div>
-        <div className="trade-hero-actions">
-          <button className="btn-primary" type="button" onClick={() => openCreateListing('sell')}>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button onClick={() => openCreateListing('sell')}>
+            <i className="ti ti-plus" aria-hidden="true" />
             {t('trades.hero.createListing')}
-          </button>
-          <div className="trade-visibility-toggle-wrap">
-            <button
-              className={`trade-visibility-toggle${autoWatchlistBuyOrdersEnabled ? ' on' : ''}`}
-              type="button"
-              onClick={() => setAutoWatchlistBuyOrdersEnabled(!autoWatchlistBuyOrdersEnabled)}
-            >
-              <span className="trade-visibility-toggle-track" />
-              <span className="trade-visibility-toggle-copy">
-                {t('trades.autoBuyOrder')}
-              </span>
-            </button>
-            <div className="trade-visibility-toggle-info">
-              <InfoHint text="Automatically adds and removes buy orders for items added/removed from the watchlist. Recommended: On" />
-            </div>
-          </div>
-          <button className="btn-secondary" type="button" onClick={() => void handleDisconnect()}>
+          </Button>
+          <label className="flex h-8 cursor-pointer items-center gap-2 rounded-md border border-line bg-bg-base px-3">
+            <Switch
+              tone="positive"
+              checked={autoWatchlistBuyOrdersEnabled}
+              onCheckedChange={setAutoWatchlistBuyOrdersEnabled}
+            />
+            <span className="text-xs font-medium text-ink">{t('trades.autoBuyOrder')}</span>
+            <InfoHint text="Adds and removes buy orders as items join and leave the watchlist" />
+          </label>
+          <Button variant="outline" onClick={() => void handleDisconnect()}>
             {t('trades.disconnect')}
-          </button>
+          </Button>
         </div>
+      </Panel>
+
+      {/* The four figures the tab exists to deliver, on `Stat` — the same treatment as Health's
+          summary and the Set Planner's, rather than the small bespoke tiles this page had. */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat
+          icon="ti-coins"
+          label={t('trades.stat.activeTradeValue')}
+          value={overview ? formatPlatinumValue(overview.activeTradeValue) : '—'}
+        />
+        <Stat
+          icon="ti-receipt"
+          label={t('trades.stat.buyExposure')}
+          value={overview ? formatPlatinumValue(buyExposure) : '—'}
+        />
+        {/* `?? '—'`, never `String(value)`: both of these are nullable on the wire, and
+            `String(null)` renders the literal text "null". */}
+        <Stat
+          icon="ti-checks"
+          label={t('trades.stat.completedTrades')}
+          value={overview?.totalCompletedTrades?.toLocaleString() ?? '—'}
+        />
+        <Stat
+          icon="ti-package"
+          label={t('trades.stat.openPositions')}
+          value={overview?.openPositions?.toLocaleString() ?? '—'}
+        />
       </div>
 
-      <div className="stats-strip trade-stats-strip">
-        <div className="stat-mini">
-          <div className="stat-mini-label">{t('trades.stat.activeTradeValue')}</div>
-          <div className="stat-mini-val neutral">
-            {overview ? formatPlatinumValue(overview.activeTradeValue) : '—'}
-          </div>
-        </div>
-        <div className="stat-mini">
-          <div className="stat-mini-label">{t('trades.stat.buyExposure')}</div>
-          <div className="stat-mini-val neutral">
-            {overview ? formatPlatinumValue(buyExposure) : '—'}
-          </div>
-        </div>
-        <div className="stat-mini">
-          <div className="stat-mini-label">{t('trades.stat.completedTrades')}</div>
-          <div className="stat-mini-val neutral">
-            {overview?.totalCompletedTrades ?? '—'}
-          </div>
-        </div>
-        <div className="stat-mini">
-          <div className="stat-mini-label">{t('trades.stat.openPositions')}</div>
-          <div className="stat-mini-val neutral">
-            {overview?.openPositions ?? '—'}
-          </div>
-        </div>
+      {overviewError ? (
+        <p className="flex items-start gap-2 rounded-md border border-accent-red/25 bg-accent-red/8 px-2.5 py-2 text-[11px] leading-relaxed text-accent-red">
+          <i className="ti ti-alert-triangle mt-px shrink-0 text-sm" aria-hidden="true" />
+          {overviewError}
+        </p>
+      ) : null}
+
+      {/* Two flex columns rather than a grid: the sell and buy panels rarely hold the same number
+          of rows, and a grid row is as tall as its tallest cell (`ELEMENTS.md` §6). */}
+      <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-2">
+        {overviewLoading && !overview ? (
+          <>
+            <Panel className="p-3">
+              <Skeleton type="table-row@5" leafClassName="h-6" />
+            </Panel>
+            <Panel className="p-3">
+              <Skeleton type="table-row@5" leafClassName="h-6" />
+            </Panel>
+          </>
+        ) : (
+          <>
+            {renderOrderPanel('sell')}
+            {renderOrderPanel('buy')}
+          </>
+        )}
       </div>
-
-      {overviewError ? <div className="trade-inline-error">{overviewError}</div> : null}
-
-      {overviewLoading && !overview ? (
-        <div className="card trade-list-card">
-          <div className="empty-state">
-            <span className="empty-primary">{t('trades.loadingSellOrders')}</span>
-            <span className="empty-sub">{t('trades.syncingAccount')}</span>
-          </div>
-        </div>
-      ) : (
-        <div className="trade-orders-split">
-          {renderOrderPanel('sell')}
-          {renderOrderPanel('buy')}
-        </div>
-      )}
 
       <Dialog
         open={closeQtyTarget !== null}
@@ -2622,11 +2807,18 @@ export function TradesPage() {
         page="trades"
         actions={
           tradeAccount && tradesSubTab === 'orders' ? (
-            <span className="trade-subnav-hint">{t('trades.subnav.liveOrders')}</span>
+            <span className="font-mono text-[11px] tracking-[0.08em] text-ink-dim uppercase">
+              {t('trades.subnav.liveOrders')}
+            </span>
           ) : null
         }
       />
-      <div className="page-content trades-page-content">
+      {/* The container owns vertical rhythm — the children carry no margins, so this gap is the
+          only thing spacing the hero, the stats and the order panels (`ELEMENTS.md` §6).
+          `[&>*]:shrink-0` goes with it: `.page-content` is `flex: 1` + `overflow-y: auto`, so
+          without it the browser squashes the short children instead of scrolling once the page
+          overflows. That shipped as a vanishing world clock on Events. */}
+      <div className="page-content trades-page-content flex flex-col gap-4 [&>*]:shrink-0">
         {!tradeAccount ? (
           <SignInPanel />
         ) : (

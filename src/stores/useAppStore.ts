@@ -1564,13 +1564,10 @@ interface AppStore {
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
-  settingsSidebarOpen: boolean;
+  // Settings is ONE overlay. It used to be a drawer plus four modals that opened on top of it,
+  // which is why there were five booleans here and four focus traps on screen.
+  settingsOpen: boolean;
   settingsSection: SettingsSection;
-  alecaframeModalOpen: boolean;
-  discordWebhookModalOpen: boolean;
-  notificationsModalOpen: boolean;
-  importExportModalOpen: boolean;
-  languageModalOpen: boolean;
   // While true (during an import/export), background scans/polls pause so nothing writes
   // to the databases mid-operation.
   dataMaintenanceActive: boolean;
@@ -1657,19 +1654,9 @@ interface AppStore {
   // Reference worldstate sources (cycles / steel-path / nightwave / vault-trader), held generically.
   worldStateExtra: Record<WorldStateExtraKey, WorldStateExtraEntry>;
   refreshWorldStateExtra: (key: WorldStateExtraKey) => Promise<void>;
-  openSettingsSidebar: (section?: SettingsSection) => void;
-  closeSettingsSidebar: () => void;
+  openSettings: (section?: SettingsSection) => void;
+  closeSettings: () => void;
   setSettingsSection: (section: SettingsSection) => void;
-  openAlecaframeModal: () => void;
-  closeAlecaframeModal: () => void;
-  openDiscordWebhookModal: () => void;
-  closeDiscordWebhookModal: () => void;
-  openNotificationsModal: () => void;
-  closeNotificationsModal: () => void;
-  openImportExportModal: () => void;
-  closeImportExportModal: () => void;
-  openLanguageModal: () => void;
-  closeLanguageModal: () => void;
   setWfstatDataStale: (stale: boolean) => void;
   setNotificationSettings: (settings: NotificationSettings) => void;
   clearSettingsError: () => void;
@@ -2017,13 +2004,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
-  settingsSidebarOpen: false,
-  settingsSection: 'alecaframe',
-  alecaframeModalOpen: false,
-  discordWebhookModalOpen: false,
-  notificationsModalOpen: false,
-  importExportModalOpen: false,
-  languageModalOpen: false,
+  settingsOpen: false,
+  settingsSection: 'notifications',
   dataMaintenanceActive: false,
   setDataMaintenanceActive: (active) => set({ dataMaintenanceActive: active }),
   language: loadLanguage(),
@@ -2207,72 +2189,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
     return worldStateExtraRefreshPromises[key]!;
   },
-  openSettingsSidebar: (section = 'alecaframe') =>
-    set({
-      settingsSidebarOpen: true,
-      settingsSection: section,
-      alecaframeModalOpen: false,
-      discordWebhookModalOpen: false,
-      settingsError: null,
-    }),
-  closeSettingsSidebar: () =>
-    set({
-      settingsSidebarOpen: false,
-      alecaframeModalOpen: false,
-      discordWebhookModalOpen: false,
-      settingsError: null,
-    }),
-  setSettingsSection: (section) => set({ settingsSection: section }),
-  openAlecaframeModal: () =>
-    set({
-      settingsSidebarOpen: true,
-      settingsSection: 'alecaframe',
-      alecaframeModalOpen: true,
-      discordWebhookModalOpen: false,
-      settingsError: null,
-    }),
-  closeAlecaframeModal: () => set({ alecaframeModalOpen: false, settingsError: null }),
-  openDiscordWebhookModal: () =>
-    set({
-      settingsSidebarOpen: true,
-      settingsSection: 'discord-webhook',
-      alecaframeModalOpen: false,
-      discordWebhookModalOpen: true,
-      settingsError: null,
-    }),
-  closeDiscordWebhookModal: () =>
-    set({ discordWebhookModalOpen: false, settingsError: null }),
-  openNotificationsModal: () =>
-    set({
-      settingsSidebarOpen: true,
-      alecaframeModalOpen: false,
-      discordWebhookModalOpen: false,
-      notificationsModalOpen: true,
-      settingsError: null,
-    }),
-  closeNotificationsModal: () => set({ notificationsModalOpen: false }),
-  openImportExportModal: () =>
-    set({
-      settingsSidebarOpen: true,
-      settingsSection: 'import-export',
-      alecaframeModalOpen: false,
-      discordWebhookModalOpen: false,
-      notificationsModalOpen: false,
-      importExportModalOpen: true,
-      settingsError: null,
-    }),
-  closeImportExportModal: () => set({ importExportModalOpen: false }),
-  openLanguageModal: () =>
-    set({
-      settingsSidebarOpen: true,
-      alecaframeModalOpen: false,
-      discordWebhookModalOpen: false,
-      notificationsModalOpen: false,
-      importExportModalOpen: false,
-      languageModalOpen: true,
-      settingsError: null,
-    }),
-  closeLanguageModal: () => set({ languageModalOpen: false }),
+  openSettings: (section = 'notifications') =>
+    set({ settingsOpen: true, settingsSection: section, settingsError: null }),
+  closeSettings: () => set({ settingsOpen: false, settingsError: null }),
+  setSettingsSection: (section) => set({ settingsSection: section, settingsError: null }),
   setWfstatDataStale: (stale) => set({ wfstatDataStale: stale }),
   setNotificationSettings: (settings) => {
     saveNotificationSettings(settings);
@@ -2372,7 +2292,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
         appSettings: settings,
         settingsLoading: false,
         settingsError: null,
-        alecaframeModalOpen: false,
         walletLoading: true,
       });
 
@@ -2411,7 +2330,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
         appSettings: settings,
         settingsLoading: false,
         settingsError: null,
-        discordWebhookModalOpen: false,
       });
     } catch (error) {
       set({
@@ -5137,7 +5055,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   marketSubTab: 'analysis',
   setMarketSubTab: (tab) => set({ marketSubTab: tab }),
 
-  eventsSubTab: 'vendors',
+  eventsSubTab: 'overview',
   setEventsSubTab: (tab) => set({ eventsSubTab: tab }),
 
   opportunitiesSubTab: 'opportunities',

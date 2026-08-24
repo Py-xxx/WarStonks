@@ -165,7 +165,7 @@ export function TopBar() {
     const asOf = Date.parse(walletSnapshot.lastUpdate);
     return Number.isFinite(asOf) && Date.now() - asOf > CURRENCY_STALE_MS;
   }, [walletSnapshot.lastUpdate]);
-  const openSettingsSidebar = useAppStore((s) => s.openSettingsSidebar);
+  const openSettings = useAppStore((s) => s.openSettings);
   const openItemInQuickView = useAppStore((s) => s.openItemInQuickView);
   const navigationBack = useAppStore((s) => s.navigationBack);
   const goBack = useAppStore((s) => s.goBack);
@@ -768,7 +768,7 @@ export function TopBar() {
           size="icon-sm"
           title={t('settings.title')}
           aria-label={t('a11y.openSettings')}
-          onClick={() => openSettingsSidebar('alecaframe')}
+          onClick={() => openSettings()}
           className="text-ink-dim hover:text-ink"
         >
           <GearIcon />

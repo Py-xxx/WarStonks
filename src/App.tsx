@@ -16,11 +16,7 @@ import { PortfolioPage } from './pages/Portfolio';
 import { StrategyPage } from './pages/Strategy';
 import { GuidePage } from './pages/Guide';
 import { StartupScreen } from './components/StartupScreen';
-import { SettingsSidebar } from './components/SettingsSidebar';
-import { AlecaframeModal } from './components/AlecaframeModal';
-import { NotificationsModal } from './components/NotificationsModal';
-import { ImportExportModal } from './components/ImportExportModal';
-import { LanguageModal } from './components/LanguageModal';
+import { SettingsDialog } from './components/Settings';
 import { ToastHost } from './components/ToastHost';
 import { BackgroundCatalogRefreshIndicator } from './components/BackgroundCatalogRefreshIndicator';
 import { FarmingSessionPanel } from './components/FarmingSessionPanel';
@@ -151,11 +147,7 @@ function AppShell() {
           <PageRouter />
         </main>
       </div>
-      <SettingsSidebar />
-      <AlecaframeModal />
-      <NotificationsModal />
-      <ImportExportModal />
-      <LanguageModal />
+      <SettingsDialog />
       <FarmingSessionPanel />
       <ToastHost />
       <BackgroundCatalogRefreshIndicator />

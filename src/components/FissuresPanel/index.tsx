@@ -4,7 +4,9 @@ import { formatWorldStateCountdown, formatWorldStateDateTime } from '../../lib/w
 import { getRelicTierIcons } from '../../lib/tauriClient';
 import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { useAppStore } from '../../stores/useAppStore';
-import { EventsPanelEmpty, EventsPanelNotice } from '../EventsPanelState';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Countdown, EventEmpty, EventError, EventPanel, EventRow } from '../Events/parts';
 import type { RelicTierIcon, WfstatFissure } from '../../types';
 
 type FissureMode = 'normal' | 'steel-path';
@@ -96,13 +98,23 @@ function FissureTierIcon({ tier, imagePath }: { tier: string; imagePath: string 
   const imageUrl = resolveRelicAssetUrl({ tier }) ?? resolveWfmAssetUrl(imagePath);
 
   return (
-    <span className="fissure-tier-icon relic-art" aria-hidden="true">
-      {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : tier.slice(0, 1)}
+    /* No thumbnail chrome — relic art is a shaped icon on transparency, so a box around it reads
+       as a chip drawn over a picture (`ELEMENTS.md` §7). */
+    <span className="grid size-4 shrink-0 place-items-center font-mono text-[9px] text-ink-faint" aria-hidden="true">
+      {imageUrl ? (
+        <img src={imageUrl} alt="" loading="lazy" className="size-full object-contain" />
+      ) : (
+        tier.slice(0, 1)
+      )}
     </span>
   );
 }
 
-export function FissuresPanel() {
+/**
+ * `grid` fills the width with one column per relic era — the Fissures tab.
+ * `rail` is a single narrow column for the overview's side pane, where the eras stack.
+ */
+export function FissuresPanel({ layout = 'grid' }: { layout?: 'grid' | 'rail' } = {}) {
   const { t } = useTranslation();
   const fissures = useAppStore((state) => state.worldStateFissures);
   const loading = useAppStore((state) => state.worldStateFissuresLoading);
@@ -165,124 +177,120 @@ export function FissuresPanel() {
   const hasUsableFissures = fissures.length > 0;
 
   return (
-    <div className="card">
-      <div className="card-header">
-        <span className="card-label">{t('ws.fissures')}</span>
-        <span className={`badge ${filteredFissures.length > 0 ? 'badge-blue' : 'badge-muted'}`}>
-          {t('evt.activeCount', { n: filteredFissures.length })}
+    <EventPanel
+      title={t('ws.fissures')}
+      count={filteredFissures.length}
+      countTone={filteredFissures.length > 0 ? 'info' : 'muted'}
+      updatedAt={
+        lastUpdatedAt ? t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) }) : null
+      }
+      aside={
+        /* Two unlabelled icons gave no way to tell which mode you were reading. The selected one
+           now carries its name; the other stays an icon, so the pair never shifts more than the
+           label's width. */
+        <span className="flex items-center gap-0.5 rounded-md bg-bg-base p-0.5" role="tablist" aria-label={t('a11y.fissureMode')}>
+          {(
+            [
+              ['normal', NormalModeIcon, t('evt.fissuresNormal')],
+              ['steel-path', SteelPathModeIcon, t('evt.fissuresSteelPath')],
+            ] as const
+          ).map(([id, Icon, label]) => {
+            const active = mode === id;
+            return (
+              <Button
+                key={id}
+                variant="ghost"
+                size="sm"
+                static
+                role="tab"
+                aria-selected={active}
+                aria-label={label}
+                title={label}
+                onClick={() => setMode(id)}
+                className={`h-6 gap-1.5 rounded-sm px-1.5 font-mono text-[9px] font-semibold tracking-[0.06em] uppercase [&_svg]:size-3.5 ${
+                  active ? 'bg-bg-elevated text-ink' : 'text-ink-dim hover:text-ink'
+                }`}
+              >
+                <Icon />
+                {active ? label : null}
+              </Button>
+            );
+          })}
         </span>
-        <div className="card-actions fissure-mode-toggle" role="tablist" aria-label={t('a11y.fissureMode')}>
-          <button
-            className={`fissure-mode-btn${mode === 'normal' ? ' active' : ''}`}
-            type="button"
-            role="tab"
-            aria-selected={mode === 'normal'}
-            aria-label={t('evt.fissuresNormal')}
-            title={t('evt.fissuresNormal')}
-            onClick={() => setMode('normal')}
-          >
-            <NormalModeIcon />
-          </button>
-          <button
-            className={`fissure-mode-btn${mode === 'steel-path' ? ' active' : ''}`}
-            type="button"
-            role="tab"
-            aria-selected={mode === 'steel-path'}
-            aria-label={t('evt.fissuresSteelPath')}
-            title={t('evt.fissuresSteelPath')}
-            onClick={() => setMode('steel-path')}
-          >
-            <SteelPathModeIcon />
-          </button>
-          <button
-            className="text-btn"
-            type="button"
-            onClick={() => {
-              void refreshWorldStateFissures();
-            }}
-          >
-            {loading ? t('common.refreshing') : t('common.refresh')}
-          </button>
-        </div>
-      </div>
-
-      <div className="card-body">
-        {lastUpdatedAt ? (
-          <div className="world-event-updated-at">
-            {t('evt.lastSync', { time: formatWorldStateDateTime(lastUpdatedAt) })}
-          </div>
-        ) : null}
-
-        <EventsPanelNotice
-          message={error}
-          tone={hasUsableFissures ? 'warning' : 'error'}
-          loading={loading}
-          onRefresh={() => {
-            void refreshWorldStateFissures();
-          }}
+      }
+      bodyClassName="flex flex-col gap-2 p-2"
+    >
+      {error ? (
+        <EventError
+          error={error}
+          stale={hasUsableFissures}
+          onRetry={() => void refreshWorldStateFissures()}
         />
+      ) : null}
 
-        {loading && fissures.length === 0 ? (
-          <EventsPanelEmpty
-            title={t('a11y.loadingFissures')}
-            detail={t('evt.checkingFissures')}
-          />
-        ) : null}
+      {loading && fissures.length === 0 ? (
+        <Skeleton type="table-row@4" leafClassName="h-5" />
+      ) : null}
 
-        {!loading && groupedFissures.length === 0 && error && !hasUsableFissures ? (
-          <EventsPanelEmpty
-            title={t('a11y.fissuresFailed')}
-            detail={error}
-            actionLabel={t('common.retry')}
-            onAction={() => {
-              void refreshWorldStateFissures();
-            }}
-          />
-        ) : null}
+      {!loading && groupedFissures.length === 0 ? (
+        <EventEmpty
+          icon="ti-diamond"
+          title={
+            mode === 'steel-path'
+              ? t('evt.noFissuresActiveSteel')
+              : t('evt.noFissuresActiveNormal')
+          }
+          detail={t('evt.switchModesHint')}
+        />
+      ) : null}
 
-        {!loading && groupedFissures.length === 0 && (!error || hasUsableFissures) ? (
-          <EventsPanelEmpty
-            title={mode === 'steel-path' ? t('evt.noFissuresActiveSteel') : t('evt.noFissuresActiveNormal')}
-            detail={t('evt.switchModesHint')}
-          />
-        ) : null}
+      {/* Each era gets its own recessed ground rather than a border. Wrapping columns make
+          `divide-x` lie — in a 3-wide grid it draws a left border on the item that STARTS the
+          second row — and the eras were previously separated by nothing but a gap, so Axi's five
+          rows ran straight into Lith's two. A change of surface reads as a group at any wrap
+          point. `Panel p-1` + well `rounded-sm` is the registered concentric pairing
+          (`ELEMENTS.md` §2). */}
+      {groupedFissures.length > 0 ? (
+        <div
+          className={
+            layout === 'rail'
+              ? 'flex flex-col gap-1.5'
+              : 'grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(230px,1fr))]'
+          }
+        >
+          {groupedFissures.map((group) => (
+            <section
+              key={group.tier}
+              className="flex min-w-0 flex-col gap-0.5 rounded-sm bg-bg-base p-1.5"
+            >
+              <div className="flex items-center gap-1.5 px-1 pb-1">
+                <FissureTierIcon
+                  tier={group.tier}
+                  imagePath={tierIconMap.get(group.tier.trim().toLowerCase()) ?? fallbackTierIcon}
+                />
+                <span className="min-w-0 flex-1 truncate font-mono text-[10px] font-semibold tracking-[0.08em] text-ink uppercase">
+                  {group.tier}
+                </span>
+                <span className="font-mono text-[10px] tabular-nums text-ink-dim">
+                  {group.fissures.length}
+                </span>
+              </div>
 
-        {groupedFissures.length > 0 ? (
-          <div className="fissure-group-grid">
-            {groupedFissures.map((group) => (
-              <section key={group.tier} className="fissure-group-card">
-                <div className="fissure-group-header">
-                  <span className="fissure-group-title-wrap">
-                    <FissureTierIcon
-                      tier={group.tier}
-                      imagePath={tierIconMap.get(group.tier.trim().toLowerCase()) ?? fallbackTierIcon}
-                    />
-                    <span className="fissure-group-title">{group.tier}</span>
-                  </span>
-                  <span className="badge badge-muted">{group.fissures.length}</span>
-                </div>
-
-                <div className="fissure-list">
-                  {group.fissures.map((fissure) => (
-                    <article key={fissure.id} className="fissure-item">
-                      <div className="fissure-item-topline">
-                        <span className="fissure-item-node">{fissure.node ?? t('mkt.unknownNode')}</span>
-                        <span className="badge badge-green">
-                          {formatWorldStateCountdown(fissure.expiry, nowMs)}
-                        </span>
-                      </div>
-                      <div className="fissure-item-meta">
-                        <span>{fissure.missionType ?? t('evt.unknownMission')}</span>
-                        <span>{fissure.enemy ?? t('evt.unknownFaction')}</span>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </div>
+              {/* The MISSION TYPE is the headline: you choose a fissure by what the mission IS.
+                  The node and faction are the detail you read after. */}
+              {group.fissures.map((fissure) => (
+                <EventRow
+                  key={fissure.id}
+                  className="gap-2 rounded-sm border-b-0 bg-bg-panel px-1.5 py-1"
+                  title={fissure.missionType ?? t('evt.unknownMission')}
+                  meta={`${fissure.node ?? t('mkt.unknownNode')} · ${fissure.enemy ?? t('evt.unknownFaction')}`}
+                  trailing={<Countdown value={formatWorldStateCountdown(fissure.expiry, nowMs)} />}
+                />
+              ))}
+            </section>
+          ))}
+        </div>
+      ) : null}
+    </EventPanel>
   );
 }

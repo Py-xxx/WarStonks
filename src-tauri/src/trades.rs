@@ -9568,6 +9568,44 @@ pub async fn verify_market_listing(
     Ok(result)
 }
 
+/// All-time count of completed sells for an account, read straight from the trade-log cache.
+///
+/// The overview used to hardcode this to `None`, so the "Completed trades" tile has never shown a
+/// number — the data was there the whole time, in the same table the Trade Log renders from.
+///
+/// This deliberately does **not** call `build_portfolio_pnl_summary_inner`, which derives the whole
+/// ledger, loads catalog metadata and opens the market database. The overview is polled; a count
+/// is one indexed `COUNT(*)`, and `closed_trades` for the all-time period is exactly "sell records
+/// with a close time" — the same rows that loop counts, minus the cutoff filter that all-time
+/// never applies. The empty-`closed_at` exclusion mirrors `load_stored_trade_log_records_inner`:
+/// an orphan row with no close time is excluded from every other read, so it must not be counted
+/// here either.
+///
+/// Best-effort by design. A missing or unreadable trade-log database must never fail the overview,
+/// so this returns `None` and the tile falls back to an em dash.
+fn count_completed_trades_best_effort(app: &tauri::AppHandle, username: &str) -> Option<i64> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let connection = open_trades_cache_database(app).ok()?;
+    connection
+        .query_row(
+            "
+            SELECT COUNT(*)
+            FROM portfolio_trade_log_cache
+            WHERE username = ?1
+              AND order_type = 'sell'
+              AND TRIM(COALESCE(closed_at, '')) <> ''
+            ",
+            params![trimmed],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+}
+
 pub(crate) fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &str) -> Result<TradeOverview> {
     let mut session = ensure_authenticated_session(app)?;
     let connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
@@ -9678,7 +9716,7 @@ pub(crate) fn build_trade_overview_inner(app: &tauri::AppHandle, _seller_mode: &
         account: session.account.clone(),
         last_updated_at: format_timestamp(now_utc())?,
         active_trade_value,
-        total_completed_trades: None,
+        total_completed_trades: count_completed_trades_best_effort(app, &session.account.name),
         open_positions: (sell_orders.len() + buy_orders.len()) as i64,
         sell_orders,
         buy_orders,
