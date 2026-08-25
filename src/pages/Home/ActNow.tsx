@@ -1,8 +1,8 @@
+import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { HomePanel } from './HomePanel';
 import {
-  BADGE_CLASS,
   OpportunityActionIcon,
   OpportunityArt,
   OpportunityCard,
@@ -79,11 +79,7 @@ function OpportunityRow({ opportunity }: { opportunity: Opportunity }) {
       <span className="truncate text-xs font-semibold">{title}</span>
 
       {subtitle ? (
-        <span
-          className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${BADGE_CLASS[tone]}`}
-        >
-          {subtitle}
-        </span>
+        <Badge tone={tone}>{subtitle}</Badge>
       ) : null}
 
       <span className="min-w-0 flex-1" />

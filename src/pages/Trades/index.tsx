@@ -30,9 +30,10 @@ import {
   updateWfmSellOrder,
 } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
-import { formatPlatinumValue, formatTradeStatusLabel, getTradeStatusToneClass } from '../../lib/trades';
+import { formatPlatinumValue, formatTradeStatusLabel, tradeStatusTone } from '../../lib/trades';
 import { rankWfmAutocompleteItems } from '../../lib/wfmAutocomplete';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -2547,9 +2548,9 @@ function ListingsTab() {
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-base font-semibold text-ink">{tradeAccount.name}</h2>
-              <span className={`badge ${getTradeStatusToneClass(tradeAccount.status)}`}>
+              <Badge tone={tradeStatusTone(tradeAccount.status)}>
                 {formatTradeStatusLabel(tradeAccount.status)}
-              </span>
+              </Badge>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-[11px] text-ink-dim">
               <span>{t('trades.hero.lastUpdated')} {formatShortLocalDateTime(overview?.lastUpdatedAt ?? tradeAccount.lastUpdatedAt)}</span>

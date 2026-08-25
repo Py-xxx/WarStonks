@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getEeLogShadowTrades, getTradeDetectionComparison } from '../../lib/tauriClient';
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { Button } from '@/components/ui/button';
+import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Panel } from '@/components/ui/panel';
 import { useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
@@ -14,11 +15,11 @@ import type {
   TradeIngestStatus,
 } from '../../types';
 
-const STATUS_TONE: Record<ComparisonStatus, string> = {
-  matched: 'badge-green',
-  shadowOnly: 'badge-blue',
+const STATUS_TONE: Record<ComparisonStatus, BadgeTone> = {
+  matched: 'green',
+  shadowOnly: 'blue',
   // The only status that should stop a cutover.
-  wfmOnly: 'badge-red',
+  wfmOnly: 'red',
 };
 
 const STATUS_LABEL_KEYS = {
@@ -28,11 +29,11 @@ const STATUS_LABEL_KEYS = {
 } as const;
 
 /** Tone by severity. A deliberate exclusion is not a failure and must not read like one. */
-const INGEST_TONE: Record<TradeIngestStatus, string> = {
-  logged: 'badge-green',
-  partiallyLogged: 'badge-amber',
-  notLogged: 'badge-red',
-  notPriceable: 'badge-muted',
+const INGEST_TONE: Record<TradeIngestStatus, BadgeTone> = {
+  logged: 'green',
+  partiallyLogged: 'amber',
+  notLogged: 'red',
+  notPriceable: 'neutral',
 };
 
 const INGEST_STATUS_KEYS = {
@@ -104,9 +105,9 @@ function NotLoggedPanel({ rows, t }: { rows: ShadowTradeRow[]; t: TranslateFn })
             {problems.map((row) => (
               <tr key={row.tradeKey}>
                 <td>
-                  <span className={`badge ${INGEST_TONE[row.ingestStatus!]}`}>
+                  <Badge tone={INGEST_TONE[row.ingestStatus!]}>
                     {t(INGEST_STATUS_KEYS[row.ingestStatus!])}
-                  </span>
+                  </Badge>
                 </td>
                 <td>
                   <span>
@@ -272,9 +273,9 @@ export function TradeDetectionComparison() {
             {rows.map((row, index) => (
               <tr key={`${row.status}:${row.itemName}:${row.occurredAt ?? index}`} className="[&>td]:border-b [&>td]:border-line-subtle [&>td]:px-2.5 [&>td]:py-1.5 [&>td]:text-[11px] [&>td]:text-ink-soft">
                 <td>
-                  <span className={`badge ${STATUS_TONE[row.status]}`}>
+                  <Badge tone={STATUS_TONE[row.status]}>
                     {t(STATUS_LABEL_KEYS[row.status])}
-                  </span>
+                  </Badge>
                 </td>
                 <td>
                   <span className="text-ink">{row.itemName}</span>

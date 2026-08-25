@@ -11,6 +11,7 @@
  * What genuinely is Scanners-specific stays here: the rank badge, the status pill, and the
  * component/drop row that both result types nest.
  */
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Metric, MetricGrid } from '@/components/ui/metric';
 import { Panel } from '@/components/ui/panel';
@@ -42,22 +43,10 @@ export function ScanPill({
   tone?: 'green' | 'blue' | 'amber' | 'red' | 'muted';
   children: React.ReactNode;
 }) {
-  const TONE = {
-    green: 'bg-accent-green/15 text-accent-green',
-    blue: 'bg-accent-blue/15 text-accent-blue',
-    amber: 'bg-accent-amber/15 text-accent-amber',
-    red: 'bg-accent-red/15 text-accent-red',
-    muted: 'bg-bg-elevated text-ink-dim',
-  } as const;
   return (
-    <span
-      className={cn(
-        'shrink-0 rounded px-1.5 py-px font-mono text-[9px] font-semibold tracking-[0.04em] uppercase',
-        TONE[tone],
-      )}
-    >
+    <Badge size="sm" uppercase tone={tone === 'muted' ? 'neutral' : tone} className="px-1.5">
       {children}
-    </span>
+    </Badge>
   );
 }
 

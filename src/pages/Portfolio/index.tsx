@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import {
@@ -605,24 +606,25 @@ function renderTradeStatusDetail(entry: PortfolioTradeLogEntry): string | null {
   return `${entry.matchedQuantity}/${entry.quantity}`;
 }
 
-function buildTradeTypeClassName(orderType: PortfolioTradeLogEntry['orderType']): string {
-  return orderType === 'buy' ? 'badge-blue' : 'badge-green';
+function tradeTypeTone(orderType: PortfolioTradeLogEntry['orderType']): BadgeTone {
+  return orderType === 'buy' ? 'blue' : 'green';
 }
 
-function buildTradeStatusClassName(status: string | null): string {
+/** `Partial` was `.badge-partial`, which was `.badge-purple` under a second name. */
+function tradeStatusTone(status: string | null): BadgeTone {
   switch (status) {
     case 'Flip':
-      return 'badge-green';
+      return 'green';
     case 'Sold As Set':
-      return 'badge-purple';
+      return 'purple';
     case 'Kept':
-      return 'badge-amber';
+      return 'amber';
     case 'Open':
-      return 'badge-blue';
+      return 'blue';
     case 'Partial':
-      return 'badge-partial';
+      return 'purple';
     default:
-      return 'badge';
+      return 'neutral';
   }
 }
 
@@ -836,9 +838,7 @@ function TradeLogEntryRow({
           <span className="truncate font-mono text-[10.5px] text-ink-soft">{metaParts.join(' · ')}</span>
         </div>
       </div>
-      <span className={`badge ${buildTradeTypeClassName(entry.orderType)}`}>
-        {renderTradeType(entry.orderType)}
-      </span>
+      <Badge tone={tradeTypeTone(entry.orderType)}>{renderTradeType(entry.orderType)}</Badge>
       <LedgerCell main={formatPlatinumValue(entry.platinum)} sub={`×${entry.quantity}`} />
       <LedgerCell
         main={entry.profit == null ? '—' : formatPlatinumValue(entry.profit)}
@@ -848,9 +848,7 @@ function TradeLogEntryRow({
       <span className="flex min-w-0 justify-start">
         {entry.status ? (
           <span className="inline-flex min-w-0 items-center gap-1.5">
-            <span className={`badge ${buildTradeStatusClassName(entry.status)}`}>
-              {renderTradeStatus(entry.status)}
-            </span>
+            <Badge tone={tradeStatusTone(entry.status)}>{renderTradeStatus(entry.status)}</Badge>
             {statusDetail ? (
               <span className="font-mono text-[10px] whitespace-nowrap text-ink-dim tabular-nums">
                 {statusDetail}
@@ -1411,7 +1409,7 @@ function TradeLogTab({ username }: { username: string | null }) {
                             </span>
                           </div>
                         </div>
-                        <span className={`badge ${buildTradeTypeClassName(row.orderType)}`}>{renderTradeType(row.orderType)}</span>
+                        <Badge tone={tradeTypeTone(row.orderType)}>{renderTradeType(row.orderType)}</Badge>
                         <LedgerCell
                           main={formatPlatinumValue(row.totalPlatinum)}
                           sub={t('pf.itemsCount', { n: row.itemCount })}
@@ -1419,11 +1417,11 @@ function TradeLogTab({ username }: { username: string | null }) {
                         <LedgerCell main="—" />
                         <span className="flex min-w-0 justify-start">
                           {groupNeedsPricing(row.children, row.totalPlatinum) ? (
-                            <span className="badge badge-amber" title={t('pf.needsPricingHint')}>
+                            <Badge tone="amber" title={t('pf.needsPricingHint')}>
                               {t('pf.needsPricing')}
-                            </span>
+                            </Badge>
                           ) : (
-                            <span className="badge">{t('pf.grouped')}</span>
+                            <Badge>{t('pf.grouped')}</Badge>
                           )}
                         </span>
                         <span className={LEDGER_DATE}>{formatShortLocalDateTime(row.closedAt)}</span>

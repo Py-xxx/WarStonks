@@ -68,14 +68,6 @@ export const CARD_TONE_CLASS: Record<OpportunityTone, string> = {
   blue: 'border-l-accent-blue',
 };
 
-export const BADGE_CLASS: Record<OpportunityTone, string> = {
-  red: 'bg-accent-red/15 text-accent-red',
-  green: 'bg-accent-green/15 text-accent-green',
-  amber: 'bg-accent-amber/15 text-accent-amber',
-  purple: 'bg-accent-purple/15 text-accent-purple',
-  blue: 'bg-accent-blue/15 text-accent-blue',
-};
-
 /** Ported from `.opp-conf-*`, and pinned against it by `opportunityView.test.ts`. */
 const CONFIDENCE_CLASS: Record<ConfidenceTone, string> = {
   green: 'text-accent-green',

@@ -317,30 +317,9 @@ body {
   box-shadow: var(--panel-shadow);
   animation: fadeIn 0.2s ease both;
 }
-
-/* ── BADGES ── */
-.badge {
-  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 4px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-.badge-red    { background: rgba(240,79,88,0.18);  color: var(--accent-red); }
-.badge-green  { background: rgba(61,214,140,0.15); color: var(--accent-green); }
-.badge-amber  { background: rgba(240,160,48,0.15); color: var(--accent-amber); }
-.badge-purple { background: rgba(139,111,255,0.15);color: var(--accent-purple); }
-.badge-muted  { background: var(--bg-elevated);     color: var(--text-muted); }
-.badge-blue   { background: rgba(74,158,255,0.15);  color: var(--accent-blue); }
-.badge-partial { background: rgba(139,111,255,0.15); color: var(--accent-purple); }
 .trade-status-offline { color: var(--text-muted); }
-.badge.trade-status-offline { background: var(--bg-elevated); color: var(--text-muted); }
 .trade-status-online { color: var(--accent-green); }
-.badge.trade-status-online { background: rgba(61,214,140,0.15); color: var(--accent-green); }
 .trade-status-ingame { color: var(--accent-purple); }
-.badge.trade-status-ingame { background: rgba(139,111,255,0.15); color: var(--accent-purple); }
 
 /* ── EMPTY STATE ── */
 .empty-state {

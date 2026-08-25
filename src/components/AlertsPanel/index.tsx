@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 
@@ -27,14 +28,6 @@ import { useAppStore } from '../../stores/useAppStore';
  */
 
 type Tone = 'green' | 'amber' | 'red' | 'blue' | 'neutral';
-
-const BADGE_CLASS: Record<Tone, string> = {
-  green: 'bg-accent-green/15 text-accent-green',
-  amber: 'bg-accent-amber/15 text-accent-amber',
-  red: 'bg-accent-red/15 text-accent-red',
-  blue: 'bg-accent-blue/15 text-accent-blue',
-  neutral: 'bg-bg-elevated text-ink-dim',
-};
 
 /** A section of alerts: a label, how many, and the control that clears them all. */
 function AlertSection({
@@ -109,11 +102,7 @@ function AlertRow({
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{title}</span>
           {badge ? (
-            <span
-              className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums ${BADGE_CLASS[badge.tone]}`}
-            >
-              {badge.text}
-            </span>
+            <Badge tone={badge.tone}>{badge.text}</Badge>
           ) : null}
           {onDismiss && dismissLabel ? (
             <Button

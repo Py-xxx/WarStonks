@@ -1,3 +1,4 @@
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
@@ -218,15 +219,9 @@ function DropRow({
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-[11px] font-medium text-ink">{name}</span>
           {badge ? (
-            <span
-              className={`shrink-0 rounded px-1 py-px font-mono text-[9px] font-semibold tabular-nums ${
-                badge.tone === 'needed'
-                  ? 'bg-accent-amber/15 text-accent-amber'
-                  : 'bg-accent-green/15 text-accent-green'
-              }`}
-            >
+            <Badge size="sm" tone={badge.tone === 'needed' ? 'amber' : 'green'}>
               {badge.text}
-            </span>
+            </Badge>
           ) : null}
         </span>
         <span className="truncate font-mono text-[10px] text-ink-faint tabular-nums">
