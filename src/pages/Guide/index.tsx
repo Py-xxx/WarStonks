@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Panel } from '@/components/ui/panel';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { useTranslation } from '../../i18n';
 import { GUIDE_SECTIONS, type GuideBlock, type GuideSection } from './guideContent';
@@ -184,7 +185,7 @@ export function GuidePage() {
         }
       />
 
-      <div className="page-content flex flex-col gap-4 [&>*]:shrink-0">
+      <PageContent stack>
         {/* Hidden while searching: the contents list describes the whole document, and a filtered
             view is not the document. */}
         {!normalizedQuery ? (
@@ -253,7 +254,7 @@ export function GuidePage() {
             </section>
           ))
         )}
-      </div>
+      </PageContent>
     </>
   );
 }

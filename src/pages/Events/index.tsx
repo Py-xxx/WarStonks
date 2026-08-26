@@ -18,6 +18,7 @@ import { FissuresPanel } from '../../components/FissuresPanel';
 import { FlashSalesPanel } from '../../components/FlashSalesPanel';
 import { MarketNewsPanel } from '../../components/MarketNewsPanel';
 import { NightwavePanel } from '../../components/NightwavePanel';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { SteelPathPanel } from '../../components/SteelPathPanel';
 import { VaultTraderPanel } from '../../components/VaultTraderPanel';
@@ -82,7 +83,7 @@ export function EventsPage() {
           SQUASHES the short children instead of scrolling. That is what made the world clock
           vanish in Normal fissures (14 of them, page overflows) and come back on Steel Path
           (fewer, page fits). Overflow only becomes real once the children refuse to shrink. */}
-      <div className="page-content flex flex-col gap-3 [&>*]:shrink-0">
+      <PageContent stack gap={3}>
         {/* The open-world cycles, above every view — they are checked constantly and belong to no
             single tab. */}
         <WorldClockPanel />
@@ -119,7 +120,7 @@ export function EventsPage() {
             <FlashSalesPanel />
           </div>
         )}
-      </div>
+      </PageContent>
     </>
   );
 }

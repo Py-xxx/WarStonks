@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 
+import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useAlecaframeProbe } from './hooks/useAlecaframeProbe';
 import { useAppStore } from './stores/useAppStore';
@@ -52,36 +53,27 @@ function WfstatStaleBanner() {
   }
 
   return (
-    <div className="data-stale-banner" role="status">
-      <svg
-        className="data-stale-banner-icon"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-      <span className="data-stale-banner-text">
+    /* Body text stays full-contrast ink: the warning meaning is carried by the amber icon and
+       ground, never by the text colour alone. */
+    <div
+      className="flex items-center gap-3 border-b border-accent-amber/45 bg-[color-mix(in_srgb,var(--color-accent-amber)_14%,var(--color-bg-surface))] px-4 py-2 text-xs leading-[1.4] text-ink"
+      role="status"
+    >
+      <i className="ti ti-alert-triangle shrink-0 text-base text-accent-amber" aria-hidden="true" />
+      <span className="flex-1">
         Warframestat (WFStat) data may be out of date — warframestat.us was unreachable, so
         WarStonks is showing its last saved data. This refreshes automatically when the service
         is back online.
       </span>
-      <button
-        type="button"
-        className="data-stale-banner-dismiss"
+      <Button
+        variant="outline"
+        size="sm"
+        className="shrink-0 border-accent-amber/55 font-semibold text-accent-amber hover:bg-accent-amber/[0.18] hover:text-accent-amber"
         onClick={() => setWfstatDataStale(false)}
         aria-label="Dismiss WFStat status notice"
       >
         Dismiss
-      </button>
+      </Button>
     </div>
   );
 }
@@ -141,9 +133,12 @@ function AppShell() {
     <TooltipProvider>
       <TopBar />
       <WfstatStaleBanner />
-      <div className="app-body">
+      <div className="flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className="content">
+        {/* Two very low-opacity blooms at the top corners — the only thing separating the content
+            ground from flat `bg-base`. Kept on the shell, not on any page, so every page inherits
+            the same one. */}
+        <main className="flex flex-1 flex-col overflow-hidden bg-bg-base bg-[radial-gradient(900px_320px_at_18%_-8%,color-mix(in_srgb,var(--color-accent-blue)_5%,transparent),transparent_65%),radial-gradient(700px_280px_at_92%_-6%,color-mix(in_srgb,var(--color-accent-purple)_4%,transparent),transparent_60%)]">
           <PageRouter />
         </main>
       </div>

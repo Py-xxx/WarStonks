@@ -46,6 +46,7 @@ const ACTION_TONE: Record<string, string> = {
 import { SKELETON_PULSE, Skeleton } from '@/components/ui/skeleton';
 import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { InfoHint } from '../../components/InfoHint';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { tActive, useTranslation } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
@@ -1947,7 +1948,7 @@ function AnalyticsTab() {
 
   if (marketVariantsError && marketVariants.length === 0 && !selectedMarketVariantKey) {
     return (
-      <div className="page-content">
+      <PageContent>
         <EmptyAnalyticsState
           title={t('a11y.analyticsFailed')}
           body={marketVariantsError}
@@ -1958,21 +1959,21 @@ function AnalyticsTab() {
             }
           }}
         />
-      </div>
+      </PageContent>
     );
   }
 
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
-      <div className="page-content">
+      <PageContent>
         <EmptyAnalyticsState body={t('mkb.pickRankCharts')} />
         {marketVariantsError ? <MarketInlineNotice tone="error" message={marketVariantsError} /> : null}
-      </div>
+      </PageContent>
     );
   }
 
   return (
-    <div ref={pageContentRef} className="page-content flex flex-col gap-5 [&>*]:shrink-0">
+    <PageContent ref={pageContentRef} stack gap={5}>
       {errorMessage && analytics ? (
         <MarketInlineNotice tone="warning" message={errorMessage} />
       ) : null}
@@ -2179,7 +2180,7 @@ function AnalyticsTab() {
             </AnalyticsPanel>
           </div>
       </>
-    </div>
+    </PageContent>
   );
 }
 
@@ -2372,7 +2373,7 @@ function AnalysisTab() {
 
   if (marketVariantsError && marketVariants.length === 0 && !selectedMarketVariantKey) {
     return (
-      <div className="page-content">
+      <PageContent>
         <EmptyAnalyticsState
           title={t('a11y.analysisFailed')}
           body={marketVariantsError}
@@ -2383,16 +2384,16 @@ function AnalysisTab() {
             }
           }}
         />
-      </div>
+      </PageContent>
     );
   }
 
   if (marketVariants.length > 1 && !selectedMarketVariantKey) {
     return (
-      <div className="page-content">
+      <PageContent>
         <EmptyAnalyticsState body={t('mkb.pickRankAnalysis')} />
         {marketVariantsError ? <MarketInlineNotice tone="error" message={marketVariantsError} /> : null}
-      </div>
+      </PageContent>
     );
   }
 
@@ -2415,7 +2416,7 @@ function AnalysisTab() {
     itemDetailsError && effectiveItemDetails ? itemDetailsError : null;
 
   return (
-    <div ref={pageContentRef} className="page-content flex flex-col gap-5 [&>*]:shrink-0">
+    <PageContent ref={pageContentRef} stack gap={5}>
       {analysisError && !analysis && !analysisLoading ? (
         <EmptyAnalyticsState
           title={t('a11y.analysisFailed')}
@@ -3094,7 +3095,7 @@ function AnalysisTab() {
         </div>
       </div>
       </>
-    </div>
+    </PageContent>
   );
 }
 

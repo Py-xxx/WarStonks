@@ -57,6 +57,7 @@ import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
 } from '../../lib/watchlistAddFeedback';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { selectAlecaframeInventoryAvailable, useAppStore } from '../../stores/useAppStore';
 import { AlecaframeInventoryPanel } from '../../components/AlecaframeInventory';
@@ -2315,7 +2316,7 @@ export function OpportunitiesPage({
     <>
       <PageHeading page={mode === 'inventory' ? 'inventory' : 'opportunities'} />
 
-      <div className="page-content">
+      <PageContent>
         {activeTab === 'set-planner' ? (
           <SetPlanner
             gate={setPlannerGate}
@@ -2425,7 +2426,7 @@ export function OpportunitiesPage({
              exhaustive — the old fallback was an unreachable untranslated sentence. */
           <OpportunitiesOverview />
         )}
-      </div>
+      </PageContent>
       <SetCompletionScreenshotImportWarningModal
         open={screenshotImportGuidanceOpen}
         onClose={closeScreenshotImportGuidance}

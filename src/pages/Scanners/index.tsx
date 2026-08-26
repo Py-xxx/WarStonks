@@ -25,6 +25,7 @@ import {
   clearWatchlistAddFeedbackTimeouts,
   markWatchlistAddFeedback,
 } from '../../lib/watchlistAddFeedback';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -1025,7 +1026,7 @@ export function ScannersPage() {
 
       {/* `[&>*]:shrink-0` — `.page-content` is `flex: 1` + `overflow-y: auto`, so without it the
           browser squashes short children instead of scrolling. See the handoff's traps. */}
-      <div className="page-content flex flex-col gap-4 [&>*]:shrink-0">
+      <PageContent stack>
         <div className="flex min-w-0 flex-col gap-3">
             {/* Above the scanner's own status: this is the baseline both tabs now fall back to
                 for items no scan has reached, so it belongs before the scan-specific counts. */}
@@ -1269,7 +1270,7 @@ export function ScannersPage() {
               />
             ) : null}
         </div>
-      </div>
+      </PageContent>
     </>
   );
 }

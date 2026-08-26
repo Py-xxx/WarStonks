@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Metric, MetricGrid } from '@/components/ui/metric';
 import { Panel, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { Switch } from '@/components/ui/switch';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { MarketChip } from '../Market/parts';
 import { useTranslation } from '../../i18n';
@@ -93,7 +94,7 @@ export function StrategyPage() {
         aside={<MarketChip tone="amber">{t('opp.beta')}</MarketChip>}
       />
 
-      <div className="page-content flex flex-col gap-4 [&>*]:shrink-0">
+      <PageContent stack>
         {/* Two columns that pack independently: settings on the left, the activity feed on the
             right. The feed is the tallest thing here and grows without bound. */}
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,420px)]">
@@ -355,7 +356,7 @@ export function StrategyPage() {
             </div>
           </Panel>
         </div>
-      </div>
+      </PageContent>
     </>
   );
 }

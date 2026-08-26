@@ -55,6 +55,7 @@ import wfmLogo from '../../assets/branding/warframe-market.png';
 import { ItemThumb } from '../../components/ListRow';
 import { InfoHint } from '../../components/InfoHint';
 import { ItemName } from '../../components/ItemName';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { HealthTab } from './HealthTab';
 import { useAppStore } from '../../stores/useAppStore';
@@ -2819,7 +2820,7 @@ export function TradesPage() {
           `[&>*]:shrink-0` goes with it: `.page-content` is `flex: 1` + `overflow-y: auto`, so
           without it the browser squashes the short children instead of scrolling once the page
           overflows. That shipped as a vanishing world clock on Events. */}
-      <div className="page-content trades-page-content flex flex-col gap-4 [&>*]:shrink-0">
+      <PageContent stack data-ws-stagger="">
         {!tradeAccount ? (
           <SignInPanel />
         ) : (
@@ -2829,7 +2830,7 @@ export function TradesPage() {
             {tradesSubTab === 'detection' && <TradeDetectionComparison />}
           </>
         )}
-      </div>
+      </PageContent>
     </>
   );
 }

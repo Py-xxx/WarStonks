@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from 'react';
 import { copyTextToClipboard } from '../../lib/marketMessages';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
   ContextMenu,
@@ -139,7 +140,10 @@ export function ItemName({ className, children, ...target }: ItemNameProps) {
         <ContextMenuTrigger
           render={
             <span
-              className={`item-name-link${className ? ` ${className}` : ''}`}
+              className={cn(
+                'cursor-pointer rounded-[3px] transition-[color] duration-100 hover:text-accent-blue hover:underline hover:underline-offset-2',
+                className,
+              )}
               role="button"
               tabIndex={0}
               title={t('itm.openQvTitle', { item: displayName })}

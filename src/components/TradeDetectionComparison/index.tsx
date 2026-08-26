@@ -213,7 +213,7 @@ export function TradeDetectionComparison() {
   const readyToCutOver = wfmOnlyCount === 0 && matchedCount > 0;
 
   return (
-    <div className="det">
+    <div className="flex flex-col gap-3 p-4">
       {/* First, because it is the only part that reports live data loss. The WFM comparison
           below is a cutover-era artefact kept for debugging. */}
       <NotLoggedPanel rows={shadowRows} t={t} />

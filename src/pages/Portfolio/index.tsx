@@ -28,6 +28,7 @@ import {
 import { formatShortLocalDateTime } from '../../lib/dateTime';
 import { formatPlatinumValue } from '../../lib/trades';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { PageContent } from '../../components/PageContent';
 import { PageHeading } from '../../components/PageHeading';
 import { useAppStore } from '../../stores/useAppStore';
 import { intlLocaleCode } from '../../lib/language';
@@ -2150,7 +2151,7 @@ export function PortfolioPage() {
   return (
     <>
       <PageHeading page="portfolio" />
-      <div className="page-content">
+      <PageContent>
         {portfolioTab === 'log' ? (
           <TradeLogTab username={tradeAccount?.name ?? null} />
         ) : (
@@ -2160,7 +2161,7 @@ export function PortfolioPage() {
             onRefreshTrades={handleRefreshTrades}
           />
         )}
-      </div>
+      </PageContent>
     </>
   );
 }

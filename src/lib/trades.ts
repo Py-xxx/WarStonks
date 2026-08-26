@@ -15,8 +15,8 @@ export function formatTradeStatusLabel(
   }
 }
 
-/** Presence as a `Badge` tone. Separate from `getTradeStatusToneClass`, which returns the bare
- *  `.trade-status-*` colour classes the TopBar still uses for text and its presence dot. */
+/** Presence as a `Badge` tone. Separate from `getTradeStatusToneClass`, which returns a text
+ *  colour for the TopBar's presence label and its dot (the dot pairs it with `bg-current`). */
 export function tradeStatusTone(
   status: TradeAccountSummary['status'] | string | null | undefined,
 ): 'green' | 'purple' | 'neutral' {
@@ -37,11 +37,11 @@ export function getTradeStatusToneClass(
   switch ((status ?? '').toString().trim().toLowerCase()) {
     case 'ingame':
     case 'in_game':
-      return 'trade-status-ingame';
+      return 'text-accent-purple';
     case 'online':
-      return 'trade-status-online';
+      return 'text-accent-green';
     default:
-      return 'trade-status-offline';
+      return 'text-ink-dim';
   }
 }
 

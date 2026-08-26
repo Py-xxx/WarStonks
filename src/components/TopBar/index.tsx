@@ -749,7 +749,9 @@ export function TopBar() {
                       }`}
                     >
                       <span
-                        className={`size-1.5 shrink-0 rounded-full ${getTradeStatusToneClass(option.value)}`}
+                        /* `bg-current`: the tone classes set `color`, not `background`, so the
+                           dot painted nothing without it. */
+                        className={`size-1.5 shrink-0 rounded-full bg-current ${getTradeStatusToneClass(option.value)}`}
                       />
                       {option.label}
                     </Button>

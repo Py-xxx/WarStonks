@@ -21,53 +21,18 @@ import { test } from 'node:test';
 
 const UI_DIR = join('src', 'components', 'ui');
 
-/** Files that have been migrated to Tailwind + primitives, and must therefore obey the rules. */
-const MIGRATED_GLOBS = [
-  join('src', 'pages', 'Home'),
-  join('src', 'components', 'Sidebar'),
-  join('src', 'components', 'TopBar'),
-  join('src', 'components', 'OpportunityCard'),
-  join('src', 'components', 'OpportunityBoard'),
-  join('src', 'components', 'UnderpricedListingsPanel'),
-  join('src', 'components', 'ListRow'),
-  join('src', 'components', 'AlecaframeInventory'),
-  join('src', 'components', 'AlertsPanel'),
-  join('src', 'pages', 'Trades'),
-  join('src', 'components', 'Settings'),
-  join('src', 'components', 'Events'),
-  join('src', 'components', 'EventsOverview'),
-  join('src', 'components', 'FissuresPanel'),
-  join('src', 'components', 'FlashSalesPanel'),
-  join('src', 'components', 'WorldStateAlertsPanel'),
-  join('src', 'components', 'VoidTraderPanel'),
-  join('src', 'components', 'VaultTraderPanel'),
-  join('src', 'components', 'NightwavePanel'),
-  join('src', 'components', 'SteelPathPanel'),
-  join('src', 'components', 'ActiveEventsPanel'),
-  join('src', 'components', 'ActivitiesPanel'),
-  join('src', 'components', 'WorldClockPanel'),
-  join('src', 'components', 'StartupScreen'),
-  join('src', 'components', 'MarketNewsPanel'),
-  join('src', 'pages', 'Portfolio'),
-  join('src', 'pages', 'Market'),
-  join('src', 'pages', 'Scanners'),
-  join('src', 'pages', 'Watchlist'),
-  join('src', 'components', 'WatchlistTable'),
-  join('src', 'components', 'WatchlistAddControls'),
-  join('src', 'components', 'WatchlistPurchaseModal'),
-  join('src', 'components', 'QuantityStepper'),
-  join('src', 'components', 'ItemSearchInput'),
-  join('src', 'pages', 'Opportunities'),
-  join('src', 'pages', 'Strategy'),
-  join('src', 'pages', 'Guide'),
-  join('src', 'components', 'FarmingSessionPanel'),
-  join('src', 'components', 'TradeDetectionComparison'),
-  join('src', 'components', 'ItemName'),
-  join('src', 'components', 'PriceHistoryBar'),
-  join('src', 'components', 'BackgroundCatalogRefreshIndicator'),
-  join('src', 'components', 'ErrorBoundary'),
-  join('src', 'components', 'ToastHost'),
-];
+/**
+ * The rules apply to **all of `src/`**.
+ *
+ * This was a hand-maintained list of 44 directories, added to as each surface migrated — and its
+ * weakness was that membership was the thing being tracked rather than the thing being enforced.
+ * `pages/Portfolio` sat in the list, passed every guard, and carried 46 legacy classes for
+ * several passes; a file nobody added was simply never checked.
+ *
+ * With `legacy.css` down to a base layer and every surface migrated, the list is the whole tree,
+ * and a new file is covered the moment it exists rather than when somebody remembers.
+ */
+const MIGRATED_GLOBS = [join('src')];
 
 function collectTsx(dir: string): string[] {
   const out: string[] = [];
@@ -83,7 +48,9 @@ function collectTsx(dir: string): string[] {
 }
 
 function migratedFiles(): string[] {
-  return MIGRATED_GLOBS.flatMap((dir) => collectTsx(dir));
+  // `src/components/ui` holds the primitives themselves — `skeleton.tsx` *is* the one pulse
+  // implementation, and `button.tsx` *is* the raw `<button>` every other file is banned from.
+  return MIGRATED_GLOBS.flatMap((dir) => collectTsx(dir)).filter((f) => !f.startsWith(UI_DIR));
 }
 
 /** Strips comments so a rule name mentioned in a doc block never trips its own check. */
