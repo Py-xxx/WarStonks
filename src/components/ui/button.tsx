@@ -18,13 +18,14 @@ import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
   [
-    // `appearance-none bg-transparent font-sans` neutralises the browser's native control
-    // styling. Tailwind's preflight would normally do this, but we deliberately don't import
-    // it during the migration (see src/index.css) — so without these, any variant that sets no
-    // background of its own renders with the UA's light grey button face, which is exactly how
-    // `outline` and `ghost` first shipped. twMerge drops `bg-transparent` when a variant
-    // supplies a real background, so this is safe as a base.
-    'appearance-none bg-transparent font-sans',
+    // `appearance-none bg-transparent` used to live here, because preflight was not imported
+    // during the migration and without them any variant setting no background of its own
+    // rendered with the UA's light grey button face — which is exactly how `outline` and
+    // `ghost` first shipped. Preflight now does both, so they are gone.
+    //
+    // `font-sans` stays, and is not the same thing: preflight gives buttons `font: inherit`,
+    // so a Button inside one of the app's mono blocks would come out in JetBrains Mono.
+    'font-sans',
     'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap',
     'rounded-md border border-transparent font-medium select-none',
     'outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:border-ring',

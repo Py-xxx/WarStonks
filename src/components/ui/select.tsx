@@ -8,10 +8,9 @@
  * Reach for Base UI's version only when an option needs rich content — an icon, a second line, a
  * value — which a native `<option>` cannot hold.
  *
- * `appearance-none` and the explicit font are the same non-negotiables as `Input` and `Button`:
- * Tailwind's preflight is deliberately not imported during the migration, so without them a native
- * select keeps the UA's light grey control face. That is what `<select>` looked like everywhere on
- * the Farm Now tab before this existed.
+ * **`appearance-none` is load-bearing here**, and preflight does not replace it: preflight never
+ * touches `appearance`, and on a `<select>` that property is what hides the OS dropdown arrow.
+ * The chevron below is ours, so without it the control draws two.
  *
  * The chevron is a sibling span rather than a background-image, so it inherits the disabled and
  * focus colours instead of being a fixed-colour asset.

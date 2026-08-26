@@ -2,9 +2,13 @@
  * Input — adapted from shadcn/ui's Base UI input (MIT), in `ui-reference/shadcn-vite`.
  *
  * Changes from the source: `dark:` variants dropped (one theme), colours on our tokens, and
- * `appearance-none` plus an explicit font added — without Tailwind's preflight (deliberately
- * not imported during the migration) a native `<input>` keeps the UA's own border, background
- * and system font, which is the same trap that made `outline` buttons render as light pills.
+ * `appearance-none` plus an explicit font added.
+ *
+ * The explicit font is now redundant — preflight gives inputs `font: inherit` — but
+ * **`appearance-none` stays**, and not for the reason the migration-era comment gave. Preflight
+ * does not touch `appearance`, and this component is also used for `type="date"` and
+ * `type="number"`, where the property governs the browser's own picker and spinner chrome.
+ * Removing it changes those two controls, not the text ones.
  *
  * `tabular-nums` is NOT applied here by default: an input holding a name should use
  * proportional figures. Numeric inputs must opt in — `<Input className="tabular-nums" />` —

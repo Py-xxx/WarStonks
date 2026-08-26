@@ -1,52 +1,47 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    WarStonks stylesheet entry point.
 
-   Layer order — later layers win. This ordering is the whole reason the Tailwind
-   migration can proceed page by page without the two systems fighting:
+   Layer order — later layers win:
 
-     theme      Tailwind's design tokens
-     base       reserved for Tailwind preflight, NOT imported yet (see below)
-     legacy     the original 16k-line stylesheet, untouched
+     theme       Tailwind's design tokens
+     base        our element-level base layer (below), and where preflight slots in
      components  our own primitives in src/components/ui/
-     utilities  Tailwind utility classes — must win over legacy
+     utilities   Tailwind utility classes — must win over base
 
-   `legacy` sits BELOW `utilities` on purpose. Without a layer, the old stylesheet
-   would beat every Tailwind utility: unlayered declarations outrank *any* cascade
-   layer regardless of specificity, and `legacy.css` line 1 is
-   `*, *::before, *::after { margin: 0; padding: 0 }` — which would silently defeat
-   every `p-*` and `m-*` class we ever write. Putting it in a layer fixes that while
-   preserving its internal ordering, so untouched pages render exactly as before.
+   `legacy.css` is **gone** (16,006 lines → 0). It lived in a `legacy` layer below
+   `utilities`, which is what let the migration proceed page by page: unlayered
+   declarations outrank *any* cascade layer, and its first line was
+   `*, *::before, *::after { margin: 0; padding: 0 }` — which would otherwise have
+   silently defeated every `p-*` and `m-*` class in the app. The same reasoning
+   keeps the base layer below `utilities` now.
 
-   PREFLIGHT IS DELIBERATELY NOT IMPORTED. Tailwind's base reset unsets margins,
-   borders, headings and lists globally; dropped on 16k lines of styles that assume
-   the current defaults it would break every un-migrated page at once. The `base`
-   layer is declared but left empty so preflight can be slotted in later, in one
-   line, once the legacy stylesheet is mostly gone.
+   PREFLIGHT IS IMPORTED, into `base` and above this file's own base block, so our
+   element rules win where they disagree. It is what makes `font: inherit` reach every
+   native control — before it, a bare `<button>` rendered at the UA's 13.33px Arial and
+   `Button` had to carry `appearance-none bg-transparent` to avoid the light grey
+   control face.
 
-   The 13 `!important` declarations in legacy.css still win over Tailwind, since
-   important declarations invert layer order. That is correct for the ones that
-   matter (the `prefers-reduced-motion` block); the handful of others are scoped to
-   specific legacy classes and will disappear with their pages.
+   It also sets `line-height: 1.5` on `html`. Our `body` overrides that back to
+   `normal`: this app's rows were tuned for years against the UA default, and 1.5 adds
+   roughly 4px to every unstyled line of 13px text — across a dense table that is a
+   different product. Components that want looser text ask for it (`leading-relaxed`).
    ───────────────────────────────────────────────────────────────────────────── */
 
-@layer theme, base, legacy, components, utilities;
+@layer theme, base, components, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
 @import "tailwindcss/utilities.css" layer(utilities);
-@import "./legacy.css" layer(legacy);
 
 /* ── Design tokens ────────────────────────────────────────────────────────────
-   One home for palette values. Components read these, never raw hex.
-   Mirrors the variables legacy.css already defines, so both systems resolve to
-   identical colours during the migration — the names differ, the values do not.
+   The one home for palette values. Components read these, never raw hex.
    ──────────────────────────────────────────────────────────────────────────── */
 
 @theme {
   /* ── Raw palette ────────────────────────────────────────────────────────────
-     These values are duplicated from legacy.css's `:root` ON PURPOSE, so both
-     systems resolve to identical colours during the migration. When legacy.css
-     finally goes, this block is the survivor — it is the one home for palette
-     values, and components must read tokens rather than raw hex.
+     These values were duplicated from legacy.css's `:root` through the migration
+     so both systems resolved identically. That file is gone and this block is the
+     survivor.
      ───────────────────────────────────────────────────────────────────────── */
 
   /* Surfaces, darkest to lightest. */
@@ -161,12 +156,115 @@
   --shadow-float: 0 8px 24px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.08);
 }
 
+/* ── Base layer ───────────────────────────────────────────────────────────────
+   Element-level defaults, moved here when `legacy.css` was retired. Everything
+   below is genuinely global: it styles elements and pseudo-elements, never a
+   class. Preflight slots in above this block when it is enabled.
+   ──────────────────────────────────────────────────────────────────────────── */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    /* Preflight sets `line-height: 1.5` on `html`. See the note at the top of this file:
+       every dense row in this app was tuned against the UA default, so the global value stays
+       `normal` and anything wanting looser text asks for it. */
+    line-height: normal;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--color-bg-base);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+  }
+
+  #root {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* Keyboard-focus fallback for interactive elements that do not define their own
+     `:focus-visible`. Load-bearing, not a nicety — several components dropped their own ring
+     during the migration and rely on this one (`ItemName` among them). A more specific
+     component rule still overrides it. */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible,
+  [role='button']:focus-visible,
+  [role='tab']:focus-visible,
+  [role='switch']:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent-blue) 28%, transparent);
+    color: var(--color-ink);
+  }
+
+  /* Images that exhausted their load retries (`useImageErrorRecovery`): a neutral surface
+     rather than the browser's broken-image icon. `color: transparent` hides the alt glyph. */
+  img[data-asset-failed='true'] {
+    background: var(--color-bg-elevated);
+    border-radius: var(--radius-md);
+    color: transparent;
+    object-fit: cover;
+  }
+
+  /* Scrollbars. `legacy.css` carried two of these — a 4px definition and an 8px one that
+     overrode it. Only the 8px was ever on screen, so only it survives. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a2f40;
+    border: 2px solid transparent;
+    border-radius: var(--radius-sm);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a4157;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  /* Respect the OS "reduce motion" setting. `!important` is deliberate: important declarations
+     invert layer order, so this beats every animation and transition in the app regardless of
+     which layer declared it. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
 /* ── Overlay motion ───────────────────────────────────────────────────────────
    Written by hand instead of pulling in `tw-animate-css`, so the durations and
    easing match the skill's motion.md exactly and we carry one less dependency.
    Keyframes only — these run once on open/close, which is precisely the case
    keyframes are for. Neutralised automatically by the global
-   `prefers-reduced-motion` block in legacy.css.
+   `prefers-reduced-motion` block in the base layer above.
    ──────────────────────────────────────────────────────────────────────────── */
 @layer components {
   @keyframes ws-overlay-in {

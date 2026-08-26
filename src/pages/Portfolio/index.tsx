@@ -350,7 +350,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
                     <text
                       x={10}
                       y={y + 3}
-                      fill="var(--text-muted)"
+                      fill="var(--color-ink-faint)"
                       fontSize="9"
                       fontFamily="JetBrains Mono"
                     >
@@ -391,7 +391,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
                     strokeWidth="1.2"
                     strokeDasharray="4 4"
                   />
-                  <circle cx={activePoint.x} cy={activePoint.y} r="5" fill="var(--accent-blue)" />
+                  <circle cx={activePoint.x} cy={activePoint.y} r="5" fill="var(--color-accent-blue)" />
                   <circle cx={activePoint.x} cy={activePoint.y} r="10" fill="rgba(74,158,255,0.14)" />
                 </>
               ) : null}
@@ -414,7 +414,7 @@ function CumulativeProfitChart({ summary }: { summary: PortfolioPnlSummary }) {
                         x={point.x}
                         y={height - 10}
                         textAnchor={index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle'}
-                        fill="var(--text-muted)"
+                        fill="var(--color-ink-faint)"
                         fontSize="9"
                         fontFamily="JetBrains Mono"
                       >
@@ -501,7 +501,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
                     <text
                       x={10}
                       y={y + 3}
-                      fill="var(--text-muted)"
+                      fill="var(--color-ink-faint)"
                       fontSize="9"
                       fontFamily="JetBrains Mono"
                     >
@@ -557,7 +557,7 @@ function ProfitPerTradeChart({ summary }: { summary: PortfolioPnlSummary }) {
                         y={height - 10}
                         textAnchor="middle"
                         pointerEvents="none"
-                        fill="var(--text-muted)"
+                        fill="var(--color-ink-faint)"
                         fontSize="9"
                         fontFamily="JetBrains Mono"
                       >
