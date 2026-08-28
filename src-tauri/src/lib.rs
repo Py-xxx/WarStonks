@@ -220,7 +220,7 @@ pub fn run() {
             commands::get_worldstate_invasions,
             commands::get_worldstate_syndicate_missions,
             commands::get_worldstate_void_trader,
-            commands::scan_void_trader_prices,
+            commands::scan_item_exit_prices,
             data_transfer::export_user_data,
             data_transfer::export_market_data,
             data_transfer::peek_baddie_file,

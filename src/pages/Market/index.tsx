@@ -2238,8 +2238,29 @@ function AnalysisTab() {
   const analysis = useAppStore((state) => state.selectedMarketAnalysis);
   const analysisLoading = useAppStore((state) => state.selectedMarketAnalysisLoading);
   const analysisError = useAppStore((state) => state.selectedMarketAnalysisError);
+  const analysisFromCache = useAppStore((state) => state.selectedMarketAnalysisFromCache);
   /** Same three-phase rule as Analytics — see `analyticsPhase`. */
   const analysisPhase: PanelPhase = !selectedItem ? 'idle' : analysis ? 'ready' : 'loading';
+  /**
+   * Wave 1 of the two-wave load (see `market-inventory.md` §2) returns a **complete** analysis —
+   * nothing is missing. It is built from the last stored snapshot with no live sell orders, so
+   * the numbers are real but pre-network.
+   *
+   * That is why no panel waits for wave 2: skeletoning over figures we already hold would be
+   * hiding data, which rule 5 forbids. What the page owes the user instead is provenance — this
+   * is a trading tool, and an unmarked stale exit price is the dangerous case. The flag existed
+   * in the store from the day the two waves were built and nothing had ever read it.
+   */
+  const showingCachedFigures = analysisPhase === 'ready' && analysisFromCache;
+  /** Only the figures the live wave actually recomputes carry the marker. `sell_orders` is empty
+   *  on the cached build, and it feeds `exitPrice` — which `netMargin` and `efficiencyScore` are
+   *  derived from. Entry and gross margin come from the statistics model, so they do not move. */
+  const cachedFigureHint = showingCachedFigures ? (
+    /* `MarketStatus`, not a fourth treatment: this page's status labels are already plain
+       coloured uppercase text, and amber is what `confidenceTone` spends on "uncertain, act with
+       care" — which is exactly what a pre-network price is. */
+    <MarketStatus tone="amber">{t('mkt.fresh.cachedFigure')}</MarketStatus>
+  ) : undefined;
   const loadSelectedMarketAnalysis = useAppStore((state) => state.loadSelectedMarketAnalysis);
   const addExplicitItemToWatchlist = useAppStore((state) => state.addExplicitItemToWatchlist);
   const worldStateAlerts = useAppStore((state) => state.worldStateAlerts);
@@ -2446,6 +2467,9 @@ function AnalysisTab() {
       <div className="flex items-center gap-3 px-4 pt-3">
         <span className="font-mono text-[10px] text-ink-faint tabular-nums">
           {t('mkt.fresh.computed')} {formatRelativeTimestamp(analysis?.computedAt ?? null)}
+          {/* One extra word, only while wave 2 is still out: the stamp already says how old the
+              numbers are, and what it cannot say on its own is that they are about to change. */}
+          {showingCachedFigures && analysisLoading ? ` · ${t('mkt.fresh.updating')}` : ''}
         </span>
         <Button
           variant="ghost"
@@ -2600,12 +2624,21 @@ function AnalysisTab() {
           >
             <MetricGrid>
               <Metric label={t('mkt.entryPrice')} value={formatPrice(analysis?.flipAnalysis.entryPrice)} />
-              <Metric label={t('mkt.exitPrice')} value={formatPrice(analysis?.flipAnalysis.exitPrice)} />
+              <Metric
+                label={t('mkt.exitPrice')}
+                value={formatPrice(analysis?.flipAnalysis.exitPrice)}
+                hint={cachedFigureHint}
+              />
               <Metric label={t('mkt.grossMargin')} value={formatPrice(analysis?.flipAnalysis.grossMargin)} />
-              <Metric label={t('mkt.netMargin')} value={formatPrice(analysis?.flipAnalysis.netMargin)} />
+              <Metric
+                label={t('mkt.netMargin')}
+                value={formatPrice(analysis?.flipAnalysis.netMargin)}
+                hint={cachedFigureHint}
+              />
               <Metric
                 label={t('mkt.efficiencyScore')}
                 value={`${formatPercent(analysis?.flipAnalysis.efficiencyScore)} · ${tHealth(t, analysis?.flipAnalysis.efficiencyLabel) || '—'}`}
+                hint={cachedFigureHint}
               />
             </MetricGrid>
             <ConfidenceNote confidence={analysis?.flipAnalysis.confidenceSummary} />

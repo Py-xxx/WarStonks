@@ -15,6 +15,7 @@ import {
   EventTag,
 } from '../Events/parts';
 import { useAppStore } from '../../stores/useAppStore';
+import { normalizeRewardName } from '../../lib/worldStatePricing';
 import type {
   WfstatEventReward,
   WfstatInvasion,
@@ -48,18 +49,63 @@ export function buildLevelLabel(minLevel: number | null, maxLevel: number | null
   return `${minLevel ?? maxLevel}`;
 }
 
-function buildInvasionRewardLabel(
-  invasion: WfstatInvasion,
-  labels: { noRewardData: string; creditsSuffix: (n: string) => string },
-): string {
-  const attackerReward = buildRewardLabel(invasion.attacker.reward, labels);
-  const defenderReward = buildRewardLabel(invasion.defender.reward, labels);
+/**
+ * The same parts `buildRewardLabel` joins into a string, kept separate so each item can carry its
+ * own price. Credits are dropped here — they are not an item and have no platinum value.
+ */
+function rewardItemParts(
+  reward: WfstatEventReward | null,
+): Array<{ name: string; label: string }> {
+  if (!reward) {
+    return [];
+  }
+  return [
+    ...reward.items.map((item) => ({ name: item, label: item })),
+    ...reward.countedItems.map((entry) => ({
+      name: entry.type,
+      label: `${entry.count}x ${entry.type}`,
+    })),
+  ];
+}
 
-  if (invasion.vsInfestation) {
-    return defenderReward;
+/**
+ * One side of an invasion, with a platinum price beside anything the catalog could resolve.
+ *
+ * Most invasion rewards are not tradeable, so an unpriced item simply shows its name — a `—` on
+ * every second reward would be noise about something that was never going to have a price.
+ */
+function RewardSide({
+  reward,
+  prices,
+  labels,
+}: {
+  reward: WfstatEventReward | null;
+  prices: Record<string, number | null>;
+  labels: { noRewardData: string; creditsSuffix: (n: string) => string };
+}) {
+  const parts = rewardItemParts(reward);
+  if (parts.length === 0) {
+    return <>{buildRewardLabel(reward, labels)}</>;
   }
 
-  return `${attackerReward} vs ${defenderReward}`;
+  return (
+    <>
+      {parts.map((part, index) => {
+        const price = prices[part.name] ?? prices[normalizeRewardName(part.name)] ?? null;
+        return (
+          <span key={`${part.name}-${index}`}>
+            {index > 0 ? ', ' : ''}
+            {part.label}
+            {price !== null && price > 0 ? (
+              <span className="ml-1 font-mono text-[11px] text-accent-green tabular-nums">
+                {price}p
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
+    </>
+  );
 }
 
 /**
@@ -142,12 +188,14 @@ function StagedActivityCard({
 
 function InvasionsCard({
   invasions,
+  invasionRewardPrices,
   loading,
   error,
   lastUpdatedAt,
   onRefresh,
 }: {
   invasions: WfstatInvasion[];
+  invasionRewardPrices: Record<string, number | null>;
   loading: boolean;
   error: string | null;
   lastUpdatedAt: string | null;
@@ -184,7 +232,27 @@ function InvasionsCard({
           <div key={invasion.id} className="min-w-0">
             <EventRow
               className="border-b-0 pb-0.5"
-              title={buildInvasionRewardLabel(invasion, rewardLabels)}
+              title={
+                <span className="truncate">
+                  {/* Order is the shipped one — attacker first, and against infestation only the
+                      defender side pays out at all. */}
+                  {invasion.vsInfestation ? null : (
+                    <>
+                      <RewardSide
+                        reward={invasion.attacker.reward}
+                        prices={invasionRewardPrices}
+                        labels={rewardLabels}
+                      />
+                      <span className="mx-1 text-ink-faint">vs</span>
+                    </>
+                  )}
+                  <RewardSide
+                    reward={invasion.defender.reward}
+                    prices={invasionRewardPrices}
+                    labels={rewardLabels}
+                  />
+                </span>
+              }
               meta={`${invasion.node ?? t('mkt.unknownNode')} · ${invasion.attacker.faction ?? t('evt.unknown')} vs ${invasion.defender.faction ?? t('evt.unknown')}`}
               trailing={
                 <span className="font-mono text-[11px] tabular-nums text-ink-soft">
@@ -225,6 +293,7 @@ export function ActivitiesPanel() {
   const refreshWorldStateArchonHunt = useAppStore((state) => state.refreshWorldStateArchonHunt);
 
   const invasions = useAppStore((state) => state.worldStateInvasions);
+  const invasionRewardPrices = useAppStore((state) => state.invasionRewardPrices);
   const invasionsLoading = useAppStore((state) => state.worldStateInvasionsLoading);
   const invasionsError = useAppStore((state) => state.worldStateInvasionsError);
   const invasionsLastUpdatedAt = useAppStore((state) => state.worldStateInvasionsLastUpdatedAt);
@@ -298,6 +367,7 @@ export function ActivitiesPanel() {
 
       <InvasionsCard
         invasions={invasions}
+        invasionRewardPrices={invasionRewardPrices}
         loading={invasionsLoading}
         error={invasionsError}
         lastUpdatedAt={invasionsLastUpdatedAt}

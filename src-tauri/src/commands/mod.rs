@@ -704,18 +704,18 @@ fn resolve_catalog_item_key_and_slug_by_name(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VoidTraderItemPrice {
+pub struct ItemExitPrice {
     pub item: String,
     pub recommended_exit_price: Option<i64>,
 }
 
-fn scan_void_trader_prices_inner(
+fn scan_item_exit_prices_inner(
     app: &tauri::AppHandle,
     items: Vec<String>,
-) -> Result<Vec<VoidTraderItemPrice>> {
-    let mut result: Vec<VoidTraderItemPrice> = items
+) -> Result<Vec<ItemExitPrice>> {
+    let mut result: Vec<ItemExitPrice> = items
         .iter()
-        .map(|item| VoidTraderItemPrice {
+        .map(|item| ItemExitPrice {
             item: item.clone(),
             recommended_exit_price: None,
         })
@@ -745,15 +745,21 @@ fn scan_void_trader_prices_inner(
     Ok(result)
 }
 
-/// Scans the Void Trader (Baro) inventory once and returns the recommended exit price for each
-/// resolvable, tradeable item. Rate-limited via the WFM scheduler; the frontend runs it a single
-/// time per Baro visit.
+/// Resolves a list of **display names** to their recommended exit price, dropping any the catalog
+/// cannot resolve. Names are all warframestat.us gives us for a worldstate reward — there is no id
+/// on the payload — so every Events price goes through here.
+///
+/// Baro's inventory was the first caller and the command was named after him; invasion rewards are
+/// the second, and nothing in the body was ever Baro-specific.
+///
+/// Rate-limited via the WFM scheduler. **Callers must not run it per poll** — Baro keys off his
+/// visit id, invasions off a signature of the reward set.
 #[tauri::command]
-pub async fn scan_void_trader_prices(
+pub async fn scan_item_exit_prices(
     app: tauri::AppHandle,
     items: Vec<String>,
-) -> Result<Vec<VoidTraderItemPrice>, String> {
-    tauri::async_runtime::spawn_blocking(move || scan_void_trader_prices_inner(&app, items))
+) -> Result<Vec<ItemExitPrice>, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_item_exit_prices_inner(&app, items))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())

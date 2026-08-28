@@ -1359,6 +1359,13 @@ export const en = {
   'mkt.fresh.snapshot': 'Snapshot',
   'mkt.fresh.stats': 'Stats',
   'mkt.fresh.computed': 'Computed',
+  // The cached wave paints real numbers from the last stored snapshot, before the rate-limited
+  // live calls answer. `updating` is the only fact worth adding: these figures will change.
+  'mkt.fresh.updating': 'updating',
+  'evt.onWatchlist': 'On your watchlist',
+  // Marks the figures the live wave actually recomputes — exit price and everything derived
+  // from it. Sits in a `Metric` label row, so it is a marker, not a sentence.
+  'mkt.fresh.cachedFigure': 'cached',
   'pf.pnlSummary': 'P&L Summary',
   'pf.allTime': 'All Time',
   'pf.netPosition': 'Net Position',

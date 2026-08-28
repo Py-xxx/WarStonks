@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ItemThumb } from '../ListRow';
 import { EventEmpty, EventError, EventPanel, EventRow, RowFigure } from '../Events/parts';
 import { resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { buildWatchedNameSet, normalizeRewardName } from '../../lib/worldStatePricing';
 import { useAppStore } from '../../stores/useAppStore';
 import { walletIcons } from '../../assets/wallet';
 import type { VoidTraderInventoryItem } from '../../types';
@@ -48,6 +49,10 @@ export function VoidTraderPanel() {
   const refreshWorldStateVoidTrader = useAppStore((state) => state.refreshWorldStateVoidTrader);
   const voidTraderPrices = useAppStore((state) => state.voidTraderPrices);
   const voidTraderPricesLoading = useAppStore((state) => state.voidTraderPricesLoading);
+  const watchlist = useAppStore((state) => state.watchlist);
+  /* Baro's stock is ~40 items and the panel re-renders on a 1s clock tick, so the lookup is a
+     Set built once per watchlist change rather than a scan per row per second. */
+  const watchedNames = useMemo(() => buildWatchedNameSet(watchlist), [watchlist]);
 
   const [nowMs, setNowMs] = useState(Date.now());
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -193,7 +198,25 @@ export function VoidTraderPanel() {
                           size="size-7"
                         />
                       }
-                      title={item.item}
+                      title={
+                        watchedNames.has(normalizeRewardName(item.item)) ? (
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate">{item.item}</span>
+                            {/* The Watchlist's own glyph, so the marker names the list it refers
+                                to. Deliberately `ink-dim` and not an accent: the accents mean
+                                profit / loss / warning, and "you are tracking this" is none of
+                                them — beside a green exit price a green marker would read as a
+                                profit claim. */}
+                            <i
+                              className="ti ti-target shrink-0 text-[13px] text-ink-dim"
+                              title={t('evt.onWatchlist')}
+                              aria-label={t('evt.onWatchlist')}
+                            />
+                          </span>
+                        ) : (
+                          item.item
+                        )
+                      }
                       trailing={
                         <>
                           <RowFigure label={t('bal.ducats')} value={item.ducats ?? '—'} />

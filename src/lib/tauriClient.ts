@@ -367,13 +367,19 @@ export async function getWorldStateVoidTrader(): Promise<WfstatVoidTrader> {
   return invoke<WfstatVoidTrader>('get_worldstate_void_trader');
 }
 
-export interface VoidTraderItemPrice {
+export interface ItemExitPrice {
   item: string;
   recommendedExitPrice: number | null;
 }
 
-export async function scanVoidTraderPrices(items: string[]): Promise<VoidTraderItemPrice[]> {
-  return invoke<VoidTraderItemPrice[]>('scan_void_trader_prices', { items });
+/**
+ * Display names → recommended exit price, for the Events surface's light pricing. Baro's stock was
+ * the first caller and invasion rewards the second; nothing about it was ever Baro-specific.
+ *
+ * Rate-limited behind the WFM scheduler — **never call this on a poll.**
+ */
+export async function scanItemExitPrices(items: string[]): Promise<ItemExitPrice[]> {
+  return invoke<ItemExitPrice[]>('scan_item_exit_prices', { items });
 }
 
 export async function getWorldStateMarketNews(): Promise<WorldStateMarketNewsResponse> {

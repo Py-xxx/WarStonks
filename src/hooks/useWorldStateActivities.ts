@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import { useWorldStateRefresh } from './useWorldStateRefresh';
 
@@ -43,6 +44,11 @@ export function useWorldStateActivities() {
   const worldStateInvasionsError = useAppStore((state) => state.worldStateInvasionsError);
   const worldStateInvasionsLoading = useAppStore((state) => state.worldStateInvasionsLoading);
   const refreshWorldStateInvasions = useAppStore((state) => state.refreshWorldStateInvasions);
+  const worldStateInvasions = useAppStore((state) => state.worldStateInvasions);
+  const scanInvasionRewardPricesIfNeeded = useAppStore(
+    (state) => state.scanInvasionRewardPricesIfNeeded,
+  );
+  const maintenance = useAppStore((state) => state.dataMaintenanceActive);
 
   const worldStateSyndicateMissionsLastUpdatedAt = useAppStore(
     (state) => state.worldStateSyndicateMissionsLastUpdatedAt,
@@ -102,4 +108,13 @@ export function useWorldStateActivities() {
     loading: worldStateSyndicateMissionsLoading,
     refresh: refreshWorldStateSyndicateMissions,
   });
+
+  // Mounted once on the AppShell, so reward prices resolve in the background whatever tab is
+  // open — same arrangement as Baro's inventory scan. The effect re-runs on every invasion
+  // refresh; the store's reward-set signature is what stops that reaching WFM each time.
+  useEffect(() => {
+    if (!maintenance && worldStateInvasions.length > 0) {
+      void scanInvasionRewardPricesIfNeeded();
+    }
+  }, [maintenance, worldStateInvasions, scanInvasionRewardPricesIfNeeded]);
 }

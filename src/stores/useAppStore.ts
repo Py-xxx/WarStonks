@@ -47,7 +47,7 @@ import {
   getCachedOpportunities,
   getOwnedRelicInventoryCache,
   refreshOwnedRelicInventory,
-  scanVoidTraderPrices,
+  scanItemExitPrices,
   getWorldStateCycles,
   getWorldStateSteelPath,
   getWorldStateNightwave,
@@ -58,6 +58,7 @@ import {
   type UnderpricedListing,
   type Opportunity,
 } from '../lib/tauriClient';
+import { buildRewardScanSignature } from '../lib/worldStatePricing';
 import {
   fetchWorldStateAlertsSnapshot,
   fetchWorldStateArbitrationSnapshot,
@@ -367,6 +368,35 @@ interface CachedWorldStateSnapshot<T> {
   payload: T;
   fetchedAt: string;
   nextRefreshAt: string | null;
+}
+
+/**
+ * Every distinct item an active invasion pays out.
+ *
+ * Completed invasions are excluded — they pay nobody — and credits are skipped because they are
+ * not an item the catalog can resolve. `countedItems` carries its own quantity, but the price is
+ * per unit, so only the type goes in.
+ */
+function collectInvasionRewardNames(invasions: WfstatInvasion[]): string[] {
+  const names = new Set<string>();
+  for (const invasion of invasions) {
+    if (invasion.completed) {
+      continue;
+    }
+    for (const side of [invasion.attacker, invasion.defender]) {
+      for (const item of side.reward?.items ?? []) {
+        if (item.trim()) {
+          names.add(item.trim());
+        }
+      }
+      for (const counted of side.reward?.countedItems ?? []) {
+        if (counted.type?.trim()) {
+          names.add(counted.type.trim());
+        }
+      }
+    }
+  }
+  return [...names];
 }
 
 function beginWatchlistRefresh(id: string): number {
@@ -1651,6 +1681,12 @@ interface AppStore {
   voidTraderPricesScannedFor: string | null;
   voidTraderPricesLoading: boolean;
   scanVoidTraderPricesIfNeeded: () => Promise<void>;
+  // Recommended exit prices for invasion rewards (item name → platinum). Keyed off a signature of
+  // the reward set, not the payload, because invasions poll and their rewards rarely change.
+  invasionRewardPrices: Record<string, number | null>;
+  invasionRewardPricesScannedFor: string | null;
+  invasionRewardPricesLoading: boolean;
+  scanInvasionRewardPricesIfNeeded: () => Promise<void>;
   // Reference worldstate sources (cycles / steel-path / nightwave / vault-trader), held generically.
   worldStateExtra: Record<WorldStateExtraKey, WorldStateExtraEntry>;
   refreshWorldStateExtra: (key: WorldStateExtraKey) => Promise<void>;
@@ -2128,6 +2164,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   worldStateVoidTrader: null,
   worldStateVoidTraderLoading: false,
   voidTraderPrices: {},
+  invasionRewardPrices: {},
+  invasionRewardPricesScannedFor: null,
+  invasionRewardPricesLoading: false,
   voidTraderPricesScannedFor: null,
   voidTraderPricesLoading: false,
   worldStateVoidTraderError: null,
@@ -3019,7 +3058,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ voidTraderPricesLoading: true });
     try {
       const names = voidTrader.inventory.map((entry) => entry.item);
-      const results = await scanVoidTraderPrices(names);
+      const results = await scanItemExitPrices(names);
       const prices: Record<string, number | null> = {};
       for (const result of results) {
         prices[result.item] = result.recommendedExitPrice;
@@ -3032,6 +3071,46 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (error) {
       console.error('[void-trader] failed to scan inventory prices', error);
       set({ voidTraderPricesLoading: false });
+    }
+  },
+
+  /**
+   * Prices the items an active invasion pays out.
+   *
+   * Baro's equivalent keys off his visit id, because his whole inventory changes at once. Invasions
+   * do not work that way: they arrive and complete continuously, the list re-fetches on a timer,
+   * and most of the rewards repeat (Mutagen Mass, Fieldron, Detonite Injector are permanent
+   * fixtures). Keying off the payload would rescan every poll, which is the request-hygiene
+   * failure the wallet poll already made once. So the key is a signature of the reward *names*,
+   * and the scan re-runs only when the set of things being priced actually changes.
+   */
+  scanInvasionRewardPricesIfNeeded: async () => {
+    const state = get();
+    const names = collectInvasionRewardNames(state.worldStateInvasions);
+    if (names.length === 0 || state.invasionRewardPricesLoading) {
+      return;
+    }
+
+    const signature = buildRewardScanSignature(names);
+    if (state.invasionRewardPricesScannedFor === signature) {
+      return;
+    }
+
+    set({ invasionRewardPricesLoading: true });
+    try {
+      const results = await scanItemExitPrices(names);
+      const prices: Record<string, number | null> = {};
+      for (const result of results) {
+        prices[result.item] = result.recommendedExitPrice;
+      }
+      set({
+        invasionRewardPrices: prices,
+        invasionRewardPricesScannedFor: signature,
+        invasionRewardPricesLoading: false,
+      });
+    } catch (error) {
+      console.error('[invasions] failed to scan reward prices', error);
+      set({ invasionRewardPricesLoading: false });
     }
   },
 
@@ -4765,6 +4844,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         selectedMarketAnalysis: cached,
         selectedMarketAnalysisLoading: false,
+        // This cache holds *live* results from an earlier load, so the pre-network marker must
+        // clear. Without it a flag left true by an abandoned two-wave load would follow the user
+        // to the next item and mark live numbers as cached.
+        selectedMarketAnalysisFromCache: false,
         selectedMarketAnalysisError: null,
       });
       return cached;
@@ -4776,6 +4859,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set({
           selectedMarketAnalysis: cached,
           selectedMarketAnalysisLoading: true,
+          selectedMarketAnalysisFromCache: false,
           selectedMarketAnalysisError: null,
         });
         return existingPromise;
@@ -4786,6 +4870,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({
       selectedMarketAnalysis: cached,
       selectedMarketAnalysisLoading: true,
+      selectedMarketAnalysisFromCache: false,
       selectedMarketAnalysisError: null,
     });
 
