@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import {
   getWfmAutocompleteItems,
@@ -15,6 +15,7 @@ import {
 } from '../../lib/watchlistAddFeedback';
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
+import { splitStatHighlightRange } from '../../lib/statHighlight';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -259,8 +260,6 @@ function formatChartTimestamp(timestamp: number, _domain: ChartDomainKey): strin
 }
 
 function renderStatHighlightLine(line: string): ReactNode {
-  const changedRangeMatch = line.match(/(\d[\d.,%+\-xX ]*->\s*\d[\d.,%+\-xX ]*)/);
-
   // Render Warframe's own color markup (e.g. `<DT_FIRE_COLOR>Heat</DT_FIRE_COLOR>`) as colored
   // text instead of leaking the raw tag onto the screen — see lib/warframeMarkup.
   const renderSegments = (text: string, keyPrefix: string): ReactNode =>
@@ -276,20 +275,21 @@ function renderStatHighlightLine(line: string): ReactNode {
       ),
     ) ?? null;
 
-  if (!changedRangeMatch || changedRangeMatch.index === undefined) {
+  // Splitting and, crucially, the spacing rules live in `lib/statHighlight` — pinned by
+  // `statHighlight.test.ts`, because both the markup parser and the range regex eat separators
+  // and that was invisible until these fragments stopped being flex items.
+  const parts = splitStatHighlightRange(line);
+  if (!parts) {
     return renderSegments(line, 'plain');
   }
 
-  const rangeStart = changedRangeMatch.index;
-  const changedText = changedRangeMatch[1].trim();
-  const label = line.slice(0, rangeStart);
-  const suffix = line.slice(rangeStart + changedRangeMatch[1].length);
-
   return (
     <>
-      {label ? renderSegments(label, 'label') : null}
-      <span className="font-semibold text-accent-blue">{changedText}</span>
-      {suffix ? renderSegments(suffix, 'suffix') : null}
+      {parts.label ? renderSegments(parts.label, 'label') : null}
+      {parts.spaceBefore ? ' ' : null}
+      <span className="font-semibold text-accent-blue">{parts.value}</span>
+      {parts.spaceAfter ? ' ' : null}
+      {parts.suffix ? renderSegments(parts.suffix, 'suffix') : null}
     </>
   );
 }
@@ -2541,9 +2541,15 @@ function AnalysisTab() {
                 {effectiveItemDetails?.description ? (
                   <div className="flex flex-col gap-1.5">
                     <span className="font-mono text-[9px] tracking-[0.07em] text-ink-dim uppercase">{t('mkt.description')}</span>
+                    {/* Flowing text, NOT one block per source line. Warframe's description text
+                        comes out of the game's own localization data hard-wrapped for the in-game
+                        UI, so honouring every source break rendered a paragraph as a stack of
+                        short ragged lines. Stat highlights below are the opposite case — their
+                        breaks are real — which is why only this one flows. */}
                     <p className="text-[11px] leading-relaxed text-ink-soft">
                       {parseWarframeMarkupLines(effectiveItemDetails.description).map((line, lineIndex) => (
-                        <span key={lineIndex} className="block">
+                        <Fragment key={lineIndex}>
+                          {lineIndex > 0 ? ' ' : null}
                           {line.map((segment, segmentIndex) =>
                             segment.color ? (
                               <span key={segmentIndex} style={{ color: segment.color }}>
@@ -2553,7 +2559,7 @@ function AnalysisTab() {
                               <span key={segmentIndex}>{segment.text}</span>
                             ),
                           )}
-                        </span>
+                        </Fragment>
                       ))}
                     </p>
                   </div>
@@ -2564,10 +2570,18 @@ function AnalysisTab() {
                     <div className="flex flex-col gap-1.5">
                       {(effectiveItemDetails?.statHighlights ?? []).map((line) => (
                         <div key={line} className="flex flex-col gap-0.5 rounded-sm bg-bg-base px-2 py-1.5 text-[11px] text-ink-soft">
+                          {/* Flowing text, not a flex row. `renderStatHighlightLine` returns up
+                              to three inline fragments — label, the blue changed range, suffix —
+                              and the suffix splits again on colour markup. Under
+                              `flex justify-between` every one of those became a flex item spread
+                              across the panel, so "Gain 1 → 6% weapon Critical Chance for 10s…"
+                              rendered as four columns of ragged text. The treatment was built for
+                              a two-part `label … value` stat row and silently breaks on anything
+                              with more parts, which is most arcanes. */}
                           {splitWarframeMarkupLines(line).map((segment, segmentIndex) => (
-                            <div key={`${line}-${segmentIndex}`} className="flex items-baseline justify-between gap-2 tabular-nums">
+                            <p key={`${line}-${segmentIndex}`} className="leading-relaxed tabular-nums">
                               {renderStatHighlightLine(segment)}
-                            </div>
+                            </p>
                           ))}
                         </div>
                       ))}

@@ -3096,10 +3096,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return;
     }
 
+    // Only price what we have not priced yet. Invasions rotate a few at a time against a mostly
+    // fixed reward pool, so re-sending the whole set on every change would re-scan a dozen names
+    // that already have a price — and an uncached name costs a real (Low-priority) WFM statistics
+    // fetch on the backend, one per item, sequentially.
+    const unpriced = names.filter((name) => !(name in state.invasionRewardPrices));
+    if (unpriced.length === 0) {
+      set({ invasionRewardPricesScannedFor: signature });
+      return;
+    }
+
     set({ invasionRewardPricesLoading: true });
     try {
-      const results = await scanItemExitPrices(names);
-      const prices: Record<string, number | null> = {};
+      const results = await scanItemExitPrices(unpriced);
+      const prices: Record<string, number | null> = { ...state.invasionRewardPrices };
       for (const result of results) {
         prices[result.item] = result.recommendedExitPrice;
       }

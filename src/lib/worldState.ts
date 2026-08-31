@@ -1,5 +1,9 @@
 import { tActive } from '../i18n';
 import { formatShortLocalDateTime } from './dateTime';
+import {
+  clampRefreshAt,
+  NO_EXPIRY_WORLDSTATE_REFRESH_MS,
+} from './worldStateRefreshWindow';
 
 import type {
   VoidTraderInventoryItem,
@@ -52,7 +56,6 @@ const WFSTAT_SYNDICATE_MISSIONS_URL =
   'https://api.warframestat.us/pc/syndicateMissions?language=en';
 const WFSTAT_VOID_TRADER_URL = 'https://api.warframestat.us/pc/voidTrader?language=en';
 const INVALID_WORLDSTATE_EXPIRY = '1970-01-01T00:00:00.000Z';
-const NO_EXPIRY_WORLDSTATE_REFRESH_MS = 5 * 60_000;
 export const WORLDSTATE_RETRY_DELAY_MS = 60_000;
 export const WORLDSTATE_ENDPOINT_KEYS = {
   events: 'events',
@@ -618,7 +621,7 @@ function selectArrayExpiryRefreshAt(
     .sort((left, right) => Date.parse(left) - Date.parse(right));
 
   if (validExpiries.length > 0) {
-    return validExpiries[0];
+    return clampRefreshAt(validExpiries[0], nowMs);
   }
 
   return new Date(nowMs + WORLDSTATE_RETRY_DELAY_MS).toISOString();
@@ -634,11 +637,11 @@ function selectSingleExpiryRefreshAt(
 
   const activationMs = entry.activation ? Date.parse(entry.activation) : Number.NaN;
   if (Number.isFinite(activationMs) && activationMs > nowMs) {
-    return entry.activation;
+    return clampRefreshAt(entry.activation as string, nowMs);
   }
 
   if (isValidFutureExpiry(entry.expiry, nowMs)) {
-    return entry.expiry;
+    return clampRefreshAt(entry.expiry as string, nowMs);
   }
 
   return new Date(nowMs + WORLDSTATE_RETRY_DELAY_MS).toISOString();
@@ -701,7 +704,7 @@ function selectTimedWindowRefreshAt(
     .sort((left, right) => Date.parse(left) - Date.parse(right));
 
   if (validTimes.length > 0) {
-    return validTimes[0];
+    return clampRefreshAt(validTimes[0], nowMs);
   }
 
   return new Date(nowMs + fallbackMs).toISOString();
