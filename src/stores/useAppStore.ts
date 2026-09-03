@@ -19,6 +19,7 @@ import {
   populateLanguageItemNames,
   getAppSettings,
   getItemAnalytics,
+  getItemAnalyticsCached,
   getItemAnalysis,
   getItemAnalysisCached,
   refreshWalletFromAppdata,
@@ -59,6 +60,7 @@ import {
   type Opportunity,
 } from '../lib/tauriClient';
 import { buildRewardScanSignature } from '../lib/worldStatePricing';
+import { perfMark, timedInvoke } from '../lib/perfLog';
 import {
   fetchWorldStateAlertsSnapshot,
   fetchWorldStateArbitrationSnapshot,
@@ -1690,6 +1692,7 @@ interface AppStore {
   // Reference worldstate sources (cycles / steel-path / nightwave / vault-trader), held generically.
   worldStateExtra: Record<WorldStateExtraKey, WorldStateExtraEntry>;
   refreshWorldStateExtra: (key: WorldStateExtraKey) => Promise<void>;
+  refreshAllWorldState: () => Promise<void>;
   openSettings: (section?: SettingsSection) => void;
   closeSettings: () => void;
   setSettingsSection: (section: SettingsSection) => void;
@@ -3122,6 +3125,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
       console.error('[invasions] failed to scan reward prices', error);
       set({ invasionRewardPricesLoading: false });
     }
+  },
+
+  /**
+   * Every worldstate source at once.
+   *
+   * One home for the list: it is used by the Events page's refresh button and by the day/night
+   * cycle watcher, and two copies would drift the first time a source was added.
+   *
+   * `allSettled`, not `all` — one dead endpoint must not stop the other eleven from updating, and
+   * each panel renders its own error from the store.
+   */
+  refreshAllWorldState: async () => {
+    const state = get();
+    await Promise.allSettled([
+      state.refreshWorldStateEvents(),
+      state.refreshWorldStateAlerts(),
+      state.refreshWorldStateSortie(),
+      state.refreshWorldStateArchonHunt(),
+      state.refreshWorldStateFissures(),
+      state.refreshWorldStateInvasions(),
+      state.refreshWorldStateVoidTrader(),
+      state.refreshWorldStateMarketNews(),
+      state.refreshWorldStateExtra('cycles'),
+      state.refreshWorldStateExtra('nightwave'),
+      state.refreshWorldStateExtra('steel-path'),
+      state.refreshWorldStateExtra('vault-trader'),
+    ]);
   },
 
   sellerMode: 'ingame',
@@ -4643,6 +4673,37 @@ export const useAppStore = create<AppStore>((set, get) => ({
         selectedMarketAnalysisError: null,
       });
 
+      // Wave 1 for the sparkline: SQLite only. It was waiting on a **full live analytics build**
+      // — a snapshot capture over the network plus the whole chart assembly — to draw twenty-four
+      // `lowestSell` values, which is why the Quick View chart lagged the rest of the panel.
+      //
+      // Dropped once the live build below has answered, so it can never overwrite fresher points.
+      void getItemAnalyticsCached(
+        itemKey,
+        item.slug,
+        nextSelectedVariantKey,
+        sellerMode,
+        '48h',
+        '1h',
+      )
+        .then((cachedAnalytics) => {
+          const currentState = get();
+          if (
+            requestId !== quickViewRequestSequence
+            || !currentState.quickView.sparklineLoading
+          ) {
+            return;
+          }
+          set({
+            quickView: {
+              ...currentState.quickView,
+              sparklinePoints: extractQuickViewSparklinePoints(cachedAnalytics.chartPoints),
+            },
+          });
+        })
+        // A cache miss is the normal state for an item never opened. Not an error.
+        .catch(() => undefined);
+
       void getItemAnalytics(
         itemKey,
         item.slug,
@@ -4889,8 +4950,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // Paint from the cache-only build first. It does no WFM calls, so it answers in
       // milliseconds, while the live build below waits on up to three rate-limited requests.
       // Deliberately not awaited — it is a head start, never a dependency.
-      void getItemAnalysisCached(itemKey, selectedItem.slug, selectedVariantKey, sellerMode)
+      // Both waves are timed from the same origin, so the log shows which one actually landed
+      // first — the reported symptom is that the *live* result arrives before the "head start".
+      const waveStartedAt = performance.now();
+      void timedInvoke('analysis:cached', () =>
+        getItemAnalysisCached(itemKey, selectedItem.slug, selectedVariantKey, sellerMode),
+      )
         .then((cachedAnalysis) => {
+          perfMark('wave1:cached-landed', performance.now() - waveStartedAt);
           set((currentState) => {
             // Drop it if the selection moved on, if this request was superseded, or if the live
             // result already landed — cached data must never overwrite fresher data.
@@ -4911,12 +4978,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         .catch(() => undefined);
 
       try {
-        const analysis = await getItemAnalysis(
-          itemKey,
-          selectedItem.slug,
-          selectedVariantKey,
-          sellerMode,
+        const analysis = await timedInvoke('analysis:live', () =>
+          // An explicit Refresh forces a real statistics fetch; an ordinary load reuses a recent
+          // one rather than spending a rate-limited request on an unchanged hourly aggregate.
+          getItemAnalysis(itemKey, selectedItem.slug, selectedVariantKey, sellerMode, force),
         );
+        perfMark('wave2:live-landed', performance.now() - waveStartedAt);
         if (requestId === marketAnalysisRequestSequence) {
           set((currentState) => {
             const nextCache = {

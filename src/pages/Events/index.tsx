@@ -38,23 +38,7 @@ export function EventsPage() {
   const refreshAll = async () => {
     setRefreshing(true);
     try {
-      const state = store.getState();
-      // Settled, not `all`: one dead endpoint must not stop the other ten from updating, and each
-      // panel already renders its own error from the store.
-      await Promise.allSettled([
-        state.refreshWorldStateEvents(),
-        state.refreshWorldStateAlerts(),
-        state.refreshWorldStateSortie(),
-        state.refreshWorldStateArchonHunt(),
-        state.refreshWorldStateFissures(),
-        state.refreshWorldStateInvasions(),
-        state.refreshWorldStateVoidTrader(),
-        state.refreshWorldStateMarketNews(),
-        state.refreshWorldStateExtra('cycles'),
-        state.refreshWorldStateExtra('nightwave'),
-        state.refreshWorldStateExtra('steel-path'),
-        state.refreshWorldStateExtra('vault-trader'),
-      ]);
+      await store.getState().refreshAllWorldState();
     } finally {
       setRefreshing(false);
     }

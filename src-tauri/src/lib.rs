@@ -16,6 +16,7 @@ mod market_observatory;
 // `open_market_observatory_database` (see market_observatory.rs).
 mod market_observatory_migration;
 mod opportunities;
+pub mod perf_log;
 mod order_flow;
 mod price_book;
 mod price_history;
@@ -158,6 +159,7 @@ pub fn run() {
             market_observatory::get_item_variants_for_market,
             market_observatory::get_item_detail_summary,
             market_observatory::get_item_analytics,
+            market_observatory::get_item_analytics_cached,
             market_observatory::get_item_analysis,
             market_observatory::get_item_analysis_cached,
             market_observatory::grade_recommendation_outcomes,

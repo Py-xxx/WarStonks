@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import {
   getWfmAutocompleteItems,
   getItemAnalytics,
+  getItemAnalyticsCached,
   getItemDetailSummary,
   getBacktestSummary,
   openExternalUrl,
@@ -16,6 +17,7 @@ import {
 import { formatMarketErrorMessage } from '../../lib/marketErrorHandling';
 import { resolveRelicAssetUrl, resolveWfmAssetUrl } from '../../lib/wfmAssets';
 import { splitStatHighlightRange } from '../../lib/statHighlight';
+import { timedInvoke } from '../../lib/perfLog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -1818,10 +1820,16 @@ function AnalyticsTab() {
   const sellerMode = useAppStore((state) => state.sellerMode);
   const selectedMarketVariantKey = useAppStore((state) => state.selectedMarketVariantKey);
   const [analytics, setAnalytics] = useState<ItemAnalyticsResponse | null>(null);
+  /* Read by wave 1's late-arriving callback: once the live wave has set `loading` false its
+     result is authoritative, and the cached one must be discarded rather than overwrite it. */
+  const loadingRef = useRef(false);
   const [backtestSummary, setBacktestSummary] = useState<BacktestSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  /* `refreshNonce` persists once bumped, so its value cannot say whether THIS run is a refresh.
+     Comparing against the previous one can. */
+  const lastRefreshNonceRef = useRef(0);
   const [trendTab, setTrendTab] = useState<'lowestSell' | 'medianSell' | 'weightedAvg'>('lowestSell');
   const [chartDomain, setChartDomain] = useState<ChartDomainKey>('48h');
   const [chartBucket, setChartBucket] = useState<ChartBucketKey>('1h');
@@ -1861,19 +1869,55 @@ function AnalyticsTab() {
       Boolean(selectionIdentity)
       && analyticsIdentityRef.current === selectionIdentity
       && analytics !== null;
+    const isForcedRefresh = refreshNonce !== lastRefreshNonceRef.current;
+    lastRefreshNonceRef.current = refreshNonce;
     setLoading(true);
+    loadingRef.current = true;
     setErrorMessage(null);
     if (!canKeepCurrentSnapshot) {
       setAnalytics(null);
     }
 
-    void getItemAnalytics(
-      itemKey,
-      selectedItem.slug,
-      selectedMarketVariantKey,
-      sellerMode,
-      chartDomain,
-      chartBucket,
+    // Wave 1: SQLite only, no WFM calls. The Charts tab used to wait on two sequential
+    // rate-limited requests with nothing on screen; this paints the last known chart in
+    // milliseconds and the live wave below replaces it.
+    //
+    // Dropped if the live result already landed, if the selection moved on, or if the range or
+    // bucket changed — cached data must never overwrite fresher data.
+    // Skipped on an explicit Refresh: there is already a chart on screen, and repainting it from
+    // cache first would show the user older data than they are looking at.
+    if (!isForcedRefresh) {
+      void timedInvoke<ItemAnalyticsResponse>('analytics:cached', () =>
+        getItemAnalyticsCached(
+          itemKey,
+          selectedItem.slug,
+          selectedMarketVariantKey,
+          sellerMode,
+          chartDomain,
+          chartBucket,
+        ),
+      )
+        .then((cachedResponse) => {
+          if (!isMounted || !loadingRef.current) {
+            return;
+          }
+          analyticsIdentityRef.current = selectionIdentity;
+          setAnalytics(cachedResponse);
+        })
+        // A cache miss is the normal state for an item never opened. Not an error.
+        .catch(() => undefined);
+    }
+
+    void timedInvoke('analytics:live', () =>
+      getItemAnalytics(
+        itemKey,
+        selectedItem.slug,
+        selectedMarketVariantKey,
+        sellerMode,
+        chartDomain,
+        chartBucket,
+        isForcedRefresh,
+      ),
     )
       .then((response) => {
         if (!isMounted) {
@@ -1881,6 +1925,7 @@ function AnalyticsTab() {
         }
         analyticsIdentityRef.current = selectionIdentity;
         setAnalytics(response);
+        loadingRef.current = false;
         setLoading(false);
         setErrorMessage(null);
       })
@@ -1896,6 +1941,7 @@ function AnalyticsTab() {
           analyticsIdentityRef.current = null;
           setAnalytics(null);
         }
+        loadingRef.current = false;
         setLoading(false);
         setErrorMessage(friendlyMessage);
       });

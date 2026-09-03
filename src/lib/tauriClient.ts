@@ -1047,6 +1047,11 @@ export async function getItemVariantsForMarket(
   });
 }
 
+/**
+ * `force` bypasses the backend's statistics freshness window, so an explicit Refresh always goes
+ * to WFM. Leave it off for ordinary loads — the statistics are hourly closed-trade aggregates and
+ * re-fetching them on every range flip is a rate-limited request that cannot return a new value.
+ */
 export async function getItemAnalytics(
   itemKey: string,
   slug: string,
@@ -1054,6 +1059,7 @@ export async function getItemAnalytics(
   sellerMode: SellerMode,
   domainKey: AnalyticsDomainKey,
   bucketSizeKey: AnalyticsBucketSizeKey,
+  force = false,
 ): Promise<ItemAnalyticsResponse> {
   return invoke<ItemAnalyticsResponse>('get_item_analytics', {
     itemKey,
@@ -1062,6 +1068,7 @@ export async function getItemAnalytics(
     sellerMode,
     domainKey,
     bucketSizeKey,
+    force,
   });
 }
 
@@ -1075,17 +1082,20 @@ export async function getItemDetailSummary(
   });
 }
 
+/** `force` bypasses the statistics freshness window; see `getItemAnalytics`. */
 export async function getItemAnalysis(
   itemKey: string,
   slug: string,
   variantKey: string | null,
   sellerMode: SellerMode,
+  force = false,
 ): Promise<ItemAnalysisResponse> {
   return invoke<ItemAnalysisResponse>('get_item_analysis', {
     itemKey,
     slug,
     variantKey,
     sellerMode,
+    force,
   });
 }
 
@@ -1099,6 +1109,31 @@ export async function getItemAnalysis(
  * That is an expected state, not a failure: callers should stay in their loading state and wait
  * for the live build rather than surfacing an error.
  */
+/**
+ * Analytics from SQLite only — no WFM calls, so it answers in milliseconds.
+ *
+ * Wave 1 of the Charts tab's two-wave load, mirroring `getItemAnalysisCached`. **Rejects on a
+ * cache miss**, which is the normal state for an item that has never been opened; callers treat
+ * that as "nothing to paint early", never as an error.
+ */
+export async function getItemAnalyticsCached(
+  itemKey: string,
+  slug: string,
+  variantKey: string | null,
+  sellerMode: SellerMode,
+  domainKey: string,
+  bucketSizeKey: string,
+): Promise<ItemAnalyticsResponse> {
+  return invoke<ItemAnalyticsResponse>('get_item_analytics_cached', {
+    itemKey,
+    slug,
+    variantKey,
+    sellerMode,
+    domainKey,
+    bucketSizeKey,
+  });
+}
+
 export async function getItemAnalysisCached(
   itemKey: string,
   slug: string,

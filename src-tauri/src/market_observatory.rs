@@ -31,6 +31,22 @@ const TRACKING_SNAPSHOT_INTERVAL_MINUTES: i64 = 4;
 const SNAPSHOT_RETENTION_DAYS: i64 = 30;
 const SET_COMPOSITION_CACHE_RETENTION_DAYS: i64 = 30;
 const SCANNER_STATS_FRESHNESS_HOURS: i64 = 12;
+
+/// How recently WFM statistics must have been fetched for an interactive market build to reuse
+/// them instead of fetching again.
+///
+/// The live path used to call `fetch_and_cache_statistics` **unconditionally** — one rate-limited
+/// Instant request on every build, including every flip of the Charts tab's range or bucket, and
+/// every time you returned to an item you had just looked at. The scanner path had checked
+/// freshness for years (`SCANNER_STATS_FRESHNESS_HOURS`); the interactive path never did.
+///
+/// Five minutes is deliberately far tighter than the scanner's twelve hours: this is the number a
+/// trader sees. It is still safe because these are **closed-trade aggregates bucketed by hour** —
+/// WFM cannot produce a new value inside the window. The live *snapshot and orders* call, which
+/// is what actually carries current prices, stays unconditional.
+///
+/// The Refresh button bypasses this entirely; see the `force` flag.
+const MARKET_STATS_FRESHNESS_MINUTES: i64 = 5;
 const SCANNER_WFM_STATS_TIMEOUT_SECONDS: u64 = 5;
 const SCANNER_ITEM_MAX_ATTEMPTS: usize = 3;
 const SCANNER_ITEM_TOTAL_DEADLINE_SECONDS: u64 = 25;
@@ -1918,7 +1934,55 @@ fn merge_latest_fetched_at(current: Option<String>, candidate: Option<String>) -
     }
 }
 
+/// The raw statistics rows behind a chart, loaded at most once per item+variant per request.
+///
+/// **Every domain from 7d up reads the same two source domains** (`90days` + `48hours`) and
+/// differs only in the cutoff it filters them by. One analysis request asked for the 30-day rows
+/// three separate times — the analytics builder loads its chart domain and then the 30-day
+/// support rows, and the analysis builder loaded them a third time for its price model — so the
+/// same SQLite read and row-parse ran three times over an identical result.
+///
+/// Scoped to a single request. It is deliberately not a longer-lived cache: these rows are
+/// rewritten by every statistics fetch, and a stale one would be far worse than a slow one.
+#[derive(Default)]
+struct StatisticsRowCache {
+    domains: HashMap<&'static str, (Vec<InternalStatsRow>, Vec<InternalStatsRow>, Option<String>)>,
+}
+
+impl StatisticsRowCache {
+    fn source_domain(
+        &mut self,
+        connection: &Connection,
+        item_key: &str,
+        variant_key: &str,
+        source_domain: &'static str,
+    ) -> Result<&(Vec<InternalStatsRow>, Vec<InternalStatsRow>, Option<String>)> {
+        if !self.domains.contains_key(source_domain) {
+            let loaded =
+                load_statistics_rows_for_domain(connection, item_key, variant_key, source_domain)?;
+            self.domains.insert(source_domain, loaded);
+        }
+        Ok(self
+            .domains
+            .get(source_domain)
+            .expect("source domain was just inserted"))
+    }
+}
+
 fn load_chart_statistics_rows(
+    connection: &Connection,
+    item_key: &str,
+    variant_key: &str,
+    domain_key: AnalyticsDomainKey,
+) -> Result<(Vec<InternalStatsRow>, Vec<InternalStatsRow>, Option<String>)> {
+    let mut cache = StatisticsRowCache::default();
+    load_chart_statistics_rows_cached(&mut cache, connection, item_key, variant_key, domain_key)
+}
+
+/// `load_chart_statistics_rows` with the per-request row cache made explicit, for callers that
+/// ask for more than one domain.
+fn load_chart_statistics_rows_cached(
+    cache: &mut StatisticsRowCache,
     connection: &Connection,
     item_key: &str,
     variant_key: &str,
@@ -1941,10 +2005,10 @@ fn load_chart_statistics_rows(
 
     for source_domain in source_domains {
         let (domain_closed_rows, domain_live_buy_rows, fetched_at) =
-            load_statistics_rows_for_domain(connection, item_key, variant_key, source_domain)?;
-        latest_fetched_at = merge_latest_fetched_at(latest_fetched_at, fetched_at);
+            cache.source_domain(connection, item_key, variant_key, source_domain)?;
+        latest_fetched_at = merge_latest_fetched_at(latest_fetched_at, fetched_at.clone());
 
-        let include_row = |row: &InternalStatsRow| -> bool {
+        let include_row = |row: &&InternalStatsRow| -> bool {
             if row.bucket_at < domain_cutoff {
                 return false;
             }
@@ -1956,8 +2020,8 @@ fn load_chart_statistics_rows(
             true
         };
 
-        closed_rows.extend(domain_closed_rows.into_iter().filter(include_row));
-        live_buy_rows.extend(domain_live_buy_rows.into_iter().filter(include_row));
+        closed_rows.extend(domain_closed_rows.iter().filter(include_row).cloned());
+        live_buy_rows.extend(domain_live_buy_rows.iter().filter(include_row).cloned());
     }
 
     closed_rows.sort_by_key(|row| row.bucket_at);
@@ -9547,10 +9611,15 @@ fn build_item_analysis_inner(
     variant_key: Option<String>,
     seller_mode: Option<String>,
     source: AnalysisSource,
+    force_statistics: bool,
 ) -> Result<ItemAnalysisResponse> {
     let variant_key = normalize_variant_key(variant_key.as_deref());
     let seller_mode = normalize_seller_mode(seller_mode.as_deref());
-    let analytics = build_item_analytics_inner(
+    let perf = crate::perf_log::PerfSpan::start(
+        "analysis",
+        format!("{item_key}/{variant_key}/{}", if source.is_live() { "live" } else { "cached" }),
+    );
+    let analytics_build = build_item_analytics_with_context(
         app.clone(),
         item_key.clone(),
         slug.clone(),
@@ -9559,7 +9628,12 @@ fn build_item_analysis_inner(
         Some("48h".to_string()),
         Some("1h".to_string()),
         source,
+        // The Overview panels read the derived signals, never the plotted series. Asking for the
+        // series here is what kept them showing `cached` until the graph had finished building.
+        ChartDetail::SignalsOnly,
+        force_statistics,
     )?;
+    let analytics = &analytics_build.response;
 
     // The third and last network call. Skipped entirely on a cached build; `current_snapshot`
     // below already falls back to the analytics snapshot, which is why this is safe to drop.
@@ -9578,14 +9652,13 @@ fn build_item_analysis_inner(
         .map(|entry| entry.1.clone())
         .unwrap_or_default();
 
-    let connection = open_market_observatory_database(&app)?;
+    perf.mark("orders-fetch");
+    // The analytics builder's connection and its 30-day closed rows, rather than a second handle
+    // and a third read of the same rows.
+    let connection = analytics_build.connection;
+    let stats_rows = analytics_build.support_closed_rows;
     let recent_snapshots = recent_snapshots(&connection, &item_key, &variant_key, &seller_mode, 12)?;
-    let (stats_rows, _, _) = load_chart_statistics_rows(
-        &connection,
-        &item_key,
-        &variant_key,
-        AnalyticsDomainKey::ThirtyDays,
-    )?;
+    perf.mark("recent-snapshots");
 
     let manipulation_risk = build_manipulation_risk(&current_snapshot, &recent_snapshots);
     let liquidity_score = liquidity_score_percent(&current_snapshot);
@@ -9667,6 +9740,7 @@ fn build_item_analysis_inner(
         &[],
     );
 
+    perf.finish("total");
     Ok(ItemAnalysisResponse {
         item_key: item_key.clone(),
         slug,
@@ -10018,6 +10092,35 @@ impl AnalysisSource {
     }
 }
 
+/// How much of the analytics response the caller actually needs.
+///
+/// The Charts tab wants the plotted series. **The analysis path does not** — `zone_overview`,
+/// `orderbook_pressure`, `trend_quality_breakdown` and `action_card` are all derived from the
+/// snapshot, the 48-hour trend points and the zone bands, and none of them reads `chart_points`.
+///
+/// Building them anyway meant the Overview panels waited on a resample of the whole chart domain,
+/// a second snapshot query and the merge — which is why the numbers stayed marked `cached` until
+/// the graph finished. They are two different questions and only one of them needs the series.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ChartDetail {
+    /// Everything, including the plotted series. What `get_item_analytics` returns.
+    Full,
+    /// The derived signals only; `chart_points` comes back empty.
+    SignalsOnly,
+}
+
+/// What `build_item_analysis_inner` would otherwise recompute from scratch.
+///
+/// The analysis builder runs the analytics builder and then needs two things it has already
+/// produced: an open database handle, and the 30-day closed rows behind its price model. It used
+/// to open a second connection and re-read those rows. Handing them over is the whole point of
+/// this struct.
+struct AnalyticsBuild {
+    response: ItemAnalyticsResponse,
+    connection: Connection,
+    support_closed_rows: Vec<InternalStatsRow>,
+}
+
 fn build_item_analytics_inner(
     app: tauri::AppHandle,
     item_key: String,
@@ -10027,7 +10130,35 @@ fn build_item_analytics_inner(
     domain_key: Option<String>,
     bucket_size_key: Option<String>,
     source: AnalysisSource,
+    force_statistics: bool,
 ) -> Result<ItemAnalyticsResponse> {
+    Ok(build_item_analytics_with_context(
+        app,
+        item_key,
+        slug,
+        variant_key,
+        seller_mode,
+        domain_key,
+        bucket_size_key,
+        source,
+        ChartDetail::Full,
+        force_statistics,
+    )?
+    .response)
+}
+
+fn build_item_analytics_with_context(
+    app: tauri::AppHandle,
+    item_key: String,
+    slug: String,
+    variant_key: Option<String>,
+    seller_mode: Option<String>,
+    domain_key: Option<String>,
+    bucket_size_key: Option<String>,
+    source: AnalysisSource,
+    chart_detail: ChartDetail,
+    force_statistics: bool,
+) -> Result<AnalyticsBuild> {
     let analytics_domain_key = domain_key
         .as_deref()
         .map(AnalyticsDomainKey::try_from)
@@ -10041,9 +10172,32 @@ fn build_item_analytics_inner(
     let variant_key = normalize_variant_key(variant_key.as_deref());
     let seller_mode = normalize_seller_mode(seller_mode.as_deref());
     let variant_label = derive_variant_label(&variant_key);
+    // Cumulative marks against one start, so each `stage=` line reads as "time since the command
+    // began" — which is what tells you where the wall clock actually goes.
+    let perf = crate::perf_log::PerfSpan::start(
+        "analytics",
+        format!("{item_key}/{variant_key}/{}", if source.is_live() { "live" } else { "cached" }),
+    );
     let connection = open_market_observatory_database(&app)?;
+    // One cache for the whole request: the chart domain and the 30-day support rows below read
+    // the same source domains out of SQLite.
+    let mut stats_row_cache = StatisticsRowCache::default();
+    perf.mark("db-open");
 
-    if source.is_live() {
+    // `fetch_and_cache_statistics` caches every domain for this item+variant at once, so the
+    // most recent fetch stamp for the pair is exactly the right freshness signal.
+    let statistics_are_fresh = !force_statistics
+        && latest_statistics_fetch_timestamp(&connection, &item_key, &variant_key)?
+            .map(|fetched_at| {
+                (now_utc() - fetched_at)
+                    < TimeDuration::minutes(MARKET_STATS_FRESHNESS_MINUTES)
+            })
+            .unwrap_or(false);
+    if statistics_are_fresh {
+        perf.mark("statistics-fresh-skip");
+    }
+
+    if source.is_live() && !statistics_are_fresh {
         if let Err(error) = fetch_and_cache_statistics(
             &connection,
             &item_key,
@@ -10080,23 +10234,38 @@ fn build_item_analytics_inner(
             .ok_or_else(|| anyhow!("no cached market snapshot for item"))?;
         (Vec::new(), snapshot)
     };
+    perf.mark("snapshot");
     let (hourly_closed_rows, hourly_live_buy_rows, hourly_stats_fetched_at) =
         load_statistics_rows_for_domain(&connection, &item_key, &variant_key, "48hours")?;
+    perf.mark("load-48h");
     let trend_points = resample_rows(
         &hourly_closed_rows,
         &hourly_live_buy_rows,
         AnalyticsDomainKey::FortyEightHours,
         AnalyticsBucketSizeKey::OneHour,
     );
+    perf.mark("resample-trend");
     let (chart_closed_rows, chart_live_buy_rows, chart_stats_fetched_at) =
-        load_chart_statistics_rows(&connection, &item_key, &variant_key, analytics_domain_key)?;
-    let (support_closed_rows, _, _) = load_chart_statistics_rows(
+        load_chart_statistics_rows_cached(
+            &mut stats_row_cache,
+            &connection,
+            &item_key,
+            &variant_key,
+            analytics_domain_key,
+        )?;
+    perf.mark("load-chart");
+    // Hits the cache above rather than re-reading SQLite: for any domain from 7d up this reads
+    // the same source rows and differs only in the cutoff.
+    let (support_closed_rows, _, _) = load_chart_statistics_rows_cached(
+        &mut stats_row_cache,
         &connection,
         &item_key,
         &variant_key,
         AnalyticsDomainKey::ThirtyDays,
     )?;
+    perf.mark("load-support-30d");
     let historical_zone_anchors = build_historical_zone_anchors(&support_closed_rows);
+    perf.mark("zone-anchors");
     let historical_zone_bands = historical_zone_anchors.as_ref().and_then(|anchors| {
         compute_zone_bands(
             anchors.support_floor.or(anchors.fair_low),
@@ -10113,34 +10282,10 @@ fn build_item_analytics_inner(
         Some(&snapshot),
         &live_sell_orders,
     );
-    let mut chart_points = merge_snapshot_chart_points(
-        resample_rows(
-            &chart_closed_rows,
-            &chart_live_buy_rows,
-            analytics_domain_key,
-            analytics_bucket_size_key,
-        ),
-        load_snapshot_chart_points(
-            &connection,
-            &item_key,
-            &variant_key,
-            &seller_mode,
-            analytics_domain_key,
-            analytics_bucket_size_key,
-        )?,
-    );
-    if let Some(zone_bands) = historical_zone_bands.as_ref() {
-        for point in &mut chart_points {
-            point.entry_zone = Some(zone_bands.entry_target);
-            point.exit_zone = Some(zone_bands.exit_target);
-        }
-    }
-    if let Some(zone_bands) = shared_exit_pricing.zone_bands.as_ref() {
-        if let Some(last_point) = chart_points.last_mut() {
-            last_point.entry_zone = Some(zone_bands.entry_target);
-            last_point.exit_zone = Some(zone_bands.exit_target);
-        }
-    }
+    // The cache check moved ABOVE the chart assembly. It used to sit below it, so a cache hit
+    // still paid for the resample, the snapshot-points query and the merge before throwing all
+    // of it away. Nothing in the cache key depends on the chart points — only on the snapshot
+    // and the statistics fetch stamps, both of which are already in hand.
     let latest_stats_fetched_at =
         merge_latest_fetched_at(hourly_stats_fetched_at, chart_stats_fetched_at);
     let source_snapshot_at = Some(snapshot.captured_at.clone());
@@ -10154,8 +10299,51 @@ fn build_item_analytics_inner(
         source_snapshot_at.as_deref(),
         latest_stats_fetched_at.as_deref(),
     )? {
-        return Ok(cached);
+        // Carries the connection and support rows, so the analysis builder above does not reopen
+        // or reload either.
+        perf.finish("total-analytics-cache-hit");
+        return Ok(AnalyticsBuild {
+            response: cached,
+            connection,
+            support_closed_rows,
+        });
     }
+    perf.mark("analytics-cache-miss");
+
+    let chart_points = if chart_detail == ChartDetail::Full {
+        let mut points = merge_snapshot_chart_points(
+            resample_rows(
+                &chart_closed_rows,
+                &chart_live_buy_rows,
+                analytics_domain_key,
+                analytics_bucket_size_key,
+            ),
+            load_snapshot_chart_points(
+                &connection,
+                &item_key,
+                &variant_key,
+                &seller_mode,
+                analytics_domain_key,
+                analytics_bucket_size_key,
+            )?,
+        );
+        if let Some(zone_bands) = historical_zone_bands.as_ref() {
+            for point in &mut points {
+                point.entry_zone = Some(zone_bands.entry_target);
+                point.exit_zone = Some(zone_bands.exit_target);
+            }
+        }
+        if let Some(zone_bands) = shared_exit_pricing.zone_bands.as_ref() {
+            if let Some(last_point) = points.last_mut() {
+                last_point.entry_zone = Some(zone_bands.entry_target);
+                last_point.exit_zone = Some(zone_bands.exit_target);
+            }
+        }
+        points
+    } else {
+        Vec::new()
+    };
+    perf.mark("chart-points");
 
     let recent_snapshots = recent_snapshots(&connection, &item_key, &variant_key, &seller_mode, 12)?;
     let liquidity_confidence = build_liquidity_confidence(&snapshot, &recent_snapshots);
@@ -10193,16 +10381,34 @@ fn build_item_analytics_inner(
         action_card,
     };
 
-    persist_analytics_cache(
-        &connection,
-        &response,
-        &seller_mode,
-        analytics_domain_key,
-        analytics_bucket_size_key,
-    )?;
+    perf.mark("assemble");
+    // Only a complete response may be cached. A `SignalsOnly` build has no chart points, and
+    // caching it would serve an empty graph to the Charts tab.
+    if chart_detail == ChartDetail::Full {
+        persist_analytics_cache(
+            &connection,
+            &response,
+            &seller_mode,
+            analytics_domain_key,
+            analytics_bucket_size_key,
+        )?;
+        perf.mark("persist-cache");
+    }
     // Best-effort: errors here must never fail the analytics response.
     let _ = maybe_emit_recommendation_outcome(&connection, &response, &seller_mode);
-    Ok(response)
+    // The chart points are the bulk of what crosses the Tauri bridge as JSON, and no stage timer
+    // can see serialization — so the size is recorded alongside the timings.
+    crate::perf_log::log_payload_size(
+        "analytics",
+        &format!("{item_key}/chartPoints"),
+        response.chart_points.len(),
+    );
+    perf.finish("total");
+    Ok(AnalyticsBuild {
+        response,
+        connection,
+        support_closed_rows,
+    })
 }
 
 // ─── Backtest / recommendation outcome tracking ───────────────────────────────
@@ -10921,6 +11127,48 @@ pub async fn refresh_market_tracking(
     .map_err(|error| error.to_string())
 }
 
+/// Analytics from **SQLite only** — no WFM calls, so it answers in milliseconds.
+///
+/// The mirror of `get_item_analysis_cached`, and the reason the Charts tab was slow: analysis had
+/// a cached wave to paint from while the network answered, and analytics had none. Every open of
+/// the tab and every range or bucket change therefore waited on two sequential rate-limited
+/// requests with nothing on screen.
+///
+/// A cache miss **rejects**, exactly as the analysis version does — normal for an item never
+/// opened, and deliberately not routed through `log_market_error_and_build_message` or the error
+/// log fills with non-events.
+#[tauri::command]
+pub async fn get_item_analytics_cached(
+    app: tauri::AppHandle,
+    item_key: String,
+    slug: String,
+    variant_key: Option<String>,
+    seller_mode: Option<String>,
+    domain_key: Option<String>,
+    bucket_size_key: Option<String>,
+) -> Result<ItemAnalyticsResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        build_item_analytics_inner(
+            app,
+            item_key,
+            slug,
+            variant_key,
+            seller_mode,
+            domain_key,
+            bucket_size_key,
+            AnalysisSource::Cached,
+            // A cached build makes no requests, so there is nothing to force.
+            false,
+        )
+    })
+    .await
+    .map_err(|error| format!("failed to join market analytics worker: {error}"))?
+    .map_err(|error| error.to_string())
+}
+
+/// `force` is set by the Refresh button. It bypasses the statistics freshness window so an
+/// explicit refresh always goes to WFM — otherwise pressing Refresh twice inside the window would
+/// be a no-op, which is exactly the moment a user wants it to mean something.
 #[tauri::command]
 pub async fn get_item_analytics(
     app: tauri::AppHandle,
@@ -10930,6 +11178,7 @@ pub async fn get_item_analytics(
     seller_mode: Option<String>,
     domain_key: Option<String>,
     bucket_size_key: Option<String>,
+    force: Option<bool>,
 ) -> Result<ItemAnalyticsResponse, String> {
     let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -10942,6 +11191,7 @@ pub async fn get_item_analytics(
             domain_key,
             bucket_size_key,
             AnalysisSource::Live,
+            force.unwrap_or(false),
         )
     })
     .await
@@ -11000,6 +11250,7 @@ pub async fn get_item_detail_summary(
         })
 }
 
+/// `force` bypasses the statistics freshness window; see `get_item_analytics`.
 #[tauri::command]
 pub async fn get_item_analysis(
     app: tauri::AppHandle,
@@ -11007,10 +11258,19 @@ pub async fn get_item_analysis(
     slug: String,
     variant_key: Option<String>,
     seller_mode: Option<String>,
+    force: Option<bool>,
 ) -> Result<ItemAnalysisResponse, String> {
     let app_for_work = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        build_item_analysis_inner(app_for_work, item_key, slug, variant_key, seller_mode, AnalysisSource::Live)
+        build_item_analysis_inner(
+            app_for_work,
+            item_key,
+            slug,
+            variant_key,
+            seller_mode,
+            AnalysisSource::Live,
+            force.unwrap_or(false),
+        )
     })
     .await
     .map_err(|error| {
@@ -11060,6 +11320,8 @@ pub async fn get_item_analysis_cached(
             variant_key,
             seller_mode,
             AnalysisSource::Cached,
+            // A cached build makes no requests, so there is nothing to force.
+            false,
         )
     })
     .await
