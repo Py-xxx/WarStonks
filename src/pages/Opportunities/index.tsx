@@ -15,6 +15,7 @@ import type { InventorySubTab, OpportunitiesSubTab } from '../../lib/navigation'
 import {
   applySetCompletionScreenshotImportRows,
   getArbitrageScannerState,
+  getSetCompletionCatalog,
   getWfmAutocompleteItems,
   getSetCompletionOwnedItems,
   getSetCompletionOwnedItemPrices,
@@ -74,6 +75,7 @@ import {
 import type {
   ArbitrageScannerComponentEntry,
   ArbitrageScannerResponse,
+  ArbitrageScannerSetEntry,
   ArbitrageScannerState,
   OwnedRelicEntry,
   RelicRefinementChanceProfile,
@@ -970,6 +972,11 @@ export function OpportunitiesPage({
   const [farmNowError, setFarmNowError] = useState<string | null>(null);
   const [expandedFarmRelicKey, setExpandedFarmRelicKey] = useState<string | null>(null);
   const [scannerResponse, setScannerResponse] = useState<ArbitrageScannerResponse | null>(null);
+  // Populates the planner from the 30-day price-history backfill when no arbitrage scan has
+  // ever run — see `getSetCompletionCatalog`. A scan, once available, still wins (fresher data).
+  const [historyCompletionCatalog, setHistoryCompletionCatalog] = useState<
+    ArbitrageScannerSetEntry[]
+  >([]);
   const [plannerFallbackCatalog, setPlannerFallbackCatalog] = useState<PlannerCatalogItem[]>([]);
   const [ownedItems, setOwnedItems] = useState<SetCompletionOwnedItem[]>([]);
   const [ownedItemPrices, setOwnedItemPrices] = useState<Record<string, number | null>>({});
@@ -1045,17 +1052,20 @@ export function OpportunitiesPage({
           return;
         }
 
-        const [scannerState, owned, autocompleteItems, ownedPrices] = await Promise.all([
-          getArbitrageScannerState(),
-          getSetCompletionOwnedItems(),
-          getWfmAutocompleteItems(useAppStore.getState().language),
-          getSetCompletionOwnedItemPrices(),
-        ]);
+        const [scannerState, historyCatalog, owned, autocompleteItems, ownedPrices] =
+          await Promise.all([
+            getArbitrageScannerState(),
+            getSetCompletionCatalog(),
+            getSetCompletionOwnedItems(),
+            getWfmAutocompleteItems(useAppStore.getState().language),
+            getSetCompletionOwnedItemPrices(),
+          ]);
         if (cancelled) {
           return;
         }
 
         setScannerResponse(scannerState.latestScan);
+        setHistoryCompletionCatalog(historyCatalog);
         setOwnedItems(owned);
         setOwnedItemPrices(
           Object.fromEntries(ownedPrices.map((entry) => [entry.slug, entry.recommendedExitPrice])),
@@ -1136,8 +1146,35 @@ export function OpportunitiesPage({
     void refreshOwnedRelics(false);
   }, [loadOwnedRelicsCache, refreshOwnedRelics]);
 
+  // Synthesized "scan" over the history-only catalog, so the set planner can use the same
+  // `.results` shape as a real scan without a scan ever having run.
+  const historyScanSource = useMemo<ArbitrageScannerResponse | null>(() => {
+    if (historyCompletionCatalog.length === 0) {
+      return null;
+    }
+    return {
+      computedAt: '',
+      scanStartedAt: '',
+      scanFinishedAt: '',
+      scannedSetCount: historyCompletionCatalog.length,
+      scannedComponentCount: 0,
+      opportunityCount: 0,
+      refreshedSetCount: 0,
+      refreshedStatisticsCount: 0,
+      skippedEntryCount: 0,
+      skippedEntries: [],
+      skippedSummaryText: null,
+      scannedRelicCount: 0,
+      relicOpportunityCount: 0,
+      results: historyCompletionCatalog,
+      relicRoiResults: [],
+    };
+  }, [historyCompletionCatalog]);
+
   const plannerScanSource =
-    activeTab === 'farm-now' ? farmNowScan ?? scannerResponse : scannerResponse ?? farmNowScan;
+    activeTab === 'farm-now'
+      ? farmNowScan ?? scannerResponse
+      : scannerResponse ?? farmNowScan ?? historyScanSource;
 
   const plannerCatalog = useMemo<PlannerCatalogItem[]>(() => {
     const bySlug = new Map<string, PlannerCatalogItem>();
@@ -2270,7 +2307,8 @@ export function OpportunitiesPage({
     );
   };
 
-  const noScanAvailable = !loading && !(scannerResponse?.results?.length);
+  const noScanAvailable =
+    !loading && !(scannerResponse?.results?.length) && historyCompletionCatalog.length === 0;
 
   /** The planner's gate, resolved once — same pattern as `farmNowGate`. Order is the shipped one:
    *  you cannot judge "no owned parts" before the scan that lists the sets exists. */

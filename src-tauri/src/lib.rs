@@ -166,6 +166,7 @@ pub fn run() {
             market_observatory::get_backtest_summary,
             market_observatory::get_arbitrage_scanner,
             market_observatory::get_arbitrage_scanner_state,
+            market_observatory::get_set_completion_catalog,
             market_observatory::get_set_completion_owned_items,
             market_observatory::set_set_completion_owned_item_quantity,
             market_observatory::apply_set_completion_screenshot_import_rows,

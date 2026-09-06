@@ -2297,6 +2297,148 @@ fn build_price_model_from_rows(
     })
 }
 
+/// Parses a `price_history_daily` day string (`"YYYY-MM-DD"`) into midnight UTC, so a bulk
+/// history row can stand in for a live statistics row's `bucket_at`.
+fn parse_history_day(day: &str) -> Result<OffsetDateTime> {
+    let format = time::format_description::parse("[year]-[month]-[day]")
+        .context("failed to build the history-day format")?;
+    let date = time::Date::parse(day, &format)
+        .with_context(|| format!("failed to parse history day '{day}'"))?;
+    Ok(date.midnight().assume_utc())
+}
+
+/// Reads one item's `closed` (actually-traded) rows out of `price_history_daily` — the
+/// WSHistory/relics.run bulk backfill, see `price_history.rs` — shaped as [`InternalStatsRow`]s
+/// so they can feed [`build_price_model_from_rows`] exactly like a live scan's rows would.
+/// `variant_key` is `"base"` for every set and set component; nothing in a set has a rank,
+/// subtype or star count.
+fn load_closed_history_rows(connection: &Connection, item_key: &str) -> Result<Vec<InternalStatsRow>> {
+    let mut statement = connection.prepare(
+        "SELECT day, volume, min_price, max_price, open_price, closed_price, avg_price,
+                wa_price, median, moving_avg, donch_top, donch_bot
+         FROM price_history_daily
+         WHERE item_key = ?1 AND variant_key = 'base' AND order_type = 'closed'
+         ORDER BY day",
+    )?;
+    let rows = statement
+        .query_map(params![item_key], |row| {
+            let day: String = row.get(0)?;
+            Ok((
+                day,
+                row.get::<_, f64>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+                row.get::<_, Option<f64>>(6)?,
+                row.get::<_, Option<f64>>(7)?,
+                row.get::<_, Option<f64>>(8)?,
+                row.get::<_, Option<f64>>(9)?,
+                row.get::<_, Option<f64>>(10)?,
+                row.get::<_, Option<f64>>(11)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut internal_rows = Vec::with_capacity(rows.len());
+    for (
+        day,
+        volume,
+        min_price,
+        max_price,
+        open_price,
+        closed_price,
+        avg_price,
+        wa_price,
+        median,
+        moving_avg,
+        donch_top,
+        donch_bot,
+    ) in rows
+    {
+        internal_rows.push(InternalStatsRow {
+            bucket_at: parse_history_day(&day)?,
+            source_kind: "closed".to_string(),
+            volume,
+            min_price,
+            max_price,
+            open_price,
+            closed_price,
+            avg_price,
+            wa_price,
+            median,
+            moving_avg,
+            donch_top,
+            donch_bot,
+        });
+    }
+    Ok(internal_rows)
+}
+
+/// Builds a [`ScannerPriceModel`] for one item from the durable 30-day history backfill alone —
+/// no live WFM fetch, no dependency on a completed arbitrage scan. Bucketed into the same
+/// `"48hours"` / `"90days"` domains `build_price_model_from_rows` expects, so a fresh day's row
+/// is not dropped by its double-counting guard against a `"48hours"` domain that, here, was
+/// never actually fetched.
+fn history_only_price_model(connection: &Connection, item_key: &str) -> Result<Option<ScannerPriceModel>> {
+    let rows = load_closed_history_rows(connection, item_key)?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let recent_cutoff = now_utc() - TimeDuration::hours(48);
+    let mut rows_by_domain: HashMap<String, Vec<InternalStatsRow>> = HashMap::new();
+    for row in rows {
+        let domain = if row.bucket_at >= recent_cutoff { "48hours" } else { "90days" };
+        rows_by_domain.entry(domain.to_string()).or_default().push(row);
+    }
+    Ok(build_price_model_from_rows(&rows_by_domain))
+}
+
+/// Populates the Set Completion Planner from the durable 30-day price-history backfill
+/// (WSHistory/relics.run) rather than requiring a completed arbitrage scan first. The scan
+/// exists to hunt for live opportunities and needs fresh orderbook data for that; the planner
+/// only needs to know roughly what a set and its parts are worth, which the daily backfill
+/// already answers from first launch — see `catalog_build_derivation` and `price_book.rs` for
+/// the same "derive from what we already have" pattern applied to the catalog and inventory
+/// valuation respectively.
+pub(crate) fn build_set_completion_from_history(
+    app: &tauri::AppHandle,
+) -> Result<Vec<ArbitrageScannerSetEntry>> {
+    let catalog_connection = item_catalog_v2::open_catalog_v2_readonly(app)?;
+    let observatory_connection = open_market_observatory_database(app)?;
+    let scanned_sets = load_scanner_sets_from_map(app, &catalog_connection)?;
+
+    let mut results = Vec::with_capacity(scanned_sets.len());
+    for (set_root, components) in &scanned_sets {
+        let set_model = history_only_price_model(&observatory_connection, &set_root.item_key)?;
+        let mut component_models = Vec::with_capacity(components.len());
+        for component in components {
+            let model = match &component.component_item_key {
+                Some(item_key) => history_only_price_model(&observatory_connection, item_key)?,
+                None => None,
+            };
+            component_models.push(model);
+        }
+        results.push(build_arbitrage_set_entry(
+            set_root,
+            set_model.as_ref(),
+            components,
+            &component_models,
+        ));
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn get_set_completion_catalog(
+    app: tauri::AppHandle,
+) -> Result<Vec<ArbitrageScannerSetEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || build_set_completion_from_history(&app))
+        .await
+        .map_err(|error| format!("failed to join set-completion history worker: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
 /// Persists one [`WriteTask`] to SQLite inside a single transaction.
 /// Called exclusively from the background writer thread.
 fn write_statistics_task(connection: &Connection, task: &WriteTask) -> Result<()> {

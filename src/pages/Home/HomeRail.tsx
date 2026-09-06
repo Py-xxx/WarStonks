@@ -7,7 +7,11 @@ import { formatElapsedTime } from '../../lib/dateTime';
 import { formatPlatinumDelta } from '../../lib/opportunityView';
 import { getCachedWfmProfileTradeLog } from '../../lib/tauriClient';
 import type { PortfolioTradeLogEntry } from '../../types';
-import { formatWorldStateCountdown, isWorldStateEntryOpen } from '../../lib/worldState';
+import {
+  formatWorldStateCountdown,
+  isWorldStateEntryOpen,
+  isWorldStateWindowActive,
+} from '../../lib/worldState';
 import { useAppStore } from '../../stores/useAppStore';
 
 /**
@@ -139,14 +143,19 @@ export function HomeRail() {
         meta: event.node,
         expiry: event.expiry as string,
       }));
-    // The Void Trader is the one exception: `expired` there means he is AWAY, and `expiry` is
-    // when he next arrives — a countdown worth showing, not a finished one. Hence no filter.
-    if (voidTrader?.expiry) {
+    // The Void Trader only belongs here while he is actually present. `voidTrader.expired` does
+    // not mean "away" — WFStat never sends an `expired` flag for him, and comparing `expiry`
+    // alone reads a not-yet-arrived visit (activation weeks out) the same as a live one, so this
+    // used to show "leaving soon" for a trader who had not shown up yet. `isWorldStateWindowActive`
+    // (the same check `EventsOverview` and `VoidTraderPanel` use) is what actually answers "is he
+    // here", and an upcoming arrival isn't "closing" — it's opening, so it is left out rather than
+    // shown with an "arrives" label.
+    if (voidTrader && isWorldStateWindowActive(voidTrader.activation, voidTrader.expiry, nowMs)) {
       rows.push({
         id: 'void-trader',
-        name: voidTrader.expired ? t('home.voidTraderArrives') : t('home.voidTraderLeaves'),
+        name: t('home.voidTraderLeaves'),
         meta: voidTrader.location ?? null,
-        expiry: voidTrader.expiry,
+        expiry: voidTrader.expiry as string,
       });
     }
     return rows.sort((a, b) => a.expiry.localeCompare(b.expiry)).slice(0, 5);

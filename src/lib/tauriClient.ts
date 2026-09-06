@@ -6,6 +6,7 @@
 import { wfmLangCode, type AppLanguage } from './language';
 import type {
   ArbitrageScannerProgress,
+  ArbitrageScannerSetEntry,
   ArbitrageScannerState,
   DiscordWebhookSettingsInput,
   DiscordWatchlistNotificationInput,
@@ -1154,6 +1155,12 @@ export async function getBacktestSummary(): Promise<BacktestSummary> {
 
 export async function getArbitrageScannerState(): Promise<ArbitrageScannerState> {
   return invoke<ArbitrageScannerState>('get_arbitrage_scanner_state');
+}
+
+/** Set-completion pricing derived from the 30-day price-history backfill alone — populated from
+ *  first launch, no arbitrage scan required. See `market_observatory::build_set_completion_from_history`. */
+export async function getSetCompletionCatalog(): Promise<ArbitrageScannerSetEntry[]> {
+  return invoke<ArbitrageScannerSetEntry[]>('get_set_completion_catalog');
 }
 
 export async function getSetCompletionOwnedItems(): Promise<SetCompletionOwnedItem[]> {
